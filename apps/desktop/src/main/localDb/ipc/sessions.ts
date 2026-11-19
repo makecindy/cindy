@@ -1312,6 +1312,10 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:create', async (event, body) => {
     assertTrustedAppRendererEvent(event);
     return createUserSession(body, {
+      validateProjectCompanion: isDeviceLinkInvoke() ? undefined : async botId => {
+        const { readProjectCompanionProfile } = await import('../../maker-ipc/projectTaskCompanion.js');
+        return readProjectCompanionProfile(botId);
+      },
       senderId: event.sender.id,
       userDataDir: app.getPath('userData'),
       notifyPluginSessionCreated: (input) => {

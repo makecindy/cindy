@@ -217,6 +217,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
+  projectCompanion?: StartSessionOptions['projectCompanion'];
   beforeTurn?: (session: Session) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
@@ -474,6 +475,7 @@ function createSendReservation(generation: number): SendReservation {
 }
 
 export class Session {
+  readonly projectCompanion?: StartSessionOptions['projectCompanion'];
   /** Caller preferences before generated context; memory-only recovery input. */
   readonly hostStartupPreferences?: SessionStartupPreferences;
   readonly id: string;
@@ -655,6 +657,7 @@ export class Session {
   private readonly beforeTurn?: (session: Session) => Promise<void>;
 
   constructor(opts: SessionOptions) {
+    this.projectCompanion = opts.projectCompanion && Object.freeze({ ...opts.projectCompanion });
     this.beforeTurn = opts.beforeTurn;
     this.hostStartupPreferences = opts.hostStartupPreferences
       ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;

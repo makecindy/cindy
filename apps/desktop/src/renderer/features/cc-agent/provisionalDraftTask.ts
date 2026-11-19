@@ -49,6 +49,7 @@ export interface ProvisionalDraftCreateArgs {
   remoteHostId?: string;
   agentDeviceId?: string;
   providerId?: string | null;
+  projectCompanionId?: string;
 }
 
 interface Current {
@@ -92,6 +93,7 @@ export function provisionalDraftArgsKey(args: ProvisionalDraftCreateArgs): strin
     args.remoteHostId || '',
     args.agentDeviceId || '',
     args.providerId ?? null,
+    args.projectCompanionId ?? null,
   ]);
 }
 

@@ -1476,6 +1476,16 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
+  /** A project partner can also answer the owner's attachment or retry of their own input. */
+  isLocalProjectCompanionInput(sessionId: string): boolean {
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
+    if (!item || item.fromDeviceLinkClient || item.fromMobileClient || item.sourcePlugin || item.sharedTaskAuthor
+      || item.botTaskCoordination || (originKind !== undefined && originKind !== 'desktop')) return false;
+    return this.inputHasOwnerAuthor(item, true)
+      || (!item.originalSyntheticTrigger && !item.autoResume && !!item.files?.length);
+  }
+
   /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;

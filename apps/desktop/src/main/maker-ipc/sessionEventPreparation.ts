@@ -52,6 +52,7 @@ import {
   InterruptedTurnAutoResumeGuard,
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
+import { projectCompanionMemoryEvent } from './projectCompanionMemoryEvents.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import {
   claudeOpusPlanTerminalErrorData,
@@ -131,6 +132,7 @@ export function prepareSessionEvent(
   // Host projections (Session.holdEventStream follow-ups) were already persisted
   // and published to renderers by the host that requested the hold.
   if (event.hostProjection) return;
+  event = projectCompanionMemoryEvent(session, event);
   // Exact patches are main-owned durable data. They have a dedicated summary push and
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
@@ -203,6 +205,9 @@ export function prepareSessionEvent(
         },
       }
     : event;
+  if (event.type === 'text' && session.projectCompanion) {
+    attributedEvent = { ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, projectCompanion: session.projectCompanion } };
+  }
   // Personal IM dispatches directly, outside AgentInputCoordinator. Preserve
   // its accepted durable input on the reply before the turn lease is released.
   if (!activeInputId && event.turnScope !== 'background') {

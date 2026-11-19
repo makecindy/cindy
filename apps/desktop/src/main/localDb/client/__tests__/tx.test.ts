@@ -16,6 +16,7 @@ import { createDbClient } from '../DbClient.js';
 import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
 
 const INIT_SQL = `
+CREATE TABLE project_task_companions (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, bot_id TEXT, revision INTEGER NOT NULL);
 CREATE TABLE mcp_app_view_states (
   message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -2581,6 +2582,50 @@ describe('db worker tx handlers', () => {
         ]),
       ).resolves.toEqual({ content: '{"handoff":"full","resumed":false}' });
     });
+  });
+
+  // DB integration: a prewarmed project and its first speaker must appear together.
+  // An inactive partner must leave no draft behind, and no hidden message may prevent discard.
+  it.each([false, true])('opens an empty draft with its first companion atomically (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec("CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+      await client.exec("INSERT INTO bot_profiles VALUES ('chosen','active'), ('paused','paused')");
+      const open = (sessionId: string, botId: string) => client.tx('sessions.openWithCompanion', {
+        sessionId, botId, insert: {
+          sql: "INSERT INTO sessions (id, working_dir, created_at, updated_at) VALUES (?, ?, 1, 1)",
+          params: [sessionId, '/repo'],
+        },
+      });
+      await expect(open('rejected', 'paused')).rejects.toThrow();
+      expect(await client.query("SELECT id FROM sessions")).toEqual([]);
+      await open('accepted', 'chosen');
+      expect(await client.query("SELECT session_id, bot_id, revision FROM project_task_companions"))
+        .toEqual([{ session_id: 'accepted', bot_id: 'chosen', revision: 1 }]);
+      expect(await client.query("SELECT id FROM messages")).toEqual([]);
+      await client.exec("DELETE FROM sessions WHERE id = 'accepted'");
+      expect(await client.query("SELECT session_id FROM project_task_companions")).toEqual([]);
+    }, { useInlineWorker });
+  });
+
+  // DB integration: two windows race to switch speakers. The loser must not erase the new SDK
+  // or append a second handoff; an explicit reset must survive reopening on either transport.
+  it.each([false, true])('commits one project partner and history boundary per revision (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'project');
+      const args = { sessionId: 'project', markerId: 'first', markerClientId: 'first',
+        markerContent: '{"handoff":"P17","consumed":false}', markerCreatedAt: 10, updatedAt: 10 };
+      await client.tx('context.rebuild', { ...args, projectCompanion: { botId: 'alice', expectedRevision: 0 } });
+      await client.exec("UPDATE sessions SET sdk_session_id = 'after-switch' WHERE id = 'project'");
+      await expect(client.tx('context.rebuild', { ...args, markerId: 'late', markerClientId: 'late',
+        projectCompanion: { botId: 'bob', expectedRevision: 0 } })).rejects.toThrow();
+      expect(await client.queryOne("SELECT sdk_session_id FROM sessions WHERE id = 'project'")).toEqual({ sdk_session_id: 'after-switch' });
+      expect(await client.query("SELECT client_id FROM messages WHERE session_id = 'project'")).toEqual([{ client_id: 'first' }]);
+      await expect(client.tx('context.rebuild', { ...args, projectCompanion: { botId: null, expectedRevision: 1 } })).rejects.toThrow();
+      expect(await client.queryOne("SELECT bot_id, revision FROM project_task_companions")).toEqual({ bot_id: 'alice', revision: 1 });
+      await client.tx('context.rebuild', { ...args, markerId: 'reset', markerClientId: 'reset',
+        projectCompanion: { botId: null, expectedRevision: 1 } });
+      expect(await client.queryOne("SELECT bot_id, revision FROM project_task_companions")).toEqual({ bot_id: null, revision: 2 });
+    }, { useInlineWorker });
   });
 
   it.each([false, true])('context recovery commits route and durable handoff atomically (inline=%s)', async (useInlineWorker) => {

@@ -36,6 +36,7 @@ export type DbTxName =
   | 'projectAliases.replaceIdentity'
   | 'toolResults.compactSession'
   | 'session.agentSwitchFallback'
+  | 'sessions.openWithCompanion'
   | 'context.rebuild'
   | 'message.insert'
   | 'message.updateContent'
@@ -148,6 +149,7 @@ export interface SessionTreeRehydrateArgs {
 
 export interface ForkSessionArgs {
   sourceSessionId: string;
+  expectedCompanionRevision?: number;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
   targetCreatedAt: number;
@@ -212,6 +214,7 @@ export interface ForkSessionArgs {
     createdAt: number;
     /** Digest of the raw ordered prefix used to prepare content; checked inside the transaction. */
     sourceMessagesDigest: string;
+    projectMessages?: Array<{ clientId: string; content: string; agentMeta: string | null }>;
   };
 }
 
@@ -404,6 +407,7 @@ export interface ContextRebuildArgs {
   expectedClearedAt?: number | null;
   /** Resume recovery clears only this rejected native ID; it never rewrites route settings. */
   expectedSdkSessionId?: string;
+  projectCompanion?: { botId: string | null; expectedRevision: number };
   /** Same transaction as the durable handoff; source SDK ownership must still match. */
   replacementRoute?: {
     expectedSdkSessionId: string;
@@ -1363,6 +1367,7 @@ export type DbTxArgsByName = {
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
+  'sessions.openWithCompanion': import('../../worker/opHandlers/openProjectCompanionSession.js').OpenProjectCompanionSessionArgs;
   'context.rebuild': ContextRebuildArgs;
   'message.insert': MessageInsertArgs;
   'message.updateContent': MessageUpdateContentArgs;
@@ -1463,6 +1468,7 @@ export type DbTxResultByName = {
   } | null;
   'toolResults.compactSession': CompactSessionToolResultsResult;
   'session.agentSwitchFallback': undefined;
+  'sessions.openWithCompanion': undefined;
   'context.rebuild': undefined;
   'message.insert': { changes: number };
   'message.updateContent': { changes: number };

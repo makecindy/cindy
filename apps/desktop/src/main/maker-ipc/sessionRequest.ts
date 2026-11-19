@@ -145,8 +145,10 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
     }
   }
+  // Only the host may attach a conversation partner after resolving the owning database.
+  const { projectCompanion: _projectCompanion, ...options } = body;
   return {
-    ...body,
+    ...options,
     id,
     agentKind,
     workspaceKind,

@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "Choose a model on this computer to chat with this teammate.",
+    "title": "Conversation partner",
+    "default": "Default assistant",
+    "changed": "The conversation partner changed in another window.",
+    "busy": "Finish the current turn and clear the input queue before switching partners.",
+    "failed": "Could not select this partner. Check that the partner is active on this computer.",
+    "unavailable": "Partner unavailable"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",

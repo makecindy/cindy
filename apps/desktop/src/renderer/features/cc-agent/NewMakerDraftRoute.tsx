@@ -64,6 +64,8 @@ import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { useTaskBotMentions } from './hooks/useTaskBotMentions';
+import { DraftProjectCompanionPicker } from './DraftProjectCompanionPicker';
+import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
 import {
   WorktreeChipsRow,
   type WorktreeDefaultSource,
@@ -1327,6 +1329,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveWritableDirs = draft.writableDirs;
   const effectiveCollab = collab;
+  const companionScope = !effectiveRemoteHostId && !effectiveDeviceLinkDeviceId
+    && !effectiveAgentDeviceId && !effectiveCollab.enabled && !newGoalOpen
+    ? JSON.stringify([dataOwnerId, dataOwnerGeneration, location.key]) : null;
+  const [draftCompanion, setDraftCompanion] = useState<{ scope: string; project: string | null; id: string } | null>(null);
+  const projectCompanionId = draftCompanion?.scope === companionScope
+    && (!draftCompanion.project || draftCompanion.project === effectiveWorkingDir) ? draftCompanion.id : undefined;
+  const draftCompanionName = projectCompanionId && composerBotMentions?.find(bot => bot.id === projectCompanionId)?.name;
+  useEffect(() => {
+    setDraftCompanion(previous => {
+      if (!previous || previous.scope !== companionScope) return null;
+      if (previous.project && previous.project !== effectiveWorkingDir) return null;
+      return !previous.project && effectiveWorkingDir ? { ...previous, project: effectiveWorkingDir } : previous;
+    });
+  }, [companionScope, effectiveWorkingDir]);
   // 协同入口判定与会话视图共用同一个 helper(issue #1170:两处各写一份判据,于是同一个
   // device-link 项目在草稿里没入口、进会话页又有)。草稿的 workspaceKind 显式按
   // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
@@ -2781,6 +2797,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     if (isDeviceLinkDraft || usesDeviceCatalog) return null;
     if (wtEnabled && wtConfirmedIneligible !== true) return null;
     const workingDir = effectiveWorkingDir?.trim() || undefined;
+    if (projectCompanionId && !workingDir) return null;
     return {
       id: localDraftSessionIdRef.current,
       agentKind: persistedAgentKind,
@@ -2792,6 +2809,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       workingDir,
       // Same shape the send path creates with: no project folder = a dialogue task.
       workspaceKind: workingDir === undefined ? 'dialogue' : 'project',
+      ...(projectCompanionId && { projectCompanionId }),
       remoteHostId: workingDir === undefined ? undefined : (effectiveRemoteHostId ?? undefined),
       ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
       extraDirs: effectiveExtraDirs,
@@ -2803,6 +2821,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     usesDeviceCatalog,
     wtEnabled,
     wtConfirmedIneligible,
+    projectCompanionId,
     effectiveWorkingDir,
     persistedAgentKind,
     draftInitialModel,
@@ -2842,7 +2861,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const args = provisionalDraftArgsRef.current;
     if (!args || !canOpenProvisionalDraftTask(args)) return;
     void ensureProvisionalDraftTask(args).then((session) => {
-      if (!session || provisionalDraftTaskId() !== session.id) return;
+      if (!session || provisionalDraftTaskId() !== session.id || provisionalDraftArgsRef.current !== args) return;
       // 每次输入都会走到这里：建出来后只初始化一次，之后只续预热(接收方节流)。
       const seededKey = `${session.id}:${provisionalDraftTaskGeneration()}`;
       const firstTime = provisionalSeededKeyRef.current !== seededKey;
@@ -4408,6 +4427,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return false;
+      if (projectCompanionId && !effectiveWorkingDir) {
+        setFolderPickerOpen(true);
+        return false;
+      }
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -4628,6 +4651,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
           }
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
+          if (projectCompanionId && routeAgentDeviceId) {
+            toast.error(t('projectCompanion.localModel'));
+            return;
+          }
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
           const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -5230,6 +5257,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               planModeEnabled: effectivePlanMode,
               workingDir: baseRepo,
               workspaceKind: 'project',
+              ...(projectCompanionId && { projectCompanionId }),
               extraDirs: effectiveExtraDirs,
               writableDirs: effectiveWritableDirs,
               remoteHostId: effectiveRemoteHostId ?? undefined,
@@ -5526,6 +5554,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // 没选项目目录 = 创建 standalone dialogue;main 端会按 workspaceKind='dialogue'
             // 自动分配 <userData>/dialogues/<date>/<sid>/ 作为运行目录,不进入项目段。
             workspaceKind: workingDir ? 'project' : 'dialogue',
+            ...(projectCompanionId && { projectCompanionId }),
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
             // Agent 在另一台电脑运行:任务与文件仍在本机,只记下运行 Agent 的电脑。
             ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
@@ -5786,6 +5815,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     },
     [
       NEW_MAKER_DRAFT_KEY,
+      projectCompanionId,
       activePluginModel,
       activeModelGroup,
       modelGroupLocationName,
@@ -7030,6 +7060,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     />
                   </button>
                 </FolderPickerPopover>
+                {companionScope ? (
+                  <DraftProjectCompanionPicker
+                    partners={composerBotMentions ?? []}
+                    value={projectCompanionId ?? null}
+                    disabled={wtCreating || wtCheckoutBusy || sendInFlight || directoryRecoverySelecting}
+                    onChange={id => {
+                      setDraftCompanion(id ? { scope: companionScope, project: effectiveWorkingDir ?? null, id } : null);
+                      if (id && !effectiveWorkingDir) setFolderPickerOpen(true);
+                    }}
+                  />
+                ) : null}
                 <WorktreeChipsRow
                   variant="advancedOnly"
                   compact
@@ -7091,7 +7132,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"
                     compactToolbar
-                    placeholder={t('newChat.chatInput.createAgentPlaceholder')}
+                    placeholder={draftCompanionName
+                      ? t(botComposerPlaceholderKey(draftCompanionName), { name: draftCompanionName })
+                      : t('newChat.chatInput.createAgentPlaceholder')}
                     previewPrompt={suggestionPreview}
                     onMutationLockChange={handleComposerMutationLockChange}
                     sessionId={undefined}

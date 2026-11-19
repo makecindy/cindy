@@ -688,6 +688,28 @@ describe('exportSessionShare', () => {
     },
   );
 
+  // Unit: reopen the real share archive after a partner was removed; an earlier native
+  // transcript and private tool result must stay on the source device.
+  it('exports only visible conversation from a task with companion history', async () => {
+    sessionRowRef.row = { ...baseSession(), companionRevision: 2, companionBotId: null };
+    const author = { displayName: '小雨', botId: 'rain', profileVersion: 1, revision: 1 };
+    messagesRef.rows[0].content = JSON.stringify({ text: '附件', files: [{ name: 'test.txt', path: 'test.txt', textContent: 'private raw tool data' }] });
+    messagesRef.rows[1].agentMeta = JSON.stringify({ projectCompanion: author, sdkSessionId: 'sid-b' });
+    messagesRef.rows.push({ ...messagesRef.rows[1], role: 'tool_result', content: '"private note"' },
+      { ...messagesRef.rows[0], rewindAt: 1700000000500, content: '"withdrawn text"' });
+    const target = path.join(tmpRoot, 'project-partner.cshare');
+    await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    const zip = await unzipOf(target);
+    const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+    expect(manifest).toMatchObject({ exportFidelity: 'db-only', sdkSessionIds: [], transcripts: [] });
+    expect(JSON.parse(await zip.file('session.json')!.async('string')).sdkSessionId).toBeNull();
+    const history = (await zip.file('messages.jsonl')!.async('string')).split('\n').map(text => JSON.parse(text));
+    expect(history.map(row => row.role)).toEqual(['user', 'assistant']);
+    expect(JSON.parse(history[0].content)).toEqual({ text: '附件', files: [{ name: 'test.txt', path: 'test.txt' }], images: [] });
+    expect(history[1].content).toBe('"ok"');
+    expect(JSON.parse(history[1].agentMeta)).toEqual({ projectCompanion: author });
+  });
+
   it('detaches parked native sessions in remote history while keeping the visible switch record', async () => {
     sessionRowRef.row = { ...baseSession(), agentKind: 'codex', agentDeviceId: 'remote-device' };
     const switchContent = {

@@ -1,5 +1,6 @@
 import { and, eq, gt, gte, desc, isNull, or, inArray, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
+import { projectCompanionHandoffHistory } from './projectCompanionTranscript.js';
 import { messages, sessions } from './schema.js';
 
 const messageRowid = sql<number>`rowid`;
@@ -16,7 +17,7 @@ export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit: number | null = 400,
   after?: { createdAt: number; rowid: number },
-  role?: 'user' | 'authorization' | 'replay',
+  role?: 'user' | 'authorization' | 'replay' | 'recovery',
 ): Promise<
   Array<{
     clientId: string;
@@ -29,7 +30,8 @@ export async function listMessagesForAgentHandoff(
 > {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
-    .select({ clearedAt: sessions.clearedAt, source: sessions.source, createdAt: sessions.createdAt })
+    .select({ clearedAt: sessions.clearedAt, source: sessions.source, createdAt: sessions.createdAt,
+      companionHistory: sql<number>`EXISTS (SELECT 1 FROM project_task_companions WHERE session_id = "sessions"."id")` })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
@@ -75,14 +77,14 @@ export async function listMessagesForAgentHandoff(
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role === 'replay'
             ? inArray(messages.role, ['user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'error', 'ask_user', 'plan_review'])
-            : role ? eq(messages.role, role) : undefined),
+            : role === 'user' ? eq(messages.role, role) : undefined),
     )
     .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid));
   // Authority replay must start at the clear/rewind boundary: the shared intent
   // budget is stateful, so an arbitrary row suffix has a different projection.
   const rows = await (limit === null ? query : query.limit(limit));
   rows.reverse();
-  return rows
+  const history = rows
     .map((r) => {
       let content: unknown = r.content;
       try {
@@ -112,6 +114,7 @@ export async function listMessagesForAgentHandoff(
       return {
         clientId: r.clientId,
         role: r.role,
+        ...(role === 'recovery' && sessRow?.companionHistory ? { projectCompanionHistory: true } : {}),
         content,
         createdAt: r.createdAt,
         agentMeta,
@@ -119,4 +122,6 @@ export async function listMessagesForAgentHandoff(
       };
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
+  if ((!role || role === 'replay') && sessRow?.companionHistory) return projectCompanionHandoffHistory(history);
+  return history;
 }

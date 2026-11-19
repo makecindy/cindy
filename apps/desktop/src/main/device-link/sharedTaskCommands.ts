@@ -1,4 +1,5 @@
 import type { SharedTaskApi, SharedTaskCloseResult, SharedTaskHostCommand, SharedTaskHostState, SharedTaskOwnedItem } from '@cindy/device-link';
+import { withSendToSessionLock } from '../maker-ipc/sendToSessionLock.js';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
@@ -67,7 +68,10 @@ export async function executeSharedTaskHostCommand(raw: unknown, deps: {
   }
   if (!deps.available()) throwIpcError('UNSUPPORTED_CAPABILITY', 'SharedTask mode requires updated clients and server');
   const host = deps.host();
-  if (input.action === 'open') return { sharedTaskId: await host.open(id(input.sessionId)) };
+  if (input.action === 'open') {
+    const sessionId = id(input.sessionId);
+    return { sharedTaskId: await withSendToSessionLock(sessionId, () => host.open(sessionId)) };
+  }
   const sharedTaskId = id(input.sharedTaskId);
   if (input.action === 'invite') return host.invite(sharedTaskId);
   if (input.action === 'close') { await host.close(sharedTaskId); return { ok: true }; }

@@ -1622,6 +1622,23 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
+  // Unit: a bound project task may have raw tool results in its vendor session. A
+  // fork must start a fresh engine and copy just the visible prefix at the selected reply.
+  it('forks a project conversation without copying private companion notes or its native thread', async () => {
+    const user = makeMessageRow({ clientId: 'question', role: 'user', content: '"Question"', createdAt: 1000, rowid: 1 });
+    const tool = makeMessageRow({ clientId: 'notes', role: 'tool_result', content: '"PRIVATE_NOTE"', createdAt: 1500, rowid: 2 });
+    const answer = makeMessageRow({ clientId: 'reply', role: 'assistant', content: '"Answer"', createdAt: 2000, rowid: 3 });
+    const source = makeSourceRow({ agentKind: 'pi', companionRevision: 2 });
+    selectQueue.push([source], [answer], [], [user, tool, answer], [makeSourceRow({ id: 'child' })]);
+    const fork = await forkSessionAtMessage('src-session', 'reply');
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(fork._count?.messages).toBe(3);
+    const args = txCalls.find(call => call.name === 'fork.session')?.args;
+    expect(args).toMatchObject({ expectedCompanionRevision: 2, newSession: { sdkSessionId: null },
+      recoveryMarker: { projectMessages: [{ clientId: 'question' }, { clientId: 'reply' }] } });
+    expect(JSON.stringify(args)).not.toContain('PRIVATE_NOTE');
+  });
+
   it('forks overflow-rebuilt history as a fresh native session with handoff', async () => {
     const target = makeMessageRow({
       id: 'stale-history',

@@ -174,10 +174,12 @@ export function registerGetChatHistoryTool(
       cursor,
       order,
     }) => {
+      const defaultId = session_ids === undefined && !workdir
+        ? deps.history.defaultConversationId?.(deps.getSessionContext?.()) : undefined;
       const scope = await resolveHistoryScope(
         deps.history,
         deps.getSessionContext,
-        session_ids ?? null,
+        session_ids ?? (defaultId ? [defaultId] : null),
       );
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       if (
@@ -193,7 +195,7 @@ export function registerGetChatHistoryTool(
         );
       }
       // 至少一个主过滤
-      const hasMainFilter =
+      const hasMainFilter = !!defaultId ||
         (session_ids !== undefined && session_ids.length > 0) ||
         (workdir !== undefined && workdir.length > 0) ||
         (from !== undefined && from.length > 0) ||

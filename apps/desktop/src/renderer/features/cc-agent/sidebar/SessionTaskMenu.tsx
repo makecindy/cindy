@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { useTaskBotMentions } from '../hooks/useTaskBotMentions';
+import { useProjectTaskCompanion } from '../hooks/useProjectTaskCompanion';
+import { Check, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   parseSharedTaskPeer,
@@ -156,6 +158,20 @@ function ActiveSessionTaskMenu({
     ownerGeneration,
   ]);
   const hosted = sharing?.detail?.status === 'active' ? sharing.detail : null;
+  const projectCompanion = useProjectTaskCompanion(session, !guest && !hosted);
+  const partners = useTaskBotMentions(session.deviceLinkDeviceId ?? null, session.remoteHostId);
+  const choosePartner = async (botId: string | null) => {
+    if (!projectCompanion) return;
+    const owner = getDataOwnerGeneration();
+    try {
+      const choice = await window.electronAPI.maker.projectTaskCompanion(session.id,
+        { botId, expectedRevision: projectCompanion.revision });
+      if (isDataOwnerGenerationCurrent(owner) && choice.botId !== botId) toast.error(t('projectCompanion.changed'));
+    } catch (error) {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(String(error).includes('PROJECT_COMPANION_TASK_BUSY')
+        ? 'projectCompanion.busy' : 'projectCompanion.failed'));
+    }
+  };
   const copyInvitation = async () => {
     if (!hosted || copyPending.current) return;
     copyPending.current = true;
@@ -280,6 +296,22 @@ function ActiveSessionTaskMenu({
                 )}
               </DropdownMenuItem>
             )}
+            {projectCompanion && (projectCompanion.botId || partners?.length) ? (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className={MENU_ROW_CLASS} disabled={ownerActionsBlocked}>
+                  {t('projectCompanion.title')}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent sideOffset={4}>
+                  {[{ id: null, name: t('projectCompanion.default') }, ...(partners ?? [])].map(partner => (
+                    <DropdownMenuItem key={partner.id ?? 'default'} className={MENU_ITEM_CLASS}
+                      onSelect={() => { void choosePartner(partner.id); }}>
+                      <span className="flex-1 truncate">{partner.name}</span>
+                      {projectCompanion.botId === partner.id && <Check size={14} aria-hidden />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ) : null}
             {tags}
             {showRuntimePlugins && <DropdownMenuItem className={MENU_ITEM_CLASS}
               disabled={ownerActionsBlocked} onSelect={() => setDialog({ kind: 'runtime-plugins' })}>

@@ -264,6 +264,8 @@ export interface XdtHelperHistoryDeps {
   /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
   sessionUrl?: (sessionId: string) => string;
   remote?: import('./_history_devices.js').HistoryRemoteDeps;
+  /** Default for an unaddressed conversation read/search; explicit targets still use the ordinary authorization scope. */
+  defaultConversationId?: (context?: import('../types.js').LiziMcpSessionContext) => string | undefined;
   /** Resolve the maximum history scope for the current runtime Session. */
   resolveSessionScope?: (args: {
     callerSessionId?: string;

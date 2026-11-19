@@ -7356,6 +7356,7 @@ const MessageItem = memo(function MessageItem({
       return withAssistantAvatar(
         assistantAvatar,
         <>
+          {message.projectCompanionName && <div className="text-xs text-muted-foreground">{message.projectCompanionName}</div>}
           <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
             pluginUi={pluginUi}

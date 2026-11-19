@@ -22,6 +22,7 @@ import {
   promptSafeSourceName,
 } from '@cindy/maker-shared/message-source';
 
+import { projectCompanionHandoffHistory } from '../localDb/projectCompanionTranscript.js';
 import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 
 /** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域)。 */
@@ -32,6 +33,7 @@ export interface HandoffSourceMessage {
   role: string;
   content: unknown;
   createdAt: number; // unix ms
+  projectCompanionHistory?: boolean;
   /** 生产 tool_result 的关联列；content 经常是纯字符串，不能靠信封里的 toolUseId。 */
   toolUseId?: string | null;
   /**
@@ -553,8 +555,9 @@ function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): R
     case 'assistant': {
       const text = typeof msg.content === 'string' ? msg.content : extractPlainText(msg.content);
       if (!text) return;
-      const source = readMessageSourceGroup(parseJsonObjectString(msg.agentMeta))
-        ? describeHandoffUserSource(msg) : null;
+      const meta = asRecord(parseJsonObjectString(msg.agentMeta));
+      const source = promptSafeSourceName(asRecord(meta?.projectCompanion)?.displayName)
+        ?? (readMessageSourceGroup(meta) ? describeHandoffUserSource(msg) : null);
       return { label: source ? `[Assistant · ${source}]` : '[Assistant]', text };
     }
     case 'thinking': {
@@ -762,6 +765,10 @@ export function buildHandoff(
   messages: HandoffSourceMessage[],
   opts: BuildHandoffOptions,
 ): { handoff: string; handoffCoverage: HandoffCoverage } {
+  if (messages.some(row => row.projectCompanionHistory)) messages = projectCompanionHandoffHistory(messages);
+  if (opts.workStateMessages?.some(row => row.projectCompanionHistory)) {
+    opts = { ...opts, workStateMessages: projectCompanionHandoffHistory(opts.workStateMessages) };
+  }
   const tokens = handoffTokenBudget(opts);
   const framing = assembleHandoffSections(messages, opts);
   const heading = opts.mode === 'delta'

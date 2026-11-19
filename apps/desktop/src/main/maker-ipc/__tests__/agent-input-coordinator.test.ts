@@ -3151,6 +3151,26 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
   });
 
+  // Unit: the partner answers ordinary project messages and file-only messages. The
+  // check runs inside sendToAgent, before the harness acknowledges the first message.
+  it.each([
+    ['typed', { autoReviewUserText: '你好' }, true],
+    ['file', { files: [{ name: 'notes.txt', path: '/repo/notes.txt' }] }, true],
+    ['phone', { fromMobileClient: true, autoReviewUserText: '你好' }, false],
+    ['forwarded', { origin: { kind: 'session', senderSessionId: 'other', displayText: '你好' } }, false],
+  ] as const)('routes a %s message to the project partner only for its local owner', async (_kind, patch, expected) => {
+    const h = createHarness(), sid = 'partner-task';
+    let routed: boolean | undefined;
+    h.sendToAgent.mockImplementationOnce(async () => {
+      routed = h.coordinator.isLocalProjectCompanionInput(sid);
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('input', _kind === 'file' ? '' : '你好', { ...patch } as Partial<AgentInputQueuedMessage>));
+    await flush();
+    expect(routed).toBe(expected);
+  });
+
   // Message provenance does not change the current account task's tool permissions.
   it.each([
     ['the owner', {}, true],

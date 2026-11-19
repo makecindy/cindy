@@ -1244,6 +1244,7 @@ export class Maker {
       sessionInstanceId,
       agentKind: meta.agentKind,
       workDir: startOpts.workingDir,
+      projectCompanion: startOpts.projectCompanion,
       handle,
       hostStartupPreferences: opts.hostStartupPreferences,
       beforeTurn: this.lifecycleHooks.beforeTurn,

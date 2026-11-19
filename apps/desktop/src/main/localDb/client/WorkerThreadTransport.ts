@@ -4,6 +4,7 @@ import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
+import { openProjectCompanionSession } from '../worker/opHandlers/openProjectCompanionSession.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
@@ -45,6 +46,7 @@ const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
+const openProjectCompanionSession = ${openProjectCompanionSession.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
@@ -502,6 +504,8 @@ function dispatchTransaction(readyDb, payload) {
       return compactSessionToolResults(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
+    case 'sessions.openWithCompanion':
+      return openProjectCompanionSession(readyDb, request.args);
     case 'context.rebuild':
       return contextRebuild(readyDb, request.args);
     case 'mcpApps.viewState.save':
@@ -764,6 +768,15 @@ function contextRebuild(readyDb, args) {
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   return readyDb.transaction(() => {
+    if (payload.projectCompanion !== undefined) {
+      const choice = asRecord(payload.projectCompanion, 'projectCompanion');
+      const revision = expectNumber(choice.expectedRevision, 'expectedRevision');
+      const botId = choice.botId === null ? null : expectString(choice.botId, 'botId');
+      const result = revision === 0
+        ? readyDb.prepare('INSERT OR IGNORE INTO project_task_companions (session_id, bot_id, revision) VALUES (?, ?, 1)').run(sessionId, botId)
+        : readyDb.prepare('UPDATE project_task_companions SET bot_id = ?, revision = revision + 1 WHERE session_id = ? AND revision = ?').run(botId, sessionId, revision);
+      if (result.changes !== 1) throw Object.assign(new Error('Conversation partner changed'), { code: 'PRECONDITION_FAILED' });
+    }
     const replacement = payload.replacementRoute === undefined
       ? null : asRecord(payload.replacementRoute, 'replacementRoute');
     const sessionResult = replacement
@@ -2068,6 +2081,11 @@ function forkSession(readyDb, args) {
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
   return readyDb.transaction(() => {
+    if (payload.expectedCompanionRevision !== undefined) {
+      const partner = readyDb.prepare('SELECT revision FROM project_task_companions WHERE session_id = ?').get(sourceSessionId);
+      if ((partner?.revision ?? 0) !== payload.expectedCompanionRevision)
+        throw invalidArgs('Conversation partner changed while preparing the fork');
+    }
     if (newSession.source === 'side-chat' && !readyDb.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {
@@ -2132,9 +2150,22 @@ function forkSession(readyDb, args) {
       readyDb.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
         .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
     }
+    const marker = payload.recoveryMarker == null ? null : asRecord(payload.recoveryMarker, 'recoveryMarker');
+    const visible = marker?.projectMessages === undefined ? null : new Map(
+      expectArray(marker.projectMessages, 'projectMessages').map(raw => {
+        const row = asRecord(raw, 'project message');
+        return [expectString(row.clientId, 'clientId'), row];
+      }),
+    );
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
+      if (visible) {
+        const safe = visible.get(message.client_id);
+        if (safe) insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role,
+          expectString(safe.content, 'content'), null, nullableString(safe.agentMeta), message.agent_kind, message.created_at - historyTimeOffset);
+        continue;
+      }
       insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at - historyTimeOffset);
     }
     if (payload.recoveryMarker != null) {
@@ -2168,7 +2199,7 @@ function forkSession(readyDb, args) {
         markerCreatedAt,
       );
     }
-    return { messageCount: sourceMessages.length };
+    return { messageCount: visible?.size ?? sourceMessages.length };
   })();
 }
 

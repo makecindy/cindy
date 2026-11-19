@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "请选用在本机运行的模型，与这位伙伴对话。",
+    "title": "对话伙伴",
+    "default": "默认助手",
+    "changed": "另一个窗口已更改对话伙伴。",
+    "busy": "请等当前回复结束、待发消息处理完后再切换伙伴。",
+    "failed": "无法选择这位伙伴，请检查伙伴是否已在这台电脑上启用。",
+    "unavailable": "伙伴不可用"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",

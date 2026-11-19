@@ -104,6 +104,9 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       return current;
     };
     let sess = readCurrentSteerSession();
+    if (sess.projectCompanion && (so.fromMobileClient || so.sourceDevice || so.sharedTaskAuthor || so.sourcePlugin
+      || so[MCP_APP_MESSAGE_GUARD] || so[FORWARDED_REQUEST_RECEIPT] || (so.sourceOrigin && (so.sourceOrigin as { kind?: string }).kind !== 'desktop')))
+      throwIpcError('PRECONDITION_FAILED', 'Conversation partners require a local owner message');
     log.info('steer: invoked', {
       sessionId,
       agentKind: sess.agentKind,

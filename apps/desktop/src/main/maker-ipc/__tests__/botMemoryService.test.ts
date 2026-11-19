@@ -214,6 +214,22 @@ describe('bot memory service', () => {
     expect(requestRefresh).toHaveBeenCalledTimes(1);
   });
 
+  // Unit: the project memory entry point uses the real companion store, and a retry
+  // cannot overwrite an earlier preference or write after the owner changes.
+  it('remembers an explicit preference once in the chosen companion store', async () => {
+    const { service } = setup();
+    const note = { name: 'short-replies', title: '简洁回答', body: '我喜欢简洁回答。' };
+    const allowed = async () => {};
+    await service.rememberPreference('bot-1', note, allowed);
+    await service.rememberPreference('bot-1', note, allowed);
+    expect((await service.read('bot-1', 'user_short-replies.md')).body).toBe(note.body);
+    await expect(service.rememberPreference('bot-1', { ...note, body: 'changed' }, allowed)).rejects.toThrow();
+    await expect(service.rememberPreference('bot-1', { ...note, name: 'denied' }, async () => {
+      throw new Error('owner changed');
+    })).rejects.toThrow('owner changed');
+    await expect(storage.read('user_denied.md')).rejects.toThrow();
+  });
+
   it('skips the runtime refresh for teammates without a main task', async () => {
     const { service, requestRefresh, flushTimers } = setup({ bot: { canonicalSessionId: null } });
     const current = await service.read('bot-1', 'feedback_verify-before-claiming.md');

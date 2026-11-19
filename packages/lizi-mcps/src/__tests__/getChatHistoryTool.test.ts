@@ -12,6 +12,20 @@ function parseText(result: { content: Array<{ type: string; text?: string }> }):
   return JSON.parse(block.text) as Record<string, unknown>;
 }
 
+// Unit: an unaddressed recall inside a project with a conversation partner stays on
+// its own timeline. Explicitly addressing another task still goes through the ordinary scope.
+it('defaults companion recall to the current conversation while respecting explicit targets', async () => {
+  const history = { listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+    defaultConversationId: () => 'current',
+    getMessages: vi.fn(async () => ({ ok: true as const, page: { items: [], nextCursor: null, hasMore: false } })) };
+  const registry = new XdtHelperToolRegistry();
+  registerGetChatHistoryTool(registry, { history });
+  await registry.call('get_chat_history', {});
+  expect(history.getMessages).toHaveBeenLastCalledWith(expect.objectContaining({ sessionIds: ['current'] }));
+  await registry.call('get_chat_history', { session_ids: ['other'] });
+  expect(history.getMessages).toHaveBeenLastCalledWith(expect.objectContaining({ sessionIds: ['other'] }));
+});
+
 describe('get_chat_history remote errors', () => {
   it('preserves stable host error codes instead of collapsing them to INTERNAL', async () => {
     const history = {

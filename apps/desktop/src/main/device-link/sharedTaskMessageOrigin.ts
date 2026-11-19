@@ -4,7 +4,7 @@ import { projectMcpAppHistory } from '../mcp-apps/history.js';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
-const GUEST_HIDDEN_META_KEYS = ['autoReviewUserText', 'botTaskCoordinationInput', 'agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
+const GUEST_HIDDEN_META_KEYS = ['projectCompanion', 'autoReviewUserText', 'botTaskCoordinationInput', 'agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
 
 function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
   if (origin.kind === 'session') return { kind: 'session' };
