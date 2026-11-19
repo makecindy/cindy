@@ -12,8 +12,8 @@
 // authenticated group uses a fixture user and password), writes a report, and restores the settings.
 //
 // With PAC or auto-discovery the Host asks its Chromium proxy helper (28c, src/chromium-proxy.ts), started here
-// exactly as in production (no test switch), so those groups must agree too. Expected difference: with an
-// authenticated proxy the Host reports unresolved every URL Electron sends through that proxy.
+// exactly as in production (no test switch), so those groups must agree too. If scutil publishes a username
+// for the selected HTTPS proxy, the Host must report it unresolved. Otherwise only routing is compared.
 // Under PAC and auto-discovery, compare all Safe Storage item identities before and after the production helper.
 //
 // usage (on the runner, from apps/host):
@@ -30,6 +30,26 @@ import { electronProxyResults } from './macos-system-proxy-reference.mjs';
 
 import { createChromiumProxyHelper } from '../src/chromium-proxy.ts';
 import { createMacSystemProxySession, readScutilProxyOutput } from '../src/macos-system-proxy.ts';
+
+function sampleNamesHttpsProxyUser(sample) {
+  // The fixture gives HTTPS and HTTP distinct addresses. Only the top-level HTTPSUser is relevant.
+  // SCPrint indents top-level keys by two spaces. As in the Host parser, a blank value names no one.
+  const user = /^ {2}HTTPSUser :(?: ([^\r\n]*))?\r?$/m.exec(sample)?.[1];
+  return Boolean(user?.trim());
+}
+
+function compareProxyResult(group, url, host, chromium, namesHttpsProxyUser) {
+  const row = { group: group.name, url, chromium, host, ok: host === chromium };
+  if (group.expect !== 'auth' || chromium !== group.authenticatedProxy) return row;
+  if (!namesHttpsProxyUser) return { ...row, authenticationRefusal: 'skipped-precondition' };
+  const ok = host.startsWith('ERROR: the system proxy for this request requires authentication;');
+  return { ...row, ok, authenticationRefusal: ok ? 'passed' : 'failed' };
+}
+
+function formatReport(report) {
+  return ['| group | url | Chromium | Host | Result | Authentication refusal |', '|---|---|---|---|---|---|',
+    ...report.map(row => `| ${row.group} | ${row.url} | ${row.chromium} | ${row.host} | ${row.ok ? 'ok' : 'MISMATCH'} | ${row.authenticationRefusal ?? ''} |`)].join('\n');
+}
 
 if (process.platform !== 'darwin' || process.env.GITHUB_ACTIONS !== 'true'
   || process.env.RUNNER_ENVIRONMENT !== 'github-hosted' || process.env.CINDY_SYSTEM_PROXY_COMPARE !== '1') {
@@ -95,7 +115,7 @@ const GROUPS = [
     '10.0.0.0/8', 'ex?mple.com', 'https://www.example.com', 'a.example.com, b.example.com', 'fd00::/8']] },
   { name: 'subtract-implicit', settings: [HTTP, HTTPS, ['-setproxybypassdomains', '<-loopback>']] },
   { name: 'auto-discovery', settings: [HTTPS, ['-setproxyautodiscovery', 'on']] },
-  // Only the HTTPS proxy names a user: what Electron sends through it the Host leaves unresolved, the rest agrees.
+  // Only the HTTPS proxy is configured with a user. Some runners omit HTTPSUser in scutil output.
   { name: 'authenticated', expect: 'auth', authenticatedProxy: 'PROXY 10.0.0.2:3129',
     settings: [['-setsecurewebproxy', '10.0.0.2', '3129', 'on', 'ci-proxy-user', 'ci-proxy-pass'], HTTP] },
 ];
@@ -115,6 +135,11 @@ try {
     await new Promise(resolve => setTimeout(resolve, 2000));
     const sample = await readScutilProxyOutput();
     fs.writeFileSync(path.join(outDir, `scutil-${group.name}.txt`), sample);
+    const namesHttpsProxyUser = group.expect === 'auth' && sampleNamesHttpsProxyUser(sample);
+    if (group.expect === 'auth' && !namesHttpsProxyUser) {
+      console.log('authenticated: scutil did not publish a nonblank HTTPSUser on this runner. '
+        + 'The refusal assertion was not run. Host and Electron routes are still compared.');
+    }
     // A new helper per group, started the production way (default launcher and assets, no test switch).
     const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
     const session = createMacSystemProxySession(async () => sample, helper);
@@ -144,11 +169,9 @@ try {
       if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
         throw new Error(`PAC did not take effect for ${url}: Electron returned ${chromium}`);
       }
-      const hostFailed = host.startsWith('ERROR: ');
-      const ok = group.expect === 'auth' ? (chromium === group.authenticatedProxy ? hostFailed : host === chromium)
-        : host === chromium;
-      if (!ok) mismatches += 1;
-      report.push({ group: group.name, url, chromium, host, ok });
+      const row = compareProxyResult(group, url, host, chromium, namesHttpsProxyUser);
+      if (!row.ok) mismatches += 1;
+      report.push(row);
     }
   }
 } finally {
@@ -157,10 +180,9 @@ try {
 }
 
 fs.writeFileSync(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-const table = ['| group | url | Chromium | Host | |', '|---|---|---|---|---|',
-  ...report.map(row => `| ${row.group} | ${row.url} | ${row.chromium} | ${row.host} | ${row.ok ? 'ok' : 'MISMATCH'} |`)].join('\n');
+const table = formatReport(report);
 fs.writeFileSync(path.join(outDir, 'report.md'), `${table}\n`);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## macOS system proxy comparison\n\n${table}\n`);
 console.log(table);
-console.log(mismatches === 0 ? 'All results agree.' : `${mismatches} result(s) differ.`);
+console.log(mismatches === 0 ? 'No mismatches in the checks that ran.' : `${mismatches} result(s) differ.`);
 process.exitCode = mismatches === 0 ? 0 : 1;
