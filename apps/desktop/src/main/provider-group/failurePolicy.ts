@@ -296,6 +296,9 @@ export function decideProviderGroupFailure(
   if (codexStay) return { action: 'stay', why: codexStay };
 
   // ── 那台账号的问题：换，并记进组的状态 ──
+  // Explicit upstream account denial is not a broken connection. Preserve the
+  // existing authorized account fallback instead of retrying that source.
+  if (reason === 'account_access_denied') return switchTo('auth', null);
   // 过载先于用量上限判(529 / serverOverloaded 也会被用量判定认作限流)：过载只短冷却，用量上限按重置时刻冷却。
   if (classifyTurnOverload(signals)) return switchTo('overload', null);
   if (isBillingDepletionError(signals) || classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);

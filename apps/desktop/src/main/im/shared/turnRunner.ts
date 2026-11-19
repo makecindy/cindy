@@ -1,5 +1,6 @@
 import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 import { captureChannelAccount } from './openChannelSession';
+import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
 import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
@@ -143,6 +144,8 @@ import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../..
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { isSilencedSchedulerTurn } from '../../scheduler-host/silent-output';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { telegramQuestionOrigin } from '../../maker-ipc/telegramQuestionReply.js';
 import { isRelayedChannelTurnSource, type ChannelTurnSource } from '../../maker-ipc/channelTurnSignal';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
@@ -435,6 +438,7 @@ interface SessionState {
    * 桌面输入等其它来源不回传；在该轮终态清除，避免沿用到下一轮。
    */
   relayedTurn: boolean;
+  replyRequesterIsOwner?: boolean;
   replyMediaRelease?: () => void;
 }
 
@@ -1883,7 +1887,8 @@ export function createTurnRunner(
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
-        origin: { kind: 'user', surface: 'im' },
+        origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true, effectiveTurnPolicy) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -1895,35 +1900,11 @@ export function createTurnRunner(
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         afterTurnReserved: async () => {
           if (!effectiveTurnPolicy) return;
-          const session = state.makerSession;
-          const previous = session.stablePermissionModeState;
-          // A retained policy is mandatory, regardless of channel or whether its
-          // requester is known. Explicit channel/companion exemptions were resolved
-          // above; never remove a mandatory policy just to admit Full access.
-          if (previous?.mode !== 'bypassPermissions') return;
-          if (!session.capabilities.setPermissionModeMidSession?.supported
-              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
-              || !session.capabilities.turnPermissionPolicy?.supported?.supported
-              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
-
-          // Reservation prevents stealing another turn's runtime. Keep the existing
-          // host lease through background continuation AND asynchronous restoration.
-          // CAS protects user changes; the persisted task preference is never changed.
-          const release = session.acquireTurnLease();
-          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
-          const originalMode = previous.mode;
-          item.turn.hostTurnLeaseRelease = () => {
-            void switching.then(async (changed) => {
-              if (changed) {
-                await session.setPermissionModeIfUnchanged(
-                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
-                );
-              }
-            }).catch((err) => {
-              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-            }).finally(release);
-          };
-          await switching;
+          await beginTemporaryImPermission(state.makerSession, cleanup => {
+            item.turn.hostTurnLeaseRelease = cleanup;
+          }, err => {
+            log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
         },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
@@ -2353,6 +2334,22 @@ export function createTurnRunner(
     }
   }
 
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean, policy?: TurnPermissionPolicy) {
+    const session = state.makerSession;
+    const account = captureImAccountGeneration();
+    const connected = im.getStatus?.();
+    return telegramQuestionOrigin((answerSession) => {
+      const status = im.getStatus();
+      if (account === null || !isImAccountGenerationCurrent(account) ||
+          answerSession !== session || state.makerSession !== session || sessionStates.get(session.id) !== state ||
+          !ownsChannelOutput(state) || state.userId !== userId || state.scopeKey !== scopeKey ||
+          connected?.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+      state.replyRequesterIsOwner = requesterIsOwner;
+      state.relayedTurn = true;
+      updateReplyMediaScope(state);
+    }, policy ? { session, policy } : undefined);
+  }
+
   /**
    * 这个任务的输出只属于本渠道: 渠道自有任务, 或伙伴的 channel 专线。决定是否注入
    * 渠道 vendorOptions、是否回传非 IM 轮次(后台结果回原处)。
@@ -2372,7 +2369,7 @@ export function createTurnRunner(
     state.replyMediaRelease = beginTelegramReplyMediaScope({
       sessionId: session.id,
       sessionInstanceId: session.instanceId,
-      scope,
+      scope: { ...scope, requesterIsOwner: state.replyRequesterIsOwner },
       isActive: () => sessionStates.get(session.id) === state &&
         state.makerSession === session && state.relayedTurn && state.queue.length === 0 &&
         im.getStatus().kind === 'connected' && scope.im.getBotId() === botId,
@@ -4933,6 +4930,7 @@ export function createTurnRunner(
     attachSessionOutput: (session, userId, route, source) => {
       const existing = sessionStates.get(session.id);
       if (existing) {
+        existing.replyRequesterIsOwner = undefined;
         existing.relayedTurn = isRelayedChannelTurnSource(source);
         const userChanged = existing.userId !== userId;
         if (route?.companionChannel) {
@@ -4977,6 +4975,7 @@ export function createTurnRunner(
       const state = sessionStates.get(session.id);
       // An IM turn still in the queue owns whatever runs now; it is delivered once, as itself.
       if (state?.makerSession !== session || state.queue.length > 0) return;
+      if (source !== 'provider-wake') state.replyRequesterIsOwner = undefined;
       state.relayedTurn = isRelayedChannelTurnSource(source);
       updateReplyMediaScope(state);
     },

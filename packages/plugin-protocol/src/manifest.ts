@@ -390,7 +390,7 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
  * 就没法只授权其中一样。
  */
-export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank', 'media_request'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
 
 /** Historical unknown data can be retained without being interpreted as a capability. */

@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMainLocale } from '../../../i18n.desktop';
 import path from 'node:path';
+import { activateTelegramQuestionReply } from '../../../maker-ipc/telegramQuestionReply';
 import { readTelegramReplyMediaScope, readChannelToolScope } from '../channelToolScope';
 
 import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionResolver, Session, SessionSendResult } from '@cindy/maker-core';
@@ -19,6 +20,7 @@ import type { ChannelIM } from '@cindy/im';
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   slackIm: {
+    getStatus: () => ({ kind: 'connected' as const, appId: 'bot-1' }),
     reactToMessage: vi.fn(),
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
@@ -1046,6 +1048,33 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledWith('U1', undefined, { threadTs: '100.1' });
     expect(stub.finalize).toHaveBeenCalledWith(turnOrigin ? '🤖 自动任务「检查进度」\n\n处理结果' : '处理结果');
+  });
+
+  // Unit regression: answering a Telegram question after the original turn finished
+  // opens one reply in its original topic, and loses delivery on bot replacement.
+  it('delivers a late question answer only to the originating Telegram account and topic', async () => {
+    let appId = 'bot-1';
+    runner = createTurnRunner({ ...fakeAdapter, channel: 'telegram',
+      im: { ...fakeAdapter.im, getStatus: () => ({ kind: 'connected', appId }) },
+      replyMediaScopeFor: laneUserId => ({ laneUserId, im: { getBotId: () => appId } as never }),
+    }, fakeRepo, fakeCards);
+    const h = await channelAndIdle('desktop');
+    const origin = h.send.mock.calls[0][1].origin;
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const emitReply = () => {
+      h.emit({ type: 'text', data: { text: 'answer result', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+    };
+    activateTelegramQuestionReply(origin, h.session);
+    expect(readTelegramReplyMediaScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId }))
+      .toMatchObject({ requesterIsOwner: false });
+    emitReply();
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('answer result'));
+    appId = 'replacement-bot';
+    activateTelegramQuestionReply(origin, h.session);
+    emitReply();
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
   });
 
   it('Agent 自己唤醒的轮次(后台任务完成)回到原聊天，子代理与桌面轮次仍不回传', async () => {

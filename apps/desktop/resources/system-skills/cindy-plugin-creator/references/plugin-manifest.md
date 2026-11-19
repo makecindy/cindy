@@ -423,14 +423,15 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
 
 ### 决策与重排声明
 
-`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+`cindy.models` 是可选的模型能力类目，支持 `decisions`、`rerank` 和 `media_request`：
 
 ```json
-{ "cindy": { "models": ["decisions", "rerank"] } }
+{ "cindy": { "models": ["media_request"] } }
 ```
 
 只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
-调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」和 [§4.0.4 媒体直调](plugin-media.md)。新增
+`media_request` 要走现有安装或更新审批。使用此能力时通过
 `minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
 或账号失效当成不支持而绕过。
 
