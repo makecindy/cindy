@@ -435,16 +435,6 @@ describe('passive shared-userData instance auth isolation', () => {
   });
 
   /**
-   * Skill projection boundary (release table row 25, step 25a). authBoundaryQuarantine.ts no
-   * longer reads Electron, so it can load in the Node Host. Its passive test is injected, and the
-   * default is "not passive". If the desktop stops injecting it, or injects after
-   * bootstrap-electron loads the first reader, a passive dev instance sharing another process's
-   * userData acts as a primary and writes the shared Skill roots and the owner boundary. Its
-   * unit test injects the predicate itself and cannot see this, hence a guard.
-   * Minimal failure: delete the configureProjectionBoundaryPassive line from index.ts, or move it
-   * below dispatch().
-   */
-  /**
    * Release table row 25 (25b): the owner-commit gate defaults to allowed, and only the Node Host's
    * resident process injects a refusal. If any desktop main-process file injected it, the desktop's
    * sign-in, logout and projection repair would stop publishing the owner and every Skill projection
@@ -467,6 +457,16 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * Skill projection boundary (release table row 25, step 25a). authBoundaryQuarantine.ts no
+   * longer reads Electron, so it can load in the Node Host. Its passive test is injected, and the
+   * default is "not passive". If the desktop stops injecting it, or injects after
+   * bootstrap-electron loads the first reader, a passive dev instance sharing another process's
+   * userData acts as a primary and writes the shared Skill roots and the owner boundary. Its
+   * unit test injects the predicate itself and cannot see this, hence a guard.
+   * Minimal failure: delete the configureProjectionBoundaryPassive line from index.ts, or move it
+   * below dispatch().
+   */
   it('Skill projection boundary: the passive check is injected before bootstrap-electron loads', () => {
     const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8').replace(
       /\r\n/g,

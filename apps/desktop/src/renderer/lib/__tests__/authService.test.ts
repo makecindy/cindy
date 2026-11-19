@@ -155,7 +155,7 @@ describe('renderer auth service', () => {
       { reason: 'HOST_START_FAILED' },
       undefined,
     ]);
-    expect(listener.mock.calls[2][0]).toEqual(signedOut);
+    expect(listener.mock.calls[2][0]).toStrictEqual(signedOut);
   });
 
   it('propagates a real initialization failure without inventing an auth snapshot', async () => {
