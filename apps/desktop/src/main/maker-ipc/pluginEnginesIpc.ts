@@ -110,11 +110,18 @@ export function listPluginEngineViews(): PluginEngineView[] {
  * controller shows the generic engine mark) so a picker read stays small on the relay.
  */
 export const REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS = 64 * 1024;
+const REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS = 512 * 1024;
 
-/** The engine list as a controller reads it over device-link: same fields, oversized icons left out. */
+/** Keep the engine list usable when a device has a large catalogue of plugin artwork. */
 export function remotePluginEngineViews(views: readonly PluginEngineView[]): PluginEngineView[] {
+  let remainingIconChars = REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS;
   return views.map((view) => {
-    if (!view.iconDataUrl || view.iconDataUrl.length <= REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS) return view;
+    if (!view.iconDataUrl) return view;
+    const size = view.iconDataUrl.length;
+    if (size <= REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS && size <= remainingIconChars) {
+      remainingIconChars -= size;
+      return view;
+    }
     const { iconDataUrl: _dropped, ...rest } = view;
     return rest;
   });

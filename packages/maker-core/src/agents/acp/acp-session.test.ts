@@ -337,7 +337,7 @@ describe('AcpSession turns', () => {
 describe('AcpSession permissions', () => {
   it.each([
     { name: 'allow once', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow' }, optionId: 'yes', asked: true },
-    { name: 'allow for the session', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow', permissionUpdates: [{}] }, optionId: 'always', asked: true },
+    { name: 'keeps Cindy session consent scoped to the current ACP request', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] }, optionId: 'yes', asked: true },
     { name: 'deny', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'deny' }, optionId: 'no', asked: true },
     { name: 'full access approves without asking', mode: 'bypassPermissions' as const, decision: null, optionId: 'yes', asked: false },
     { name: 'unsupported mode falls back to asking', mode: 'acceptEdits' as const, decision: { kind: 'permission', behavior: 'deny' }, optionId: 'no', asked: true },
@@ -366,6 +366,17 @@ describe('AcpSession permissions', () => {
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Write' }, options: PERMISSION_OPTIONS });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+
+  it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: 'ask' });
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+    const answer = await agent.requestPermission({
+      toolCall: { toolCallId: 'once-only', title: 'Write' },
+      options: PERMISSION_OPTIONS.filter((option) => option.kind !== 'allow_once'),
+    });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
   });
 });
@@ -402,15 +413,22 @@ describe('AcpSession stop and failure', () => {
     expect(agent.methods()).toEqual(['initialize', 'session/new']);
   });
 
-  it('ends the turn itself when the agent ignores a cancel past the grace period', async () => {
+  it('retires the endpoint when the agent ignores a cancel past the grace period', async () => {
     vi.useFakeTimers();
     const agent = createFakeAgent();
-    const { session, events } = await open(agent, { cancelGraceMs: 1_000 });
+    const { session, events } = await open(agent, { cancelGraceMs: 1_000, permissionMode: 'bypassPermissions' });
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     await session.abort();
+    await expect(agent.requestPermission({
+      toolCall: { toolCallId: 'after-stop', title: 'Write' },
+      options: PERMISSION_OPTIONS,
+    })).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'cancelled' } });
+    expect(agent.closedByClient).toBe(true);
+    await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
+    expect(agent.prompts).toHaveLength(1);
     // A late answer for the abandoned prompt must not produce a second turn end.
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.advanceTimersByTimeAsync(0);
@@ -550,7 +568,7 @@ function createAcpAgent(connect: () => FakeAgent['transport'], seen: string[] = 
 }
 
 describe('AcpAgent (the acp engine)', () => {
-  it('hands Cindy tools to the agent as HTTP MCP servers, never leaking a server without its credentials', () => {
+  it('passes only the task-scoped Cindy HTTP bridge and omits external MCP credentials', () => {
     expect(acpMcpServersFromBridge({
       mcpBridge: { token: 'tok', servers: [
         { name: 'cindy_tools', url: 'http://127.0.0.1:9/mcp/cindy_tools' },
@@ -560,7 +578,6 @@ describe('AcpAgent (the acp engine)', () => {
       mcpEnv: { K1: 'secret' },
     })).toEqual([
       { type: 'http', name: 'cindy_tools', url: 'http://127.0.0.1:9/mcp/cindy_tools', headers: [{ name: 'Authorization', value: 'Bearer tok' }] },
-      { type: 'http', name: 'remote_ok', url: 'https://mcp.example/a', headers: [{ name: 'X-Key', value: 'secret' }] },
     ]);
   });
 

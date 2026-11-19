@@ -185,41 +185,7 @@ export interface AgentDeviceRuntimeSelectionInput {
   supersededByOwnerBoundary(): boolean;
 }
 
-/** Whether a model selection targets a task running on a plugin engine (live or persisted). */
-function isPluginEngineSelectionTarget(
-  maker: Maker,
-  getSessionDbAgentKind: SessionRuntimeSelectionPorts['getSessionDbAgentKind'],
-  sessionId: string,
-): boolean {
-  const live = maker.getSession(sessionId);
-  return live ? live.agentKind === 'acp' : getSessionDbAgentKind(sessionId) === 'acp';
-}
-
-/**
- * Model / reasoning selection for a plugin-engine task: the agent owns its model list
- * (ACP config options), so there is no catalog route, provider, credential family or
- * engine switch to settle. Applies to the live engine if running, then records the
- * choice on the task row (it is re-applied when the engine next starts).
- */
-async function applyPluginEngineModelSelection(
-  ports: Pick<SessionRuntimeSelectionPorts, 'maker' | 'persistSessionFields' | 'broadcastSessionRuntimeProjection'>,
-  sessionId: string,
-  model: string,
-  providerId: unknown,
-  selectionEffort: unknown,
-): Promise<{ deferred: boolean; superseded: boolean; effectiveModelId?: string }> {
-  if (providerId !== undefined && providerId !== null && (typeof providerId !== 'string' || !acpHarnessKeyFromProviderId(providerId))) {
-    throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
-  }
-  const effort = isSupportedRuntimeEffort(selectionEffort) ? selectionEffort : undefined;
-  const live = ports.maker.getSession(sessionId);
-  if (live?.setModel) await live.setModel(model, effort ? { effort } : undefined);
-  await ports.persistSessionFields(sessionId, { model, ...(effort ? { effort } : {}) });
-  await ports.broadcastSessionRuntimeProjection(sessionId).catch(() => {});
-  return { deferred: false, superseded: false, effectiveModelId: model };
-}
-
-/** Maker as seen after the plugin-engine branch of handleSetModel returned. */
+/** Maker as seen after checking the persisted route and the current handle inside the route lock. */
 type BuiltinSessionsMaker = {
   getSession(sessionId: string): (Session & { agentKind: AgentKind }) | undefined;
   getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
@@ -328,16 +294,6 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     ) {
       throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
     }
-    // Plugin engine tasks (docs/plans/acp-plugin-bridge.md) own their model list; handled apart.
-    if (isPluginEngineSelectionTarget(makerPort, getSessionDbAgentKind, sessionId)) {
-      return applyPluginEngineModelSelection(
-        { maker: makerPort, persistSessionFields, broadcastSessionRuntimeProjection },
-        sessionId, model, providerId, selectionEffort,
-      );
-    }
-    // From here on the task runs on a built-in engine (plugin-engine tasks returned above and
-    // cannot switch engines), so this handler sees built-in sessions only. Type-only view.
-    const maker = makerPort as BuiltinSessionsMaker;
     if (isDeviceLinkInvoke() && confirmedContextWindow !== undefined) {
       throwIpcError(
         'PRECONDITION_FAILED',
@@ -428,6 +384,32 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       ) {
         return { deferred: false, superseded: true };
       }
+      const live = makerPort.getSession(sessionId);
+      if (runtimeStatus.agentKind === 'acp') {
+        if (internalOptions.source !== 'user' || (live && live.agentKind !== 'acp')) {
+          return { deferred: false, superseded: true };
+        }
+        if (!acpHarnessKeyFromProviderId(runtimeStatus.providerId)
+          || (providerId != null && providerId !== runtimeStatus.providerId)) {
+          throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+        }
+        // Keep the same owner, write authorization and send lock across the ACP round trip.
+        assertRuntimeOwnerCurrent();
+        assertSharedTaskCurrent.admit();
+        const effort = atomicSelection?.effort;
+        if (live && runtimeStatus.status === 'active') {
+          await live.setModel(model, effort ? { effort } : undefined);
+          assertRuntimeOwnerCurrent();
+          assertSharedTaskCurrent.admit();
+        }
+        await persistSessionFields(sessionId, { model, ...(effort ? { effort } : {}) });
+        assertRuntimeOwnerCurrent();
+        const response = { deferred: false, superseded: false, effectiveModelId: model };
+        if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+        return response;
+      }
+      if (live?.agentKind === 'acp') return { deferred: false, superseded: true };
+      const maker = makerPort as BuiltinSessionsMaker;
       if (runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId) {
         return applyAgentDeviceRuntimeSelection({
           sessionId, model, providerId, atomicSelection, internalOptions, runtimeStatus,

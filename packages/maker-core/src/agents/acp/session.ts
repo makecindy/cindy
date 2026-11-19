@@ -403,16 +403,22 @@ export class AcpSession {
     this.stopGeneration += 1;
     this.pendingPrompts.length = 0;
     const turn = this.turn;
-    if (!turn || turn.settled) return;
-    // ACP: after session/cancel the client answers pending permission requests with `cancelled`.
+    if (!turn || turn.settled || turn.cancelTimer) return;
+    turn.cancelTimer = setTimeout(() => {
+      this.logger?.warn('acp: agent did not settle a cancelled prompt in time', { graceMs: this.cancelGraceMs });
+      // Mark the handle as closing before emitting done so no queued or later prompt
+      // can share the endpoint with the prompt that ignored cancellation.
+      if (!this.closing) {
+        this.closing = Promise.resolve().then(() => this.connection.close());
+        void this.closing.catch((error: unknown) => {
+          this.logger?.warn('acp: could not confirm exit after cancellation', { error: String(error) });
+        });
+      }
+      this.finishTurn(turn.token, { stopReason: 'cancelled' });
+    }, this.cancelGraceMs);
+    // ACP also expects cancelled responses to permission requests that arrive during the grace period.
     this.cancelPermissions();
     this.connection.notify('session/cancel', { sessionId: this.id });
-    if (!turn.cancelTimer) {
-      turn.cancelTimer = setTimeout(() => {
-        this.logger?.warn('acp: agent did not settle a cancelled prompt in time', { graceMs: this.cancelGraceMs });
-        this.finishTurn(turn.token, { stopReason: 'cancelled' });
-      }, this.cancelGraceMs);
-    }
   }
 
   async close(): Promise<void> {
@@ -578,14 +584,14 @@ export class AcpSession {
   }
 
   private async decidePermission(params: AcpRecord, signal: AbortSignal): Promise<AcpPermissionOutcome> {
+    if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
     const options = normalizePermissionOptions(params.options);
     const toolCall = normalizeToolCallFields(params.toolCall) ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` };
     this.emit(this.translator.noteToolCall(toolCall));
-    const allowOnce = firstOfKind(options, ['allow_once', 'allow_always']);
-    const allowAlways = firstOfKind(options, ['allow_always', 'allow_once']);
-    const reject = firstOfKind(options, ['reject_once', 'reject_always']);
-    if (signal.aborted) return { outcome: 'cancelled' };
-    if (this.permissionMode === 'bypassPermissions') return selected(allowOnce);
+    // Only the agent can define the lifetime and scope of a persistent grant.
+    const allowOnce = firstOfKind(options, ['allow_once']);
+    const reject = firstOfKind(options, ['reject_once']);
+    if (this.permissionMode === 'bypassPermissions') return selected(allowOnce ?? reject);
     const resolver = this.resolver;
     if (!resolver) return selected(reject);
 
@@ -615,7 +621,7 @@ export class AcpSession {
       const decision = await untilAborted(resolver(request, controller.signal), controller.signal);
       if (decision === ABORTED || controller.signal.aborted) return { outcome: 'cancelled' };
       if (decision.kind !== 'permission' || decision.behavior !== 'allow') return selected(reject);
-      return selected(decision.permissionUpdates?.length ? allowAlways : allowOnce);
+      return selected(allowOnce ?? reject);
     } catch (error) {
       if (controller.signal.aborted) return { outcome: 'cancelled' };
       this.logger?.warn('acp: permission resolver failed; rejecting', { error: String(error) });
@@ -691,13 +697,13 @@ export class AcpSession {
     if (info.reason !== 'closed-by-client') {
       this.logger?.warn('acp: agent connection ended', { reason: info.reason, ...(info.detail ? { detail: info.detail } : {}) });
     }
+    this.pendingPrompts.length = 0;
     const turn = this.turn;
     if (turn) {
       this.finishTurn(turn.token, info.reason === 'closed-by-client'
         ? { stopReason: 'cancelled' }
         : { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' });
     }
-    this.pendingPrompts.length = 0;
     this.endEvents();
   }
 

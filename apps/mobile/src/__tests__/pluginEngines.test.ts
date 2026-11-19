@@ -17,10 +17,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 import {
   buildPluginEngineGroups,
+  getCachedPluginEngines,
+  loadPluginEngines,
   normalizePluginEngines,
   pluginEngineSessionCapabilities,
   type MobilePluginEngine,
@@ -69,6 +72,29 @@ describe('reading the engines of the controlled computer', () => {
     const maker = createMobileMakerTransport({ deviceId: 'old-desk', invoke });
     await expect(maker.listPluginEngines()).resolves.toEqual([]);
     await expect(maker.refreshPluginEngines()).resolves.toBeUndefined();
+  });
+
+  // The catalogue may contain private model names and plugin metadata. An old account's
+  // unresolved list must neither be reused nor publish into the next account's picker.
+  it('discards a late engine list when the mobile account changes', async () => {
+    setMobileAuthOwner('older-account');
+    const [oldEngine] = normalizePluginEngines([desktopView]);
+    let finishOld!: (engines: MobilePluginEngine[]) => void;
+    const oldRequest = new Promise<MobilePluginEngine[]>((resolve) => { finishOld = resolve; });
+    const refreshPluginEngines = vi.fn(async () => undefined);
+    const deviceId = 'same-catalogue-device';
+    try {
+      const before = loadPluginEngines(deviceId, { listPluginEngines: () => oldRequest, refreshPluginEngines });
+      setMobileAuthOwner('current-account');
+      const listPluginEngines = vi.fn(async () => []);
+      const after = loadPluginEngines(deviceId, { listPluginEngines, refreshPluginEngines });
+      finishOld([oldEngine!]);
+      await Promise.all([before, after]);
+      expect(listPluginEngines).toHaveBeenCalledOnce();
+      expect(getCachedPluginEngines(deviceId)).toEqual([]);
+    } finally {
+      setMobileAuthOwner(null);
+    }
   });
 });
 

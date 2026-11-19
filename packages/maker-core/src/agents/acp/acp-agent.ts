@@ -101,27 +101,16 @@ function trackClose(transport: AcpLineTransport): {
   };
 }
 
-/** Converts Pi's MCP bridge descriptor into ACP `mcpServers` (HTTP with headers). */
+/** Shares the task-scoped Cindy bridge through ACP. External MCP credentials stay in the host. */
 export function acpMcpServersFromBridge(extra: PiExtraSpawnConfig | null): AcpMcpServer[] {
   const bridge = extra?.mcpBridge;
   if (!bridge) return [];
-  const env = extra?.mcpEnv ?? {};
-  const servers: AcpMcpServer[] = [];
-  for (const server of bridge.servers) {
-    if (server.remote) {
-      const headers: Array<{ name: string; value: string }> = [];
-      let complete = true;
-      for (const [header, envName] of Object.entries(server.remote.headerEnvVars ?? {})) {
-        const value = env[envName];
-        if (typeof value !== 'string') { complete = false; break; }
-        headers.push({ name: header, value });
-      }
-      if (complete) servers.push({ type: 'http', name: server.name, url: server.url, headers });
-      continue;
-    }
-    servers.push({ type: 'http', name: server.name, url: server.url, headers: [{ name: 'Authorization', value: `Bearer ${bridge.token}` }] });
-  }
-  return servers;
+  return bridge.servers.filter((server) => !server.remote).map((server) => ({
+    type: 'http',
+    name: server.name,
+    url: server.url,
+    headers: [{ name: 'Authorization', value: `Bearer ${bridge.token}` }],
+  }));
 }
 
 export class AcpAgent extends BaseAgent {

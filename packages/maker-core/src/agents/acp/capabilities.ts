@@ -42,7 +42,7 @@ export const ACP_SUPPORTED_PERMISSION_MODES: ReadonlySet<PermissionMode> = new S
  * the same mode ignoring case, '-', '_' and spaces (`accept-edits` → acceptEdits); other values
  * stay agent-only, like reasoning levels Cindy cannot name.
  */
-const MAPPABLE_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+const MAPPABLE_MODES: readonly PermissionMode[] = ['ask', 'default', 'acceptEdits', 'auto', 'plan'];
 
 function modeKey(value: string): string {
   return value.toLowerCase().replace(/[-_\s]/g, '');
@@ -76,7 +76,7 @@ export function mapModeValues(option: AcpConfigOption | undefined): MappedAcpMod
  * followed by Full access; any other agent offers Ask each time / Full access.
  */
 export function acpPermissionModes(options: readonly AcpConfigOption[]): PermissionModeDescriptor[] {
-  const agentModes = mapModeValues(findModeOption(options)).filter((mapped) => mapped.mode !== 'bypassPermissions');
+  const agentModes = mapModeValues(findModeOption(options));
   if (agentModes.length === 0) return [...ACP_PERMISSION_MODES];
   const fullAccess = ACP_PERMISSION_MODES.find((mode) => mode.id === 'bypassPermissions')!;
   return [...agentModes.map((mapped) => ({ id: mapped.mode, displayName: mapped.name })), fullAccess];

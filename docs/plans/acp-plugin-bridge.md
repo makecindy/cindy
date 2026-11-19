@@ -84,7 +84,7 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 新建任务 | `initialize` → `session/new`（`cwd` = 任务工作目录，`mcpServers` 见下文） |
 | 重开任务 | 对端声明 `session/resume` 用它，否则有 `loadSession` 用 `session/load`（回放的历史不再重复展示）；都没有或恢复失败时抛 `AcpResumeUnavailableError`，由宿主决定新开会话并在界面说明「上下文未恢复」，引擎不静默换新会话 |
 | 发送 | `session/prompt`（文本、资源链接；图片仅在对端声明支持时） |
-| 停止 | `session/cancel`；未决权限请求立即回 `cancelled`（即使确认卡仍开着）；对端 15 秒内不收尾则 Cindy 自行以 `cancelled` 结束本轮，迟到的回复不再产生第二个结束 |
+| 停止 | `session/cancel`；未决权限请求和等待收尾期间的新权限请求均回 `cancelled`。对端 15 秒内不收尾时终止该连接，以 `cancelled` 结束当前轮次，下一轮使用新连接恢复任务。 |
 | 插话 | ACP 每个会话同时只有一个 prompt；插话按排队处理（保持发送顺序），`sameTurnSteer` 标为不支持 |
 | 回合外输出 | Agent 自主运行（如子任务回报）产生的输出标记为 `turnScope: 'background'` |
 | 关闭 | 支持则 `session/close`，随后结束进程 |
@@ -149,11 +149,13 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   缓存，下次直接显示；首次只显示「默认模型」。不为探测模型额外创建会话，避免在 Agent 侧留下
   垃圾会话。
 - **权限**：第一期提供两档：「逐项确认」（转给用户确认卡）与「全部允许」（自动选 allow_once）。
+  两档均不替外部 Agent 建立持久授权；没有单次允许选项时拒绝或取消该请求。Cindy 的「全部允许」只控制
+  本任务的确认响应，不切进 Agent 的原生全权限模式。
   Cindy 自动审核留到后续。界面需说明：Agent 自己不发起确认的操作，Cindy 无法拦截。
 - **Cindy 工具**：对端声明 `mcpCapabilities.http` 时，通过 `session/new` 的 `mcpServers` 交给
   它 Cindy 的本地 HTTP MCP 桥（复用 Codex / Pi 已有实现），令牌按任务签发、随任务失效。
   交出的工具范围与内置 Pi 相同（2026-11-18 用户决定），复用 Pi 的允许清单而不另立一份；
-  安装确认文案需写明这一范围。
+  安装确认文案需写明这一范围。直接连接的第三方 MCP 与其凭证留在宿主。
 - **排除范围**：远程 / SSH / 设备互联被控端、定时任务、伙伴、多 Agent 协同、插件模型路由、
   标题生成的 oneShot 均不接入 `acp`，遇到即返回明确的「不支持」。
 

@@ -47,7 +47,7 @@ utilityProcess 原样 stdio 模式，stdin 为 base64 字节帧、stdout 为原�
 回归见 `pluginEngineSessionSwitch.test.ts`、`pluginEngineSessionAdmission.test.ts` 与 renderer `sessionAgentSwitchRemoteRouting.test.ts`。
 
 手机读插件引擎（2026-11-19，第二期）：device-link allowlist 新增只读 `maker:list-plugin-engines`（返回 `PluginEngineView[]`，与本机
-Renderer 读到的字段相同；数据 URL 超过 64 KiB 的插件图标不带，控制端显示通用引擎标志）与 `maker:refresh-plugin-engines`（请那台的
+Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次列表合计最多 512 KiB，超出预算的图标显示通用标志）与 `maker:refresh-plugin-engines`（请那台的
 插件重新上报模型，插件各自冷却），两者都进后台 invoke 档。变更推送 `maker:plugin-engines-changed` 仍只发本机窗口，控制端打开选择器时
 按需读取。旧被控端没有这两条准入 → `CHANNEL_NOT_ALLOWED`，控制端按「没有插件引擎」隐藏入口；旧控制端不调用。走既有 invoke 帧，
 自建中转无需改动。

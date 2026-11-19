@@ -17,7 +17,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
-import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 export const PLUGIN_ENGINE_AGENT_KIND = 'acp' as const;
 export const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
@@ -397,6 +397,7 @@ export function getCachedPluginEngines(deviceId: string | null | undefined): rea
 /** 退出账号 / 切换账号时清掉，不把上一个账号的电脑引擎带过去。 */
 export function clearPluginEngineCache(): void {
   lastRefreshAt.clear();
+  inFlight.clear();
   if (cache.size === 0) return;
   cache.clear();
   publish();
@@ -410,17 +411,30 @@ export interface PluginEngineReader {
 /** 读一次某台电脑的引擎列表(同一台并发只发一次)；任何失败都按「没有插件引擎」。 */
 export function loadPluginEngines(deviceId: string, reader: PluginEngineReader): Promise<void> {
   ensureOwnerSubscription();
+  const owner = getMobileAuthOwner();
+  if (!owner.accountId) return Promise.resolve();
   const existing = inFlight.get(deviceId);
   if (existing) return existing;
   const run = reader.listPluginEngines()
-    .then((engines) => setCachedPluginEngines(deviceId, engines, true))
+    .then((engines) => {
+      if (isMobileAuthOwnerCurrent(owner)) setCachedPluginEngines(deviceId, engines, true);
+    })
     .catch(() => {
       // 旧电脑没有这个 channel，或读失败：保留已读到的列表，从没读到时就是空列表。
-      if (!cache.has(deviceId)) setCachedPluginEngines(deviceId, [], false);
+      if (isMobileAuthOwnerCurrent(owner) && !cache.has(deviceId)) {
+        setCachedPluginEngines(deviceId, [], false);
+      }
     })
-    .finally(() => { inFlight.delete(deviceId); });
+    .finally(() => {
+      if (inFlight.get(deviceId) === run) inFlight.delete(deviceId);
+    });
   inFlight.set(deviceId, run);
   return run;
+}
+
+/** Lists with plugin tasks share one initial catalogue read per device. */
+export function prefetchPluginEngineIcons(deviceId: string, reader: PluginEngineReader): Promise<void> {
+  return cache.has(deviceId) ? Promise.resolve() : loadPluginEngines(deviceId, reader);
 }
 
 /** 插件重新上报模型需要一点时间：请求后只再读一次，不轮询。 */
@@ -437,13 +451,17 @@ function ensureOwnerSubscription(): void {
 
 /** 模型选择器打开：读当前列表，并请那台电脑的插件重新上报模型(那台按插件冷却)。 */
 export function refreshPluginEnginesForPicker(deviceId: string, reader: PluginEngineReader, now = Date.now()): void {
-  void loadPluginEngines(deviceId, reader);
-  if (cache.get(deviceId)?.supported === false) return;
-  const last = lastRefreshAt.get(deviceId) ?? 0;
-  if (now - last < REFRESH_MIN_INTERVAL_MS) return;
-  lastRefreshAt.set(deviceId, now);
-  void reader.refreshPluginEngines().catch(() => undefined);
-  setTimeout(() => { void loadPluginEngines(deviceId, reader); }, REFRESH_REREAD_DELAY_MS);
+  const owner = getMobileAuthOwner();
+  void loadPluginEngines(deviceId, reader).then(() => {
+    if (!isMobileAuthOwnerCurrent(owner) || !cache.get(deviceId)?.engines.length) return;
+    const last = lastRefreshAt.get(deviceId) ?? 0;
+    if (now - last < REFRESH_MIN_INTERVAL_MS) return;
+    lastRefreshAt.set(deviceId, now);
+    void reader.refreshPluginEngines().catch(() => undefined);
+    setTimeout(() => {
+      if (isMobileAuthOwnerCurrent(owner)) void loadPluginEngines(deviceId, reader);
+    }, REFRESH_REREAD_DELAY_MS);
+  });
 }
 
 function subscribe(listener: () => void): () => void {
