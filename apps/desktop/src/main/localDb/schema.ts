@@ -2007,6 +2007,18 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/** UTC execution-day token counts. Account and task identity stay outside this table. */
+export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
+  day: text('day').notNull(),
+  provider: text('provider').notNull(),
+  billingSource: text('billing_source').notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').notNull(),
+  outputTokens: integer('output_tokens').notNull(),
+  cacheReadTokens: integer('cache_read_tokens').notNull(),
+  cacheCreateTokens: integer('cache_create_tokens').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
+
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
  * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
