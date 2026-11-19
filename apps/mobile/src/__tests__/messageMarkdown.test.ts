@@ -2588,6 +2588,41 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / review 4624540427: excluded HTML lines still leave list scopes.
+  // Unit production entry; prior HTML tests did not cross a dedented closer.
+  it('unwinds list scopes on dedented HTML continuations and closers', () => {
+    for (const tag of ['div', 'pre']) {
+      for (const indent of ['', '  ']) {
+        const source = '[site][s]\n\n- item\n  <' + tag + '>\n' + indent + '</' + tag + '>\n\n  [s]: https://example.com/';
+        expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(indent ? [] : [link]);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+      }
+    }
+  });
+
+  // #9440 / review 4624540428: body block boundaries apply inside comments.
+  // Unit production entry; prior cases only closed comments on ordinary lines.
+  it('honors structural boundaries on comment continuation lines', () => {
+    for (const close of ['# heading -->', '> quote -->', '- item -->', 'name | value\na | -->']) {
+      const source = '[site][s]\n\ntext <!--\n' + close + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const paragraph = '[site][s]\n\ntext <!--\ncontinued -->\n[s]: https://example.com/';
+    expect(inlines(paragraph).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

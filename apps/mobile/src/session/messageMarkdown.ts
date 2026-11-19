@@ -178,11 +178,13 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
+    // Excluded HTML/comment text still contributes its physical list boundary.
+    if (line.trim()) leaveListScopes(leadingIndentColumns(line));
     if (rawHtmlEnd) {
       if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
       continue;
     }
-    if (!comment && !html && line.trim()) {
+    if (!html && line.trim()) {
       const table = parseTableBlock(lines, index);
       if (table && !/^(?:#{1,6}\s|\s*>)/.test(line)) {
         // Match pushBlock: a table can leave an earlier list, while a nested
@@ -201,18 +203,16 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
         continue;
       }
       const list = /^(\s*)(?:[-*]|\d+[.)])\s+/.exec(line);
-      const indent = leadingIndentColumns(line);
       // Retain enclosing items, but replace siblings: marker width can change
       // (for example 9. to 10.) and therefore changes the content column.
-      leaveListScopes(indent);
       if (list) listContentIndents.push(leadingIndentColumns(list[0].replace(/\S/g, ' ')));
     }
     const startsInComment = comment;
     comment = advanceHtmlCommentState(line, comment);
     if (startsInComment || comment || line.includes('<!--')) {
-      if (startsInComment && line.trim()) leaveListScopes(leadingIndentColumns(line));
-      // An inline comment does not close the paragraph it belongs to.
-      if (!startsInComment) paragraph = !/^(?: {0,3}<!--|#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line);
+      // Body headings/quotes/lists interrupt even a comment continuation.
+      if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line)) paragraph = false;
+      else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
       continue;
     }
     if (!line.trim()) { html = false; paragraph = false; continue; }
