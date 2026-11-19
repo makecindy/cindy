@@ -24,6 +24,7 @@ import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
+import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionOrigin, stampTelegramQuestionAnswer, telegramQuestionAnswerOrigin } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT, formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { appMessageInput, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import {
@@ -470,6 +471,27 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   };
   return { deps, session };
 }
+
+// Unit regression: the actual send boundary activates the original question's route
+// and carries it forward to a second question, without relaying an ordinary App turn.
+it('keeps the Telegram answer destination across successive question turns', async () => {
+  const { deps, session } = createDeps();
+  const { sendToAgentAccepted } = createMakerSendTransaction(deps);
+  const activate = vi.fn();
+  let origin = telegramQuestionOrigin(activate);
+  for (const text of ['first answer', 'second answer']) {
+    const item = { text, clientId: text, persistedContent: text } as AgentInputQueuedMessage;
+    stampTelegramQuestionAnswer(item, origin);
+    const result = await sendToAgentAccepted(session.id, text, undefined, {
+      [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(item),
+    });
+    expect(result.accepted).toBe(true);
+    origin = vi.mocked(session.send).mock.lastCall![1]!.origin!;
+  }
+  await sendToAgentAccepted(session.id, 'local input');
+  expect(activate.mock.calls).toEqual([[session], [session]]);
+});
+
 
 // Host recovery must durably mark a turn before the provider starts, or a crash
 // can replay it. Existing App guard tests cover revocation but no launcher write.

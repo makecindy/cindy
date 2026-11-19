@@ -139,6 +139,8 @@ import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../..
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { isSilencedSchedulerTurn } from '../../scheduler-host/silent-output';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { telegramQuestionOrigin } from '../../maker-ipc/telegramQuestionReply.js';
 import { isRelayedChannelTurnSource, type ChannelTurnSource } from '../../maker-ipc/channelTurnSignal';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
@@ -1858,7 +1860,8 @@ export function createTurnRunner(
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
-        origin: { kind: 'user', surface: 'im' },
+        origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -2326,6 +2329,21 @@ export function createTurnRunner(
       throw cause instanceof SessionCreationCleanupPendingError
         ? cause : new SessionCreationCleanupPendingError({ cause });
     }
+  }
+
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey?: string) {
+    const session = state.makerSession;
+    const account = captureImAccountGeneration();
+    const connected = im.getStatus();
+    return telegramQuestionOrigin((answerSession) => {
+      const status = im.getStatus();
+      if (account === null || !isImAccountGenerationCurrent(account) ||
+          answerSession !== session || state.makerSession !== session || sessionStates.get(session.id) !== state ||
+          !ownsChannelOutput(state) || state.userId !== userId || state.scopeKey !== scopeKey ||
+          connected.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+      state.relayedTurn = true;
+      updateReplyMediaScope(state);
+    });
   }
 
   /**
