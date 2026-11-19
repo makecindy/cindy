@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
@@ -1129,6 +1129,14 @@ describe('BillingPage remote catalog rendering', () => {
   });
 
   describe('sending a bought card by email', () => {
+    // 冷却倒计时按 Date.now 计算：冷却用例只冻结时钟（定时器照常），剩余秒数不随 CI 上用例的先后与耗时漂移。
+    const freezeClock = () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-19T08:06:00.000Z'));
+    };
+    afterEach(() => {
+      vi.useRealTimers();
+    });
     const later = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
     const card = (overrides: Partial<BillingPurchasedGiftCard> = {}): BillingPurchasedGiftCard => ({
       cardId: 'card_mail', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
@@ -1173,12 +1181,14 @@ describe('BillingPage remote catalog rendering', () => {
 
     // 服务端明确拒绝时就地说明，不关弹窗；冷却中的卡写明还要等几秒，可以换邮箱。
     it.each([
-      [{ ok: false as const, reason: 'INVALID_EMAIL' as const }, 'billing.giftCardPurchase.email.invalid'],
-      [{ ok: false as const, reason: 'NOT_AVAILABLE' as const }, 'billing.giftCardPurchase.toasts.unavailable'],
-      [{ ok: false as const, reason: 'COOLDOWN' as const, retryAt: Date.now() + 42_000 }, /billing\.giftCardPurchase\.email\.cooldown:\{"seconds":4[12]\}/],
-    ])('explains %o in the dialog', async (result, message) => {
+      ['INVALID_EMAIL', () => ({ ok: false as const, reason: 'INVALID_EMAIL' as const }), 'billing.giftCardPurchase.email.invalid'],
+      ['NOT_AVAILABLE', () => ({ ok: false as const, reason: 'NOT_AVAILABLE' as const }), 'billing.giftCardPurchase.toasts.unavailable'],
+      // 截止时间在用例执行时才算，不在加载测试文件时算。
+      ['COOLDOWN', () => ({ ok: false as const, reason: 'COOLDOWN' as const, retryAt: Date.now() + 42_000 }), 'billing.giftCardPurchase.email.cooldown:{"seconds":42}'],
+    ])('explains %s in the dialog', async (_reason, result, message) => {
+      freezeClock();
       window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
-      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(async () => result);
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(async () => result());
       render(<BillingPage />);
       const input = await openEmailDialog();
       fireEvent.change(input, { target: { value: 'friend@example.com' } });
@@ -1189,13 +1199,14 @@ describe('BillingPage remote catalog rendering', () => {
     });
 
     it('starts from the last recipient and waits out the cooldown before sending again', async () => {
+      freezeClock();
       window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () =>
         page([card({ email: delivery('SENT', 30) })]));
       render(<BillingPage />);
       expect(await screen.findByText('billing.giftCardPurchase.email.status.sent:{"email":"friend@example.com"}')).toBeTruthy();
       const input = await openEmailDialog();
       expect(input.value).toBe('friend@example.com');
-      expect(screen.getByText(/billing\.giftCardPurchase\.email\.cooldown:\{"seconds":(29|30)\}/)).toBeTruthy();
+      expect(screen.getByText('billing.giftCardPurchase.email.cooldown:{"seconds":30}')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }).hasAttribute('disabled')).toBe(true);
     });
 
