@@ -37,7 +37,9 @@ test('serve injects the owner-commit refusal before it listens, and only the own
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       if (!/\.(ts|mts|mjs|cts)$/.test(entry.name) || /\.test\.mjs$/.test(entry.name)) continue;
-      if (fs.readFileSync(full, 'utf8').includes('configureProjectionBoundaryOwnerCommit(')) offenders.push(path.relative(root, full));
+      if (fs.readFileSync(full, 'utf8').includes('configureProjectionBoundaryOwnerCommit(')) {
+        offenders.push(path.relative(root, full).split(path.sep).join('/'));
+      }
     }
   };
   walk(path.join(root, 'apps/host/src'));
