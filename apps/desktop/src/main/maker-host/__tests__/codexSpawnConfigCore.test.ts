@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, promises as fs } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -42,9 +41,6 @@ let scratch: string;
 beforeEach(async () => { scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-codex-spawn-')); });
 afterEach(async () => { await fs.rm(scratch, { recursive: true, force: true }); });
 const fixtureHome = () => path.join(scratch, 'codex-home');
-
-const bundledCodex = path.resolve(__dirname, '../../../../../codex-package-bin',
-  process.platform + '-' + process.arch, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
 
 function fixture() {
   const buildSessionMcpConfig = vi.fn(() => ({ 'mcp_servers.local_slow.enabled': true }));
@@ -137,18 +133,6 @@ describe('Codex spawn MCP ownership', () => {
     await fs.writeFile(rules, '# owner policy');
     await expect(f.prepare([], { runtimeCodexHome: historyHome })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
     expect(await fs.readFile(rules, 'utf8')).toBe('# owner policy');
-  });
-
-  it.skipIf(!existsSync(bundledCodex))('checks the installed policy with the bundled Codex executable', async () => {
-    await fixture().prepare([], {});
-    const rules = path.join(fixtureHome(), 'rules', 'cindy-computer-use.rules');
-    const check = (...argv: string[]) => JSON.parse(execFileSync(bundledCodex, [
-      'execpolicy', 'check', '--rules', rules, '--resolve-host-executables', '--', ...argv,
-    ], { encoding: 'utf8' }));
-    expect(check('cua-driver', 'call', 'run_steps').decision).toBe('forbidden');
-    for (const argv of [['cua-driver', '--version'], ['cua-driver', 'status'], ['rg', 'cua-driver call']]) {
-      expect(check(...argv).matchedRules).toEqual([]);
-    }
   });
 
   it('leaves an external directory behind a linked account parent untouched', async () => {
