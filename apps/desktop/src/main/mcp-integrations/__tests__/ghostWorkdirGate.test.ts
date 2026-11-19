@@ -3657,7 +3657,7 @@ describe('market install live authority', () => {
   }
 
   // A missing PR plugin used to end the task with only a generic not-found error.
-  it('offers the exact verified release from discovery, manual and call without installing it', async () => {
+  it('guides missing-plugin discovery without eager market I/O from info, manual or call', async () => {
     const { deps, market } = marketHarness();
     for (const result of [
       await deps.getAwakeGhost('mail-suite', null),
@@ -3665,11 +3665,13 @@ describe('market install live authority', () => {
       await deps.callGhostTool({ ghostId: 'mail-suite', namespace: null, tool: 'pr_card', args: {} }),
     ]) {
       expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND',
-        message: expect.stringContaining('ghost_market_install with {"plugin_id":"p1","release_id":"r1"}') });
+        message: expect.stringContaining('match the exact identity {"ghost_id":"mail-suite","namespace":null}') });
     }
+    expect(market.lookup).not.toHaveBeenCalled();
+    expect(market.query).not.toHaveBeenCalled();
     expect(market.install).not.toHaveBeenCalled();
     const mismatch = await deps.getAwakeGhost('mail-suite', 'acme');
-    expect(mismatch).toMatchObject({ ok: false, message: expect.not.stringContaining('ghost_market_install') });
+    expect(mismatch).toMatchObject({ ok: false, message: expect.stringContaining('{"ghost_id":"mail-suite","namespace":"acme"}') });
   });
 
   it.each(['claude-code', 'codex', 'pi'] as const)('uses the live %s task and does not connect on install', async (kind) => {

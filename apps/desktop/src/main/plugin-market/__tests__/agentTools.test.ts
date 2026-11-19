@@ -172,15 +172,6 @@ describe('Agent plugin discovery and installation', () => {
     expect(await h.tools.install(request)).toMatchObject({ status: 'installed' });
   });
 
-  it('withholds an install action for ambiguous or incomplete catalog results', async () => {
-    const h = harness();
-    h.snapshot.items.push({ ...h.detail, pluginId: 'other-source' });
-    expect(await h.tools.missingPluginMessage('mail-suite')).not.toContain('ghost_market_install');
-    h.snapshot.items.pop();
-    h.snapshot.unavailableCustomSourceNames.push('offline');
-    expect(await h.tools.missingPluginMessage('mail-suite')).not.toContain('ghost_market_install');
-  });
-
   it('tells the Agent not to retry when the user declines the install confirmation', async () => {
     const h = harness();
     h.market.install.mockImplementation(async () => throwIpcError('MUTATION_CANCELLED', '用户取消了插件安装'));

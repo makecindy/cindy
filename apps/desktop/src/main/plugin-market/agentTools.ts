@@ -1,6 +1,6 @@
 import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import type { PluginMarketService } from './service.js';
-import { uniquePluginInstallCandidate, type PluginMarketItem } from '../../shared/pluginMarket.js';
+import { type PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { ServerApiError } from '../serverApiClient.desktop.js';
@@ -17,7 +17,7 @@ interface InstalledState {
 }
 
 export interface PluginMarketAgentDeps {
-  market: Pick<PluginMarketService, 'query' | 'lookup' | 'detail' | 'install'>;
+  market: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   installedState(ghostId: string, namespace?: string | null): InstalledState;
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
@@ -53,18 +53,6 @@ const pendingInstalls = new Set<string>();
 /** Narrow Agent adapter: live catalog discovery and first install, with no credential projection. */
 export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
   return {
-    async missingPluginMessage(ghostId: string, namespace?: string | null): Promise<string> {
-      const assertCurrent = deps.captureRead();
-      const market = await deps.market.lookup([ghostId]);
-      assertCurrent();
-      const candidate = uniquePluginInstallCandidate(market, { ghostId, namespace });
-      if (!candidate || deps.installedState(ghostId, namespace).exists) {
-        return 'No unambiguous install offer is available. Show the Plugins settings link on the task computer to inspect the source and availability.';
-      }
-      const args = JSON.stringify({ plugin_id: candidate.pluginId, release_id: candidate.releaseId });
-      return 'If this plugin is required for the current request, present the native installation confirmation by calling ghost_market_install with ' + args +
-        '. If the tool is unavailable on this surface, offer the Plugins settings link for the task computer. After acceptance inspect ghost_info and resume the unfinished step only. If declined, stop prompting.';
-    },
     async search(query: string): Promise<Record<string, unknown>> {
       const assertCurrent = deps.captureRead();
       const snapshot = await deps.market.query({ query: query.trim().slice(0, 100), limit: 20, counts: false });

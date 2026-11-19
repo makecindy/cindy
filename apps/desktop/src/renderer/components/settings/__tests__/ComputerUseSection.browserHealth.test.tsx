@@ -37,6 +37,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { ComputerUseSection } from '../ComputerUseSection';
+import { makePluginUsableInPlace } from '@/features/plugin/lib/pluginInPlace';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -570,6 +571,21 @@ describe('ComputerUseSection browser backend health loading', () => {
       allowSourceReplacement: false,
     });
     expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
+  });
+
+  // Standard tier: a partial catalog used to stop the shared browser setup at a toast.
+  // The production entry must preserve a recovery route and perform no install.
+  it.each([undefined, 'known-market-id'])('opens plugin settings on incomplete sources (market %s)', async (marketPluginId) => {
+    const install = vi.fn();
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} },
+      pluginMarket: { lookup: vi.fn(async () => ({
+        items: [], unavailableReason: null, unavailableCustomSourceNames: ['offline-source'],
+      })), install },
+    });
+    expect(await makePluginUsableInPlace({ ghostId: 'my-browser', namespace: null, marketPluginId }))
+      .toEqual({ status: 'page', route: marketPluginId ? '/plugins?market=known-market-id' : '/plugins' });
+    expect(install).not.toHaveBeenCalled();
   });
 
   // Copying Chrome logins only serves the standalone browser, so the switch never shows elsewhere,

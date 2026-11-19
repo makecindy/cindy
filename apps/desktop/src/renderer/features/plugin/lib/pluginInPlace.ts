@@ -90,7 +90,7 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
         const item = marketItemForInstalledGhost(market.items, ghost);
         if (target.requireRemoteTaskView && !item && (
           market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length
-        )) return { status: 'failed', messageKey: 'settings.ghosts.market.errors.generic' };
+        )) return { status: 'page', route: installedRoute(ghost) };
         const detail = item?.installState === 'update-available'
           ? await window.electronAPI.pluginMarket.detail(item.pluginId)
           : null;
@@ -139,7 +139,7 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
     const candidate = uniquePluginInstallCandidate(market, target);
     if (!candidate) {
       if (market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length)
-        return { status: 'failed', messageKey: 'settings.ghosts.market.errors.generic' };
+        return { status: 'page', route: target.marketPluginId ? marketRoute(target.marketPluginId) : '/plugins' };
       return target.marketPluginId ? { status: 'page', route: marketRoute(target.marketPluginId) } : { status: 'unavailable' };
     }
     const detail = await window.electronAPI.pluginMarket.detail(candidate.pluginId);

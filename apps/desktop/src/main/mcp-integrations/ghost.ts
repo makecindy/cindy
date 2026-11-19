@@ -201,7 +201,7 @@ export interface GhostGrantLiveSessionState {
 
 
 export interface CindyGhostsHostDeps {
-  pluginMarket?: Pick<PluginMarketService, 'query' | 'lookup' | 'detail' | 'install'>;
+  pluginMarket?: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
@@ -1911,11 +1911,12 @@ function getCindyGhostsMcpDeps(
     // Plugin pages and stale grants must never discover marketplace identities.
     if (pageCall || failure.errorCode !== 'GHOST_NOT_FOUND' || !isValidGhostId(ghostId) ||
         installed.some(ghost => ghost.manifest.id === ghostId)) return failure;
-    let next = 'Use the host-generated Plugins settings link for the task computer. Confirm availability there before continuing the unfinished step.';
-    if (marketTools) {
-      try { next = await marketTools.missingPluginMessage(ghostId, namespace); }
-      catch { /* An incomplete catalog or changed owner cannot authorize a selection. */ }
-    }
+    const identity = JSON.stringify({ ghost_id: ghostId, ...(namespace !== undefined ? { namespace } : {}) });
+    const next = marketTools
+      ? 'If this plugin is required for the request, use ghost_market_search with query ' + JSON.stringify(ghostId) +
+        ' and match the exact identity ' + identity + '. When sources are complete and one exact listing matches, use ghost_market_install with its plugin_id and release_id to present the native confirmation. ' +
+        'If sources are incomplete or ambiguous, show the host-generated Plugins settings link for the task computer. After acceptance inspect ghost_info and resume only the unfinished step. If declined, stop prompting.'
+      : 'Use the host-generated Plugins settings link for the task computer. Confirm availability there before continuing the unfinished step.';
     return { ...failure, message: failure.message + ' ' + next };
   }
   const contributionAuthority = async (write: boolean) => {
