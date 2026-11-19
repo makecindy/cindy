@@ -2626,26 +2626,6 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
   -webkit-backdrop-filter: none;
 }
 
-/* Anchor the spring at the shared dropdown's collision-aware transform origin. */
-[data-account-menu][data-state='open'][role='menu'] {
-  animation: account-menu-in var(--motion-enter) var(--motion-ease-move);
-}
-
-@keyframes account-menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.88);
-    animation-timing-function: var(--motion-ease-out);
-  }
-  34% { opacity: 1; }
-  50% { transform: scale(1.05); }
-  77% { transform: scale(0.987); }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 /* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
    高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
    不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。

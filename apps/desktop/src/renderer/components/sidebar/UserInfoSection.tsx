@@ -312,7 +312,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     <DropdownMenu onOpenChange={(open) => open && void refreshSavedAccounts()}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       {/* The trigger starts after the capsule's 1px border and 7px padding. */}
-      <DropdownMenuContent side="top" align="start" alignOffset={isCollapsed ? 0 : -8} sideOffset={8} data-account-menu
+      <DropdownMenuContent side="top" align="start" alignOffset={isCollapsed ? 0 : -8} sideOffset={8}
         style={{ width: isCollapsed ? undefined : accountCardWidth }}
         className="min-w-[228px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto">
         {mode === 'cloud' && accountsReadyForOwner && !accountsMutationAllowed ? (

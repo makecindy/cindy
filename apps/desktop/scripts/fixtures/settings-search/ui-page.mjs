@@ -108,12 +108,15 @@ export default {
       await menu.waitFor({ state: 'hidden' });
       if (checkMotion) {
         const frames = await page.evaluate(() => window.accountMenuFrames);
-        assert.ok(frames.some(frame => frame.state === 'open' && frame.animation === 'account-menu-in'));
+        assert.ok(frames.some(frame => frame.state === 'open' && frame.animation === 'float-in'));
         assert.ok(frames.some(frame => frame.state === 'closed' && frame.animation === 'float-out'));
         assert.ok(frames.every(frame => frame.items === 3), JSON.stringify(frames));
         await page.emulateMedia({ reducedMotion: 'reduce' });
       }
       await account.press('Enter');
+      if (checkMotion) {
+        assert.equal(await menu.evaluate(el => getComputedStyle(el).animationDuration), '0s');
+      }
       await usage.click();
       await page.locator('#settings-panel-usage').waitFor();
       await page.locator('#settings-nav-models').click();
