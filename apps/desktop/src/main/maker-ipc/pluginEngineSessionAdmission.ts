@@ -16,7 +16,10 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isPluginEngineEffort,
   pluginEngineKeyFromProviderId,
+  type PluginEngineEffort,
   type PluginEngineModel,
+  type PluginEnginePermissionModeId,
+  type PluginEngineView,
 } from '../../shared/pluginEngines.js';
 
 /**
@@ -48,4 +51,42 @@ export function admitPluginEngineSession(
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';
   return { ...body, model, effort, fastMode: false };
+}
+
+/** What a task switching onto a plugin engine starts with (the engine's own values, see below). */
+export interface PluginEngineSwitchTarget {
+  model: string;
+  /** '' = the engine keeps its own level. */
+  effort: PluginEngineEffort | '';
+  permissionMode: PluginEnginePermissionModeId;
+  /** The engine's name, for the handoff and the switch divider. */
+  engineName: string;
+}
+
+/**
+ * Admission for an existing task switching onto a plugin engine (sessionAgentSwitchHandler).
+ * Same rules as opening a task on it: the engine must be offered on this computer right now; the
+ * model is the engine's own value; a reasoning level only when the engine lists it for that model.
+ * The task keeps its permission mode when the engine offers it, else it takes the mode a new task on
+ * that engine starts in. Full access is offered by every engine, so it is kept only when the task
+ * already had it.
+ */
+export function admitPluginEngineSwitchTarget(
+  target: { providerId: string | null | undefined; model: string; effort?: unknown; permissionMode?: string | null },
+  engines: readonly PluginEngineView[],
+): PluginEngineSwitchTarget {
+  const key = pluginEngineKeyFromProviderId(target.providerId);
+  if (!key) throw new Error('缺少插件引擎标识。请重新选择插件引擎。');
+  const engine = engines.find((item) => item.key === key);
+  if (!engine) throw new Error('提供这个引擎的插件已停用或卸载。请重新选择模型。');
+  if (engine.availability.state === 'unavailable') {
+    const hint = engine.availability.message?.trim();
+    throw new Error(hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`);
+  }
+  const model = target.model.trim() || PLUGIN_ENGINE_DEFAULT_MODEL;
+  const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
+  const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort : '';
+  const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id
+    ?? engine.defaultPermissionMode;
+  return { model, effort, permissionMode, engineName: engine.name };
 }

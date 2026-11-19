@@ -86,10 +86,12 @@ import {
   PluginEngineIcon,
   PluginEngineSessionPanel,
   PluginEnginesSection,
+  type PluginEnginePendingSelection,
   type PluginEngineSessionPickerProps,
   type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
 import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineModelName, resolvePluginEngineEffort } from '@/lib/pluginEngineSelection';
+import type { PluginEngineEffort, PluginEngineView } from '../../../shared/pluginEngines';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -775,10 +777,13 @@ export interface ModelSelectorBaseProps {
   /** 语义同 ModelSelectorContentProps.pluginEngines。选中某个引擎时 trigger 显示该引擎与模型。 */
   pluginEngines?: PluginEnginesPickerProps;
   /**
-   * 运行在插件引擎上的已建任务(sessions.agent_kind = 'acp')。传入时 trigger 显示引擎名与模型，
-   * 面板只列该引擎的模型；内置引擎的统一面板、跨引擎切换、深度与 Fast 都不出现。
+   * 运行在插件引擎上的已建任务(sessions.agent_kind = 'acp')。传入时 trigger 显示引擎名与模型。
+   * 同时传 pluginEngines(本机普通任务，能换引擎)时面板与内置任务一样列出内置模型与插件引擎；
+   * 只传本项时面板只列该引擎的模型。
    */
   pluginEngineSession?: PluginEngineSessionPickerProps;
+  /** 已建任务下一条消息要切到的插件引擎：trigger 显示「下条：引擎 · 模型」。 */
+  pluginEnginePending?: PluginEnginePendingSelection;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -4364,6 +4369,7 @@ export function ModelSelector({
   modelGroups,
   pluginEngines,
   pluginEngineSession,
+  pluginEnginePending,
   providersOverride,
   providersOverrideState,
   taskSourceProvider,
@@ -4430,7 +4436,8 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const sshCodexRefresh = sshCodex?.refresh;
-  const pluginEngineSessionActive = !!pluginEngineSession;
+  // 只列该插件引擎模型的面板(任务不能换引擎时)；能换引擎时与内置任务同一个面板。
+  const pluginEngineSessionActive = !!pluginEngineSession && !pluginEngines;
   const [keepOpenForAgentSwitch, setKeepOpenForAgentSwitch] = useState(false);
   const composerResizeGenerationRef = useRef(0);
   useProviderShareQuotaViewing(open || keepOpenForAgentSwitch);
@@ -4882,8 +4889,23 @@ export function ModelSelector({
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
   // 插件引擎(草稿里选中的引擎，或运行在插件引擎上的任务)：trigger 写「引擎名 · 模型」，
-  // 不画任何内置 Harness 的名字或标志(docs/plans/acp-plugin-bridge.md)。
-  const triggerEngine = pluginEngineSession
+  // 不画任何内置 Harness 的名字或标志(docs/plans/acp-plugin-bridge.md)。已建任务待切到插件引擎时
+  // 与内置引擎的意图一样写成「下条：引擎 · 模型」，前面带等待标记。
+  const triggerEngine: {
+    name: string;
+    engine: PluginEngineView | null;
+    modelId: string;
+    effort: PluginEngineEffort | null;
+    pending?: boolean;
+  } | null = pluginEnginePending
+    ? {
+        name: pluginEnginePending.engineName,
+        engine: pluginEnginePending.engine,
+        modelId: pluginEnginePending.modelId,
+        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort),
+        pending: true,
+      }
+    : pluginEngineSession
     ? {
         name: pluginEngineSession.engineName,
         engine: pluginEngineSession.engine,
@@ -4909,8 +4931,13 @@ export function ModelSelector({
         : t('newChat.modelSelector.trigger.unresolved'))
     : null;
   const triggerTitle = triggerEngine
-    ? [triggerEngine.name, triggerEngineModelLabel, triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null]
-      .filter(Boolean).join(' · ')
+    ? [
+        triggerEngine.pending
+          ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
+          : triggerEngine.name,
+        triggerEngineModelLabel,
+        triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null,
+      ].filter(Boolean).join(' · ')
     : activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
     : activeModelGroupRow
@@ -4918,7 +4945,13 @@ export function ModelSelector({
       : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const accessibleLabel = triggerEngine
-    ? t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
+    ? triggerEngine.pending
+      ? t('newChat.modelSelector.trigger.pendingAria', {
+          agent: triggerEngine.name,
+          model: [triggerEngineModelLabel, triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null]
+            .filter(Boolean).join(' · '),
+        })
+      : t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
     : activePluginModel || activeModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
@@ -5049,7 +5082,7 @@ export function ModelSelector({
       )}
       aria-label={ariaLabel}
     >
-      {!triggerEngine && agentIdentity?.state === 'pending' && (
+      {(triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
       {triggerEngine ? (
@@ -5071,7 +5104,9 @@ export function ModelSelector({
                   isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
                 )}
               >
-                {triggerEngine.name}
+                {triggerEngine.pending
+                  ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
+                  : triggerEngine.name}
               </span>
               <span
                 className={cn(
@@ -5363,7 +5398,7 @@ export function ModelSelector({
     </button>
   );
 
-  const content = pluginEngineSession ? (
+  const content = pluginEngineSession && pluginEngineSessionActive ? (
     <PluginEngineSessionPanel
       picker={pluginEngineSession}
       disabled={switching || disabled}

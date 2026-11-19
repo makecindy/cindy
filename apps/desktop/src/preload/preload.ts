@@ -7913,7 +7913,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // switched=false 且无 deferred = 同引擎 no-op(用户选回当前引擎,意图已清)。
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      // 'acp' = 插件引擎(providerId 为 acp-plugin:<插件>:<引擎>，只限本机任务)。
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -7923,7 +7924,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       thinking?: boolean,
     ): Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       model: string;
       engineReady: boolean;
       deferred?: boolean;

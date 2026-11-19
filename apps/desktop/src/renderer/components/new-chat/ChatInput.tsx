@@ -149,7 +149,11 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
-import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from './PluginEnginesSection';
+import type {
+  PluginEnginePendingSelection,
+  PluginEngineSessionPickerProps,
+  PluginEnginesPickerProps,
+} from './PluginEnginesSection';
 import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
@@ -425,10 +429,12 @@ import {
 } from '@/state/newMakerDraft';
 import type { MessageDeliveryMode, QueuedMessage } from '@/lib/makerChatStore';
 import {
+  builtinAgentSwitchIntent,
   isRemoteOptimisticComposerTransitionActive,
   isRemoteOptimisticDataOwnerBoundaryError,
   isRemoteOptimisticSessionPurgedError,
   makerChatStore,
+  pluginEngineAgentSwitchIntent,
 } from '@/lib/makerChatStore';
 // 切模型前的上下文容量预检(大窗口 → 小窗口护栏), 纯函数与 main 共用。
 import {
@@ -1482,7 +1488,7 @@ export function ChatInput({
     (!sessionId || !!catalogHostDeviceId ||
       controlledTaskAgentLocationReadable({
         agentDeviceId: _agentDeviceId,
-        pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
+        pendingAgentDeviceId: builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))?.agentDeviceId,
         selfDeviceId,
         readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),
       }));
@@ -1496,7 +1502,7 @@ export function ChatInput({
    */
   const intentAgentDeviceId =
     sessionId && agentLocationAware && !remoteHostId
-      ? makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId
+      ? builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))?.agentDeviceId
       : undefined;
   /** 下一条消息时 Agent 所在的电脑(null = 任务所在电脑)。 */
   const effectiveAgentDeviceId =
@@ -1958,8 +1964,25 @@ export function ChatInput({
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
   // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
-  const agentSwitchIntent =
+  const storedAgentSwitchIntent =
     sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图由选择器单独呈现；下面内置引擎的展示、
+  // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
+  const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
+  const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  // 待切到插件引擎时选择器的 trigger 写「下条：引擎 · 模型」；引擎已不在时用通用名称。
+  const pluginEnginePending = useMemo<PluginEnginePendingSelection | undefined>(() => {
+    const providerId = pluginEngineSwitchIntent?.providerId;
+    if (!pluginEngineSwitchIntent || !providerId) return undefined;
+    const engine = pluginEngines?.engines.find((item) => item.providerId === providerId) ?? null;
+    return {
+      providerId,
+      engine,
+      engineName: engine?.name ?? t('newChat.pluginEngines.genericName'),
+      modelId: pluginEngineSwitchIntent.model,
+      effort: pluginEngineSwitchIntent.effort ?? null,
+    };
+  }, [pluginEngineSwitchIntent, pluginEngines, t]);
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
@@ -2116,9 +2139,13 @@ export function ChatInput({
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
+  // 插件引擎任务(docs/plans/acp-plugin-bridge.md)只在本机；它能换到内置引擎的条件与换到插件引擎
+  // 相同，由父组件按任务决定是否传 pluginEngines(本机普通任务)。
+  const pluginEngineTaskSwitchable = !!pluginEngineSession && !!sessionId && !!pluginEngines && !deviceLinkDeviceId;
   const sessionAgentSwitchSupported =
-    sessionOrcaRole !== undefined && runtimeAgentKind != null &&
-    (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
+    (sessionOrcaRole !== undefined && runtimeAgentKind != null &&
+      (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch)) ||
+    pluginEngineTaskSwitchable;
 
   // 切换写入的串行链与写序号都按 session 存在**模块级**协调层(agentSwitchCoordinator),
   // 不放组件 ref:用户切走再切回时旧组件已卸载但 invoke 仍在飞,新组件若另起空队列 /
@@ -2204,7 +2231,8 @@ export function ChatInput({
   // (按 availableModels 归类,不靠 id 前缀猜)。
   const currentModelAgentKind: AgentKind | null = useMemo(() => {
     // 插件引擎的模型不在任何内置目录里：没有内置 Harness，也就不做来源连接 / 断开判定。
-    if (pluginEngineActive) return null;
+    // 插件引擎任务待切到内置引擎时，按目标引擎判定(与内置引擎之间切换一致)。
+    if (pluginEngineActive && !agentSwitchIntent) return null;
     if (runtimeEffective || composerSelection.pending) return composerSelection.display.agentKind;
     if (agentKind) return agentKind;
     if ((ccCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
@@ -2217,7 +2245,7 @@ export function ChatInput({
       return 'pi';
     }
     return null;
-  }, [pluginEngineActive, activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [pluginEngineActive, agentSwitchIntent, activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   // SSH 项目:Codex 只走远端主机的原生连接,模型清单读远端;Claude Code / Pi 仍用本机目录。
@@ -7218,8 +7246,8 @@ export function ChatInput({
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+      if (sessionId && builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))) {
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // await 而非 fire-and-forget:意图重登记是不是真的成功,是这次 Fast 写入的唯一结果。
         return (
           (await performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
@@ -8230,7 +8258,7 @@ export function ChatInput({
       if (settingsLocked) return false;
       if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
           expectedAgentSwitchRevision === undefined) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
         return performAgentSwitch(intent?.target ?? runtimeAgentKind, newModelId,
           intent ? intent.providerId : effectiveSourceId ?? null);
       }
@@ -8260,9 +8288,9 @@ export function ChatInput({
       if (
         sessionId &&
         expectedAgentSwitchRevision === undefined &&
-        makerChatStore.getAgentSwitchIntent(sessionId)
+        builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))
       ) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
         // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
         // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
@@ -8579,8 +8607,8 @@ export function ChatInput({
     async (newEffort: Effort, options?: EffortChangeOptions): Promise<boolean> => {
       if (settingsLocked) return false;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+      if (sessionId && builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))) {
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // await 而非 fire-and-forget:意图重登记成功与否就是这次深度写入的结果。
         return (
           (await performAgentSwitch(intent.target, intent.model, intent.providerId, {
@@ -8841,7 +8869,7 @@ export function ChatInput({
       if (settingsLocked) return false;
       if (sessionId && sessionAgentSwitchSupported && !remoteHostId && runtimeAgentKind &&
           expectedAgentSwitchRevision === undefined) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
         return performAgentSwitch(intent?.target ?? runtimeAgentKind,
           reconciledModelId ?? intent?.model ?? activeModel, newProviderId, {
             effort: reconciledEffort,
@@ -8881,9 +8909,9 @@ export function ChatInput({
       if (
         sessionId &&
         expectedAgentSwitchRevision === undefined &&
-        makerChatStore.getAgentSwitchIntent(sessionId)
+        builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))
       ) {
-        const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
+        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))!;
         // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
         // (Chris 2026-08-19)。
         const nextEffort = resolveIntentReselectEffort(reconciledEffort, intent.effort);
@@ -10269,7 +10297,7 @@ export function ChatInput({
                       // confirming the preference. A rejected write must leave
                       // the visible switch and its remembered value unchanged.
                       if (sessionId) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        const intent = builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId));
                         if (intent) {
                           const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
                             ...(intent.effort ? { effort: intent.effort as Effort } : {}),
@@ -10350,8 +10378,12 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
-                    {...(!sessionId && unifiedPanelActive && pluginEngines ? { pluginEngines } : {})}
-                    {...(pluginEngineSession ? { pluginEngineSession } : {})}
+                    // 已建任务：父组件只为本机普通任务传 pluginEngines，任务里也能换到 / 换出插件引擎。
+                    {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
+                      ? { pluginEngines } : {})}
+                    // 插件引擎任务待切到内置引擎时，trigger 按内置引擎的「下条：」显示。
+                    {...(pluginEngineSession && !agentSwitchIntent ? { pluginEngineSession } : {})}
+                    {...(pluginEnginePending ? { pluginEnginePending } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在

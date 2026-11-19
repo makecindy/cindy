@@ -14,8 +14,8 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginHarness } from '../../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../../localDb/sessionOpening.js';
-import { admitPluginEngineSession as admitWith } from '../pluginEngineSessionAdmission.js';
-import type { PluginEngineModel } from '../../../shared/pluginEngines.js';
+import { admitPluginEngineSession as admitWith, admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
+import type { PluginEngineModel, PluginEngineView } from '../../../shared/pluginEngines.js';
 
 // DSH 的 reasoning_effort 是 off / low / high / max(2026-11-19 实测)；Cindy 只认 low / high / max。
 const models: PluginEngineModel[] = [
@@ -80,5 +80,46 @@ describe('opening a task on a plugin engine', () => {
     ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '只能在本机运行'],
   ] as const)('refuses with a reason when %s', (_label, input, harnesses, message) => {
     expect(() => admitPluginEngineSession(input, harnesses)).toThrow(message);
+  });
+});
+
+// Phase 2 (2026-11-19): an existing task switching onto the engine follows the same rules, and its
+// permission mode is narrowed to what the engine offers (Full access only if the task had it).
+describe('switching an existing task onto a plugin engine', () => {
+  const view = (availability: PluginEngineView['availability']): PluginEngineView => ({
+    key: '_ns__local__dsh-acp:dsh', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+    ghostId: '_ns__local__dsh-acp', harnessId: 'dsh', name: 'DeepSeek Harness', availability, models,
+    permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'plan', displayName: 'Plan' },
+      { id: 'bypassPermissions', displayName: 'Allow all' }],
+    defaultPermissionMode: 'default',
+  });
+  const target = (extra: Partial<Parameters<typeof admitPluginEngineSwitchTarget>[0]> = {}) => ({
+    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh', model: 'deepseek-v4', ...extra,
+  });
+
+  it('keeps an offered mode, else the mode a new task on the engine starts in', () => {
+    const engines = [view({ state: 'available' })];
+    expect(admitPluginEngineSwitchTarget(target({ permissionMode: 'bypassPermissions' }), engines).permissionMode)
+      .toBe('bypassPermissions');
+    expect(admitPluginEngineSwitchTarget(target({ permissionMode: 'plan' }), engines).permissionMode).toBe('plan');
+    expect(admitPluginEngineSwitchTarget(target({ permissionMode: 'acceptEdits' }), engines).permissionMode).toBe('default');
+    expect(admitPluginEngineSwitchTarget(target({ permissionMode: 'ask' }), engines).permissionMode).toBe('default');
+  });
+
+  it('keeps only a listed reasoning level and names the engine', () => {
+    const engines = [view({ state: 'available' })];
+    expect(admitPluginEngineSwitchTarget(target({ effort: 'max' }), engines)).toMatchObject({
+      model: 'deepseek-v4', effort: 'max', engineName: 'DeepSeek Harness',
+    });
+    expect(admitPluginEngineSwitchTarget(target({ effort: 'xhigh' }), engines).effort).toBe('');
+    expect(admitPluginEngineSwitchTarget(target({ model: ' ' }), engines).model).toBe('default');
+  });
+
+  it.each([
+    ['turned off or removed', [], '提供这个引擎的插件已停用或卸载'],
+    ['reported unavailable', [view({ state: 'unavailable', message: 'Run npm i -g @deepseek-ai/dsh' })],
+      'DeepSeek Harness 当前不可用：Run npm i -g @deepseek-ai/dsh'],
+  ] as const)('refuses an engine that is %s', (_label, engines, message) => {
+    expect(() => admitPluginEngineSwitchTarget(target(), engines)).toThrow(message);
   });
 });

@@ -70,7 +70,7 @@ it.each(['recovery', 'ordinary', 'missing-offer', 'pending', 'new-provider', 'ne
     const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false,
       invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
       remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind: 'codex', isCodex: true, session,
-      pluginEngineTask: false,
+      pluginEngineTask: false, pluginEngineSwitchIntent: null,
       agentSwitchIntent: scenario === 'new-intent' ? { target: 'pi' } : null,
       vendorAuthGate: { checkAndConfirm: auth },
     });
@@ -92,7 +92,7 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
   const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false,
     invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
     remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind, isCodex: displayAgentKind === 'codex', session,
-    pluginEngineTask: false, agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
+    pluginEngineTask: false, pluginEngineSwitchIntent: null, agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
   });
   await send('hello again', recovered.model, '', 'ask', undefined, undefined, {
     literalText: true, providerId: recovered.providerId, beforeEnqueue,
@@ -132,7 +132,7 @@ function setup(options: {
     remoteDeviceId: options.remoteDeviceId ?? null, catalogDeviceId: options.catalogDeviceId,
     displayAgentKind: options.pendingVendor ?? agentKind,
     isCodex: !options.pendingVendor && agentKind === 'codex',
-    pluginEngineTask: false,
+    pluginEngineTask: false, pluginEngineSwitchIntent: null,
     agentSwitchIntent: options.switchAgentDeviceId !== undefined
       ? { target: options.pendingVendor ?? agentKind, agentDeviceId: options.switchAgentDeviceId } : null,
     modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },

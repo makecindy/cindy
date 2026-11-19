@@ -68,6 +68,16 @@ export interface PluginEngineSessionPickerProps {
   onSelectModel(modelId: string, effort?: PluginEngineEffort): void | boolean | Promise<void | boolean>;
 }
 
+/** A plugin engine chosen for an existing task's next message; the switch applies when it is sent. */
+export interface PluginEnginePendingSelection {
+  providerId: string;
+  /** null when the plugin was turned off or removed meanwhile. */
+  engine: PluginEngineView | null;
+  engineName: string;
+  modelId: string;
+  effort?: string | null;
+}
+
 /**
  * The engine's mark: the providing plugin's own icon (manifest `icon`) when it has one, else the
  * generic puzzle. `className` colours the puzzle only; a plugin icon keeps its own colours.

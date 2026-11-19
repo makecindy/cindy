@@ -241,10 +241,10 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
-import { pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
-import { admitPluginEngineSession } from './pluginEngineSessionAdmission.js';
+import { listPluginEngineViews, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
+import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
-import { isPluginEngineKind } from '../../shared/pluginEngines.js';
+import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
   AgentEvent,
@@ -11100,6 +11100,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     assertAgentDeviceRouteUsable,
     describeAgentDevice,
+    // 任务中换到插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入。
+    admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    describePluginEngine: (providerId) => {
+      const key = pluginEngineKeyFromProviderId(providerId);
+      return key ? getPluginHarnessRegistry().list().find((harness) => harness.key === key)?.name ?? null : null;
+    },
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
@@ -16720,7 +16726,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         configStaged: true,
       });
       const intent = agentSwitchPending.get(sessionId);
-      return intent ? {
+      // 系统路由只登记内置引擎；插件引擎意图不会出现在这些任务上(切到插件引擎只限普通任务)。
+      return intent && intent.targetAgentKind !== 'acp' ? {
         ...route, agentKind: intent.targetAgentKind, model: intent.model,
         providerId: intent.providerId ?? null,
         agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
@@ -16879,7 +16886,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
         // The task owns its model: a manual change sticks until the configured route itself changes.
         hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
-        next: intent ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
+        // 伙伴任务不能切到插件引擎，这里的意图只会是内置引擎。
+        next: intent && intent.targetAgentKind !== 'acp' ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
           providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
@@ -16907,7 +16915,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   readPendingAgentSwitchRouteHolder = (sessionId) => {
     const intent = agentSwitchPending.get(sessionId);
-    return intent
+    // 只给 IM 默认路由同步读；IM 任务不能切到插件引擎，插件引擎意图按「没有」处理。
+    return intent && intent.targetAgentKind !== 'acp'
       ? {
           agentKind: intent.targetAgentKind,
           model: intent.model,
