@@ -1149,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "Cindy está trabajando",
-    "hint": "Presiona cualquier tecla o la tecla Touch ID para bloquear y luego desbloquea con tu huella o contraseña",
+    "hint": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "lockFailed": {
       "status": "Cindy no pudo bloquear esta Mac",
       "hint": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Touch ID o tu contraseña para quitar la pantalla. También puedes cerrar la tapa o pulsar el botón de encendido.",
       "hintWindows": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Windows Hello o tu PIN para quitar la pantalla. También puedes presionar la tecla del logotipo de Windows + L."
     },
-    "hintWindows": "Presiona cualquier tecla para bloquear; desbloquea con Windows Hello o tu contraseña",
-    "hintLinux": "Presiona cualquier tecla para bloquear; desbloquea con tu contraseña",
+    "hintWindows": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
+    "hintLinux": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "verifyReason": "quitar la pantalla de privacidad"
   },
   "appBadge": {
@@ -6133,7 +6133,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modelo alternativo automático para tareas",
-        "description": "Tras varios fallos de conexión o capacidad, prueba otra fuente conectada para el mismo modelo y, después, un modelo recomendado explícitamente para el Agent actual. Nunca cambia de Agent ni modifica tu selección guardada. Desactivado de forma predeterminada."
+        "description": "Si hay un fallo, el grupo prueba otros modelos disponibles del grupo. Al cambiar de agente se transfiere la tarea y se guarda la nueva selección. Las demás tareas prueban otra fuente o un modelo recomendado del mismo agente tras fallos repetidos. Desactivado de forma predeterminada."
       },
       "toggleAria": "Activar o desactivar el modelo alternativo automático para tareas",
       "toast": {
@@ -11572,7 +11572,7 @@
         "projectDirChoose": "Elegir carpeta",
         "projectDirChange": "Cambiar carpeta",
         "projectDirClear": "Quitar carpeta",
-        "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
+        "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del compañero que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMemberInvites": "Permitir que todos inviten amigos",
@@ -11906,15 +11906,15 @@
           "replyModeAssistant": "Cindy responde",
           "replyModeAssistantNote": "Responde la Cindy del grupo.",
           "work": "División del trabajo",
-          "ownFolder": "Carpeta propia del grupo",
+          "ownFolder": "Automático",
           "projectDirHint": "Solo se aplica en este ordenador.",
-          "projectDirClearHint": "Usar la carpeta propia del grupo en su lugar",
+          "projectDirClearHint": "Volver a la selección automática del proyecto",
           "project": "Proyecto",
           "projectCaption": "Los amigos responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
           "githubRepo": "Repositorio de GitHub",
-          "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repositorio",
-          "repositoryHint": "GitHub: escribe owner/name. GitLab (también propio de tu empresa), CNB y otros: pega el enlace del repositorio. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repositoryHint": "Para GitHub, introduce owner/name o pega la URL del repositorio. Cindy busca un único proyecto coincidente en este equipo.",
           "repositoryPlaceholder": "owner/name o enlace del repositorio",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
           "folderRepoFilled": "Se completó el repositorio {{repo}} a partir de esta carpeta. Los ordenadores de los demás miembros también lo usarán.",
@@ -14749,12 +14749,14 @@
       "runningWithWorktree_other": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_many": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias."
     },
-    "followUpHint": {
-      "queueDefault": "Los mensajes enviados mientras la tarea se ejecuta se ponen en cola.",
-      "steerDefault": "Los mensajes enviados mientras la tarea se ejecuta dan indicaciones a la tarea en curso.",
+    "sendDelivery": {
+      "menuAria": "Cómo enviar este mensaje",
+      "queueHint": "Tras esta respuesta",
+      "steerHint": "En el siguiente paso",
+      "setDefault": "Usar por defecto",
+      "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
-      "switchToQueue": "Poner en cola por defecto",
-      "dismiss": "Cerrar sugerencia"
+      "switchToQueue": "Poner en cola por defecto"
     }
   },
   "onboarding": {
@@ -16897,6 +16899,7 @@
         "thisEvening": "Esta tarde",
         "tomorrow": "Mañana",
         "nextWeek": "La próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "wakeAt": "Fecha y hora de regreso",
         "timeZone": "Hora local ({{zone}})",
@@ -19663,6 +19666,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Este turno ha fallado.",
+    "blockedReasonUnknown": "No se ha indicado un motivo concreto del bloqueo.",
+    "blockedNextStep": "Puedes añadir información en esta tarea. Tras resolver la causa, haz clic en «{{action}}» para continuar.",
     "status": {
       "active": "Avanzando hacia el objetivo",
       "paused": "En pausa",
@@ -20002,6 +20008,7 @@
         "empty": "No hay asignaciones promocionales disponibles.",
         "incomplete": "Hay muchos registros de asignaciones. Solo se muestran los últimos {{count}}.",
         "unnamed": "Asignación promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Tarjeta de regalo · de {{sender}}",
         "original": "Importe original",
         "used": "Usado",
@@ -20242,6 +20249,8 @@
       "basicModels": "Accede a algunos modelos",
       "subscription": "Plan de suscripción",
       "rollover": "Conserva hasta {{amount}} de saldo sin usar durante {{period}}",
+      "rolloverMonthly": "Acumula hasta {{amount}} de saldo sin usar como saldo promocional\nVálido durante 1 mes, sin nueva acumulación\nSe utiliza antes del Saldo del plan y del Saldo de recargas",
+      "rolloverMonthlySummary": "Acumula hasta {{amount}} de saldo sin usar, válido durante 1 mes",
       "nextPeriod": {
         "MONTH": "el próximo mes",
         "YEAR": "el próximo año",

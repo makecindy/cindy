@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -96,6 +96,9 @@ function SnoozeOptions({
           </time>
         </DropdownMenuItem>
       ))}
+      <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => void snooze(INDEFINITE_SNOOZE_UNTIL)}>
+        {t('ccAgent.sidebar.inbox.indefinite')}
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={onCustom}>
         {t('ccAgent.sidebar.inbox.custom')}
@@ -117,7 +120,7 @@ export function SessionSnoozeCustomDialog({
   const [customValue, setCustomValue] = useState(() => {
     const until = taskSnoozeUntil(session);
     const initial =
-      until > Date.now()
+      Number.isFinite(until) && until > Date.now()
         ? new Date(until)
         : taskSnoozeOptions(new Date()).find((option) => option.id === 'tomorrow')!.until;
     return toLocalDateTimeValue(initial);

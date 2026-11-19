@@ -902,7 +902,7 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
       LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
-    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    const replace = existing && existing.sessionId === p.replaceSessionId;
     if (existing && !replace) return { sessionId: existing.sessionId, created: false };
     if (existing) {
       // The group's project folder changed on this computer: the lane moves with it.

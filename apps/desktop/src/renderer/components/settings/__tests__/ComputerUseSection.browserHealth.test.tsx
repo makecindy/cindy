@@ -37,6 +37,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { ComputerUseSection } from '../ComputerUseSection';
+import { makePluginUsableInPlace } from '@/features/plugin/lib/pluginInPlace';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -526,7 +527,7 @@ describe('ComputerUseSection browser backend health loading', () => {
   // and the guidance moves on to step 2 as soon as the host reports the extension as the gap.
   it('installs the My browser plugin from settings and moves on to the extension step', async () => {
     const detail = {
-      pluginId: 'market-opaque-id',
+      pluginId: 'market-opaque-id', ghostId: 'my-browser', namespace: null,
       releaseId: 'release-1',
       manifest: { id: 'my-browser' },
       installState: 'not-installed',
@@ -534,13 +535,16 @@ describe('ComputerUseSection browser backend health loading', () => {
     // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
     const lookup = vi.fn().mockResolvedValue({
       items: [
-        { pluginId: 'other-id', ghostId: 'other-plugin' },
-        { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
+        { ...detail, pluginId: 'organization-copy', namespace: 'acme' },
+        detail,
       ],
     });
     const marketDetail = vi.fn().mockResolvedValue(detail);
     const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
-    Object.assign(window.electronAPI, { pluginMarket: { lookup, detail: marketDetail, install } });
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} },
+      pluginMarket: { lookup, detail: marketDetail, install },
+    });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
     api.getBackendHealth
       .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })
@@ -567,6 +571,21 @@ describe('ComputerUseSection browser backend health loading', () => {
       allowSourceReplacement: false,
     });
     expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
+  });
+
+  // Standard tier: a partial catalog used to stop the shared browser setup at a toast.
+  // The production entry must preserve a recovery route and perform no install.
+  it.each([undefined, 'known-market-id'])('opens plugin settings on incomplete sources (market %s)', async (marketPluginId) => {
+    const install = vi.fn();
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} },
+      pluginMarket: { lookup: vi.fn(async () => ({
+        items: [], unavailableReason: null, unavailableCustomSourceNames: ['offline-source'],
+      })), install },
+    });
+    expect(await makePluginUsableInPlace({ ghostId: 'my-browser', namespace: null, marketPluginId }))
+      .toEqual({ status: 'page', route: marketPluginId ? '/plugins?market=known-market-id' : '/plugins' });
+    expect(install).not.toHaveBeenCalled();
   });
 
   // Copying Chrome logins only serves the standalone browser, so the switch never shows elsewhere,

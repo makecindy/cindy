@@ -141,6 +141,8 @@ describe('billing response projection', () => {
     ).toThrow();
   });
 
+  // D17: the real credit-usage projector must retain nullable source for localized
+  // rollover names; its old allowlist dropped the field before renderer received it (unit).
   it('projects exact pool usage and independent promotional grant states', () => {
     expect(
       projectModelAccessCreditUsage({
@@ -152,6 +154,7 @@ describe('billing response projection', () => {
           {
             grantId: 'welcome',
             displayName: 'Welcome',
+            source: { type: 'subscription_rollover' },
             originalAmount: '2',
             usedAmount: '1',
             remainingAmount: '1',
@@ -162,6 +165,7 @@ describe('billing response projection', () => {
           {
             grantId: 'expired',
             displayName: null,
+            source: null,
             originalAmount: '5',
             usedAmount: '1.25',
             remainingAmount: '0',
@@ -194,6 +198,7 @@ describe('billing response projection', () => {
         {
           grantId: 'welcome',
           displayName: 'Welcome',
+          source: { type: 'subscription_rollover' },
           originalAmount: '2',
           usedAmount: '1',
           remainingAmount: '1',
@@ -203,6 +208,7 @@ describe('billing response projection', () => {
         {
           grantId: 'expired',
           displayName: null,
+          source: null,
           originalAmount: '5',
           usedAmount: '1.25',
           remainingAmount: '0',
@@ -227,9 +233,9 @@ describe('billing response projection', () => {
     });
   });
 
-  // 契约：礼品卡来源越过主进程边界时只保留类型与赠送方；来源只是展示信息，
-  // 认不出或不合规时按没有来源处理，不能让整份余额读取失败。
-  it('keeps a gift card source on a grant and drops sources it cannot vouch for', () => {
+  // 人工审查后的来源契约（unit）：同一真实投影接受滚存/礼品卡对象和 null，
+  // 旧覆盖只验证字符串滚存；最小失败输入是滚存对象，以及必须忽略的旧字符串。
+  it('keeps rollover and gift card objects while dropping string and malformed sources', () => {
     const grant = (grantId: string, source: unknown) => ({
       grantId,
       displayName: null,
@@ -249,6 +255,9 @@ describe('billing response projection', () => {
       { type: 'gift_card', senderName: 'x'.repeat(81) },
       { type: 'gift_card' },
       'gift_card',
+      'subscription_rollover',
+      { type: 'subscription_rollover', cardId: 'internal' },
+      'x'.repeat(4096),
     ];
     const usage = projectModelAccessCreditUsage({
       available: String(sources.length),
@@ -264,7 +273,13 @@ describe('billing response projection', () => {
     });
 
     expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
-    for (const projected of usage.promotionalGrants.slice(1)) {
+    expect(usage.promotionalGrants[2].source).toBeNull();
+    expect(usage.promotionalGrants[9].source).toEqual({ type: 'subscription_rollover' });
+    for (const projected of [
+      usage.promotionalGrants[1],
+      ...usage.promotionalGrants.slice(3, 9),
+      usage.promotionalGrants[10],
+    ]) {
       expect(projected).not.toHaveProperty('source');
     }
   });

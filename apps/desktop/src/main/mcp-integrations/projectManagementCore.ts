@@ -1,13 +1,14 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { teammateFolderName, teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { eq } from 'drizzle-orm';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
-import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
+import { listRecentWorkdirs, listRegisteredProjectPaths } from '../localDb/ipc/recentWorkdirsCore.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliasesCore.js';
-import { recentWorkdirs, sessions } from '../localDb/schema.js';
+import { botSessionLinks, recentWorkdirs, sessions } from '../localDb/schema.js';
 import { loadSidebarSettingsSnapshot, setLocalProjectHidden } from '../sidebarSettingsStoreCore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
 import { workingDirEquals } from '../../shared/workingDir.js';
@@ -18,20 +19,19 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   validateLocalProjectDirectory,
   validateExistingLocalProjectDirectory,
-  withLocalProjectContext,
-  type LocalProjectContext,
-} from './createProjectCore.js';
+} from '../projectDirectoryRoot.js';
+import { withLocalProjectContext, type LocalProjectContext } from './localProjectContext.js';
 
 const identity = (directory: string) =>
   projectKeyComparisonKey(`local:${directory}`, process.platform);
 
-/** Self-inspection only: reads current membership without touching the catalog. */
-export async function readCurrentSessionProject(sessionId: string) {
+async function readSessionPlacement(sessionId: string) {
   const client = tryGetDbClient();
   if (!client || isAppSessionBoundaryPending()) throw new Error('Project storage unavailable');
   const owner = getActiveDataOwnerPushStamp();
   const [row] = await client.drizzle
     .select({
+      source: sessions.source,
       projectDir: sessions.projectDir,
       workingDir: sessions.workingDir,
       workspaceKind: sessions.workspaceKind,
@@ -40,6 +40,14 @@ export async function readCurrentSessionProject(sessionId: string) {
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
+  let buddyProject: string | null = null;
+  const folder = teammateFolderOfProjectPath(row?.workingDir);
+  if (row?.source === 'bot' && row.workspaceKind === 'dialogue' && folder) {
+    const [link] = await client.drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+      .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+    if (link && link.role !== 'group' && teammateFolderName(link.botId) === folder)
+      buddyProject = row.workingDir;
+  }
   const current = getActiveDataOwnerPushStamp();
   if (
     isAppSessionBoundaryPending() ||
@@ -55,9 +63,26 @@ export async function readCurrentSessionProject(sessionId: string) {
         ? null
         : (row.projectDir ??
           (row.workingDir ? collapseWorktreeDirForGrouping(row.workingDir) : null)),
+    buddyProject,
     workspaceKind: row.workspaceKind,
     remoteHostId: row.remoteHostId,
   };
+}
+
+/** Self-inspection reports the persisted task membership. */
+export async function readCurrentSessionProject(sessionId: string) {
+  const { projectDir, workspaceKind, remoteHostId } = await readSessionPlacement(sessionId);
+  return { projectDir, workspaceKind, remoteHostId };
+}
+
+/** Lightweight catalog for repository matching: no task history or aliases are needed. */
+export function listVisibleRegisteredProjectPaths() {
+  return withLocalProjectContext(undefined, async context => {
+    const paths = await listRegisteredProjectPaths(context.client);
+    context.assertCurrent();
+    const hidden = new Set(loadSidebarSettingsSnapshot().hiddenProjectKeys.map(key => projectKeyComparisonKey(key, process.platform)));
+    return { ok: true as const, paths: paths.filter(directory => !hidden.has(identity(directory))) };
+  });
 }
 
 /** Metadata edits remain usable even when a registered directory is temporarily offline. */
@@ -131,8 +156,8 @@ export async function resolveSessionProject(params: {
     let selected = params.projectDir;
     if (selected === undefined) {
       const source = params.callerSessionId
-        ? await readCurrentSessionProject(params.callerSessionId)
-        : { workspaceKind: 'dialogue', projectDir: null };
+        ? await readSessionPlacement(params.callerSessionId)
+        : { workspaceKind: 'dialogue', projectDir: null, buddyProject: null };
       context.assertCurrent();
       if (source.workspaceKind === 'dialogue') {
         const containing = params.workingDir
@@ -144,6 +169,11 @@ export async function resolveSessionProject(params: {
             projectDir: containing,
             projectFromWorkingDir: true as const,
           };
+        if (!params.workingDir && source.buddyProject) {
+          const home = await nearestVisibleProject(context, source.buddyProject);
+          if (home && workingDirEquals(home, source.buddyProject))
+            return { ok: true as const, projectDir: home };
+        }
         selected = null;
       } else if (source.workspaceKind === 'project' && source.projectDir)
         selected = source.projectDir;
@@ -156,28 +186,50 @@ export async function resolveSessionProject(params: {
         };
     }
     if (selected === null) return { ok: true as const, projectDir: null };
-    const directory = validateLocalProjectDirectory(selected);
-    if (!directory.ok) return directory;
-    const projectDir = await requireRegisteredProject(context, directory.workingDir);
-    const hidden = loadSidebarSettingsSnapshot().hiddenProjectKeys.some(
-      (key) => projectKeyComparisonKey(key, process.platform) === identity(projectDir),
-    );
-    if (hidden)
-      return {
-        ok: false as const,
-        errorCode: 'INVALID_ARGS',
-        message:
-          '项目已移除，请选择 list_projects 中的可见项目；确需恢复时显式调用 create_project。',
-      };
-    const checked = await validateExistingLocalProjectDirectory(projectDir);
-    if (!checked.ok) return checked;
-    context.assertCurrent();
-    return { ok: true as const, projectDir };
+    return validateTaskProject(context, selected);
   });
 }
 
-export { inferProjectsRoot } from '../projectCreation.js';
-import { inferProjectsRoot } from '../projectCreation.js';
+export async function validateTaskProject(context: LocalProjectContext, selected: string) {
+  const directory = validateLocalProjectDirectory(selected);
+  if (!directory.ok) return directory;
+  const projectDir = await requireRegisteredProject(context, directory.workingDir);
+  const hidden = loadSidebarSettingsSnapshot().hiddenProjectKeys.some(
+    (key) => projectKeyComparisonKey(key, process.platform) === identity(projectDir),
+  );
+  if (hidden)
+    return {
+      ok: false as const,
+      errorCode: 'INVALID_ARGS',
+      message:
+        '项目已移除，请选择 list_projects 中的可见项目；确需恢复时显式调用 create_project。',
+    };
+  const checked = await validateExistingLocalProjectDirectory(projectDir);
+  if (!checked.ok) return checked;
+  context.assertCurrent();
+  return { ok: true as const, projectDir };
+}
+
+/** Automatic fallback skips missing or hidden projects. Storage and account failures stop the request. */
+export async function registeredTaskProject(dir: string): Promise<string | null> {
+  const result = await resolveSessionProject({ projectDir: dir });
+  if (result.ok) return result.projectDir;
+  if (result.errorCode === 'NOT_FOUND' || result.errorCode === 'INVALID_ARGS' || result.errorCode === 'NOT_A_DIRECTORY') return null;
+  throw new Error(result.message);
+}
+
+// A selected execution folder may belong to an existing project. Selecting it never
+// registers a new one. An explicit project must still belong to this account.
+export async function projectForNewTask(workingDir?: string, projectDir?: string | null) {
+  if (projectDir === null || (!workingDir && projectDir === undefined))
+    return { projectDir: null, workspaceKind: 'dialogue' as const };
+  const result = await resolveSessionProject({ workingDir, projectDir });
+  if (!result.ok) throw new Error(result.message);
+  return { projectDir: result.projectDir, workspaceKind: result.projectDir ? 'project' as const : 'dialogue' as const };
+}
+
+export { inferProjectsRoot } from '../projectRootInference.js';
+import { inferProjectsRoot } from '../projectRootInference.js';
 
 /**
  * Explicit choice first, then visible existing projects, then ~/Projects. Never writes.

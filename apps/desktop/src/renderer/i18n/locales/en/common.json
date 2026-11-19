@@ -1132,14 +1132,14 @@
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key or the Touch ID key to lock, then unlock with your fingerprint or password",
+    "hint": "Press any key to show the unlock screen",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
       "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
       "hintWindows": "Touch the computer to try locking again. If it still can’t lock, verify with Windows Hello or your PIN to remove the cover. You can also press the Windows logo key + L to lock."
     },
-    "hintWindows": "Press any key to lock; unlock with Windows Hello or your password",
-    "hintLinux": "Press any key to lock; unlock with your password",
+    "hintWindows": "Press any key to show the unlock screen",
+    "hintLinux": "Press any key to show the unlock screen",
     "verifyReason": "remove the privacy screen"
   },
   "appBadge": {
@@ -6075,7 +6075,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatic task model fallback",
-        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+        "description": "On failure, a model group tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
       },
       "toggleAria": "Toggle automatic task model fallback",
       "toast": {
@@ -11483,7 +11483,7 @@
         "projectDirChoose": "Choose Folder",
         "projectDirChange": "Change Folder",
         "projectDirClear": "Clear Folder",
-        "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
+        "projectDirNote": "Choose an existing project on this computer. Otherwise, work uses the matching repository project or the executing buddy’s project. Git work splits use a worktree.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
         "allowMemberInvites": "Let all members invite friends",
@@ -11822,15 +11822,15 @@
           "replyModeAssistant": "Cindy Replies",
           "replyModeAssistantNote": "Group Cindy replies.",
           "work": "Work splits",
-          "ownFolder": "Group's own folder",
+          "ownFolder": "Automatic",
           "projectDirHint": "Applies on this computer only.",
-          "projectDirClearHint": "Use the group's own folder instead",
+          "projectDirClearHint": "Return to automatic project selection",
           "project": "Project",
           "projectCaption": "Buddies reply and do work splits in this project. The repository is shared with the group; the folder stays on this computer.",
           "githubRepo": "GitHub repository",
-          "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repository",
-          "repositoryHint": "GitHub: enter owner/name. GitLab (self-hosted too), CNB and others: paste the repository link. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repositoryHint": "Enter owner/name for GitHub, or paste the repository URL. Cindy looks for one matching project on this computer.",
           "repositoryPlaceholder": "owner/name or repository link",
           "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
           "folderRepoFilled": "Filled in the repository {{repo}} from this folder. Other members’ computers will use it too.",
@@ -14627,12 +14627,14 @@
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
     },
-    "followUpHint": {
-      "queueDefault": "Messages sent while a task is running are queued.",
-      "steerDefault": "Messages sent while a task is running steer the current task.",
+    "sendDelivery": {
+      "menuAria": "How to send this message",
+      "queueHint": "After this reply",
+      "steerHint": "At the next step",
+      "setDefault": "Set as default",
+      "nowDefault": "Now the default",
       "switchToSteer": "Steer by default",
-      "switchToQueue": "Queue by default",
-      "dismiss": "Dismiss tip"
+      "switchToQueue": "Queue by default"
     }
   },
   "onboarding": {
@@ -16735,6 +16737,7 @@
         "thisEvening": "This evening",
         "tomorrow": "Tomorrow",
         "nextWeek": "Next week",
+        "indefinite": "Indefinitely",
         "custom": "Custom…",
         "wakeAt": "Wake-up date and time",
         "timeZone": "Local time ({{zone}})",
@@ -19479,6 +19482,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "This turn failed.",
+    "blockedReasonUnknown": "No specific reason was provided for this block.",
+    "blockedNextStep": "You can add information in this task. After addressing the cause, click “{{action}}” to continue.",
     "status": {
       "active": "Advancing goal",
       "paused": "Paused",
@@ -19817,6 +19823,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "rolloverName": "Rollover grant",
         "giftCard": "Gift card · from {{sender}}",
         "original": "Original",
         "used": "Used",
@@ -20056,6 +20063,8 @@
       "basicModels": "Access some models",
       "subscription": "Subscription plan",
       "rollover": "Keep up to {{amount}} in unused balance for {{period}}",
+      "rolloverMonthly": "Roll over up to {{amount}} in unused balance as promotional balance\nValid for 1 month, with no further rollover\nUsed before Plan Balance and Top-up Balance",
+      "rolloverMonthlySummary": "Roll over up to {{amount}} in unused balance, valid for 1 month",
       "nextPeriod": {
         "MONTH": "next month",
         "YEAR": "next year",

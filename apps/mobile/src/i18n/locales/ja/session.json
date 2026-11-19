@@ -577,6 +577,7 @@
       "taskCost": "タスクの費用",
       "actualCost": "実際の費用",
       "estimatedValue": "推定価値",
+      "tokenUnit": "token",
       "totalTokens": "累計トークン",
       "seeDetails": "内訳を見る",
       "valueUnavailable": "一部のタスク価値を取得できません",

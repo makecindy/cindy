@@ -30,12 +30,11 @@ import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
 import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { botGroupFolderPath } from './botGroupWorkDir.js';
-import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
-import { createGroupProjectFolders } from './groupProjectFolder.js';
+import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
+import { createGroupProjectFolders, requestRepository } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { GROUP_TEAMMATE_HANDOFF_GUIDANCE } from './groupCollaborationSkillContent.js';
-import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
+import { createGroupAssistantTasks, formatGroupRequest } from './groupAssistantTask.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
@@ -156,7 +155,7 @@ interface Running {
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
-  workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
+  workspace?: { projectDir?: string | null; workDir: string; branch: string | null; ownerSessionId: string | null };
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
   /**
@@ -546,16 +545,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
   /** Where a group's work happens on this computer (`groupProjectFolder.ts`, bot-group-chat.md §7.5). */
   const projectFolders = createGroupProjectFolders({
-    workspaceRoot: readDialogueWorkspaceSettings,
-    chosen: roomId => workspaces().read(roomId)?.projectDir ?? null,
-    fallback: room => workspaces().read(room.id)?.fallbackDir ??
-      (existsSync(botGroupFolderPath(ownerScopedUserDataPath(), room.id)) ? botGroupFolderPath(ownerScopedUserDataPath(), room.id) : null),
-    bindFallback: (roomId, dir) => workspaces().save(roomId, { projectDir: null, plans: {}, ...workspaces().read(roomId), fallbackDir: dir }),
+    chosen: roomId => {
+      const settings = workspaces().read(roomId);
+      const dir = settings?.projectDir;
+      return dir && dir !== settings.fallbackDir && !deps.isLegacyGroupFolder?.(roomId, dir) ? dir : null;
+    },
+    get executorProject() { return deps.executorProject; },
     get findRegistered() { return deps.findProjectDirsForRepo; },
-    get checkouts() { return deps.groupCheckouts; },
     get validate() { return deps.validateProjectDir; },
-    owner: () => current(),
   });
+  const unsubscribeProjects = onProjectCatalogChanged(projectFolders.invalidate);
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
     if (!groupDiscussionParity) return;
@@ -861,7 +860,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       onRoom: (source, room) => { upgradedGroups.set(source, room); upgradeErrors.delete(source); changed(room); },
       afterMessages: async (source, room) => {
         const [group] = await db.select().from(botGroups).where(eq(botGroups.id, source)).limit(1);
-        if (group && !workspaces().read(room)) workspaces().save(room, { projectDir: group.projectDir, plans: {} });
+        if (group && !workspaces().read(room)) workspaces().save(room, { projectDir: group.projectDir && !deps.isLegacyGroupFolder?.(source, group.projectDir) ? group.projectDir : null, plans: {} });
         if (group?.organizerBotId) {
           const s = await snapshot(room);
           const organizerId = actors.find(a => a.externalId === group.organizerBotId)?.id;
@@ -2844,16 +2843,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     current, store: () => chatServerAssistantSessions(config.baseUrl, selfId, current),
     folders: projectFolders, get ensureSession() { return deps.ensureGroupAssistantSession; },
   });
-  /** What a request says when the group's repository is not on this computer yet: why, and what to do. */
-  function checkoutNote(repository: GroupRepository, pending: NonNullable<GroupAssistantTask['pending']>): string {
-    const key = pending.status === 'preparing' ? 'preparing' : pending.status === 'git-missing' ? 'gitMissing'
-      : pending.status === 'access-required' ? 'accessRequired'
-        : pending.status === 'sign-in-required' ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
-    const guide = t(`bots.groupChat.assistant.checkout.installGit.${process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'}`);
-    const host = repository.kind === 'github' ? 'github.com' : repository.host;
-    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => groupRepositoryLabel(repository))
-      .replaceAll('{{host}}', () => host).replaceAll('{{guide}}', () => guide);
-  }
   /**
    * The group's messages a request to the group's Cindy carries as background: those of its
    * conversation (main group or its Thread) since the last request delivered into the task — the
@@ -2933,7 +2922,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!live()) throw new Error('STALE_EXECUTOR');
       // Words in the Thread of a task card it posted go into that task.
       if (source.threadRootId && await runInCardTask(run, s, Promise.resolve(source))) return;
-      const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement, source.threadRootId ?? undefined);
+      const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement, source.threadRootId ?? undefined,
+        source.authorId === selfId && !source.maskAttribution ? requestRepository(bodyText(source)) : null);
       if (!live()) throw new Error('STALE_EXECUTOR');
       const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
@@ -2966,8 +2956,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
       }
       const words = bodyText(source).trim();
-      const message = formatGroupRequest({ words, heading, background,
-        ...(task.pending && readGroupRepository(s.room.project) ? { note: checkoutNote(readGroupRepository(s.room.project)!, task.pending) } : {}) });
+      const message = formatGroupRequest({ words, heading, background });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
@@ -3069,43 +3058,46 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         await metadata.get(s.room.id);
         // A member may bring another owned companion after this room was first cached.
         await getDbClient().drizzle.insert(botGroupMembers).values({ groupId: s.room.id, botId: bot.id, position: 0, lastSeenSequence: 0, joinedAt: Date.now() }).onConflictDoNothing();
+        const source = await sourceRead;
+        if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
+        const folder = await projectFolders.forWork(s.room, { botId: bot.id,
+          request: source && source.authorId === selfId && !source.maskAttribution ? requestRepository(bodyText(source)) : null,
+          isCurrent: () => current() && running.get(execution.id) === run });
+        let projectDir = folder.dir;
         if (execution.plan_id && planRead) {
           run.plan = (await planRead).find(p => p.id === execution.plan_id);
           if (!run.plan) throw new Error('PLAN_CLOSED');
           // A discussion only talks: no project folder, worktree or produced files.
-          if (execution.access_mode !== 'chat' && run.plan.kind !== 'talk') {
+          if (!toolsOff && run.plan.kind !== 'talk') {
             const settings = workspaces().read(s.room.id) ?? { projectDir: null, plans: {} };
             // Each grant has its own workspace. Revoked grants cannot reuse private context.
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.forWork(s.room, { signIn: false, isCurrent: current })).dir });
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
-              run.workspace = prepared;
+              run.workspace = { ...prepared, projectDir };
               if (!current()) throw new Error('OWNER_CHANGED');
               // Preparation yields: another lane may settle or save settings in
               // the meantime. Add this workspace to the latest persisted record.
               const latestSettings = workspaces().read(s.room.id) ?? settings;
-              latestSettings.plans[key] = prepared; latestSettings.plans[run.plan.id] = prepared;
+              latestSettings.plans[key] = run.workspace; latestSettings.plans[run.plan.id] = run.workspace;
               workspaces().save(s.room.id, latestSettings);
             }
+            projectDir = run.workspace.projectDir !== undefined ? run.workspace.projectDir
+              : await deps.projectOfWorkDir?.(run.workspace.workDir) ?? null;
             run.beforeFiles = await deps.workDir?.snapshot(run.workspace.workDir);
           }
         }
-        const source = await sourceRead;
-        if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
-        // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
-        // Folder identity is shared; toolsOff above enforces the caller's authority.
-        const projectDir = !ownDirectRoom
-          ? (await projectFolders.forWork(s.room, { signIn: false, isCurrent: () => current() && running.get(execution.id) === run })).dir : null;
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
           ...(projectDir ? { projectDir } : {}),
+          ...(folder.continueConversation && !run.plan ? { continueConversation: true } : {}),
           chatAccess: { mode: execution.access_mode, revision: execution.access_revision, maskOwnerId: execution.mask_owner_id },
           ...(digest ? { personalDigest: true } : {}),
           // A queue turn talks in its own lane (no project folder); a division of work runs in its work directory.
           ...(run.plan?.kind === 'talk' ? { talkPlanId: run.plan.id }
-            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? (execution.access_mode === 'chat' ? projectDir ?? '' : ''), sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
+            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
           ...(threadRootId ? { threadRootId } : {}) });
         if (!lane.ok) throw new Error(botGroupRuntimeFailureCode({ code: lane.errorCode, message: lane.message }));
         if (lane.replacedSessionId) void deps.closeLanes?.([lane.replacedSessionId]);
@@ -4578,6 +4570,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       postedThreads.clear();
       for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
+      unsubscribeProjects();
       disposed = true;
       for (const [timer, finish] of capabilityNoticeRetries) { clearTimeout(timer); finish(); }
       capabilityNoticeRetries.clear();

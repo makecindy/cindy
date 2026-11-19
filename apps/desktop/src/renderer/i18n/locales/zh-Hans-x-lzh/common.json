@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正劳作",
-    "hint": "按任一键或 Touch ID 键即锁屏，再以指纹或密码解之",
+    "hint": "按任一键，乃可解锁",
     "lockFailed": {
       "status": "Cindy 未能锁此机",
       "hint": "触机则再试锁屏；仍不能锁，以 Touch ID 或密码验之，乃可撤。亦可合盖或按电源键以锁。",
       "hintWindows": "触机则再试锁屏；仍不能锁，以 Windows Hello 或 PIN 验之，乃可撤。亦可按 Windows 徽键 + L 以锁。"
     },
-    "hintWindows": "按任一键即锁屏，以 Windows Hello 或密码解之",
-    "hintLinux": "按任一键即锁屏，以密码解之",
+    "hintWindows": "按任一键，乃可解锁",
+    "hintLinux": "按任一键，乃可解锁",
     "verifyReason": "撤隐私画面"
   },
   "appBadge": {
@@ -6032,7 +6032,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "差事模型自降",
-        "description": "连接或容量之故障连发时，先切至同名模型之他处已连来源，再试当前 Agent 明确所荐之模型；不换 Agent，亦不改君所存之选择。常例为阖。"
+        "description": "模型组遇故，试组内可用之余模。更换引擎，依旧法交接，存其新选。寻常差事屡败，方于本引擎另试来源或所荐模型。初设为关。"
       },
       "toggleAria": "切换差事模型自降",
       "toast": {
@@ -11438,7 +11438,7 @@
         "projectDirChoose": "择",
         "projectDirChange": "易",
         "projectDirClear": "清",
-        "projectDirNote": "分工行事时，同伴于此劳作。不择亦可，将用此群议自有之卷匣；若择 git 项目，每次分工将新开一 worktree 与分支，不动君手中之代码。",
+        "projectDirNote": "可择本机既有之项目。未择，则先取仓库所系，次取行事同伴之项目。Git 分工另辟 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，请再试",
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
@@ -11766,15 +11766,15 @@
           "replyModeAssistant": "Cindy 答之",
           "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分职",
-          "ownFolder": "群自有之卷匣",
+          "ownFolder": "自动择取",
           "projectDirHint": "唯此机有效。",
-          "projectDirClearHint": "改用群自有之卷匣",
+          "projectDirClearHint": "复为自动择项",
           "project": "案",
           "projectCaption": "同僚于群中应答、分工，皆于此案行之。库为全群所共，文件夹唯存此机。",
           "githubRepo": "GitHub 库",
-          "githubRepoHint": "书 owner/name。未择文件夹之机，用本机此案；无之，则自取一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码之库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等，贴库之链接。未择夹之机，用本机此项目，无则自取一份。",
+          "repositoryHint": "GitHub 可书 owner/name，余库可贴其址。此机既有之项，独一相合者用之。",
           "repositoryPlaceholder": "owner/name 或库之链接",
           "githubRepoSaveFailed": "库未存，请察而再试。",
           "folderRepoFilled": "已依此夹填库 {{repo}}，群中他人之机亦用之。",
@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之讯，默从排队。",
-      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+    "sendDelivery": {
+      "menuAria": "此讯遣法",
+      "queueHint": "待此轮毕",
+      "steerHint": "次步即理",
+      "setDefault": "立为默",
+      "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
-      "switchToQueue": "默改排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默改排队"
     }
   },
   "onboarding": {
@@ -16661,6 +16663,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下周",
+        "indefinite": "无期",
         "custom": "自定…",
         "wakeAt": "唤回日期时辰",
         "timeZone": "本地时辰（{{zone}}）",
@@ -19403,6 +19406,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此轮未成。",
+    "blockedReasonUnknown": "受阻之由未详。",
+    "blockedNextStep": "可于此任务补述详情；解其阻后，按“{{action}}”续行。",
     "status": {
       "active": "方趋目标",
       "paused": "已暂止",
@@ -19740,6 +19746,7 @@
         "empty": "今无赠予之记。",
         "incomplete": "赠予之记甚多，今唯示最近 {{count}} 笔。",
         "unnamed": "赠予余资",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原额",
         "used": "已用",
@@ -19978,6 +19985,8 @@
       "basicModels": "可用若干模型",
       "subscription": "订阅之约",
       "rollover": "所余可留至{{period}}，至多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余资和储值余资使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "次月",
         "YEAR": "次年",

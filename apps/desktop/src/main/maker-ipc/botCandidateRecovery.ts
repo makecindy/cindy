@@ -2,6 +2,12 @@ import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-c
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
+/** A model-specific rate limit leaves other models on the connection available. */
+export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorSignals): boolean {
+  return signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
+    /\binsufficient_quota\b|insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(signals.message ?? '');
+}
+
 /** Host-proven stopped bootstrap, distinct from a turn or opaque startup error. */
 export const BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON = 'bot-subscription-startup-admission';
 
