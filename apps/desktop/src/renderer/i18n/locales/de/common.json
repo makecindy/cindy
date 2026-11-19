@@ -16063,6 +16063,7 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
+      "workerPromotionNotice": "Sobald der erste Worker erstellt ist, wechselt diese Rückfrage aus der Seitenleiste als eigenständige Aufgabe in die Aufgabenliste. Der Chatverlauf bleibt erhalten.",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",

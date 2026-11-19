@@ -16018,6 +16018,7 @@
       "commandDescription": "依主差事开旁问。可于命令后附问，以为追问草稿。",
       "title": "旁问",
       "context": "以开启时已成之上下文为据；主差事照常行之。阖此分页前，所问之录犹存。",
+      "workerPromotionNotice": "首位 Worker 建成，此问即移出侧栏，独列于任务表；往来记录仍存。",
       "opening": "方启…",
       "notReady": "主差事尚未答一回，且稍安勿躁。",
       "unsupported": "此 Agent 之远程差事暂不支持旁问。",

@@ -228,6 +228,10 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
 
   await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
   await clickControl('turn on collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
+  await until('promotion notice is visible before starting collaboration', () => evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    return /创建第一个 Worker 后，这条追问会移出侧栏|Once the first worker is created, this follow-up moves from the sidebar/.test(dialog?.innerText ?? '');
+  }));
   await until('dialog uses the loopback model and automatic approval', async () => {
     const snapshot = await ui.snapshot();
     return snapshot.includes(`当前：${model}`) || snapshot.includes(`Current: ${model}`)

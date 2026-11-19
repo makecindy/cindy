@@ -16213,6 +16213,7 @@
       "commandDescription": "Abra uma conversa paralela com o contexto desta tarefa. O texto opcional vira um rascunho de pergunta.",
       "title": "Conversa paralela",
       "context": "Usa o contexto concluído no momento em que você a abriu. A tarefa principal continua em execução. O histórico fica disponível até você fechar esta aba.",
+      "workerPromotionNotice": "Quando o primeiro Worker for criado, esta conversa sairá da barra lateral e aparecerá como uma tarefa independente na lista de tarefas. O histórico será mantido.",
       "opening": "Abrindo…",
       "notReady": "Aguarde a tarefa principal concluir a primeira resposta.",
       "unsupported": "O Agent desta tarefa é executado em outro ambiente de execução. A conversa paralela ainda não está disponível aqui.",

@@ -160,7 +160,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   if (unavailableChild && unavailableChild === childId) return null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
-      <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t('chat.sideChat.context')}</p>
+      <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t('chat.sideChat.context')}{' '}{t('chat.sideChat.workerPromotionNotice')}</p>
       <div className="min-h-0 flex-1">
         {state.deviceId && (loadFailed || remoteSession?.id !== childId) ? <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-sm leading-5 text-muted-foreground">{t(loadFailed ? 'chat.sideChat.failed' : 'chat.sideChat.opening')}</p>

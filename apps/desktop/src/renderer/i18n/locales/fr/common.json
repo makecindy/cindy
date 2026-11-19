@@ -16213,6 +16213,7 @@
       "commandDescription": "Ouvrir une conversation annexe avec le contexte de cette tâche. Le texte facultatif devient une question en brouillon.",
       "title": "Conversation annexe",
       "context": "Utilise le contexte des réponses déjà terminées au moment de l'ouverture. La tâche principale continue de s'exécuter. L'historique est conservé jusqu'à la fermeture de cet onglet.",
+      "workerPromotionNotice": "Une fois le premier Worker créé, cet échange quitte le panneau latéral et apparaît dans la liste des tâches comme une tâche indépendante. Son historique est conservé.",
       "opening": "Ouverture…",
       "notReady": "Attendez que la tâche principale ait terminé sa première réponse.",
       "unsupported": "L'Agent de cette tâche s'exécute dans un autre environnement d'exécution. La conversation annexe n'est pas encore disponible ici.",

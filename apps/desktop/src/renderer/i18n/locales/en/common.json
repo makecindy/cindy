@@ -16100,6 +16100,7 @@
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
       "context": "Uses completed context from when you opened it. The main task keeps running. History stays until you close this tab.",
+      "workerPromotionNotice": "Once the first worker is created, this follow-up moves from the sidebar to the task list as a separate task. Its chat history stays with it.",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",
       "unsupported": "This task's agent runs in another execution environment. Side chat is not available here yet.",

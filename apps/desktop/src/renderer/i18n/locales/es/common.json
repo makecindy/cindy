@@ -16213,6 +16213,7 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
+      "workerPromotionNotice": "Al crear el primer Worker, esta consulta pasará del panel lateral a la lista de tareas como una tarea independiente. Se conservará el historial de la conversación.",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",

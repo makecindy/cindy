@@ -3920,6 +3920,7 @@ describe('Cindy Make task note', () => {
       persistUserMessage: { clientId: 'side-1', content: 'Explain this choice' },
     });
     expect(vi.mocked(session.send).mock.calls[0][0]).toContain('[Side chat context]');
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain('Before using Orca tools to start collaboration or create the first worker here, tell the user in a visible message');
     expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Explain this choice');
     await transaction.sendToAgentAccepted('session-1', 'And the alternative?');
     expect(vi.mocked(session.send).mock.calls[1][0]).toBe('And the alternative?');
