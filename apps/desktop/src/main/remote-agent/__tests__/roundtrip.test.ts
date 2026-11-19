@@ -3125,14 +3125,19 @@ describe('shared startup lease budget upload cancellation', () => {
   beforeEach(() => { payloadCompression.enabled = true; payloadCompression.paused = false; payloadCompression.calls = 0; payloadCompression.finish = undefined; });
   afterEach(() => { payloadCompression.enabled = false; payloadCompression.finish = undefined; });
 
-  it('allows the in-flight first chunk to return but sends no later upload or open after cancellation', async () => {
+  // Chunks overlap on the wire (pipelined upload): the opening window may already be in flight.
+  it('allows the in-flight chunks to return but sends no later upload or open after cancellation', async () => {
     const f = fixture(); f.hold();
     const starting = f.client.open('codex', f.payload); void starting.catch(() => undefined);
-    await flush(); expect(f.requests.map(request => request.op)).toEqual(['upload']);
+    await flush();
+    const inFlight = f.requests.length;
+    expect(inFlight).toBeGreaterThanOrEqual(1);
+    expect(inFlight).toBeLessThanOrEqual(2);
+    expect(f.requests.every(request => request.op === 'upload')).toBe(true);
     f.client.abandon('start-cancelled'); f.reply();
     await expect(starting).rejects.toThrow('REMOTE_AGENT_EXPIRED');
-    expect(f.requests.map(request => request.op)).toEqual(['upload']);
-    expect(f.requests[0]?.index).toBe(0);
+    expect(f.requests.map(request => request.op)).toEqual(Array(inFlight).fill('upload'));
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: inFlight }, (_, index) => index));
   });
 
   it('sends no first chunk if cancellation happens while gzip is pending', async () => {
@@ -3169,11 +3174,13 @@ describe('shared startup lease budget upload cancellation', () => {
     const rejected = expect(starting).rejects.toThrow('[LINK_NOT_OPEN]');
     await flush();
     expect(payloadCompression.calls).toBe(1);
+    const inFlight = f.requests.length;
     current = false;
     if (stage === 'gzip') payloadCompression.finish!();
     else f.reply();
     await rejected;
-    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : ['upload']);
+    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : Array(inFlight).fill('upload'));
+    if (stage === 'upload') expect(inFlight).toBeGreaterThanOrEqual(1);
     f.client.abandon('start-cancelled');
   });
 });

@@ -9,6 +9,7 @@
  * - 现有覆盖缺口：新模块；hostDelegation.test.ts 只覆盖逐条手写的专用路由。
  * - 最小失败输入：旧 Host（无清单）、指纹不符、owner_scope_changed、host_instance_changed 后换账号、
  *   Host 不回包、外部页面发起调用、清单超时一次、钉住时 Host 换了实例、503 host_stopping。
+ * - 并存方案 A：启动被拒的 409 带原因码时改抛带标记的 PRECONDITION_FAILED（旧 Host 不变），见文件末尾。
  * - tier：unit（进程内假 Host 的 fetch，无网络）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ import {
 } from '@cindy/maker-shared/host-ipc-registry';
 
 import { createHostIpcProxy, registerHostIpcProxies, type HostIpcOwnerView } from '../host-ipc-proxy';
+import { mapIpcErrorToI18nKey } from '../../shared/ipcError';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { markAppContentWindow } from '../windowFocusClassifier';
 
@@ -306,5 +308,36 @@ describe('client-mode registration', () => {
     const { proxy } = fakeHost();
     expect(() => registerHostIpcProxies({ ipcMain, proxy: proxy(), admit: {} as never })).toThrow(/No sender admission/);
     expect(handlers.size).toBe(0);
+  });
+});
+
+// 并存方案 A（审核方 2026-11-17 定）：Host 因单独运行的桌面版占用数据而启动被拒时，409 带原因码和一句话；
+// 代理只在看到这个原因码时改抛带标记的 PRECONDITION_FAILED，旧 Host（只有 error）照旧是笼统的那句。
+describe('host IPC proxy · a Host refused because a desktop app uses its data', () => {
+  it('turns the reason into a marked refusal, and leaves an older Host bare', async () => {
+    const { host, proxy } = fakeHost();
+    const client = proxy();
+    host.replies.push(() => ({ status: 409, body: { error: 'owner_runtime_unavailable', reason: 'HOST_PROFILE_IN_USE_BY_DESKTOP',
+      message: 'Quit that app, then restart the Host.' } }));
+    const refused = await client.invoke(ENTRY, ['parent']).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED',
+      message: '[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.' });
+    expect(mapIpcErrorToI18nKey(refused)).toBe('logic.errors.hostProfileInUseByDesktopAtStart');
+
+    for (const body of [{ error: 'owner_runtime_unavailable' }, { error: 'owner_runtime_unavailable', reason: 'SOMETHING_ELSE', message: 'x' }]) {
+      host.replies.push(() => ({ status: 409, body }));
+      const bare = await client.invoke(ENTRY, ['parent']).catch((error: unknown) => error);
+      expect(bare).toMatchObject({ code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] The Host account is not ready' });
+      expect(mapIpcErrorToI18nKey(bare)).toBe('ipcError.PRECONDITION_FAILED');
+    }
+  });
+
+  it('keeps the running refusal typed, and it maps to its own key', async () => {
+    const { host, proxy } = fakeHost();
+    host.replies.push(() => ({ status: 409, body: { ok: false, error: { code: 'PRECONDITION_FAILED',
+      message: 'HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.' } } }));
+    const refused = await proxy().invoke(ENTRY, ['parent']).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mapIpcErrorToI18nKey(refused)).toBe('logic.errors.hostProfileInUseByDesktopRetry');
   });
 });

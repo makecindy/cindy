@@ -1386,6 +1386,7 @@ function TimeActionsSlot({
                 <CardAction
                   variant="list"
                   isActive={isActive}
+                  inboxComplete
                   label={t('ccAgent.sidebar.inbox.complete')}
                   onClick={() => onComplete()}
                 >
@@ -1413,20 +1414,24 @@ function TimeActionsSlot({
 function CardAction({
   variant = 'card',
   isActive = false,
+  inboxComplete,
   label,
   onClick,
   children,
 }: {
   variant?: 'card' | 'list';
   isActive?: boolean;
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
 }) {
   return (
     <Tip text={label}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        tone="quiet"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
@@ -1437,22 +1442,22 @@ function CardAction({
         className={cn(
           variant === 'list'
             ? cn(
-                'shrink-0 size-5 flex items-center justify-center rounded-md',
+                'shrink-0 size-5 p-0 flex items-center justify-center',
                 'focus:outline-none',
                 isActive
-                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-                  : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                  : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
               )
             : cn(
-                'flex size-6 items-center justify-center rounded-[7px]',
-                'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-                'border border-sidebar-border',
-                'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+                'flex size-6 p-0 items-center justify-center',
+                '[--button-face-bg:var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+                '[--button-face-border:hsl(var(--sidebar-border))]',
+                'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground focus:outline-none',
               ),
         )}
       >
         {children}
-      </button>
+      </Button>
     </Tip>
   );
 }

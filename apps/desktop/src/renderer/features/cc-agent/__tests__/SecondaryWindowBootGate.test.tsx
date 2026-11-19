@@ -65,6 +65,18 @@ describe('SecondaryWindowBootGate', () => {
     cleanup();
   });
 
+  // Unit regression: these sidebar targets have no local task row at window boot.
+  it.each(['/bots/mate', '/bots/groups/group-1', '/bots/remote/mac/mate'])(
+    'opens the dragged conversation %s directly in the secondary window',
+    async target => {
+      mocks.getBootSessionId.mockReturnValue(target);
+      mocks.getBootDeviceId.mockReturnValue(null);
+      render(<SecondaryWindowBootGate />);
+      await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith(target, { replace: true }));
+      expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    },
+  );
+
   it('reads remote Worker metadata after pinning when the mirror has not hydrated', async () => {
     const workerSession = { id: 'worker-remote', orcaRole: 'worker' };
     mocks.getSessionFor.mockResolvedValue(workerSession);

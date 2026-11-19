@@ -9459,6 +9459,31 @@
     "preparing": "正在連線登入服務",
     "preparingSubtitle": "將為你載入當前區域可用的登入方式",
     "unavailable": "暫時無法登入",
+    "hostUnavailable": {
+      "title": "Cindy 後台服務沒有啟動",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "這份資料屬於另一個帳號，和 Cindy 後台服務儲存的登入不一致。",
+          "action": "請用原來的帳號執行 cindy-host login，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一個 Cindy 程式正在使用這份資料。",
+          "action": "請先關閉它，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "這個帳號的資料打不開。",
+          "action": "如果最近用過較新版本的 Cindy，請先把這台電腦上的 Cindy 更新到最新版本，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy；否則執行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 後台服務啟動時連不上登入服務。",
+          "action": "請檢查網路，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 後台服務啟動時出錯。",
+          "action": "請重新啟動 Cindy 後台服務，然後重新開啟 Cindy。如果還是出錯，執行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "重試",
     "browserWaiting": "請在瀏覽器中完成驗證",
     "browserCallback": {
@@ -19120,6 +19145,9 @@
     },
     "errors": {
       "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
+      "hostProfileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+      "hostProfileInUseByDesktopAtStart": "這份資料正被單獨執行的 Cindy 電腦端使用，Cindy 後台服務沒有啟動。請先結束它，重新啟動 Cindy 後台服務，然後重新開啟目前這個 Cindy 視窗。",
+      "hostProfileInUseByDesktopRetry": "這份資料正被單獨執行的 Cindy 電腦端使用，暫時不能修改。請先結束它，再試一次。",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
@@ -21790,14 +21818,14 @@
     "openFailed": "無法開啟 GitHub"
   },
   "hostConnection": {
-    "connecting": "正在連線 Cindy 後台…",
+    "connecting": "正在連線 Cindy 後台服務…",
     "restoring": "正在恢復任務狀態…",
     "retrying": "任務狀態尚未同步，正在重試…",
     "pairing": "需要重新授權連線",
-    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台服務的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
     "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
     "retry": "重試連線",
-    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
+    "desktopAuthHelp": "請在啟動終端更新 Cindy 後台服務的連線設定，然後重新開啟這個實驗客戶端。"
   },
   "remoteControlConsent": {
     "title": "允許遠端控制這台電腦？",

@@ -584,6 +584,30 @@ describe('local-db:messages:list cursor', () => {
     }
   });
 
+  // The history view reads through the shared reader (localHistoryViewReader.ts), which restores task
+  // images only through the port the desktop binds (restoreTaskImages); the cases above cover the other
+  // channels. Unbound, the view would show the unrestored rows. Both the outline read and the hydration
+  // of the visible rows restore, so the restored body is what the page carries.
+  it('restores visible images before returning the history view', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'answer', createdAt: 1000, content: 'Original with a local task image' });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (_db, rows) =>
+      rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') })));
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(restore).toHaveBeenCalled();
+      expect(JSON.stringify(page)).toContain('restored-image');
+      expect(JSON.stringify(page)).not.toContain('Original with a local task image');
+    } finally {
+      restore.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('keeps around windows stable for same timestamp rows', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');

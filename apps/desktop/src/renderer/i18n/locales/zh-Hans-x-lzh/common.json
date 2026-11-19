@@ -9459,6 +9459,31 @@
     "preparing": "方连登录服务",
     "preparingSubtitle": "将为君载当前区域可用之登录方式",
     "unavailable": "暂不能登录",
+    "hostUnavailable": {
+      "title": "Cindy 后台服务没有启动",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "这份数据属于另一个账号，和 Cindy 后台服务保存的登录不一致。",
+          "action": "请用原来的账号运行 cindy-host login，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一个 Cindy 程序正在使用这份数据。",
+          "action": "请先关掉它，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "这个账号的数据打不开。",
+          "action": "如果最近用过更新版本的 Cindy，请先把这台电脑上的 Cindy 更新到最新版本，再重新启动 Cindy 后台服务，然后重新打开 Cindy；否则运行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 后台服务启动时连不上登录服务。",
+          "action": "请检查网络，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 后台服务启动时出错。",
+          "action": "请重新启动 Cindy 后台服务，然后重新打开 Cindy。如果还是出错，运行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "再试",
     "browserWaiting": "请于浏览器中完成验证",
     "browserCallback": {
@@ -19120,6 +19145,9 @@
     },
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
+      "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
+      "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
       "openFileFailed": "无从于系统中启此卷",
       "emptyResponse": "模型无所答。请再试；上下文甚长者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未报谬误详情），请再试。",
@@ -21790,14 +21818,14 @@
     "openFailed": "未能开启 GitHub"
   },
   "hostConnection": {
-    "connecting": "正连 Cindy 后台…",
+    "connecting": "正连 Cindy 后台服务…",
     "restoring": "正复差事之态…",
     "retrying": "差事之态未同步，正重试…",
     "pairing": "连接须再授权",
-    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "pairingHelp": "请留此页。于启动 Cindy 后台服务之终端重行打开网页之命令，于新页配对毕，再返此页。",
     "keepDraft": "草稿仍存。连接复通，差事之态将自同步。",
     "retry": "重试连接",
-    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
+    "desktopAuthHelp": "请于启动终端更新 Cindy 后台服务之连接设置，再启此实验客户端。"
   },
   "remoteControlConsent": {
     "title": "许远控此机乎？",
