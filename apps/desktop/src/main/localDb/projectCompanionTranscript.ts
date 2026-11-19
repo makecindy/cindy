@@ -1,10 +1,12 @@
+import { readImageAnnotations } from '../../shared/imageAnnotations.js';
+
 type ProjectHistoryRow = { role: string; content: unknown; agentMeta?: unknown };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function visibleContent(row: ProjectHistoryRow) {
+function visibleContent(row: ProjectHistoryRow, localCopy: boolean) {
   const content = row.content;
   if (typeof content === 'string') return content.trim() ? content : null;
   const object = record(content);
@@ -18,14 +20,16 @@ function visibleContent(row: ProjectHistoryRow) {
       .map(file => ({ path: file.path, name: file.name ?? file.originalName }));
     const images = (Array.isArray(object?.images) ? object.images : blocks.filter(block => block?.type === 'image'))
       .filter(image => typeof image?.url === 'string' && !image.url.startsWith('data:'))
-      .map(image => ({ url: image.url, mimeType: image.mimeType, originalName: image.originalName }));
+      .map(image => ({ url: image.url, mimeType: image.mimeType, originalName: image.originalName,
+        ...(localCopy ? readImageAnnotations(image) : {}),
+      }));
     if (files.length || images.length) return { text, files, images };
   }
   return text.trim() ? text : null;
 }
 
 /** Only the visible conversation and its display author cross a companion identity boundary. */
-export function projectCompanionHandoffHistory<T extends ProjectHistoryRow>(rows: T[]) {
+export function projectCompanionHandoffHistory<T extends ProjectHistoryRow>(rows: T[], mode: 'visible' | 'local-copy' = 'visible') {
   return rows.flatMap(row => {
     if (row.role !== 'user' && row.role !== 'assistant') return [];
     let value = row.agentMeta;
@@ -35,7 +39,7 @@ export function projectCompanionHandoffHistory<T extends ProjectHistoryRow>(rows
     const meta = record(value);
     if (meta?.parentUuid || meta?.botPrivateReply || meta?.autoResume || meta?.failedSamplingAttempt
       || meta?.samplingAttemptPending || meta?.contextRebuild || meta?.voiceCall || meta?.sessionImport) return [];
-    const content = visibleContent(row);
+    const content = visibleContent(row, mode === 'local-copy');
     if (!content) return [];
     const author = record(meta?.projectCompanion);
     const agentMeta = author && typeof author.displayName === 'string'

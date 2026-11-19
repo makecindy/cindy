@@ -173,9 +173,9 @@ function buildForkRecoveryMarker(opts: {
     clientId: row.clientId, role: row.role, content: parseJsonContent(row.content),
     createdAt: row.createdAt, toolUseId: row.toolUseId, agentMeta: row.agentMeta,
   }));
-  const visible = opts.companionHistory ? projectCompanionHandoffHistory(history) : undefined;
+  const visible = opts.companionHistory ? projectCompanionHandoffHistory(history, 'local-copy') : undefined;
   const label = opts.agentKind === 'cc' ? 'Claude Code' : opts.agentKind === 'pi' ? 'Pi' : 'Codex';
-  const replay = buildHandoff(visible ?? history, {
+  const replay = buildHandoff(visible ? projectCompanionHandoffHistory(visible) : history, {
     fromLabel: label,
     toLabel: label,
     targetContextWindow: opts.targetContextWindow,

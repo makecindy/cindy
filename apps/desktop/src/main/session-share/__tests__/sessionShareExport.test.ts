@@ -693,7 +693,9 @@ describe('exportSessionShare', () => {
   it('exports only visible conversation from a task with companion history', async () => {
     sessionRowRef.row = { ...baseSession(), companionRevision: 2, companionBotId: null };
     const author = { displayName: '小雨', botId: 'rain', profileVersion: 1, revision: 1 };
-    messagesRef.rows[0].content = JSON.stringify({ text: '附件', files: [{ name: 'test.txt', path: 'test.txt', textContent: 'private raw tool data' }] });
+    const markedImage = { url: 'xdt-image://s/marked.png', mimeType: 'image/png', originalName: 'marked.png' };
+    const original = 'xdt-image://s/original.png';
+    messagesRef.rows[0].content = JSON.stringify({ text: '附件', images: [{ ...markedImage, annotationSourceUrl: original, annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }] }] }], files: [{ name: 'test.txt', path: 'test.txt', textContent: 'private raw tool data' }] });
     messagesRef.rows[1].agentMeta = JSON.stringify({ projectCompanion: author, sdkSessionId: 'sid-b' });
     messagesRef.rows.push({ ...messagesRef.rows[1], role: 'tool_result', content: '"private note"' },
       { ...messagesRef.rows[0], rewindAt: 1700000000500, content: '"withdrawn text"' });
@@ -705,7 +707,10 @@ describe('exportSessionShare', () => {
     expect(JSON.parse(await zip.file('session.json')!.async('string')).sdkSessionId).toBeNull();
     const history = (await zip.file('messages.jsonl')!.async('string')).split('\n').map(text => JSON.parse(text));
     expect(history.map(row => row.role)).toEqual(['user', 'assistant']);
-    expect(JSON.parse(history[0].content)).toEqual({ text: '附件', files: [{ name: 'test.txt', path: 'test.txt' }], images: [] });
+    expect(JSON.parse(history[0].content)).toEqual({ text: '附件', files: [{ name: 'test.txt', path: 'test.txt' }], images: [markedImage] });
+    const media = JSON.parse(await zip.file('media-map.json')!.async('string')).entries;
+    expect(media.map((entry: { url: string }) => entry.url)).toEqual([markedImage.url]);
+    expect(zip.file(media[0].zipPath)).toBeTruthy();
     expect(history[1].content).toBe('"ok"');
     expect(JSON.parse(history[1].agentMeta)).toEqual({ projectCompanion: author });
   });

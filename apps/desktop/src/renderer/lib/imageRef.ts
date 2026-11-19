@@ -1,3 +1,4 @@
+import { isManagedImageUrl, readImageAnnotations } from '../../shared/imageAnnotations';
 /**
  * imageRef.ts (image-local-cache M7)
  * ---------------------------------------------------------------------------
@@ -228,10 +229,6 @@ export function parseUserContent(content: unknown): UserMessageContent {
  * rendering). Output is always normalised to `originalName`.
  */
 /** 可渲染的托管图片地址:历史 xdt-image:// 或媒体总仓 cindy-media://。 */
-function isManagedImageUrl(url: string): boolean {
-  return url.startsWith('xdt-image://') || url.startsWith('cindy-media://');
-}
-
 function coerceImageRef(x: unknown): ImageRef | null {
   if (!x || typeof x !== 'object') return null;
   const o = x as Record<string, unknown>;
@@ -250,51 +247,8 @@ function coerceImageRef(x: unknown): ImageRef | null {
     ref.size = integrity.size;
     ref.sha256 = integrity.sha256;
   }
-  // 非破坏性标注字段:形状校验通过才成对透传(review P2:此前 coerce 只取
-  // 三字段,重载 / 从存储取回后历史图丢失可再编辑数据)。半份数据没有意义,
-  // 任一不合法就整体丢弃,退化为普通烧录图展示。
-  const strokes = coerceAnnotationStrokes(o.annotationStrokes);
-  if (
-    strokes &&
-    typeof o.annotationSourceUrl === 'string' &&
-    isManagedImageUrl(o.annotationSourceUrl)
-  ) {
-    ref.annotationSourceUrl = o.annotationSourceUrl;
-    ref.annotationStrokes = strokes;
-  }
+  Object.assign(ref, readImageAnnotations(o));
   return ref;
-}
-
-/** 校验并复制持久化笔迹数组;任何一处形状不合法返回 null(整体丢弃)。 */
-function coerceAnnotationStrokes(
-  x: unknown,
-): Array<{ points: Array<{ x: number; y: number }> }> | null {
-  if (!Array.isArray(x) || x.length === 0) return null;
-  const strokes: Array<{ points: Array<{ x: number; y: number }> }> = [];
-  for (const raw of x) {
-    if (!raw || typeof raw !== 'object') return null;
-    const points = (raw as { points?: unknown }).points;
-    if (!Array.isArray(points) || points.length === 0) return null;
-    const copied: Array<{ x: number; y: number }> = [];
-    for (const p of points) {
-      // p 可能是 null / 原始值:先判对象再取值,否则解引用直接 throw,
-      // 一条坏笔迹记录会炸掉整个会话的消息加载(review P2)。
-      if (!p || typeof p !== 'object') return null;
-      const px = (p as { x?: unknown }).x;
-      const py = (p as { y?: unknown }).y;
-      if (
-        typeof px !== 'number' ||
-        typeof py !== 'number' ||
-        !Number.isFinite(px) ||
-        !Number.isFinite(py)
-      ) {
-        return null;
-      }
-      copied.push({ x: px, y: py });
-    }
-    strokes.push({ points: copied });
-  }
-  return strokes;
 }
 
 function isValidFileRef(x: unknown): x is FileRef {

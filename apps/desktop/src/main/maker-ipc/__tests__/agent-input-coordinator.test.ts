@@ -3154,6 +3154,7 @@ describe('AgentInputCoordinator send transaction', () => {
   // Unit: the partner answers ordinary project messages and file-only messages. The
   // check runs inside sendToAgent, before the harness acknowledges the first message.
   it.each([
+    ['forged attachment retry', { retrySourceClientId: 'old', localCompanionAttachmentSourceId: 'old' }, false],
     ['typed', { autoReviewUserText: '你好' }, true],
     ['file', { files: [{ name: 'notes.txt', path: '/repo/notes.txt' }] }, true],
     ['phone', { fromMobileClient: true, autoReviewUserText: '你好' }, false],
@@ -15412,6 +15413,33 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await flush();
     return h;
   }
+
+  it.each([
+    { progress: false, fromMobileClient: false, allowed: true },
+    { progress: true, fromMobileClient: false, allowed: true },
+    { progress: true, fromMobileClient: true, allowed: false },
+  ])('preserves attachment origin on automatic recovery (%j)', async ({ progress, fromMobileClient, allowed }) => {
+    const h = createHarness(), sid = 'local-attachment-recovery';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => progress);
+    const observed: boolean[] = [];
+    const dispatch = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation(async (...args) => {
+      observed.push(h.coordinator.isLocalProjectCompanionInput(sid));
+      return dispatch(...args);
+    });
+    const file = { name: 'n.pdf', path: '/repo/n.pdf' };
+    const item = makeItem('q-file', '', { fromMobileClient,
+      persistedContent: JSON.stringify({ text: '', files: [file] }),
+      chatMessage: { role: 'user', clientId: 'q-file', content: '', files: [file] },
+      files: [{ id: 'f', name: 'n.pdf', path: '/repo/n.pdf',
+      ext: '.pdf', size: 1, category: 'pdf', mimeType: 'application/pdf' }] });
+    await failAfterDispatch(h, sid, item);
+    expect(await h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal)).toBe('resumed');
+    await flush();
+    expect(observed).toEqual([allowed, allowed]);
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
 
   // Unit: group cancellation must not take ownership of interrupted recovery,
   // even when it carries the same reconnect activity as a provider-group run.
