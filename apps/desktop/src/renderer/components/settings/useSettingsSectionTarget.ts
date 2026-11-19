@@ -11,6 +11,7 @@ export function useSettingsSectionTarget(
     const container = scrollRef.current;
     if (!targetId || !container) return;
     let target: HTMLElement | null = null;
+    let highlighted: HTMLElement | null = null;
     let timer: number | undefined;
     let observer: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
@@ -32,10 +33,25 @@ export function useSettingsSectionTarget(
         ? exact
         : (fallbackTargetId ? document.getElementById(fallbackTargetId) : null);
       if (!next || !container.contains(next)) return;
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const changed = next !== target;
       if (changed) {
         if (timer !== undefined) window.clearTimeout(timer);
-        target?.classList.remove('settings-search-target-highlight');
+        highlighted?.classList.remove('settings-search-target-highlight');
+        // A page result scrolls to the panel and highlights its single navigation option.
+        const pageTarget = next.getAttribute('role') === 'tabpanel';
+        highlighted = pageTarget
+          ? document.getElementById(next.getAttribute('aria-labelledby') ?? '')
+          : next;
+        if (highlighted) {
+          const option = highlighted;
+          option.classList.add('settings-search-target-highlight');
+          if (pageTarget) option.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          timer = window.setTimeout(
+            () => option.classList.remove('settings-search-target-highlight'),
+            2300,
+          );
+        }
       }
       target = next;
       const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
@@ -44,12 +60,8 @@ export function useSettingsSectionTarget(
       lastScrollHeight = container.scrollHeight;
       container.scrollTo({
         top: Math.max(0, top - 8),
-        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        behavior: reducedMotion ? 'auto' : 'smooth',
       });
-      if (changed) {
-        target.classList.add('settings-search-target-highlight');
-        timer = window.setTimeout(() => target?.classList.remove('settings-search-target-highlight'), 1600);
-      }
     };
     const frame = window.requestAnimationFrame(() => {
       if (stopped) return;
@@ -69,7 +81,7 @@ export function useSettingsSectionTarget(
       stopFollowing();
       for (const event of inputEvents) container.removeEventListener(event, stopFollowing);
       if (timer !== undefined) window.clearTimeout(timer);
-      target?.classList.remove('settings-search-target-highlight');
+      highlighted?.classList.remove('settings-search-target-highlight');
     };
   }, [targetId, fallbackTargetId, navigationKey, scrollRef]);
 }

@@ -72,7 +72,7 @@ export const appearanceSettings = defineSettings({
     id: 'settings.appearance.wallpaper.customChoose',
     fallbackTargetId: 'settings-search-target-appearance-wallpaper',
     tab: 'appearance',
-    targetId: 'settings-search-settings-appearance-wallpaper',
+    targetId: 'settings-search-settings-appearance-wallpaper-custom',
     titleKey: 'settings.appearance.wallpaper.options.custom',
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.customHint',

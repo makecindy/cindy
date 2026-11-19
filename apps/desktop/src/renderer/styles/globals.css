@@ -2295,16 +2295,56 @@ mark.doc-search-mark [class] {
   color: inherit;
 }
 
-/* Settings search navigation briefly marks the section selected from the
-   sidebar. Reuse the existing dual-theme search tokens instead of baking a
-   light-only color into the settings surface. */
+/* Settings navigation uses a transient tint derived from the target's theme. */
 .settings-search-target-highlight {
-  outline: 1px solid hsl(var(--search-match-active-fg));
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
-  transition:
-    outline-color var(--motion-fast) var(--motion-ease-move),
-    box-shadow var(--motion-fast) var(--motion-ease-move);
+  --settings-search-feedback-bg: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+@layer components {
+  .settings-search-target-highlight:where(:not(input, textarea, select)) {
+    position: relative;
+    isolation: isolate;
+  }
+}
+
+.settings-search-target-highlight.cindy-button-frame {
+  --settings-search-feedback-bg: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+.settings-search-target-highlight[role='tab'] {
+  --settings-search-feedback-bg: color-mix(in srgb, var(--sidebar-item-active-foreground) 18%, transparent);
+  scroll-margin-block: 4px;
+}
+
+.settings-search-target-highlight:not(input, textarea, select)::after {
+  content: '';
+  position: absolute;
+  inset: -4px -8px;
+  z-index: -1;
+  border-radius: 12px;
+  pointer-events: none;
+  background-color: var(--settings-search-feedback-bg);
+  animation: settings-search-feedback 2200ms linear both;
+}
+
+.settings-search-target-highlight:is(.cindy-button-frame, [role='tab'])::after {
+  border-radius: inherit;
+}
+
+/* Form controls that cannot paint an ::after layer use their existing rounded frame. */
+.settings-search-target-highlight:is(input, textarea, select) {
+  animation: settings-search-field-feedback 2200ms linear;
+}
+
+@keyframes settings-search-feedback {
+  to { opacity: 0; }
+}
+
+@keyframes settings-search-field-feedback {
+  from {
+    background-color: color-mix(in srgb, var(--text-primary) 12%, var(--settings-input-bg));
+    box-shadow: 0 0 0 4px var(--settings-search-feedback-bg);
+  }
 }
 
 @layer utilities {

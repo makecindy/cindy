@@ -73,6 +73,7 @@ void mountPage({
       codexCompactionGet: read({ enabled: true, isCustomized: false }),
       codexCompactionSet: forbid('codexCompactionSet'),
       listCustomMcpServers: read({ servers: [] }), onMcpChanged: subscription('mcp'),
+      listMcpDuplicates: read({ connections: [], complete: false }),
       plugins: { list: read([]), getState: read({ effectiveEnabled: true }) },
     },
     billing: {
