@@ -509,6 +509,7 @@ export function GhostPluginDetailView({
                       account={
                         hasGithubConnection ? (
                           <GithubAccountCard
+                            pluginSettings
                             includeEvents={ghost.manifest.id === 'cindy-github' && ghost.namespace === null}
                             onConnected={() => setGithubConnectionVersion((version) => version + 1)}
                           />

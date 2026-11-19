@@ -31,3 +31,18 @@ export interface GithubAppConnectionState {
   repositories?: string[];
   unavailable?: string[];
 }
+
+export interface GithubInstallationAccess {
+  id: number;
+  owner: string;
+  app: string;
+  selection: 'all' | 'selected';
+  /** Number visible to the signed-in user. A failed count preserves the scope. */
+  visibleRepositories: number | null;
+  suspended: boolean;
+  permissions: Record<string, string>;
+}
+
+export type GithubAppAccess =
+  | { status: 'ready'; installations: GithubInstallationAccess[] }
+  | { status: 'missing' | 'unavailable' };

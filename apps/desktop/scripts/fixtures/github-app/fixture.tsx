@@ -10,6 +10,9 @@ void mountPage({
     return { gitContext: {
       githubConnection: async () => ctx.data.account ?? { status: 'missing' },
       onGithubConnected: () => () => {},
+      githubAppAccess: async () => ({ status: 'ready', installations: [
+        { id: 1, app: 'example-app', owner: 'example-org', selection: 'all', visibleRepositories: 12, permissions: { contents: 'read', pull_requests: 'write' } },
+      ] }),
       githubAppStatus: async () => {
         checks++;
         if (ctx.data.loading) await new Promise(() => {});
@@ -25,5 +28,5 @@ void mountPage({
       disconnectGithubApp: forbid('disconnectGithubApp'),
     } };
   },
-  render: ctx => <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">{ctx.data.unified ? <GithubAccountCard includeEvents onConnected={() => {}} /> : <GithubAppCard />}</div>,
+  render: ctx => <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">{ctx.data.unified ? <GithubAccountCard pluginSettings includeEvents onConnected={() => {}} /> : <GithubAppCard />}</div>,
 });

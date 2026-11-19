@@ -111,3 +111,23 @@ it('limits automation setup to account connection and relevant repository author
   expect(screen.queryByText(prefix + 'connected')).toBeNull();
   expect(screen.queryByText(prefix + 'missing')).toBeNull();
 });
+
+// Settings-only installation reads must not run for a scheduler or sign-in dialog,
+// or repeat on ordinary focus; returning from installation settings must refresh.
+it('loads installation access only on the plugin settings page and on return from GitHub', async () => {
+  const githubAppAccess = vi.fn(async () => ({ status: 'ready', installations: [] }));
+  const githubAppStatus = vi.fn(async () => ({ available: true, login: 'person', repositories: [] }));
+  window.electronAPI = { gitContext: { githubAppAccess, githubAppStatus, installGithubApp: vi.fn() } } as unknown as typeof window.electronAPI;
+  const card = render(<GithubAppCard automation />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.account.connected');
+  card.rerender(<GithubAppCard />);
+  expect(githubAppAccess).not.toHaveBeenCalled();
+  card.rerender(<GithubAppCard pluginSettings />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.access.empty');
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.access.manage'));
+  await screen.findByText(prefix + 'finishInBrowser');
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledTimes(2);
+});

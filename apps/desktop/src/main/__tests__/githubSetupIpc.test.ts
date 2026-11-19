@@ -1,4 +1,4 @@
-vi.mock('../git-context/githubAppAuthorization.desktop', () => ({ readGithubAppToken: async () => null, onGithubAppAuthorizationChanged: () => () => {} }));
+vi.mock('../git-context/githubAppAuthorization.desktop', () => ({ readGithubAppToken: vi.fn(async (): Promise<string | null> => null), onGithubAppAuthorizationChanged: () => () => {} }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));
@@ -50,6 +50,7 @@ vi.mock('../git-context/githubSetup', () => ({
     return { start: mocks.start, snapshot: () => ({ phase: 'idle' }), cancel: vi.fn() };
   },
 }));
+import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop';
 import { openGithubSignIn, readGithubConnection, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
@@ -189,4 +190,27 @@ it('reads only the requested plugin\'s fallback token when one is given', async 
   expect(outboundFetch).not.toHaveBeenCalled();
   expect(readGhostSecret).toHaveBeenCalledWith('other-plugin', 'token');
   expect(readGhostSecret).not.toHaveBeenCalledWith('cindy-github', 'github_pat');
+});
+
+// Unit / trusted local IPC. A legacy gh login cannot stand in for an App grant;
+// failure to read one repository count must preserve the granted scope and permissions.
+it('reads the installation scope with the App grant only when explicitly requested', async () => {
+  registerGithubSetupIpc(vi.fn());
+  const read = mocks.handlers.get('git-context:github-app:access')!;
+  await expect(read({})).resolves.toEqual({ status: 'missing' });
+  expect(mocks.readToken).not.toHaveBeenCalled();
+  expect(outboundFetch).not.toHaveBeenCalled();
+  vi.mocked(readGithubAppToken).mockResolvedValueOnce('synthetic-grant');
+  vi.mocked(outboundFetch)
+    .mockResolvedValueOnce(Response.json({ installations: [{
+      id: 7, app_slug: 'example-app', account: { login: 'example' }, repository_selection: 'all',
+      permissions: { contents: 'write' }, suspended_at: null,
+    }] }))
+    .mockResolvedValueOnce(new Response(null, { status: 403 }));
+  await expect(read({})).resolves.toEqual({ status: 'ready', installations: [{
+    id: 7, app: 'example-app', owner: 'example', selection: 'all', visibleRepositories: null,
+    permissions: { contents: 'write' }, suspended: false,
+  }] });
+  expect(outboundFetch).toHaveBeenLastCalledWith('https://api.github.com/user/installations/7/repositories?per_page=1',
+    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer synthetic-grant' }) }));
 });
