@@ -803,7 +803,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
   const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
-  const hostProjectOrderLoadRef = useRef<Promise<void> | null>(null);
+  const reloadHostProjectOrderRef = useRef<(() => Promise<void>) | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<ViewInstance>(null);
@@ -1505,12 +1505,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     void loadHome({ visible: true }).then(async () => {
       // A refresh queued behind startup must wait for that queued batch too.
       while (syncInFlightRef.current) await syncInFlightRef.current;
-      // Scope reconciliation can replace a cancelled load while refresh is waiting.
-      while (hostProjectOrderLoadRef.current) {
-        const pending = hostProjectOrderLoadRef.current;
-        await pending;
-        if (hostProjectOrderLoadRef.current === pending) break;
-      }
+      if (homeAccountGenerationRef.current !== owner || displayOrderScopeRef.current !== scope) return;
+      // A settled startup load cannot satisfy a manual refresh. Join a live
+      // load for the current scope or start a fresh one after the list batch.
+      await reloadHostProjectOrderRef.current?.();
       if (homeAccountGenerationRef.current === owner && displayOrderScopeRef.current === scope) resetDisplayOrder();
     });
     if (!homeRoster) return;
@@ -2171,51 +2169,68 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     sortBy: indexedSearch.sortBy,
     status: indexedSearch.statusFilter,
   });
+  // Directory refreshes can reorder the same computers. Ordering reads depend only on
+  // membership and connection generation, not on row identity or display order.
+  const projectOrderDeviceIds = useStableValue([...homeSyncDeviceIds].sort(),
+    (a, b) => a.length === b.length && a.every((id, index) => id === b[index]));
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
-    const ids = homeSyncDeviceIds;
+    const ids = projectOrderDeviceIds;
     if (ids.length === 0) return undefined;
     let cancelled = false;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
-    const loadAttempt = async () => {
-      // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
-      // finish first so cold start/reconnect does not create a second overlapping six-device
-      // fan-out. A queued refresh is included as well; live pushes remain fenced below.
-      while (syncInFlightRef.current) {
-        await syncInFlightRef.current;
-        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
-      }
-      const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
-      const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
-        const result = await homeDeviceSyncLimiterRef.current.run(async () => {
-          if (
-            cancelled
-            || homeAccountGenerationRef.current !== expectedAccountGeneration
-            || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
-          ) return { kind: 'transient' } as const;
-          return fetchHostProjectOrder(invoke, deviceId);
+    const startLoad = () => {
+      if (load) return load.completion;
+      let pendingIds = ids;
+      const loadAttempt = async () => {
+        // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
+        // finish first so cold start/reconnect does not create a second overlapping six-device
+        // fan-out. A queued refresh is included as well; live pushes remain fenced below.
+        while (syncInFlightRef.current) {
+          await syncInFlightRef.current;
+          if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
+        }
+        const tokens = new Map(pendingIds.map((deviceId) => [deviceId, fence.begin(deviceId)]));
+        const entries = await runHomeDeviceSyncBatch(pendingIds, async (deviceId) => {
+          const result = await homeDeviceSyncLimiterRef.current.run(async () => {
+            if (
+              cancelled
+              || homeAccountGenerationRef.current !== expectedAccountGeneration
+              || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
+            ) return { kind: 'transient' } as const;
+            return fetchHostProjectOrder(invoke, deviceId, expectedAccountGeneration, connectionEpoch);
+          });
+          return [deviceId, result] as const;
         });
-        return [deviceId, result] as const;
-      });
-      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
-      for (const [deviceId, result] of entries) {
-        if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
-        if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
-      }
-      setHostProjectOrders((current) => {
-        const next = new Map(current);
+        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
         for (const [deviceId, result] of entries) {
           if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
-          if (result.kind === 'ok') next.set(deviceId, result.snapshot);
-          else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+          if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
         }
-        return next;
-      });
-      return entries.some(([, result]) => result.kind === 'transient');
+        setHostProjectOrders((current) => {
+          const next = new Map(current);
+          for (const [deviceId, result] of entries) {
+            if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
+            if (result.kind === 'ok') next.set(deviceId, result.snapshot);
+            else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+          }
+          return next;
+        });
+        pendingIds = entries.filter(([, result]) => result.kind === 'transient').map(([id]) => id);
+        return pendingIds.length > 0;
+      };
+      const started = startHostProjectOrderLoad(loadAttempt);
+      load = started;
+      const settled = () => {
+        if (load === started) load = null;
+      };
+      void started.completion.then(settled, settled);
+      return started.completion;
     };
-    const load = startHostProjectOrderLoad(loadAttempt);
-    hostProjectOrderLoadRef.current = load.completion;
+    let load: ReturnType<typeof startHostProjectOrderLoad> | null = null;
+    reloadHostProjectOrderRef.current = startLoad;
+    void startLoad();
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (
         cancelled
@@ -2231,11 +2246,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => {
       cancelled = true;
-      load.cancel();
-      if (hostProjectOrderLoadRef.current === load.completion) hostProjectOrderLoadRef.current = null;
+      load?.cancel();
+      if (reloadHostProjectOrderRef.current === startLoad) reloadHostProjectOrderRef.current = null;
       unsubscribe();
     };
-  }, [accountGeneration, homeSyncDeviceIds, invoke]);
+  }, [accountGeneration, connectionEpoch, projectOrderDeviceIds, invoke]);
   const revokedTipDeviceName = useMemo(
     () => revokedTipDeviceId
       ? deviceModels.find((item) => item.deviceId === revokedTipDeviceId)?.name ?? t('devices.list.thisComputer')

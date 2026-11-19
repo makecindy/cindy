@@ -119,6 +119,8 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   clearPiSubagentDeletedTombstone: h.clearPiSubagentDeletedTombstone,
 }));
 vi.mock('../../../appSessionState', () => ({
+  activeOwnerScopeKey: () => 'owner-a',
+  isAppSessionBoundaryPending: () => false,
   getActiveAppSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.userDataDir!, ...parts),
 }));
@@ -422,7 +424,7 @@ beforeEach(() => {
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionWorktreeRecycle(h.requestRecycle);
   setSessionWorktreeBindingLookup(null);
-  registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
+  registerSessionIpc(undefined, { isBusyForProjectArchive: id => id === 'busy', closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
@@ -437,6 +439,53 @@ afterEach(async () => {
     rmSync(dir, { recursive: true, force: true });
     h.userDataDir = null;
   }
+});
+
+// DB tier: the remote preview must cover the owning project even when only one task
+// is visible, and a confirmed ID can move or become protected before the host writes.
+it('archives only still-eligible project members from a complete project preview', async () => {
+  h.sqlite!.exec(`
+    CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
+      kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision));
+    CREATE TABLE im_bindings (target_session_id TEXT);
+    INSERT INTO im_bindings VALUES ('attached');
+    UPDATE sessions SET workspace_kind = 'project' WHERE id = 'cc-local';
+    UPDATE sessions SET working_dir='/old/dir' WHERE id='cc-remote';
+    WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<1001)
+      INSERT INTO sessions(id,working_dir,workspace_kind,created_at,updated_at)
+        SELECT 'other-'||i, '/other', 'project', 2, 2 FROM n;
+  `);
+  Object.assign(h.client!, { tx: async (name: string, args: { sessionId?: string }) => {
+    if (args.sessionId === 'racing') h.sqlite!.prepare('UPDATE sessions SET pinned_at=3 WHERE id=?').run('racing');
+    return runDbTransaction(h.sqlite!, { name, args });
+  } });
+  const insert = h.sqlite!.prepare("INSERT INTO sessions(id, working_dir, workspace_kind, created_at, updated_at) VALUES (?, '/old/dir', 'project', 1, 1)");
+  for (const id of ['moved', 'busy', 'pinned', 'attached', 'later-pinned', 'racing']) insert.run(id);
+  h.sqlite!.exec("UPDATE sessions SET pinned_at=1 WHERE id='pinned'");
+  const invoke = h.handlers.get('local-db:sessions:project-archive')!;
+  const scope = { directory: '/old/dir', action: 'archive' };
+  const preview = await invoke({}, { ...scope, operation: 'preview' });
+  expect(preview).toHaveLength(7);
+  expect(preview).toEqual(expect.arrayContaining(['busy', 'pinned', 'attached'].map(id =>
+    expect.objectContaining({ id, blocked: id === 'busy' ? 'running' : id }))));
+  h.sqlite!.exec("UPDATE sessions SET working_dir='/other' WHERE id='moved'; UPDATE sessions SET pinned_at=2 WHERE id='later-pinned'");
+  const apply = (id: string) => invoke({}, { ...scope, operation: 'apply', sessionId: id });
+  expect(await apply('moved')).toBe('changed');
+  expect(await apply('later-pinned')).toBe('pinned');
+  expect(await apply('attached')).toBe('attached');
+  expect(await apply('busy')).toBe('running');
+  await expect(apply('racing')).rejects.toThrow(/Project task changed/);
+  expect(await apply('cc-local')).toBe('updated');
+  expect(await apply('cc-local')).toBe('changed');
+  expect(h.requestRecycle).toHaveBeenCalledWith('cc-local', expect.any(Array));
+  expect(h.sqlite!.prepare("SELECT id FROM sessions WHERE status='archived'").all()).toEqual([{ id: 'cc-local' }]);
+  insert.run('keep-files');
+  const removal = { ...scope, action: 'archiveOnRemoval', operation: 'apply', sessionId: 'keep-files' };
+  await expect(invoke({}, { ...removal, remoteHostId: 'ssh' })).rejects.toThrow('Invalid project archive action');
+  expect(await invoke({}, removal)).toBe('updated');
+  expect(h.requestRecycle).toHaveBeenCalledWith('keep-files', expect.any(Array), 'keep');
+  expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').get('keep-files')).toEqual({ status: 'archived' });
 });
 
 describe('local-db:sessions:update handler wiring', () => {
@@ -877,6 +926,9 @@ describe('local-db:sessions:update handler wiring', () => {
     await vi.waitFor(() => {
       expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled();
     });
+
+    // The call starts asynchronous removal; wait for its result before checking disk state.
+    await h.stopAndRemovePiSubagentRuns.mock.results[0]!.value;
 
     // Cleanup reported success, so nothing will look at this task again: the
     // root has to be genuinely gone, with no orphan inside it.
@@ -1386,6 +1438,29 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
     );
+  });
+
+  // The destructive option is command metadata. Both real IPC handlers must
+  // journal it only after archiving and keep it out of the session projection.
+  it.each([invokeUpdate, invokePatchMeta])('applies discard after archive in %s', async (invoke) => {
+    const statuses: unknown[] = [];
+    h.requestRecycle
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      })
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      });
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+
+    expect(statuses).toEqual([{ status: 'active' }, { status: 'archived' }]);
+    expect(h.requestRecycle).toHaveBeenNthCalledWith(2, 'codex-local', expect.any(Array), true);
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+    expect(h.requestRecycle).toHaveBeenCalledTimes(2);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+    });
   });
 
   it('cleans runtime state before releasing the local terminal status lock', async () => {

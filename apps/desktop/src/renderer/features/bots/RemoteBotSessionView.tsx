@@ -29,6 +29,15 @@ export function RemoteBotSessionView() {
   const { deviceId, botId, sessionId: requestedSessionId } = useParams();
   const owner = getDataOwnerGeneration();
   const cloud = useCompanionCloud();
+  const location = useLocation();
+  const home = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId)?.homeDeviceId : null;
+  // An ordinary companion URL follows its confirmed remote home. Do this outside
+  // the session gate so a former host cannot start (or finish) a stale chat lookup.
+  // Local arrival still uses the gate's profile-failure / completed-restore path;
+  // a cloud home on this computer alone does not prove its local copy is ready.
+  if (!requestedSessionId && deviceId && botId && home && home !== deviceId && home !== cloud.selfDeviceId) {
+    return <Navigate to={`/bots/remote/${encodeURIComponent(home)}/${encodeURIComponent(botId)}${location.search}`} state={location.state} replace />;
+  }
   const actor = cloudCompanionAt(cloud, deviceId, botId);
   const localReady = !!actor && !actor.profileFailure && deviceId === cloud.selfDeviceId && !!botId && !cloud.demotedBotIds.includes(botId);
   // A new identity or recovery state must never reuse the previous confirmation.

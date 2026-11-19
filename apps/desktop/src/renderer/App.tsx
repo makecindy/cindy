@@ -354,6 +354,7 @@ export function App() {
         fast,
         thinking,
         markModelChoice,
+        selectDraftAgent,
         taskProviderId,
         appDefaultSelection,
       }) => {
@@ -405,7 +406,7 @@ export function App() {
               model: modelId,
               providerId: providerId || null,
               ...(effort !== undefined ? { effort: effort as Effort } : {}),
-            });
+            }, { selectVendor: selectDraftAgent });
           }
         }
         if (effort !== undefined) {

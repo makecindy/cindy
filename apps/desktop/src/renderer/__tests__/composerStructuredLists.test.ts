@@ -179,7 +179,7 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.textContent).toBe('  - ');
   });
 
-  it.each(['0. ', '0001. '])('keeps %s as plain text', (typed) => {
+  it.each(['0. ', '0001. ', '123、', '324325、'])('keeps %s as plain text', (typed) => {
     const editor = makeEditor();
 
     typeThroughInputRules(editor, typed);
@@ -750,7 +750,7 @@ describe('composer live plain-list promotion', () => {
     expect(editor.state.doc.lastChild?.type.name).toBe('paragraph');
   });
 
-  it('keeps optional CJK spacing during live promotion', () => {
+  it('leaves a CJK ordinal row literal when it lands outside input rules', () => {
     const editor = makeEditor({
       type: 'doc',
       content: [
@@ -762,8 +762,8 @@ describe('composer live plain-list promotion', () => {
     });
     selectDocumentEnd(editor);
 
-    expect(promoteTrailingPlainListParagraph(editor.view)).toBe(true);
-    expect(serializeEditorContent(editor).text).toBe('3、 项目');
+    expect(promoteTrailingPlainListParagraph(editor.view)).toBe(false);
+    expect(editor.state.doc.firstChild?.type.name).toBe('paragraph');
   });
 
   it('does not promote a multiline paragraph as one list item', () => {

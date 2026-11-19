@@ -1567,6 +1567,7 @@ export const schedules = sqliteTable(
      * exit 0 放行 / exit 2 跳过本轮(run 记 'skipped') / 其它、超时阻止本轮并记 failed。
      * 内存对象里与 timeout 合成 `Schedule.preRunHook` 嵌套对象(同 notify 的拆列模式)。
      */
+    prTrigger: text('pr_trigger'),
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
@@ -1927,6 +1928,22 @@ export const dailySpend = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.costCurrency] }),
   }),
 );
+
+/** Auxiliary requests are independent of task turns and retain their own attribution. */
+export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
+  receiptId: text('receipt_id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model').notNull(),
+  source: text('source').notNull(),
+  sessionId: text('session_id'),
+  transport: text('transport').notNull(),
+  day: text('day').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  cacheCreateTokens: integer('cache_create_tokens'),
+}, t => ({ dayIndex: index('auxiliary_usage_receipts_day_idx').on(t.day) }));
 
 /** Immutable request receipts; insertion and aggregate increments share one transaction. */
 export const piUsageReceipts = sqliteTable('pi_usage_receipts', {

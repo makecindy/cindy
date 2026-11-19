@@ -193,7 +193,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   if (page.kind === 'manage') {
     title = k('manage');
     content = <ManagePage k={k} group={group} owner={owner} writable={writable} online={online} busy={busy} direct={direct}
-      identityOf={identityOf} settings={settings} lifecycle={lifecycle} rename={direct ? undefined : openEdit}
+      settings={settings} lifecycle={lifecycle} rename={direct ? undefined : openEdit}
       archive={archive => void confirmed(k(archive ? 'archive' : 'unarchive'), k(archive ? 'archiveHint' : 'unarchiveHint'), k(archive ? 'archive' : 'unarchive'),
         () => management ? management.act('archive', { archived: archive }) : act('delete', throughComputer({})))} />;
   } else if (page.kind === 'edit') {
@@ -421,9 +421,8 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
   </>;
 }
 
-function ManagePage({ k, group, owner, writable, online, busy, direct, identityOf, settings, lifecycle, archive, rename }: {
+function ManagePage({ k, group, owner, writable, online, busy, direct, settings, lifecycle, archive, rename }: {
   k: Translate; group: BotGroupRemoteChatData; owner: boolean; writable: boolean; online: boolean; busy: boolean; direct: boolean;
-  identityOf(member: BotGroupMemberView): BotGroupIdentity;
   settings(actionId: GroupSettingsActionId, input: Record<string, unknown>): Promise<boolean>;
   lifecycle(action: 'dissolve'): void; archive(archive: boolean): void;
   /** Through a computer the group name is the one 群资料 field the phone can change. */
@@ -438,8 +437,6 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
       {open => <ActionInfoRow label={label} value={options.find(option => option.id === value)?.title ?? ''} accessibilityLabel={label}
         disabled={!writable || busy} onPress={open} testID={`${testID}.row`} />}
     </BotGroupMenu>;
-  // Early groups do not tag kinds; every member there is a teammate.
-  const companions = group.members.filter(member => (!member.actorKind || member.actorKind === 'bot') && isActiveBotGroupMember(member));
   if (group.archived) return <>
     <Notice>{k('archived')}</Notice>
     {/* Archived groups are read-only here; only 取消归档 remains, which a computer cannot carry. */}
@@ -473,11 +470,9 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
         { id: 'auto', title: t('groupChat.settings.speakingModeAuto') }, { id: 'sequential', title: t('groupChat.settings.speakingModeSequential') },
       ], 'speakingMode', 'botGroup.settings.speakingMode')}
     </SettingsGroup>}
-    {companions.length ? <SettingsGroup title={k('work')} footer={`${k('organizerHint')}${k('projectDirOnComputer')}`}>
-      {choice(t('groupChat.organizer'), group.organizerBotId ?? '', companions.map(member => ({ id: member.botId, title: identityOf(member).name || member.name })),
-        'organizerBotId', 'botGroup.settings.organizer')}
-      {group.projectDirName !== undefined && !direct ? <ActionInfoRow chevron={false} label={t('groupChat.settings.projectDir')}
-        value={group.projectDirName ?? k('ownFolder')} accessibilityLabel={t('groupChat.settings.projectDir')} testID="botGroup.settings.projectDir" /> : null}
+    {group.projectDirName !== undefined && !direct ? <SettingsGroup footer={k('projectDirOnComputer')}>
+      <ActionInfoRow chevron={false} label={t('groupChat.settings.projectDir')}
+        value={group.projectDirName ?? k('ownFolder')} accessibilityLabel={t('groupChat.settings.projectDir')} testID="botGroup.settings.projectDir" />
     </SettingsGroup> : null}
     <SettingsGroup footer={k('archiveRowHint')}>
       <ActionInfoRow chevron={false} label={k('archive')} accessibilityLabel={k('archive')} disabled={!writable || busy} onPress={() => archive(true)} testID="botGroup.settings.archive" />

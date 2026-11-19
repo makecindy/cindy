@@ -140,6 +140,8 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  /** Main-only observation: preparation may have side effects even if selection later changes. */
+  onRuntimePreparation?: () => void;
   readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
@@ -251,6 +253,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
@@ -261,6 +264,7 @@ export interface MakerSendTransactionSession {
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
@@ -337,7 +341,7 @@ export interface MakerSendTransactionDeps {
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   readSessionWritableDirsFromDb?(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
-  bootstrapSession(opts: CreateOpts): Promise<{
+  bootstrapSession(opts: CreateOpts, assertStartupCurrent?: () => void): Promise<{
     session: MakerSendTransactionSession;
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
@@ -431,7 +435,9 @@ export interface MakerSendTransactionDeps {
    * 保留意图本次不动。undefined = 不启用(测试最小 harness)。`signal` 是这次发送的取消信号：
    * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
-  applyPendingAgentSwitch?(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }): Promise<void>;
+  applyPendingAgentSwitch?(sessionId: string, options?: {
+    signal?: AbortSignal; scheduled?: boolean; clientId?: string; nextInputChars?: number;
+  }): Promise<void>;
   onModelDispatched?(sessionId: string, clientId: string): void;
   /**
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
@@ -529,6 +535,10 @@ export interface MakerSendTransaction {
    * task row. Returns false when a runtime already exists or startup failed;
    * the next send then follows its normal path.
    */
+  preparePiSkillRuntime(
+    sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>,
+    assertStartupCurrent?: () => void,
+  ): Promise<void>;
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
   /**
    * Main-side senders that reach an idle live session without this transaction (Orca
@@ -1006,6 +1016,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function lazyCreateSession(
     sessionId: string,
     createOpts: CreateOpts,
+    assertStartupCurrent?: () => void,
   ): Promise<ResolveSessionResult> {
     const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
       preferDbWorkingDir: true,
@@ -1023,13 +1034,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
     await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'lazy-create');
+    assertStartupCurrent?.();
     try {
       createOpts.preserveStartupStoppedError = true;
       const {
         session: lazySess,
         didInjectOrcaInstructions,
         didInjectProjectContext,
-      } = await deps.bootstrapSession(createOpts);
+      } = await (assertStartupCurrent ? deps.bootstrapSession(createOpts, assertStartupCurrent) : deps.bootstrapSession(createOpts));
       await deps.markOrcaRoleIfNeeded(lazySess.id, createOpts.orcaRole);
       deps.broadcastSessionCreated(lazySess.id);
       deps.log.info('send: lazy create-session', {
@@ -1043,6 +1055,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return { kind: 'session', session: lazySess };
     } catch (startupError) {
+      assertStartupCurrent?.();
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
@@ -1093,6 +1106,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
+    async preparePiSkillRuntime(sessionId, workingDir, preferences, assertStartupCurrent) {
+      const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+      assertStartupCurrent?.();
+      if (opts.agentKind !== 'pi' || opts.workingDir !== workingDir) {
+        throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
+      }
+      const live = deps.getSession(sessionId);
+      if (live && live.getStatus?.() !== 'error') {
+        if (live.agentKind !== 'pi' || live.workDir !== workingDir ||
+            (live.agentDeviceId ?? null) !== (opts.agentDeviceId ?? null)) {
+          throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
+        }
+        live.retryFailedRuntimeCapabilityCapture?.();
+        return;
+      }
+      const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
+      const result = await lazyCreateSession(sessionId, co, assertStartupCurrent);
+      if (result.kind === 'failure') {
+        const outcome = result.result.outcome;
+        throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
+      }
+    },
     async prewarmSession(sessionId, createOpts) {
       if (deps.getSession(sessionId)) return false;
       const lazy = await lazyCreateSession(sessionId, createOpts);
@@ -1121,6 +1156,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
         requestedSendOpts.signal);
       if (runtimePreparation) {
+        requestedSendOpts.onRuntimePreparation?.();
         const runtime = await runtimePreparation;
         if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
         Object.assign(requestedSendOpts, runtime.options);
@@ -1133,17 +1169,24 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (sendOrigin as { kind?: unknown }).kind === 'scheduler';
       const rawClientId = requestedSendOpts.persistUserMessage?.clientId;
       const clientId = typeof rawClientId === 'string' ? rawClientId : undefined;
+      const nextInput = typeof message === 'string' ? message
+        : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
       await deps.applyPendingAgentSwitch?.(
         sessionId,
-        requestedSendOpts.signal || scheduled || clientId ? {
+        requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
           ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
           ...(scheduled ? { scheduled: true } : {}),
           ...(clientId ? { clientId } : {}),
+          ...(nextInputChars > 0 ? { nextInputChars } : {}),
         } : undefined,
       );
       try {
         const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
-        if (promptPreparation) await promptPreparation;
+        if (promptPreparation) {
+          requestedSendOpts.onRuntimePreparation?.();
+          await promptPreparation;
+        }
       } catch (error) {
         if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
         return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
@@ -1624,6 +1667,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         try {
           const pending = deps.composeRuntimeContext?.(sessionId,
             () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
+          if (pending) so.onRuntimePreparation?.();
           const context = pending ? await pending : undefined;
           if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {

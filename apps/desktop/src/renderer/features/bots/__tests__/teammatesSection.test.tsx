@@ -29,6 +29,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  realStore: false,
   navigate: vi.fn(),
   observeSession: vi.fn(),
   profiles: [] as unknown[],
@@ -77,11 +78,16 @@ vi.mock('react-router-dom', async importOriginal => ({
     ? `/bots/remote/${mocks.params.deviceId}/${mocks.params.botId}`
     : mocks.params.botId ? `/bots/${mocks.params.botId}` : '/bots', search: '', hash: '' }),
 }));
-vi.mock('../botStore', () => ({
-  getBotProfiles: () => mocks.profiles,
-  useBotProfiles: () => mocks.profiles,
+vi.mock('../botStore', async importOriginal => {
+  const actual = await importOriginal<typeof import('../botStore')>();
+  return ({
+  ...actual,
+  getBotProfiles: () => mocks.realStore ? actual.getBotProfiles() : mocks.profiles,
+  useBotProfiles: () => mocks.realStore ? actual.useBotProfiles() : mocks.profiles,
+  useBotProfilesLoadState: () => mocks.realStore ? actual.useBotProfilesLoadState() : 'ready',
+  hasLoadedBotProfiles: () => mocks.realStore ? actual.hasLoadedBotProfiles() : true,
   useBotUnreadCounts: () => mocks.unread,
-  refreshBotProfiles: mocks.refreshBotProfiles,
+  refreshBotProfiles: () => mocks.realStore ? actual.refreshBotProfiles() : mocks.refreshBotProfiles(),
   setBotHidden: mocks.setBotHidden,
   setBotPinned: mocks.setBotPinned,
   duplicateBotProfile: mocks.duplicateBotProfile,
@@ -89,7 +95,8 @@ vi.mock('../botStore', () => ({
     sessions?: Array<{ id: string; role?: string; kind?: string }>;
   }) =>
     bot.sessions?.find((session) => session.role === 'canonical' || session.kind === 'chat')?.id,
-}));
+});
+});
 vi.mock('../BotDeleteDialog', () => ({
   BotDeleteDialog: ({ bot }: { bot: { name: string } | null }) =>
     bot ? <div data-testid="bot-delete-dialog">{bot.name}</div> : null,
@@ -136,6 +143,7 @@ async function renderSidebar() {
 }
 
 beforeEach(() => {
+  mocks.realStore = false;
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
@@ -1199,4 +1207,73 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
   });
+});
+
+// #9978 / unit: mount the production sidebar with its real store. Existing row
+// fixtures replaced the store and could not distinguish a failed read from empty.
+describe('startup roster read failures', () => {
+  it.each(['list', 'icons', 'collapsed'] as const)('keeps failed startup distinct from empty and recovers through the visible retry (%s)', async mode => {
+    mocks.realStore = true;
+    writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+    writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration(`startup-failed-${mode}`);
+    const list = vi.fn().mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DbClient not ready'))
+      .mockResolvedValue([bot({ id: 'existing', name: 'Existing buddy' })]);
+    window.electronAPI.localDb!.bots = { list } as never;
+    await store.ensureBotProfilesLoaded();
+    const view = await renderSidebar();
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    await waitFor(() => expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']));
+    expect(screen.queryByRole('alert')).toBeNull();
+    if (mode === 'collapsed') fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+    if (mode === 'icons') expect(screen.getByRole('button', { name: 'Existing buddy' })).toBeTruthy();
+    else expect(view.container.textContent).toContain('Existing buddy');
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a successful empty snapshot before offering empty-roster creation', async () => {
+    mocks.realStore = true;
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration('startup-empty');
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+    window.electronAPI.localDb!.bots = { list } as never;
+    const pending = store.ensureBotProfilesLoaded();
+    await renderSidebar();
+    try {
+      expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    } finally {
+      await act(async () => { finish([]); await pending; });
+    }
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.add' })).toBeTruthy();
+    expect(list).toHaveBeenCalledOnce();
+  });
+});
+
+// #9706 / unit-jsdom: loading must remain visible in all sidebar presentation
+// modes. Execute the production store/section and settle the read in finally.
+it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until its current-owner read succeeds (%s)', async mode => {
+  mocks.realStore = true;
+  writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+  writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+  const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+  setDataOwnerGeneration(`startup-pending-${mode}`);
+  let finish!: (rows: unknown[]) => void;
+  const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+  window.electronAPI.localDb!.bots = { list } as never;
+  const pending = store.ensureBotProfilesLoaded();
+  await renderSidebar();
+  try {
+    expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+  } finally {
+    await act(async () => { finish([bot({ id: 'existing', name: 'Existing buddy' })]); await pending; });
+  }
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
+  expect(list).toHaveBeenCalledOnce();
 });

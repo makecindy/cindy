@@ -65,12 +65,11 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('maker.switchSessionAgent(');
     expect(source).toContain('agentSwitchIntent: normalizeSessionAgentSwitchIntent(result)');
     expect(source).toContain('agentSwitch={sessionAgentSwitchSupported ? {');
-    expect(source).toContain('confirmMobileSessionAgentSwitch(next, !!agentSwitchIntent)');
     expect(source).toContain('targetAgentKind: modelSheetAgentKind');
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');
   });
 
-  it('lists other computers in the model sheet and moves the Agent only after confirmation', () => {
+  it('lists other computers in the model sheet and stages explicit moves while keeping the host capability gates', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const writerStart = source.indexOf('const writeSessionAgentSwitchIntent = useCallback');
     const writer = source.slice(writerStart, source.indexOf('// Context 面板', writerStart));
@@ -127,8 +126,6 @@ describe('session Agent switch UI wiring', () => {
       'enabled: agentLocationMovable && modelSheetOpen && !intentChangesAgentLocation(agentSwitchIntent),',
     );
     expect(source).toContain('running: { deviceId: currentAgentDeviceId, providerId: currentProviderId },');
-    // 顶部常驻说明已去掉,由换电脑前的二次确认代替。
-    expect(source).not.toContain('notice={agentLocationNotice}');
 
     const rowSelector = source.slice(
       source.indexOf('const selectComposerModelRow'),
@@ -143,10 +140,10 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const browseComposerModelAgent'),
     );
     for (const selector of [rowSelector, unifiedSelector, flatSelector]) {
-      expect(selector).toContain('await confirmAgentLocationForPick({');
-      expect(selector).toContain('intent: agentSwitchIntent,');
-      // 换电脑的选择走切换意图,而且必须在 setModel 之前分流;取消 = 什么都不改。
-      expect(selector).toMatch(/if \(!location(?: \|\| deviceIdRef\.current !== deviceId)?\) return/);
+      // 位置受限的任务不能借任一选择入口把 Agent 挪出许可范围。
+      expect(selector).toContain('resolveAgentLocationPick({');
+      expect(selector).toContain('movable: agentLocationMovable,');
+      expect(selector).toContain('if (!location) return');
       expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeGreaterThan(-1);
       expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeLessThan(
         selector.indexOf('setComposerModel('),
@@ -163,7 +160,7 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const toggleComposerModelPicker'),
     );
     expect(toggles.match(
-      /\(orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
+      /\(modelSelectionUsesWindowIntent \|\| orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
     )).toHaveLength(2);
 
     // 模型药丸按 Agent 所在电脑的目录显示,带远程标记;读屏标签读出那台电脑。
@@ -209,22 +206,15 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const writeSessionAgentSwitchIntent'),
     );
 
-    const legacyGuard = helper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const legacyGuard = alertHelper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const admission = helper.indexOf('!canStageModelWindowSelection(');
     const setModel = helper.indexOf(
       'await maker.setModel(sessionId, args.model, args.providerId, args.selection)',
     );
     expect(legacyGuard).toBeGreaterThan(-1);
-    expect(legacyGuard).toBeLessThan(setModel);
-    expect(helper.slice(legacyGuard, setModel)).toContain('return false;');
-    expect(helper).toContain(
-      'hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
-    );
-    expect(helper).toContain('agentKind: sessionAgentKind');
-    expect(helper).not.toContain('isSsh');
-    expect(helper).toContain('contextTokens: currentSession?.contextTokens');
-    expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
-    expect(helper).toContain('targetContextWindow: args.targetContextWindow');
-    expect(helper).toContain('showRemoteModelWindowUnsupported(args.targetContextWindow);');
+    expect(admission).toBeGreaterThan(-1);
+    expect(admission).toBeLessThan(setModel);
+    expect(helper.slice(admission, setModel)).toContain('return false;');
     expect(rowSelector).toContain(
       'modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
     );

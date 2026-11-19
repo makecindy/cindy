@@ -314,6 +314,12 @@ describe('Codex local session import', () => {
     const newer = path.join(home, 'archived_sessions', `rollout-2026-05-13-${threadId}.jsonl`);
     const unrelated = path.join(home, 'sessions', `rollout-2026-05-13-${execThreadId}.jsonl`);
     const content = JSON.stringify({ type: 'session_meta', payload: { id: threadId, source: 'cli' } }) + '\n';
+    // #11025 unit: the no-index archive fallback reads sqlite_home from native
+    // config. A single BOM previously blocked archive lookup; never rewrite it.
+    const sqliteHome = path.join(rootDir, 'custom-state');
+    const config = `\uFEFFsqlite_home = ${JSON.stringify(sqliteHome)}\n`;
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'config.toml'), config);
     for (const file of [older, newer, unrelated]) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
@@ -323,10 +329,11 @@ describe('Codex local session import', () => {
     const stat = vi.spyOn(fs.promises, 'stat');
     try {
       await expect(readCodexThreadStorageForArchiveAsync(threadId)).resolves.toEqual({
-        historyHome: home, sqliteHome: home, rolloutPath: newer,
+        historyHome: home, sqliteHome, rolloutPath: newer,
       });
       expect(stat.mock.calls.some(([file]) => file === unrelated)).toBe(false);
       expect(fs.readFileSync(newer, 'utf8')).toBe(content);
+      expect(fs.readFileSync(path.join(home, 'config.toml'), 'utf8')).toBe(config);
       expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
       await expect(readCodexThreadStorageForArchiveAsync('not-a-thread')).resolves.toBeUndefined();
     } finally { stat.mockRestore(); }

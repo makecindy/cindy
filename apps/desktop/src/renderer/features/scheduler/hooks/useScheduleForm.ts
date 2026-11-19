@@ -36,6 +36,15 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
+import { normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+
+function prFields(schedule: Schedule): Partial<ScheduleFormState> {
+  if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
+  const rules = schedulePrTriggers(schedule);
+  if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
+  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change };
+}
+
 const DEFAULT_FORM: ScheduleFormState = {
   name: '',
   prompt: '',
@@ -290,6 +299,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     sourceExpireAt: s.expireAt,
     recurring: s.recurring,
     manual: s.manual,
+    ...prFields(s),
     webhookEnabled: Boolean(s.webhookTrigger),
     webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
     ...webhookSourceFormFields(s.webhookTrigger?.source),
@@ -521,6 +531,10 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource !== 'plugin' && !form.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
+    }
+    if (form.prEnabled) {
+      try { normalizePrTrigger({ url: form.prUrl ?? '', change: form.prChange ?? 'any' }); }
+      catch { return { key: 'scheduler.prTrigger.invalid' }; }
     }
     if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
       return { key: 'scheduler.editor.webhook.customInvalid' };

@@ -350,6 +350,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
     // oneShot 兜底——不再写死 haiku/mini。maxTokens 120:长档 30+ CJK 字可能超 80 token,留余量防截断。
     const utility = await requestUtilityText(getMaker(), prompt, {
+      source: 'task-summary', sessionId,
       maxTokens: 120,
       timeoutMs: 30_000,
       beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
@@ -373,6 +374,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
           !(await beforeSessionAgentDispatch())
         ? ''
         : await getMaker().oneShot(agentKind, prompt, {
+            source: 'task-summary', sessionId,
             maxTokens: 120,
             beforeDispatch: beforeSessionAgentDispatch,
           });

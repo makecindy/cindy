@@ -8,6 +8,7 @@ export interface ToolResultCompactionMarker {
 
 /** Observed fields, not an inferred task verdict. No messages, input or media. */
 export interface ToolResultDiagnostics {
+  previousFailure?: { errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED'; firedAt: number; laterRunSucceeded: boolean };
   ok?: boolean;
   isError?: boolean;
   errorCode?: string;
@@ -30,6 +31,11 @@ export function sanitizeToolResultDiagnostics(value: unknown): ToolResultDiagnos
   for (const key of ['ok', 'isError', 'outcomeUnknown', 'observationOk', 'afterSnapshotOk']) {
     if (typeof source[key] === 'boolean') result[key] = source[key];
   }
+  const previous = source.previousFailure as Partial<NonNullable<ToolResultDiagnostics['previousFailure']>> | undefined;
+  if (previous?.errorCode === 'TASK_ACTION_AUTHORIZATION_EXPIRED' && typeof previous.firedAt === 'number'
+    && Number.isSafeInteger(previous.firedAt) && previous.firedAt > 0 && typeof previous.laterRunSucceeded === 'boolean') {
+    result.previousFailure = { errorCode: previous.errorCode, firedAt: previous.firedAt, laterRunSucceeded: previous.laterRunSucceeded };
+  }
   const enums: Record<string, readonly string[]> = {
     outcome: ['confirmed', 'unknown', 'failed'],
     effect: ['confirmed', 'unverifiable', 'refused'],
@@ -37,7 +43,7 @@ export function sanitizeToolResultDiagnostics(value: unknown): ToolResultDiagnos
     verificationStatus: ['satisfied', 'unsatisfied', 'unknown'],
     // Deliberately closed: even a short arbitrary error code can contain a secret.
     errorCode: [
-      'INVALID_ARGS', 'UNKNOWN_TOOL', 'COMPUTER_DRIVER_ERROR', 'CUA_UNAVAILABLE',
+      'TASK_ACTION_AUTHORIZATION_EXPIRED', 'INVALID_ARGS', 'UNKNOWN_TOOL', 'COMPUTER_DRIVER_ERROR', 'CUA_UNAVAILABLE',
       'COMPUTER_DRIVER_INCOMPATIBLE', 'STALE_SNAPSHOT', 'SECURE_FIELD',
       'PATH_NOT_ALLOWED', 'REQUEST_CANCELLED', 'ACTION_OUTCOME_UNKNOWN',
       'POSTCONDITION_NOT_SATISFIED', 'DESKTOP_INPUT_BUSY', 'DESKTOP_INPUT_YIELDED', 'APP_NOT_INSTALLED',
@@ -104,6 +110,8 @@ export function extractToolResultDiagnostics(content: unknown, unwrapMcp = true)
   const data = root.tool !== undefined || root.errorCode !== undefined ? object(root.data) : root;
   return sanitizeToolResultDiagnostics({
     ok: root.ok,
+    previousFailure: root.ok === true && typeof object(root.data).deleted === 'string'
+      ? object(root.data).previousFailure : undefined,
     isError: isError ? true : root.isError,
     errorCode: root.errorCode ?? root.code ?? object(root.refusal).code,
     outcome: object(root.outcome).status,

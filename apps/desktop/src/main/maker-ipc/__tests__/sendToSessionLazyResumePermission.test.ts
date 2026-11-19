@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
@@ -109,7 +110,7 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
+    '\n  setBotInvitationWelcomeDispatch(',
   );
   const groupDispatch = slice(
     '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
@@ -284,6 +285,7 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);

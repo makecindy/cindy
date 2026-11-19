@@ -32,7 +32,7 @@ Pi 先 `cindy_mcp_list_tools({server:"cindy_helper",tool:"list_tools"})`，再�
 
 | 分类 / 工具 | 字段或操作 | 生效与恢复 |
 | --- | --- | --- |
-| `preferences` | 语言、明暗主题、主题家族、通知、发送快捷键、网页/本地链接打开方式、流式动效、消息导航、忽略目录显示、首页用量、输入建议 | 复用 Renderer 原 setter，保存并回读，立即生效；无整组 reset |
+| `preferences` | 语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式（排队/插话）、网页/本地链接打开方式、流式动效、消息导航、忽略目录显示、首页用量、输入建议 | 复用 Renderer 原 setter，保存并回读，立即生效；无整组 reset |
 | `appearance` | 界面/代码/终端字体与字号、窗口缩放、内置壁纸、遮罩/可见度/模糊/动效 | 原外观持久化与广播；reset 删除原覆盖；不返回自定义壁纸资产 URL |
 | `git-safety` | `mode`：关闭/已有 Git 项目/所有项目 | 下一轮；reset 跟随原默认 |
 | `goal-defaults` | 轮数、token 预算、无进展轮数 | 以后启动的目标；null 不限；reset 删除覆盖 |
@@ -40,7 +40,6 @@ Pi 先 `cindy_mcp_list_tools({server:"cindy_helper",tool:"list_tools"})`，再�
 | `memory` | Cindy、Claude Code、Codex、Pi 记忆开关 | 复用忙碌时延迟生效；reset 只恢复开关，不删除记忆；Cindy 记忆接管时沿用原生开关互斥规则 |
 | `subagent-models` | Claude 子代理模型与来源、Codex 智能调配 | 保留原生软重启/空闲应用逻辑；reset 删除覆盖 |
 | `auxiliary-models` | 辅助模型优先与两级备用 | 使用原候选校验；空数组/reset 跟随自动选择 |
-| `vision-bridge` | 总开关、目标模型、主/备用视觉模型 | 下一请求；reset 删除覆盖 |
 | `get_app_default_model` / `set_app_default_model` | 默认模型、思考深度、Fast/Ultrafast | 可用目录校验并等待真实选择器保存回执；用于新任务，不替换当前运行任务 |
 | `list_model_providers` | 全量安全模型目录、顺序、停用状态与显示覆盖 | 包含已关闭型号；不返回凭证 |
 | `get_model_configuration` / `set_model_configuration` | 单模型选择器显示、上下文上限、压缩比例、图片输入、价格估算 | 与设置页同一服务；null 删除对应覆盖；价格只影响本地估算 |
@@ -63,10 +62,9 @@ Pi 先 `cindy_mcp_list_tools({server:"cindy_helper",tool:"list_tools"})`，再�
 | GitSafetySection | `git-safety` | 无新增缺口 |
 | CollaborationSection | 已有协同执行工具不等于设置控制 | Worker 软/硬限制、空闲释放配置 |
 | AppearanceSection | `preferences` + `appearance` | 导入自定义壁纸/本地主题、侧栏卡片/主列表模式 |
-| PersonalizationSettings | 记忆、子代理、辅助模型、视觉桥、链接、建议已接通 | 用户提示词、终端 Shell |
+| PersonalizationSettings | 记忆、子代理、辅助模型、链接、建议已接通 | 用户提示词、终端 Shell |
 | PersonalizationDetails | `preferences`、`memory`、`auxiliary-models` | 终端 Shell、兼容相关设置 |
 | SubagentModelSection | `subagent-models` | 无新增缺口 |
-| VisionBridgeSection | `vision-bridge` | 无新增缺口 |
 | TipsSection | `preferences.promptRecommendations` | 无新增缺口 |
 | ProvidersSection | 默认模型、模型目录/参数、供应商展示管理 | 新建/编辑/删除自定义连接、各供应商专属选项、组与分享管理仍需各自正式接口；登录输入走安全授权，不把密钥交模型 |
 | LocalAgentSection | 既有连接/授权流程保持 | 本地模型安装、移除、运行参数等未接入本批设置工具 |

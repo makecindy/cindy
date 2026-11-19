@@ -33,7 +33,7 @@ import {
   type MemoryConfig,
   type WriteOptions,
 } from './types.js';
-import type { BaseAgent } from '../agents/base-agent.js';
+import type { BaseAgent, OneShotOptions } from '../agents/base-agent.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentKind } from '../types/common.js';
 import type { Logger } from '../interfaces/logger.js';
@@ -110,6 +110,8 @@ export interface MakerMemoryManagerDeps {
     prompt: string,
     opts: { maxTokens: number; timeoutMs: number },
   ) => Promise<string | null>;
+  /** Meter the legacy agent route without changing auxiliary-chain fallback semantics. */
+  reviewAgentOneShot?: (agent: AgentKind, prompt: string, opts: OneShotOptions) => Promise<string>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -987,7 +989,9 @@ export class MakerMemoryManager {
     if (!agent) {
       throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
     }
-    const suggestions = await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
+    const suggestions = this.deps.reviewAgentOneShot
+      ? await this.deps.reviewAgentOneShot(reviewAgentKind, prompt, REVIEW_ONE_SHOT_OPTS)
+      : await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
     // oneShot await 后、返回前复核 (review #2388 Codex 21st P1): 边界在 LLM
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);

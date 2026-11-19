@@ -34,6 +34,7 @@ import { botGroupFolderPath } from './botGroupWorkDir.js';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
+import { GROUP_TEAMMATE_HANDOFF_GUIDANCE } from './groupCollaborationSkillContent.js';
 import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
@@ -525,6 +526,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
   let singleSpeaker = false;
+  let independentReplies = false;
   /** The server keeps a group's shared GitHub project (capability groupProject). */
   let supportsGroupProject = false;
   /** The group's repository may be on another git host (GitLab, CNB, ...), not only GitHub. */
@@ -1051,7 +1053,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
@@ -1063,6 +1065,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
       supportsMemberInvites = me.capabilities?.groupMemberInvites === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
+      independentReplies = me.capabilities?.independentReplies === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       supportsGroupProject = (me.capabilities as { groupProject?: number } | undefined)?.groupProject === 1;
       supportsGroupProjectGit = supportsGroupProject && (me.capabilities as { groupProjectGit?: number } | undefined)?.groupProjectGit === 1;
@@ -2033,7 +2036,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
-    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -2850,6 +2853,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...lines],
     };
   }
+  function mentionableTeammates(snapshot: Snapshot, speakerId: string) {
+    if (!supportsTeammateMentions) return undefined;
+    const bots = snapshot.members.filter(member => member.kind === 'bot' && member.state === 'joined');
+    if (!bots.some(member => member.id !== speakerId)) return undefined;
+    return bots.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
+      displayName: member.displayName, nickname: member.nickname }));
+  }
+
+  function replyMention(source: Message, run: Running) {
+    if (!run.mentionable || source.authorId === run.execution.bot_id) return undefined;
+    const sender = run.mentionable.find(member => member.botId === source.authorId);
+    if (!sender) return undefined;
+    const mention = `@${sender.name}`;
+    const { botIds } = resolveBotGroupMentions(mention, { members: run.mentionable, allLabels: [] });
+    return botIds.length === 1 && botIds[0] === sender.botId ? mention : undefined;
+  }
+
   /**
    * A request to the group's Cindy (bot-group-chat.md §9). It runs only on the requester's own
    * computer — the server hands it to no one else — with the requester's own logins, model and
@@ -2916,6 +2936,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         validate: () => validateExecutionAuthority(run),
         onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
+      run.mentionable = mentionableTeammates(s, execution.bot_id);
+      if (run.mentionable?.length) {
+        const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
+        background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
+      }
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background,
         ...(task.pending && readGroupRepository(s.room.project) ? { note: checkoutNote(readGroupRepository(s.room.project)!, task.pending) } : {}) });
@@ -3252,7 +3277,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         return { ...promptMessage(m), ...(files.length ? { attachments: files } : {}) };
       };
       const chronological = (messages: Message[]) => [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
-      const request = { currentRequest: source ? { ...focusMessage(source), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
+      if (!digest && !execution.mask_owner_id) run.mentionable = mentionableTeammates(s, execution.bot_id);
+      const request = { currentRequest: source ? { ...focusMessage(source), replyToMention: replyMention(source, run), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
       const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
       // Queue answers already have bounded handoffs below. Keep them out of both
       // full and incremental Thread background, including the recovery snapshot.
@@ -3283,13 +3309,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...additions.filter(m => !m.threadRootId),
         ].map(m => [m.id, m])).values()]).map(mainMessage),
       } : fullConversation;
-      // Teammates ask each other with @ (bot-group-chat.md §4.0): the reply's @ wakes whom it names.
-      // The speaker stays in the name table (its own name must not resolve to a namesake) and is
-      // dropped from the result; alone, it has nobody to name.
-      const joinedBots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
-      if (supportsTeammateMentions && !digest && !execution.mask_owner_id
-        && joinedBots.some(m => m.id !== execution.bot_id)) run.mentionable = joinedBots
-        .map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.displayName, nickname: m.nickname }));
       const participants = s.members.filter(m => m.state === 'joined').map(m => {
         const local = m.kind === 'bot' ? localBot(m.id) : undefined;
         return { name: memberName(m, s.members), kind: m.kind, ...(m.id === execution.bot_id ? { you: true } : {}),
@@ -3339,7 +3358,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(run.plan && !talk ? ['Earlier step artifacts, including those produced on another computer, come as attachments. Copy needed files into your working directory before editing.'] : []),
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
         ...(run.mentionable?.length
-          ? ['To ask another teammate in participants, write @ and its name in your reply; it is woken and answers in the group.', 'Keep your reply concise. Your final response will be posted to the group.']
+          ? ['An @name in your final reply wakes that teammate. When currentRequest.replyToMention is present, use that exact mention to return your result or blocker.', 'Keep your reply concise. Your final response will be posted to the group.']
           : ['Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.']),
       ].join('\n');
       const fullPrompt = buildPrompt(recoveryConversation, textHistory, false);
@@ -4005,6 +4024,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (!post) {
           const uploaded = prepared?.ok ? await media.upload(i.groupId, i.clientId, prepared.attachments, selfId) : [];
           post = { body: { operationId: i.clientId, threadRootId: i.rootId,
+            ...(independentReplies ? { independentReplies: true } : {}),
             content: [...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded], mentions: recipients,
             ...(supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}) },
             prepared: prepared?.ok ? prepared : undefined };
@@ -4165,7 +4185,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
     // A single-speaker server cannot release a held request (no cancel-planning): a newer message
     // replacing a 分工 still being arranged would leave it to be queued two minutes later. Wait for its card.
-    if (!recovered && singleSpeaker && planIntents.get(i.groupId)?.sourceId) throw new Error('PLAN_OPEN');
+    if (!recovered && (!independentReplies || i.division) && singleSpeaker && planIntents.get(i.groupId)?.sourceId) throw new Error('PLAN_OPEN');
     // An attempted send must not cancel a valid decision until its message exists.
     const intentVersion = ++nextIntentVersion;
     // The reads a send needs share one round trip (none for a snapshot the live subscription
@@ -4178,7 +4198,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const knownQuote = i.quote ? postedQuotes.get(quoteKey) : undefined;
     const snapshotMembers = snapshotRead.then(value => value.members);
     const quoteRead = i.quote && !knownQuote && !recovered ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotMembers, direct) : undefined;
-    const plansRead = recovered ? Promise.resolve(recovered.plans) : direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
+    const plansRead = recovered ? Promise.resolve(recovered.plans) : direct || (independentReplies && !i.division) ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const membersRead = recovered ? Promise.resolve(recovered.members) : namesNobody(i.mentions) && !i.quote ? undefined : api<Member[]>(`/conversations/${i.groupId}/members`);
     for (const read of [snapshotMembers, quoteRead, plansRead, membersRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
@@ -4201,10 +4221,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const canTrigger = !direct && (i.division || i.mentions.allBots || namedBot || (namesNobody(i.mentions) && s.room.response_mode !== 'mentioned'));
     // Words for a card under way reach its current step only when they would wake anyone (§4.0,
     // §7.4); a queue waiting for 继续 gives way to a new request instead.
-    const commentPlan = canTrigger && openPlan && openPlan.status !== 'proposed' && !(singleSpeaker && openPlan.kind === 'talk' && openPlan.status === 'waiting') && !i.mentions.botIds.length && !i.mentions.all && !i.mentions.allBots && mayAdd ? openPlan : undefined;
+    const commentPlan = canTrigger && !independentReplies && openPlan && openPlan.status !== 'proposed' && !(singleSpeaker && openPlan.kind === 'talk' && openPlan.status === 'waiting') && !i.mentions.botIds.length && !i.mentions.all && !i.mentions.allBots && mayAdd ? openPlan : undefined;
     // Single-speaker servers queue turns themselves; only a 分工, or words about your proposed card,
     // wait for the arrangement. A 分工 that writes out its steps needs no helper model.
-    const shouldPlan = recovered?.shouldPlan ?? (!direct && (singleSpeaker
+    const shouldPlan = recovered?.shouldPlan ?? (!direct && (!independentReplies || i.division) && (singleSpeaker
       ? i.division || (canTrigger && proposed && namesNobody(i.mentions) && !!deps.decidePlan)
       : canTrigger && !!deps.decidePlan && (i.division || (!i.mentions.botIds.length && (!proposed || (!i.mentions.all && !i.mentions.allBots))))
         && (!openPlan || proposed)));
@@ -4214,6 +4234,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       deps.log?.warn('Chat attachment preparation failed', { groupId: i.groupId, trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), ...chatErrorDiagnostic(prepared && !prepared.ok ? new Error(prepared.message) : error) });
       throw error;
     }
+    const independentSend = recovered
+      ? (recovered.body as { independentReplies?: boolean } | null)?.independentReplies === true
+      : !direct && !i.division && independentReplies;
     let result: { id: string };
     let posting = false;
     try {
@@ -4228,6 +4251,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const body = recovered?.body ?? {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
           ...uploaded ], mentions, deferExecution: shouldPlan,
+          ...(independentSend ? { independentReplies: true } : {}),
           ...(!direct && supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}), ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.allBots === true, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       };
       if (!recovered) sendJournal.save(journalKey, signature, { snapshot: s, plans, members, quote, mentions: i.mentions,
@@ -4249,7 +4273,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The message exists: the send is answered now and its receipt answers any retry, so the
     // quote snapshot is no longer needed. Arrangement bookkeeping continues after the answer.
     postedQuotes.delete(quoteKey);
-    if (direct) { changed(i.groupId); return { ok: true as const, messageId: result.id }; }
+    if (direct || independentSend) { changed(i.groupId); return { ok: true as const, messageId: result.id }; }
     const roomId = i.groupId;
     const messageId = result.id;
     void (async () => {
