@@ -2,7 +2,7 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../useProportionalWidth';
+import { CHAT_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../useProportionalWidth';
 
 const BREAKPOINTS = [560, 600, 700] as const;
 
@@ -50,7 +50,7 @@ describe('useProportionalWidth resize hot path', () => {
     let latestCompact = false;
 
     function Harness() {
-      const width = useProportionalWidth(914, { expandTo: TASK_MESSAGE_MAX_WIDTH, responsiveBreakpoints: BREAKPOINTS });
+      const width = useProportionalWidth(914, { expandTo: CHAT_MESSAGE_MAX_WIDTH, responsiveBreakpoints: BREAKPOINTS });
       renders += 1;
       latestBand = width.inputWidthBand;
       latestCompact = width.isCompact;

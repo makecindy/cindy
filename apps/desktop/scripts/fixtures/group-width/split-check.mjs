@@ -50,7 +50,9 @@ export async function checkSplit(page, ui) {
       const sample = `${width}:${column}`;
       const stable = window.__widthSample === sample;
       window.__widthSample = sample;
-      return stable && Math.abs(column - Math.min(914, width - (width < 700 ? 40 : 100))) < 1;
+      const progress = Math.min(1, Math.max(0, (width - 1200) / 400));
+      const expected = Math.min(914 + 206 * progress, width - (width < 700 ? 40 : 100));
+      return stable && Math.abs(column - expected) < 1;
     });
     const result = await page.evaluate(() => {
       const timeline = document.querySelector('[data-testid="bot-group-timeline"]');

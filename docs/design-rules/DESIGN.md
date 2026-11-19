@@ -761,18 +761,19 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 **Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
 
-### Desktop task content width (2026-11-18)
+### Desktop chat content width (2026-11-18; shared across chat surfaces)
 
-普通任务以聊天面板的实际可用宽度适配，不根据整窗断点或侧栏开关猜测空间。
-新建页与进行中任务共用同一内容列：pane≤1200px 时保留成熟的 914px 上限，pane 从1200到1600px
-时将上限连续扩大到1120px，之后封顶。纯文字、标题、列表、引用、表格、代码与过程一起展开，
-不另造窄正文列；输入框和状态区沿同一中心轴、每侧向外10px。这样1440px笔记本展开260px侧栏后
-仍保留原行宽，大pane的纯文字也最多增加22.5%空间，正文和代码不会突然出现两个右边界。
-表格保留块内横向滚动、普通代码保留自动折行。窄面板继续沿用现有 50px / compact 20px
-消息边距，不新增宽屏开关或拖宽手柄；右侧面板和分栏仍由现有布局引擎分配空间。
-结构化答案卡片保持自己的布局；用户通过外观自定义的阅读宽度继续优先约束整条回复（包括表格和代码）。
-伙伴私聊与群聊继续使用 914px 内容列及原气泡宽度。实现见 `useProportionalWidth.ts`、
-`CCAgentSessionView.tsx`，纯文字/混合内容同窗口前后对照及分割线回归见 `scripts/fixtures/task-content-width/`。
+新建任务、进行中的普通任务、伙伴私聊与群聊根据聊天面板的实际可用宽度，共用居中的内容列和输入区。
+面板≤1200px 时保留914px内容上限，1200到1600px连续扩大到1120px，之后封顶。输入区同轴居中、
+每侧比内容列向外10px，最大1140px。右侧面板和分栏由现有布局引擎分配空间，窄面板沿用50px /
+compact20px的消息边距，按实测面板宽度计算。
+
+普通任务的正文、表格与代码共用内容列。伙伴私聊和群聊的消息使用原有按内容收窄的气泡，仍为720px
+上限。面板达到1600px时，Markdown表格按内容决定列宽，短表格的列保持相邻，长表格仍受消息
+或气泡可用空间约束，超出时在表格内横向滚动。用户外观设置的阅读宽度继续约束整条回复。
+
+实现见 `useProportionalWidth.ts`，真实组件几何与明暗回归见 `scripts/fixtures/task-content-width/`
+和 `scripts/fixtures/group-width/`。
 
 ### Desktop chat threads
 
@@ -1919,7 +1920,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
 复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
-常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。伙伴私聊与群聊共用914px内容列及响应式留白规则，群聊不得单独放宽；普通任务的大屏工作列见 §4 Desktop task content width，气泡及输入区规则见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
+常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务、伙伴私聊与群聊共用 §4 Desktop chat content width 的居中宽度规则，气泡及输入区规则见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 
 ### 伙伴内部通讯入口（2026-11-01）
 

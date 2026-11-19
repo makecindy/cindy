@@ -4,7 +4,7 @@ import composer from '../companion-composer/ui-page.mjs';
 export default {
   name: 'task-content-width', entry: './fixture.tsx', viewport: { width: 1920, height: 1080 },
   real: 'MessageStream, AssistantMessage, MarkdownRenderer, ChatInput, useProportionalWidth, LayoutRoot, SplitGroup and their production draggable dividers; AppFrame header, fonts and themes',
-  notCovered: 'Full session routing, new-task transition, native OS scaling/window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Viewports are effective CSS widths at100% page zoom; scaling cases model1920/125% or150% without changing the OS display. Group and companion bubble widths are unchanged. SplitGroup uses a synthetic session catalog and replaces CCAgentSessionView with the same real MessageStream/ChatInput test body; complete session routing is not mounted.',
+  notCovered: 'Full session routing, new-task transition, native OS scaling/window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Viewports are effective CSS widths at100% page zoom; scaling cases model1920/125% or150% without changing the OS display. Companion cases mount the production simplified MessageStream and ChatInput, with synthetic task data. SplitGroup uses a synthetic session catalog and replaces CCAgentSessionView with the same real MessageStream/ChatInput test body; complete session routing is not mounted.',
   stubs: {
     ...composer.stubs,
     'src/renderer/features/cc-agent/CCAgentSessionView': 'export { Task as CCAgentSessionView } from "./scripts/fixtures/task-content-width/fixture";',
@@ -24,7 +24,10 @@ export default {
     default: { about: 'Large desktop, sidebar expanded' },
     'width-normal': { about: 'Ordinary laptop, sidebar expanded', viewport: { width: 1280, height: 900 } },
     'width-large': { about: 'Large desktop, sidebar expanded' },
-    'width-ultrawide': { about: 'Ultrawide desktop', viewport: { width: 3440, height: 1440 } },
+    ...Object.fromEntries([1860, 3440].flatMap(width => [false, true].map(companion => [
+      companion ? `companion-wide-${width}` : width === 3440 ? 'width-ultrawide' : 'width-cap',
+      { about: 'Wide pane cap and compact short tables for a task or companion', viewport: { width, height: 1080 }, data: { companion, shortTable: true } },
+    ]))),
     'width-collapsed': { about: 'Large desktop, sidebar collapsed', data: { collapsed: true } },
     'width-panel': { about: 'Reference panel at 50/50 and divider extremes', data: { panel: true } },
     'width-legacy': { about: 'Original 914px width for design comparison', data: { legacy: true } },
@@ -57,7 +60,8 @@ export default {
       const markdown = paneElement.querySelector('[data-message-client-id="answer"] .msg-markdown');
       const paragraph = markdown.querySelector(':scope > p');
       const prose = paragraph.getBoundingClientRect();
-      const table = markdown.querySelector('table');
+      const [table, shortTable] = markdown.querySelectorAll('table');
+      const bubble = markdown.closest('[data-bot-reply-bubble]');
       const tableViewport = table?.parentElement;
       const headerLines = table ? Math.max(...Array.from(table.querySelectorAll('th'), th => {
         const range = document.createRange();
@@ -69,6 +73,8 @@ export default {
         supportedWideCap: Number(paneElement.querySelector('[data-task-width]').dataset.wideCap),
         proseLines: Math.round(prose.height / lineHeight),
         table: table?.getBoundingClientRect().width, tableViewport: tableViewport?.clientWidth, headerLines,
+        bubble: bubble?.getBoundingClientRect().width,
+        shortTable: shortTable?.getBoundingClientRect().width,
         code: markdown.querySelector('pre')?.getBoundingClientRect().width,
         cssViewport: innerWidth, pageScale: visualViewport?.scale, dpr: devicePixelRatio,
         centerDelta: (composer.left + composer.right - column.left - column.right) / 2,
@@ -88,16 +94,24 @@ export default {
       const original = m.supportedWideCap === 914;
       assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= (original ? 6.1 : 1), JSON.stringify(m));
       assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
-      assert.ok(Math.abs(m.prose - m.column) <= 1, `Prose and blocks share one content edge: ${JSON.stringify(m)}`);
+      if (ui.data.companion) {
+        assert.ok(m.bubble > 0 && m.bubble <= 721 && m.prose < m.bubble, JSON.stringify(m));
+      } else {
+        assert.ok(Math.abs(m.prose - m.column) <= 1, `Prose stays in the content column: ${JSON.stringify(m)}`);
+      }
       for (const width of [m.code].filter(value => value !== undefined)) {
-        assert.ok(Math.abs(width - m.column) <= 1, `Wide blocks share the prose column: ${JSON.stringify(m)}`);
+        assert.ok(Math.abs(width - m.prose) <= 1, `Wide blocks share the prose column: ${JSON.stringify(m)}`);
       }
       if (m.table !== undefined) {
-        assert.ok(Math.abs(m.tableViewport - m.column) <= 1 && m.table >= m.tableViewport - 1,
+        assert.ok(m.tableViewport <= m.prose + 1 && m.table >= m.tableViewport - 1,
           `The table scrollport shares the content column: ${JSON.stringify(m)}`);
         // UI regression2026-11-19: a280px task pane stacked seven labels
         // character by character; the earlier wide-column checks missed it.
         if (m.pane < 700) assert.equal(m.headerLines, 1, `Narrow table labels remain readable: ${JSON.stringify(m)}`);
+      }
+      if (ui.data.shortTable) {
+        assert.ok(m.table > m.shortTable * 2 && m.shortTable >= 70 && m.shortTable < 240,
+          `Short table columns stay adjacent: ${JSON.stringify(m)}`);
       }
       assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
       if (!original && !ui.data.legacy && m.pane >= 1600) {

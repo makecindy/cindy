@@ -18,6 +18,7 @@ import type { ChatMessage } from '../../../src/renderer/lib/makerChatStore';
 const paragraph = '大屏可以承载更完整的工作结果，连续文字仍应保持容易阅读的行宽。打开侧栏或拖动分栏时，内容应跟随聊天面板的实际空间收缩，消息、过程与输入框保持同一中心轴。';
 const table = '| 项目 | 适用场景 | 目标 | 当前进展 | 负责人 | 下一步 | 验收方式 |\n|---|---|---|---|---|---|---|\n' +
   Array.from({ length: 4 }, (_, i) => `| 方案 ${i + 1} | 大屏多任务工作区 | 让宽表格利用更多空间 | 等待布局验证 | 设计与开发 | 核对内容与控件边界 | 浅色和深色真实组件截图 |`).join('\n');
+const shortTable = '| 项目 | 状态 |\n|---|---|\n| 验证 | 完成 |';
 const code = '```ts\n' + Array.from({ length: 4 }, (_, i) => `const section${i} = { title: "Responsive workspace", availableWidth: 1920, columns: ["summary", "progress", "owner", "next step", "validation"] };`).join('\n') + '\n```';
 const content = `### 宽屏工作区\n\n${paragraph.repeat(3)}\n\n${table}\n\n${code}\n\n${paragraph}`;
 const textContent = `${paragraph.repeat(3)}\n\n${paragraph.repeat(3)}\n\nA larger workspace should make ordinary reading and structured results easier to use together. The available chat pane determines the content width, so opening a reference panel or expanding the sidebar preserves the same layout relationships.\n\n${paragraph.repeat(2)}`;
@@ -36,13 +37,14 @@ if (ctx.data.splitWidth) splitGroupStore.addSession('width-b', 'width-a', 'right
 export function Task({ sessionIdProp, compactToolbar }: { sessionIdProp?: string; compactToolbar?: boolean } = {}) {
   // Namespace lookup keeps --compare runnable against the original hook,
   // which has no wide-pane export/option; its unchanged914px behavior is replayed.
-  const wideCap = Reflect.get(proportionalWidth, 'TASK_MESSAGE_MAX_WIDTH') ?? 914;
+  const wideCap = Reflect.get(proportionalWidth, 'CHAT_MESSAGE_MAX_WIDTH')
+    ?? Reflect.get(proportionalWidth, 'TASK_MESSAGE_MAX_WIDTH') ?? 914;
   const width = proportionalWidth.useProportionalWidth(914, { expandTo: ctx.data.legacy ? undefined : wideCap });
   const attachmentState = useAttachments(`fixture-task-width-${sessionIdProp ?? 'main'}`);
   return <main className={`flex-1 h-full ${ctx.data.splitWidth ? 'min-w-0' : 'min-w-[400px]'}`} data-task-pane>
     <div ref={width.containerRef} className={`relative h-full w-full${width.isCompact ? ' chat-rail-compact' : ''}`} data-task-width data-wide-cap={wideCap}>
-      <MessageStream workingDir="" historyLoaded messages={messages.map(message => message.clientId === 'answer'
-        ? { ...message, content: ctx.data.textOnly ? textContent : content,
+      <MessageStream workingDir="" historyLoaded simplifiedBotConversation={Boolean(ctx.data.companion)} messages={messages.map(message => message.clientId === 'answer'
+        ? { ...message, content: ctx.data.textOnly ? textContent : ctx.data.shortTable ? `${content}\n\n${shortTable}` : content,
           ...(ctx.data.streaming ? { isStreaming: true, turnCompleted: false } : {}) }
         : message)} contentWidth={width.messageWidth}
         getContentWidth={width.getMessageWidth} bottomPadding={220} />
