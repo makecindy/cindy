@@ -141,21 +141,57 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       if (isClosingMathFence(line)) math = false;
       continue;
     }
+    // Block fences interrupt HTML paragraphs in the document parser too.
+    // Recognize them before HTML/comment exclusions so their literal bodies
+    // cannot become hidden reference definitions after an internal blank line.
+    const opening = parseOpeningCodeFence(line);
+    if (opening) {
+      fence = { ...opening, start: index, lines: [] };
+      html = false;
+      rawHtmlEnd = undefined;
+      paragraph = false;
+      continue;
+    }
+    if (/^\$\$(?:(?!\$\$).)+\$\$$/.test(line.trim())) {
+      html = false;
+      rawHtmlEnd = undefined;
+      paragraph = false;
+      continue;
+    }
+    if (isOpeningMathFence(line)) {
+      math = true;
+      html = false;
+      rawHtmlEnd = undefined;
+      paragraph = false;
+      continue;
+    }
     if (rawHtmlEnd) {
       if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
       continue;
     }
-    const opening = parseOpeningCodeFence(line);
-    if (opening && !comment && !html) {
-      fence = { ...opening, start: index, lines: [] };
-      paragraph = false;
-      continue;
+    if (!comment && !html && line.trim()) {
+      const table = parseTableBlock(lines, index);
+      if (table && !/^(?:#{1,6}\s|\s*>)/.test(line)) {
+        // Consume the body parser's span before interpreting inline comments.
+        for (let row = index; row <= table.endIndex; row++) {
+          comment = advanceHtmlCommentState(lines[row], comment);
+        }
+        index = table.endIndex;
+        paragraph = false;
+        continue;
+      }
+      const list = /^(\s*)(?:[-*]|\d+[.)])\s+/.exec(line);
+      const indent = leadingIndentColumns(line);
+      if (list) listIndent = listIndent === undefined ? indent : Math.min(listIndent, indent);
+      else if (listIndent !== undefined && indent <= listIndent) listIndent = undefined;
     }
     const startsInComment = comment;
     comment = advanceHtmlCommentState(line, comment);
-    if (startsInComment || comment || line.includes('<!--')) { paragraph = false; continue; }
-    if (!html && /^\$\$(?:(?!\$\$).)+\$\$$/.test(line.trim())) { paragraph = false; continue; }
-    if (!html && isOpeningMathFence(line)) { math = true; paragraph = false; continue; }
+    if (startsInComment || comment || line.includes('<!--')) {
+      // An inline comment does not close the paragraph it belongs to.
+      if (!startsInComment) paragraph = !/^(?: {0,3}<!--|#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s|\s*\|)/.test(line);
+      continue;
+    }
     if (!line.trim()) { html = false; paragraph = false; continue; }
     const rawTag = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(line);
     if (rawTag) {
@@ -166,10 +202,6 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     }
     if (/^ {0,3}<\/?[A-Za-z!]/.test(line)) html = true;
     if (html) continue;
-    const list = /^(\s*)(?:[-*]|\d+[.)])\s+/.exec(line);
-    const indent = leadingIndentColumns(line);
-    if (list) listIndent = listIndent === undefined ? indent : Math.min(listIndent, indent);
-    else if (listIndent !== undefined && indent <= listIndent) listIndent = undefined;
     const definition = !paragraph && listIndent === undefined
       ? readMarkdownReferenceDefinition(lines, index) : null;
     if (definition) {

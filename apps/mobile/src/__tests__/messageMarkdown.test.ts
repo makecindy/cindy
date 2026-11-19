@@ -2425,6 +2425,65 @@ describe('reference definition boundaries', () => {
     expect(inlines(source).filter(value => value.type === 'link' && ['site', 'hidden'].includes(value.text))).toEqual([link]);
   });
 
+  // #9440 / PR #11411 P2: unit production parser must preserve fenced text
+  // after HTML and never activate definitions from it. Existing cases isolated
+  // HTML from fences; the minimal failure is <div> + ~~~md + blank + [s]: URL.
+  it('keeps fence boundaries consistent after HTML while definitions stream in', () => {
+    const definition = '[s]: https://example.com/';
+    for (const [open, close] of [['<div>', '</div>'], ['<pre>', '</pre>'], ['<!--', '-->']]) {
+      for (const [fence, end, type] of [['~~~md', '~~~', 'code'], ['$$', '$$', 'math']]) {
+        const source = [open, fence, '', definition, end, close, '', '[site][s]'].join('\n');
+        const blocks = parseMobileMarkdownDocument(source, { srcLines: true }).blocks;
+        expect(blocks.find(block => block.type === type)).toMatchObject({
+          type, srcLine: 1, text: type === 'code' ? '\n' + definition : definition,
+        });
+        expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+        const withRootDefinition = source + '\n\n' + definition;
+        expect(inlines(withRootDefinition).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      }
+    }
+  });
+
+  // PR #11411 P2: inline comments must not let a definition interrupt a
+  // paragraph; standalone comment boundaries and table endings differ.
+  it('keeps definitions literal in open paragraphs containing inline comments', () => {
+    for (const prefix of ['[site][s] <!-- note -->', '[site][s] <!-- note\ncontinued -->']) {
+      const source = prefix + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+    }
+    for (const item of ['- item', '- item <!-- note -->']) {
+      const source = '[site][s]\n\n' + item + '\n\n  [s]: https://wrong.example/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    }
+    for (const block of ['# heading', '> quote', '- item']) {
+      const source = '[site][s]\n\n' + block + ' <!-- note -->\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    const standalone = '[site][s]\n\n<!-- note -->\n[s]: https://example.com/';
+    expect(inlines(standalone).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('collects definitions immediately after tables without leading pipes', () => {
+    for (const table of ['name | value\n--- | ---\na | b', 'name | value\na | b', 'name <!-- note --> | value\n--- | ---\na | b']) {
+      const source = '[site][s]\n\n' + table + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
