@@ -555,6 +555,22 @@ function oneLineDescription(text: string, maxLen: number): string {
   return line.length > maxLen ? line.slice(0, maxLen - 1) + '…' : line;
 }
 
+// A copy of Windows process.env loses case-insensitive lookup. When spellings
+// collide, Node passes the first in lexical order to the child. Keep all bypasses.
+function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
+  const keys = Object.keys(env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key)).sort();
+  for (const key of keys) {
+    const name = key.toUpperCase();
+    if (name === key) continue;
+    if (name === 'NO_PROXY') {
+      env.NO_PROXY = [env.NO_PROXY, env[key]].filter(Boolean).join(',');
+    } else {
+      env[name] ??= env[key];
+    }
+    delete env[key];
+  }
+}
+
 /**
  * NO_PROXY 兜底:pi 的模型请求打的是 Cindy 本地 compat proxy(loopback),bridge 的
  * MCP fetch 也是 localhost —— 用户设了全局 HTTP_PROXY 时这些请求不能进代理隧道。
@@ -874,7 +890,7 @@ function scheduleStaleLocalConfigHomeSweep(
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra)。思考开关走 setThinkingEnabled / thinkingEnabled。 */
-function effortToPiThinkingLevel(effort: Effort): string {
+function effortToPiThinkingLevel(effort: Effort): Exclude<Effort, 'ultra'> {
   return effort === 'ultra' ? 'max' : effort;
 }
 
@@ -937,10 +953,21 @@ export function pickSupportedEffort(
   return null;
 }
 
-/** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
+/**
+ * 从本次启动写入 models.json 的 native model 快照提取可用 effort。
+ *
+ * 快照在这里翻译回 **Cindy 档位空间**：Pi 没有 ultra，能落 `max` 的 native 模型就是
+ * Cindy 的 ultra（见 `effortToPiThinkingLevel`），所以补一个 ultra 让调用方直接
+ * `includes` 判断即可。
+ *
+ * 这层别名只对 native 快照成立：网关快照是 Server/XD 下放的 Cindy efforts，本身就是
+ * 权威能力表，只声明 `max` 不声明 `ultra` 的模型不得被当成支持 ultra——否则恢复/收敛
+ * 会下发 `max` 却把 `mutableEffort` 记成 ultra，`getEffort()` 报出目标并不支持的档位。
+ */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
-  return piSupportedEfforts(model);
+  const efforts = piSupportedEfforts(model);
+  return efforts.includes('max') ? [...efforts, 'ultra'] : efforts;
 }
 
 /**
@@ -5851,6 +5878,14 @@ export class PiAgent extends BaseAgent {
         if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
         spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
       }
+      if (!remote && this.deps.getLocalPiHttpsProxy) {
+        if (process.platform === 'win32') normalizeWindowsProxyEnv(spawnEnv);
+        const proxy = await this.deps.getLocalPiHttpsProxy(spawnEnv);
+        if (proxy) {
+          spawnEnv.HTTPS_PROXY = proxy;
+          spawnEnv.https_proxy = proxy;
+        }
+      }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
@@ -7489,13 +7524,13 @@ export class PiAgent extends BaseAgent {
      * 再不带档位切到不支持 `high` 的模型时 `mutableEffort` 仍是 `high`，直接下发会被
      * Pi 拒绕（开启失败）或与当前能力对不上。
      */
-    const applyThinkingEnabled = async (enabled: boolean): Promise<void> => {
+    const applyThinkingEnabled = async (enabled: boolean, selectedEffort?: Effort): Promise<void> => {
       // 目标模型不支持思考（快照为空）时没有什么可开：下发 off 并**保留**用户原来的
       // 档位记忆。否则同路由重选这类模型会发 xhigh、成功后还把 mutableEffort 改成
       // xhigh，用户之后切回支持 xhigh 的模型就被静默改了档。
       const thinkingUnsupported = activeEffortSnapshot !== undefined && activeEffortSnapshot.length === 0;
       const wanted = enabled && !thinkingUnsupported;
-      const remembered = pickSupportedEffort(activeEffortSnapshot, mutableEffort, startupEffort);
+      const remembered = pickSupportedEffort(activeEffortSnapshot, selectedEffort, mutableEffort, startupEffort);
       // 打开时回到会话当前的期望档位，而不是固定 xhigh：显式开关不该把用户选好的
       // max/medium 抹平——否则紧随其后的切模按 mutableEffort 归一化时又会把它降档。
       // 没有可用期望档位时才回到历史默认 xhigh。
@@ -7516,9 +7551,10 @@ export class PiAgent extends BaseAgent {
       // 发了 off，但那是能力所致，不能被记成「用户主动关闭」——否则之后不带档位切回
       // 推理模型会跳过档位恢复，思考再也打不开。
       thinkingExplicitlyOff = !enabled;
-      // 只在真的打开时更新档位记忆：关掉思考不丢档位——档位是用户的独立选择，
-      // 再打开应回到原档位，而不是回落到启动时的档位。
+      // 关掉思考保留原档位，除非这次选择显式带了新档位；二者是独立意图。
+      // 记忆同样等 RPC 成功后才更新，避免未确认的选择影响后续恢复。
       if (wanted) mutableEffort = targetEffort ?? 'xhigh';
+      else if (selectedEffort) mutableEffort = selectedEffort;
     };
     const switchModel = async (
       model: string,
@@ -7607,8 +7643,14 @@ export class PiAgent extends BaseAgent {
         // 同路由也可能带显式的思考开关（会话当前关思考、调用方重选同一模型并传
         // thinkingEnabled:true）：这里直接返回会让调用方以为开启成功，Pi 实际仍关闭，
         // 发送结算随后还会把这份选择清掉。
+        // An empty snapshot only accepts low as a UI placeholder, not a new remembered tier.
+        const selectedEffort = nextEffortSnapshot?.length === 0 ? undefined : setOpts?.effort;
         if (typeof setOpts?.thinkingEnabled === 'boolean') {
-          await applyThinkingEnabled(setOpts.thinkingEnabled);
+          await applyThinkingEnabled(setOpts.thinkingEnabled, selectedEffort);
+        } else if (selectedEffort) {
+          // A same-route selection still owns its tier; do not reopen explicitly disabled thinking.
+          if (thinkingExplicitlyOff) mutableEffort = selectedEffort;
+          else await applyThinkingEnabled(true, selectedEffort);
         }
         return;
       }

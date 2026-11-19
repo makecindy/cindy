@@ -99,6 +99,7 @@ import {
   SESSION_SYNC_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
@@ -117,6 +118,7 @@ import {
   type PushOwnerStamp,
   type Topic,
 } from '@cindy/device-link';
+import { withoutPluginEngineSwitchIntent } from './pluginEngineSwitchIntentPush.js';
 import {
   DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
   type MobileVoiceDictionaryLearningRequest,
@@ -2540,6 +2542,12 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
     let projected = projectedPayloadFor(dst);
+    // 「待切到插件引擎」的意图只给认识它的控制端；旧控制端看到的是「没有待切换」，
+    // 不会把插件引擎显示成 Claude Code。
+    if (channel === 'local-db:sessions:patched'
+      && !subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1)) {
+      projected = withoutPluginEngineSwitchIntent(projected);
+    }
     if (listMessage && receivesListMessages(dst)) {
       if (channel === 'local-db:messages:created') {
         const push = projected as { message: Record<string, unknown> };

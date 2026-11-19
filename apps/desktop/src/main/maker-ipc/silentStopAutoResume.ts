@@ -27,6 +27,8 @@ export const SILENT_STOP_SESSION_BREAKER_LIMIT = 6;
 export const SILENT_STOP_RESUME_MIN_INTERVAL_MS = 5_000;
 /** 自动补发的续跑消息正文(固定常量;作为普通 user 消息 append,不扰动缓存前缀)。 */
 export const SILENT_STOP_RESUME_PROMPT = '继续';
+/** silent-stop done 之后等多久再问守卫要决策(让本次 turn-end 的落库/收口先走完，也给用户恰好发消息留出让位窗口)。 */
+export const SILENT_STOP_DECISION_DELAY_MS = 1_500;
 
 export type SilentStopDecision =
   | { action: 'resume' }

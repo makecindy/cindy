@@ -453,6 +453,7 @@ function createRunnerHarness(
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
     bootstrapSession?: MakerScheduleRunnerDeps['bootstrapSession'];
     applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
+    admitPluginEngine?: MakerScheduleRunnerDeps['admitPluginEngine'];
   } = {},
 ) {
   const logger = createLogger();
@@ -499,6 +500,7 @@ function createRunnerHarness(
       return { status: 'applied' as const };
     }),
     resolveModelSelection: opts.resolveModelSelection,
+    admitPluginEngine: opts.admitPluginEngine,
   });
   return {
     runner,
@@ -1121,6 +1123,39 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(h.session.setModel).not.toHaveBeenCalled();
     expect(ctx.onTurnActive).not.toHaveBeenCalled();
     expect(h.listenerCount()).toBe(0);
+  });
+
+  // Standard regression for PR #11549: exercise fire and the real dispatch callbacks.
+  // The direct-send fixture bypassed both queue admission points for a fresh ACP task.
+  it.each([true, false])('dispatches a fresh ACP run only if its engine is still enabled (%s)', async (enabled) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
+    mocks.setSessionProvider.mockImplementation((_id, providerId) => {
+      mocks.getSessionProvider.mockReturnValue(providerId);
+    });
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(() => ({ model: 'plugin-model', effort: '' }));
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, { admitPluginEngine });
+    vi.mocked(maker.isSessionAlive).mockReturnValue(false);
+    const ctx = createFireContext();
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'acp', modelAgentKind: 'acp', targetSessionId: undefined, workingDir: '/work',
+      model: 'plugin-model', providerId: 'acp-plugin:test:engine',
+    }), ctx);
+    const outcome = fire.then(result => ({ result }), error => ({ error }));
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    if (!enabled) admitPluginEngine.mockImplementation(() => { throw new Error('plugin disabled'); });
+    await queue.accept();
+    if (enabled) {
+      await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+      h.emit({ type: 'done', data: {} });
+      expect(await outcome).toMatchObject({ result: { sessionId: SESSION_ID } });
+      expect(ctx.onTurnActive).toHaveBeenCalledOnce();
+    } else {
+      expect(await outcome).toMatchObject({ error: { message: expect.stringContaining('plugin disabled') } });
+      expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    }
+    expect(admitPluginEngine).toHaveBeenCalledTimes(2);
   });
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
@@ -3734,6 +3769,10 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     });
     const queue = createQueueHarness({ busy: false });
     const { runner, maker } = createRunnerHarness(harness.session, queue.deps);
+    vi.mocked(maker.createSession).mockImplementation(async options => {
+      Object.assign(saved, { workspaceKind: options.workspaceKind, projectDir: options.projectDir });
+      return harness.session;
+    });
     vi.mocked(maker.isSessionAlive).mockReturnValue(false);
     const ctx = createFireContext();
     const broadcasts: Record<string, unknown>[] = [];
@@ -3747,7 +3786,7 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
       expect(broadcasts).toEqual([]);
       release();
       await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
-      expect(broadcasts[0]).toMatchObject({ source: 'scheduler', workspaceKind: 'project' });
+      expect(broadcasts[0]).toMatchObject({ source: 'scheduler', workspaceKind: 'dialogue', projectDir: null });
     } finally {
       release();
       ctx.abortController.abort();

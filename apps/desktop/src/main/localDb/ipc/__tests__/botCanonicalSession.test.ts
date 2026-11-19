@@ -30,7 +30,8 @@ import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosav
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
+import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
@@ -520,8 +521,9 @@ async function invoke(channel: string, body: unknown): Promise<any> {
 const capabilityDeps = {
   getMaker, getPluginRegistry, isBotToolsetAvailable,
   resolveBotAgentKind: async (): Promise<AgentKind | null> => 'pi',
-  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: AgentKind; remoteHostId?: string }) => buildBotMcpCatalog({
-    agentKind, remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
+  // Same narrowing as the production wiring (maker-host/index.ts): Bot catalogs are built-in only.
+  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: EngineKind; remoteHostId?: string }) => buildBotMcpCatalog({
+    agentKind: requireBuiltinAgentKind(agentKind, 'teammate tools'), remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
     customServers: h.customMcpConfigs.map((config) => ({ ...config, updatedAt: 1 })),
   }),
 };
@@ -2606,6 +2608,8 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'ROOT_UNAVAILABLE' });
     const first = await topicInvoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
     expect(first).toMatchObject({ ok: true, created: true });
+    expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(first.sessionId))
+      .toEqual({ title: 'Plan the launch post' });
     await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
     const canonical = h.sqlite!.prepare('SELECT working_dir AS workingDir, permission_mode AS permissionMode FROM sessions WHERE id = ?')
@@ -2968,7 +2972,9 @@ describe('Bot canonical Session lifecycle', () => {
         inputs.push({ kind: 'toolsets', remoteHostId: input.remoteHostId });
         return [{
           id: 'xdt_helper', name: 'Helper', essential: true,
-          available: helperEnabled && isBotToolsetAvailableOnTarget({ ...input, toolsetId: 'xdt_helper' }),
+          available: helperEnabled && isBotToolsetAvailableOnTarget({
+            ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools'), toolsetId: 'xdt_helper',
+          }),
         }];
       },
     });
@@ -3802,7 +3808,7 @@ describe('Bot canonical Session lifecycle', () => {
       const snapshot = await hydrateBotProfileRuntime(opts, {
         listMcpServers: async ({ agentKind: actualRoute, remoteHostId }) => {
           const catalog = buildBotMcpCatalog({
-            agentKind: actualRoute, remoteHostId, providers, builtinNames: [], customServers: configs,
+            agentKind: requireBuiltinAgentKind(actualRoute, 'teammate tools'), remoteHostId, providers, builtinNames: [], customServers: configs,
           });
           expect(JSON.stringify(catalog)).not.toMatch(/FAKE_SECRET|FAKE_TOKEN|example.invalid|Authorization/);
           return catalog;

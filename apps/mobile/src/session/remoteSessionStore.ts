@@ -77,6 +77,7 @@ import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { sessionAgentSwitchIntentPatch } from '@/session/sessionAgentSwitch';
 import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
@@ -1841,6 +1842,7 @@ function preserveSessionRuntimeFields(
     'companion',
     'taskTeammate',
     'agentSwitchIntent',
+    'pluginEngineSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
     'runtimeEffective',
@@ -4813,7 +4815,12 @@ export const remoteSessionStore = {
           localRow as unknown as Record<string, unknown> | undefined,
         );
         if (Object.keys(filtered).length > 0) {
-          this.applySessionPatch(deviceId, sessionId, filtered as Partial<RemoteSession>);
+          // 意图投影拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)，既有内置链路
+          // 永远看不到 targetAgentKind = 'acp'。
+          const split = Object.prototype.hasOwnProperty.call(filtered, 'agentSwitchIntent')
+            ? { ...filtered, ...sessionAgentSwitchIntentPatch(filtered.agentSwitchIntent) }
+            : filtered;
+          this.applySessionPatch(deviceId, sessionId, split as Partial<RemoteSession>);
         }
       }
       return;

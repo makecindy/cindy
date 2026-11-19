@@ -48,6 +48,7 @@ import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh 
 import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
+  AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
@@ -207,9 +208,9 @@ import {
 import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
-  isCodexModelUnavailableError,
-  CODEX_MODEL_UNAVAILABLE_MESSAGE,
+  isCodexAccessRejectedError,
   CODEX_MODEL_UNAVAILABLE_REASON,
+  CODEX_ACCOUNT_ACCESS_DENIED_REASON,
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
@@ -4681,7 +4682,15 @@ assertRouteCurrent();
      * 每个 per-request 的事实都住在自己的条目里, 请求 settle 时整条删掉, 天然不串味;
      * "有没有 start 在飞"一律由 `inFlightStarts.size` 派生, 不再有第二份真相。
      */
+    type UsageRoute = { providerId: string | null; credentialMode: AgentCredentialMode | null };
+    const activeUsageRoute = (): UsageRoute => ({
+      providerId: activeTurnProviderId ?? null,
+      credentialMode: (activeTurnProviderId === opts.providerId ? sessionCredentialMode :
+        this.deps.isCodexAccountProvider?.(activeTurnProviderId) ? 'oauth-bearer' :
+          resolveAgentCredentialMode({ agentKind: 'codex', providerId: activeTurnProviderId, model: activeTurnModel }) ?? sessionCredentialMode) ?? null,
+    });
     const inFlightStarts = new Map<number, {
+      usageRoute: UsageRoute;
       quarantined: boolean;
       terminalSettled: boolean;
       capabilitySelectionText: string;
@@ -4712,6 +4721,7 @@ assertRouteCurrent();
     ): number => {
       const seq = ++turnStartSeq;
       inFlightStarts.set(seq, {
+        usageRoute: activeUsageRoute(),
         quarantined: false,
         terminalSettled: false,
         capabilitySelectionText,
@@ -4763,6 +4773,7 @@ assertRouteCurrent();
      * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
      */
     const turnOriginByTurnId = new Map<string, {
+      usageRoute: UsageRoute;
       startSeq: number | null;
       sendGen: number;
       startedAtMs: number;
@@ -7057,6 +7068,7 @@ assertRouteCurrent();
     const toTurnInput = async (
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
+      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -7074,7 +7086,9 @@ assertRouteCurrent();
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(content.trim());
+      const slash = parseLeadingSlashToken(
+        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
+      );
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -7090,7 +7104,13 @@ assertRouteCurrent();
           name: pinnedSkill.name,
           path: pinnedSkill.path,
         }];
-        const prompt = slash.rest.trim();
+        // Authenticate the command from Host-owned source text, but assemble the
+        // prompt from the wire text. Notes can precede the command and library
+        // mappings can follow it; neither may disappear when using a pinned Skill.
+        const wireSlash = parseLeadingSlashToken(content.trim());
+        const prompt = (wireSlash?.name.toLowerCase() === normalizedSlashName
+          ? wireSlash.rest
+          : content).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
@@ -7383,12 +7403,13 @@ assertRouteCurrent();
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;
       if (reportedHelperState === state) return;
-      reportedHelperState = state;
-      const message = state === 'unverified'
-        ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
-        : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
       log.warn('Codex expected helper readiness check failed', { threadId: checkedThreadId, state });
-      const code = state === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
+      // The helper can be usable even if the status query times out. Keep
+      // the last confirmed warning until an ordinary send can check again.
+      if (state === 'unverified') return;
+      reportedHelperState = state;
+      const message = 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
+      const code = 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
       eventQueue.push({ type: 'error', data: { code, message, isTerminal: false }, source: 'codex' });
       // Recoverable error banners disappear on the next event. The existing
       // independent notice channel keeps this diagnostic in task history without
@@ -9460,7 +9481,8 @@ assertRouteCurrent();
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
       const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
-      const isModelRejection = timeoutReason === CODEX_MODEL_UNAVAILABLE_REASON;
+      const isModelRejection = timeoutReason === CODEX_MODEL_UNAVAILABLE_REASON
+        || timeoutReason === CODEX_ACCOUNT_ACCESS_DENIED_REASON;
       const deferTurnCleanupUntilInterrupt =
         isModelRejection || timeoutReason === 'codex_reconnect_stalled' ||
         timeoutReason === 'upstream_response_idle_timeout';
@@ -11500,7 +11522,7 @@ assertRouteCurrent();
       deadTurnId: string,
       error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
     ): boolean => {
-      if (isCodexModelUnavailableError(error)) return false;
+      if (isCodexAccessRejectedError(error)) return false;
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
@@ -11594,7 +11616,7 @@ assertRouteCurrent();
       const rejectedSummaryRecovery = pendingRecovery?.reason === SUMMARY_RECOVERY
         && !!turn.error && !canRecoverRemoteCompaction(turn.id, turn.error);
       if (recoveryState && pendingRecovery
-        && (isCodexModelUnavailableError(turn.error) || rejectedSummaryRecovery)) {
+        && (isCodexAccessRejectedError(turn.error) || rejectedSummaryRecovery)) {
         // The authoritative error can refine a preliminary rejection into an
         // exhausted account or another failure that must not trigger a summary.
         recoveryState.pendingAutomaticRecovery = null;
@@ -11746,9 +11768,18 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
+      // Display only: lets the finished message show the chart the turn ran with.
+      const codexGenerationTrace = translatorRt.generationTimingReliable
+        ? translatorRt.tokenSpeed.trace() : undefined;
       const generationDurationMs = translatorRt.generationSegmentComplete
         ? codexGenerationDurationMs(translatorRt) : undefined;
+      // The desktop can host several app-servers with different credentials at
+      // once. Preserve this runtime's dispatch context when settling its usage.
       const codexDoneUsage = {
+        ...(!opts.remoteHostId ? { execution: {
+          ...(turnOriginByTurnId.get(turn.id)?.usageRoute ?? activeUsageRoute()),
+          model: turnOriginByTurnId.get(turn.id)?.model ?? activeTurnModel,
+        } } : {}),
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
         reasoningTokens: realTurnUsageSegments.reduce(
@@ -11768,6 +11799,7 @@ assertRouteCurrent();
         ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
           ? { turnDurationMs: turn.durationMs }
           : {}),
+        ...(codexGenerationTrace ? { generationTrace: codexGenerationTrace } : {}),
       };
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,
@@ -12920,6 +12952,7 @@ assertRouteCurrent();
           ? startedServiceTier
           : existingTurnOrigin?.serviceTier;
         turnOriginByTurnId.set(params.turn.id, {
+          usageRoute: startedOwner?.[1].usageRoute ?? existingTurnOrigin?.usageRoute ?? activeUsageRoute(),
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
           startedAtMs:
@@ -13028,6 +13061,12 @@ assertRouteCurrent();
             generation: usageExecutionGeneration,
             total: { ...cumulativeTotal },
           });
+          const observed = opts.resolveUsagePriceVariant?.({
+            threadId: params.threadId,
+            inputTokens: totalInput,
+            outputTokens: last.outputTokens ?? 0,
+            cacheReadTokens: cached,
+          });
           usageTracker.ingestApiCallUsage({
             inputTokens: uncachedInput,
             // outputTokens already includes the reasoning subset. Adding
@@ -13036,13 +13075,9 @@ assertRouteCurrent();
             cacheReadTokens: cached,
             cacheCreateTokens: cacheWrite,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
-            model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
-            priceVariant: opts.resolveUsagePriceVariant?.({
-              threadId: params.threadId,
-              inputTokens: totalInput,
-              outputTokens: last.outputTokens ?? 0,
-              cacheReadTokens: cached,
-            }) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
+            model: (typeof observed === 'object' ? observed.model : undefined)
+              ?? turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            priceVariant: (typeof observed === 'object' ? observed.priceVariant : observed) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
               : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)
                 ? 'priority'
@@ -13626,15 +13661,16 @@ assertRouteCurrent();
         if (
           !isTerminalError && !isTransportError && isTurnInFlight &&
           params.threadId === threadId && params.turnId && params.turnId === currentTurnId &&
-          isCodexModelUnavailableError(params.error)
+          isCodexAccessRejectedError(params.error)
         ) {
           if (reconnectStallCleanupTurnId === params.turnId || skipIfStaleHost('turn/interrupt')) return;
           if (overloadRetry?.pendingAutomaticRecovery?.deadTurnId === params.turnId) {
             overloadRetry.pendingAutomaticRecovery = null;
           }
+          const rejection = classifyCodexError(params.error);
           interruptTurnForProviderFailure({
-            reason: CODEX_MODEL_UNAVAILABLE_REASON,
-            message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+            reason: rejection.reason,
+            message: rejection.message,
             logLabel: 'Codex rejected the selected model — interrupting current turn',
             ignorePendingTools: true,
             modelRejectionError: params.error,
@@ -13776,7 +13812,7 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true || isCodexModelUnavailableError(effectiveParams.error)) return null;
+            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error)) return null;
             const rawMessage = effectiveParams.error?.message ?? '';
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
@@ -14111,6 +14147,7 @@ assertRouteCurrent();
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
+            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
         } catch (e) {
           isTurnStartPending = false;
@@ -14218,6 +14255,7 @@ assertRouteCurrent();
               // completed 已经把该 turn 记为终态，下面不会重新激活；这里仅补权威
               // 归属，供 start finally flush completed 后的一次 HTTP 重投校验。
               turnOriginByTurnId.set(resp.turn.id, {
+                usageRoute: startEntry.usageRoute,
                 startSeq: ownerSeq,
                 sendGen: startEntry.sendGen,
                 startedAtMs: startEntry.startedAtMs,
@@ -14329,6 +14367,7 @@ assertRouteCurrent();
                 ? startEntry.serviceTier
                 : turnOriginByTurnId.get(resp.turn.id)?.serviceTier;
               turnOriginByTurnId.set(resp.turn.id, {
+                usageRoute: startEntry?.usageRoute ?? turnOriginByTurnId.get(resp.turn.id)?.usageRoute ?? activeUsageRoute(),
                 startSeq: ownerSeq,
                 sendGen: mySendGen,
                 startedAtMs:

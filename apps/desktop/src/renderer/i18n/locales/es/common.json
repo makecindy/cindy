@@ -882,8 +882,7 @@
         "loading": "Leyendo cuota…",
         "unavailable": "No se puede leer la cuota de esta computadora en este momento",
         "none": "Este proveedor no tiene información de cuota",
-        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota",
-        "share": "La cuota no se muestra para computadoras compartidas por otros"
+        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota"
       },
       "runningCount_one": "{{count}} tarea en ejecución",
       "runningCount_other": "{{count}} tareas en ejecución",
@@ -999,8 +998,8 @@
       "loading": "Cargando imagen…"
     },
     "moveToolbar": "Mover la barra de herramientas hacia la izquierda o hacia la derecha",
-    "hint": "Haz clic para seleccionar una ventana o un elemento, o arrastra para seleccionar un área · Desplázate para cambiar el alcance · Espacio: pantalla completa · C: copiar color · Esc: salir",
-    "hintWithLast": "Haz clic para seleccionar una ventana o un elemento, o arrastra para seleccionar un área · Desplázate para cambiar el alcance · Espacio: pantalla completa · R: última área · C: copiar color · Esc: salir",
+    "hint": "Haz clic para seleccionar una ventana o un elemento, o arrastra para seleccionar un área · Desplázate para cambiar el alcance · Espacio: seleccionar toda la ventana · C: copiar color · Esc: salir",
+    "hintWithLast": "Haz clic para seleccionar una ventana o un elemento, o arrastra para seleccionar un área · Desplázate para cambiar el alcance · Espacio: seleccionar toda la ventana · R: última área · C: copiar color · Esc: salir",
     "copy": "Copiar",
     "cancel": "Salir de la captura de pantalla",
     "captureFailed": "No se pudo capturar la pantalla",
@@ -2841,6 +2840,8 @@
       "autoUpdateSaveFailed": "No se pudo guardar la configuración de actualización automática",
       "analyticsLabel": "Estadísticas de uso",
       "analyticsDescription": "Nos ayuda a comprender con qué frecuencia se inicia y se mantiene en uso Cindy. Envía información sobre el dispositivo y el entorno de uso, como el modelo de tu dispositivo, la versión del sistema operativo, la versión de la aplicación y un identificador del dispositivo, además de tu ID de cuenta una vez que hayas iniciado sesión; nunca conversaciones, archivos ni indicaciones. Al desactivarlo, el envío se detiene de inmediato.",
+      "productTokenUsage": "Compartir uso de modelos",
+      "productTokenUsageHint": "Tu región agrupa los nuevos tokens de esta cuenta en este dispositivo por origen y modelo antes de enviarlos a TapDB.",
       "analyticsEnabledToast": "Estadísticas de uso habilitadas",
       "analyticsDisabledToast": "Estadísticas de uso deshabilitadas",
       "analyticsSaveFailed": "No se pudo guardar la configuración de estadísticas de uso",
@@ -4172,6 +4173,25 @@
         "refreshFailed": "No se pudo actualizar la lista de modelos. Vuelve a intentarlo más tarde.",
         "refreshReconnect": "No se pudo actualizar la lista de modelos. Vuelve a conectar este proveedor e inténtalo de nuevo.",
         "refreshFetchDisabled": "La recuperación remota del catálogo de modelos está deshabilitada: se omitió la actualización",
+        "withdrawn": {
+          "refreshFound": "Modelos que ya no ofrece el servicio: {{count}}",
+          "refreshAdded": "Modelos nuevos: {{added}}. Ya no ofrecidos: {{count}}",
+          "refreshSuspicious": "Modelos no devueltos esta vez: {{count}}. Es posible que la lista esté incompleta",
+          "refreshAddedSuspicious": "Modelos nuevos: {{added}}. No devueltos esta vez: {{count}}. Es posible que la lista esté incompleta",
+          "review": "Revisar modelos",
+          "heading": "Modelos que ya no se ofrecen",
+          "intro": "Al actualizar {{provider}}, el servicio no devolvió estos modelos. Selecciona los que quieres quitar. Los motores que todavía los incluyen no se ven afectados.",
+          "suspicious": "Faltan muchos más modelos de lo normal. Es posible que el servicio haya devuelto una lista incompleta. Vuelve a actualizar más tarde para confirmarlo o selecciona solo los modelos que sabes que se retiraron.",
+          "selectAll": "Seleccionar todos",
+          "selected": "{{count}} de {{total}} seleccionados",
+          "consequence": "Los modelos quitados dejan de aparecer en la selección de modelos y donde se usen aparecerán como no disponibles. Si el servicio vuelve a ofrecerlos, actualiza para añadirlos de nuevo.",
+          "confirm": "Quitar modelos ({{count}})",
+          "cancel": "Conservar modelos",
+          "removed": "Modelos quitados: {{count}}",
+          "cleanupIncomplete": "Modelos quitados: {{count}}. No se pudieron borrar algunos ajustes de visibilidad o desactivación",
+          "stale": "La conexión cambió y no hay modelos para quitar. Vuelve a actualizar para revisarlos",
+          "removeFailed": "No se pudieron quitar los modelos"
+        },
         "disableModel": "Deshabilitar este modelo",
         "paymentRequired": "De pago",
         "paymentUnlock": "Pagar para desbloquear",
@@ -6878,6 +6898,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Usar solo Agent-Net",
         "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto.",
         "peerSwitch": {
@@ -8022,6 +8045,7 @@
           "accessDenied": "Esta operación del complemento no está permitida o se canceló.",
           "notConfigured": "El mercado de complementos no está disponible en este entorno.",
           "invalidPackage": "Este paquete de complemento no es válido y no se puede instalar. Contacta al editor.",
+          "downloadAuthorizationExpired": "La autorización de descarga del complemento ha caducado. Comprueba la fecha y la hora del sistema antes de iniciar una nueva instalación.",
           "downloadTimeout": "Se agotó el tiempo de descarga del complemento. Inténtalo más tarde.",
           "downloadFailed": "No se pudo descargar el complemento. Revisa tu conexión e inténtalo de nuevo.",
           "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero falta redirectPort en la misma configuración de OAuth, por lo que no se puede instalar desde el mercado de complementos. Contacta al editor para que agregue el campo y publique una nueva versión.",
@@ -8283,6 +8307,7 @@
         "cindyEmbedText": "Puede enviar texto para convertirlo en vectores (para búsqueda semántica)",
         "cindyModelsDecisions": "Puede usar modelos de decisión (consume tu cuota de modelos)",
         "cindyModelsRerank": "Puede usar modelos de reordenación (consume tu cuota de modelos)",
+        "cindyModelsMediaRequest": "Puede generar imágenes y vídeos, sintetizar voz y transcribir audio con Cindy AI (consume tu cuota de modelos)",
         "cindyEmbedTextDetail": "El texto se envía al modelo de embeddings del sistema y se convierte en números, hasta {{max}} elementos por llamada. Pueden aplicarse cargos por uso del modelo. Los vectores van solo al complemento; no se escribe nada en tu propia biblioteca.",
         "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
         "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
@@ -8341,6 +8366,8 @@
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
         "agentModelPreferences": "Leer y editar tus modelos favoritos, y leer tus modelos usados recientemente",
         "agentModelPreferencesDetail": "Puede leer los modelos favoritos y los usados recientemente en esta computadora, incluida la intensidad de razonamiento y Fast, y añadir, cambiar o quitar favoritos. Los cambios también aparecen en el selector de modelo de Cindy. Los modelos elegidos en el complemento no se añaden a los recientes. No incluye modelos de tus otras computadoras ni compartidos contigo, y no comparte credenciales.",
+        "harnesses": "Proporciona motores de ejecución: {{names}}",
+        "harnessesDetail": "En tus tareas, puede leer y escribir en el directorio de trabajo, ejecutar comandos y usar las mismas herramientas de Cindy que el Pi integrado.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
@@ -9580,6 +9607,31 @@
     "preparing": "Preparando el inicio de sesión",
     "preparingSubtitle": "Cargando los métodos disponibles para esta región",
     "unavailable": "Inicio de sesión no disponible ahora",
+    "hostUnavailable": {
+      "title": "Servicio en segundo plano de Cindy",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estos datos pertenecen a una cuenta distinta del inicio de sesión guardado por el servicio en segundo plano de Cindy.",
+          "action": "Ejecuta cindy-host login con la cuenta original, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Otra aplicación de Cindy está usando estos datos.",
+          "action": "Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "No se pueden abrir los datos de esta cuenta.",
+          "action": "Si has usado hace poco una versión más reciente de Cindy, actualiza primero Cindy en este ordenador a la última versión, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si no, ejecuta cindy-host status para ver el motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "El servicio en segundo plano de Cindy no pudo conectar con el servicio de inicio de sesión al iniciarse.",
+          "action": "Comprueba tu red, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "El servicio en segundo plano de Cindy encontró un error al iniciarse.",
+          "action": "Reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si vuelve a ocurrir, ejecuta cindy-host status para ver el motivo."
+        }
+      }
+    },
     "retry": "Reintentar",
     "browserWaiting": "Completa la verificación en tu navegador",
     "browserCallback": {
@@ -9850,6 +9902,10 @@
     "cacheLine": "Desglose de caché: lectura {{read}} · escritura {{create}} · tasa de aciertos {{rate}}",
     "cacheLineNoRate": "Desglose de caché: lectura {{read}} · escritura {{create}}",
     "stepsLine": "Solicitudes este turno: {{steps}} · ~{{context}} de contexto cada una",
+    "traceChartLabel": "Velocidad de generación y razonamiento por solicitud en este turno",
+    "traceRequests": "Solicitudes este turno: {{requests}}",
+    "traceThinkingShare": "Razonamiento: {{share}} de la salida",
+    "traceThinkingTokens": "Razonamiento: {{thinking}} tokens",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -13700,6 +13756,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versión todavía no admite este tipo de contenido multimedia de WeChat.",
+          "delayedReply": "Respuesta retrasada, preparada el {{createdAt}} para tu mensaje recibido el {{receivedAt}}. El contenido puede estar desactualizado.",
+          "delayedReplyQuestion": "Mensaje original: {{question}}",
           "stillProcessing": "Sigo trabajando en ello…",
           "ownerOnlyCommands": "Solo el propietario puede usar los comandos del bot.",
           "companionManagedCommand": "Abre a este compañero en Cindy: el modelo se cambia en la configuración del compañero y los permisos, debajo del cuadro de entrada de la conversación.",
@@ -14290,6 +14348,32 @@
             "label": "Acceso completo",
             "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar cada vez",
+            "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
+          },
+          "default": {
+            "label": "Predeterminado",
+            "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
+          },
+          "acceptEdits": {
+            "label": "Aceptar ediciones",
+            "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
+          },
+          "plan": {
+            "label": "Solo planificar",
+            "description": "El agente solo analiza y planifica; no edita archivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir todo",
+            "description": "Todos los permisos que pida el Agent se conceden automáticamente."
+          }
         }
       }
     },
@@ -14764,6 +14848,16 @@
       "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
       "switchToQueue": "Poner en cola por defecto"
+    },
+    "pluginEngines": {
+      "group": "Motores de complementos",
+      "genericName": "Motor de complemento",
+      "defaultModel": "Modelo predeterminado",
+      "defaultModelHint": "Usa la configuración predeterminada del motor",
+      "unavailable": "No disponible",
+      "engineMissing": "El complemento que proporciona este motor está desactivado o desinstalado.",
+      "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar.",
+      "modelChangeFailed": "No se pudo cambiar el modelo"
     }
   },
   "onboarding": {
@@ -15067,6 +15161,7 @@
       "rateHistory": "Historial de velocidad de generación",
       "outputTotal": "Salida",
       "observedPeak": "Máxima",
+      "thinkingShare": "Razonamiento",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Último intervalo de generación. Excluye herramientas y esperas.",
@@ -15930,6 +16025,7 @@
       "REMOTE_AGENT_BUSY": "Se están ejecutando demasiadas sesiones en la otra computadora. Termina algunas y vuelve a intentarlo.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
@@ -16568,6 +16664,7 @@
       },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todo",
+      "filterHideAutomations": "Ocultar tareas automatizadas",
       "filterCreatorsNone": "Ocultar todo",
       "filterSelectedCreators": "Seleccionados: {{count}}",
       "filterProjectsHeading": "Proyectos",
@@ -17493,6 +17590,7 @@
       "promote": {
         "menu": "Convertir en automatización del proyecto",
         "noWorkingDir": "No se puede convertir una programación sin directorio de trabajo",
+        "pluginEngine": "Los motores de complemento solo funcionan en este equipo; esta programación no se puede convertir en automatización del proyecto",
         "success": "Se convirtió en automatización del proyecto"
       },
       "editProject": {
@@ -17769,6 +17867,7 @@
         "selectThread": "Selecciona una sesión de destino",
         "selectProject": "Selecciona un directorio de proyecto",
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
+        "pluginEngineUnavailable": "El motor de complemento seleccionado no está disponible ahora. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",
@@ -19384,6 +19483,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
+      "hostProfileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "hostProfileInUseByDesktopAtStart": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que el servicio en segundo plano de Cindy no se ha iniciado. Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir esta ventana de Cindy.",
+      "hostProfileInUseByDesktopRetry": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que ahora no se puede cambiar. Ciérrala y vuelve a intentarlo.",
       "openFileFailed": "No se puede abrir el archivo en el sistema",
       "emptyResponse": "El modelo no devolvió contenido. Inténtalo de nuevo. Si el contexto es muy largo, cambia de modelo.",
       "turnFailed": "La tarea falló (el modelo no devolvió detalles del error); inténtalo de nuevo.",
@@ -19976,7 +20078,8 @@
         "validityValue_many": "{{count}} de días tras el canje",
         "validityValue_other": "{{count}} días tras el canje",
         "claimBy": "Canjear antes del",
-        "destination": "Se añade a"
+        "destination": "Se añade a",
+        "validityPermanent": "No caduca"
       },
       "doneTitle": "{{amount}} añadidos",
       "doneDescription": "Se añadió a tu Saldo promocional. Válido hasta el {{date}}.",
@@ -19992,10 +20095,13 @@
         "alreadyClaimed": "Esta tarjeta de regalo ya se ha canjeado.",
         "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
         "voided": "Esta tarjeta de regalo se ha anulado.",
+        "voidedPurchased": "Esta tarjeta de regalo no se puede canjear por ahora.",
         "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
         "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
         "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
-      }
+      },
+      "doneDescriptionPurchased": "Se añadió a tu Saldo de recargas. No caduca.",
+      "pendingDescriptionPurchased": "Se está añadiendo {{amount}} y aparecerá en breve en tu Saldo de recargas. No hace falta canjearla de nuevo."
     },
     "usage": {
       "title": "Uso del saldo",
@@ -20041,7 +20147,10 @@
         "noPayment": "No requiere pago",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Página siguiente"
+        "next": "Página siguiente",
+        "giftCard_one": "Tarjeta de regalo × {{count}}",
+        "giftCard_many": "Tarjetas de regalo × {{count}}",
+        "giftCard_other": "Tarjetas de regalo × {{count}}"
       },
       "count": "{{count}} pedidos",
       "orderId": "N.º {{id}}",
@@ -20270,6 +20379,125 @@
         "MONTH": "Incluye {{amount}} cada mes",
         "YEAR": "Incluye {{amount}} cada año",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar tarjeta de regalo",
+      "title": "Comprar tarjeta de regalo",
+      "subtitle": "Regálala o quédatela. Al canjearla se añade a tu Saldo de recargas y nunca caduca.",
+      "previewLabel": "Lo que recibirá",
+      "sameCards_one": "{{count}} tarjeta con su propio código de canje",
+      "sameCards_many": "{{count}} tarjetas con el mismo diseño, importe y mensaje, cada una con su propio código",
+      "sameCards_other": "{{count}} tarjetas con el mismo diseño, importe y mensaje, cada una con su propio código",
+      "fields": {
+        "face": "Diseño",
+        "amount": "Importe",
+        "quantity": "Cantidad",
+        "sender": "De",
+        "senderHint": "Se mostrará como «De {{sender}}»",
+        "senderPlaceholder": "Tu nombre",
+        "message": "Mensaje (opcional)",
+        "messagePlaceholder": "Unas palabras para quien la reciba",
+        "tooLong": "Máximo {{max}} caracteres",
+        "paymentMethod": "Método de pago"
+      },
+      "decrease": "Una tarjeta menos",
+      "increase": "Una tarjeta más",
+      "quantityHint": "Hasta {{limit}} tarjetas cada {{hours}} horas · te quedan {{remaining}}",
+      "quantityLimitReached": "Ya compraste el máximo de {{limit}} tarjetas en {{hours}} horas. Vuelve a intentarlo más tarde.",
+      "orderAmountCap": "Hasta {{amount}} por pedido",
+      "totalDetail_one": "{{count}} tarjeta × {{amount}}",
+      "totalDetail_many": "{{count}} tarjetas × {{amount}}",
+      "totalDetail_other": "{{count}} tarjetas × {{amount}}",
+      "pay": "Continuar al pago",
+      "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "cancel": "Cancelar",
+      "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
+      "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",
+      "checkoutSubtitle_many": "Tarjetas de regalo {{amount}} × {{count}} · se emiten en cuanto se complete el pago",
+      "checkoutSubtitle_other": "Tarjetas de regalo {{amount}} × {{count}} · se emiten en cuanto se complete el pago",
+      "faces": {
+        "cindy": "Cindy · Rojo de marca",
+        "cat": "Gato negro · Noche",
+        "bell": "Campana · Festivo",
+        "leap": "Salto · Marfil"
+      },
+      "errors": {
+        "limitReached": "Alcanzaste el límite de compra de tarjetas de regalo. Vuelve a intentarlo más tarde.",
+        "amountTooLarge": "Este pedido supera el límite de pago por pedido. Elige menos tarjetas e inténtalo de nuevo."
+      },
+      "done": {
+        "title_one": "Tu tarjeta de regalo está lista",
+        "title_many": "Tus {{count}} tarjetas de regalo están listas",
+        "title_other": "Tus {{count}} tarjetas de regalo están listas",
+        "pendingTitle": "Tarjeta de regalo pagada",
+        "loading": "Obteniendo las tarjetas de este pedido…",
+        "description": "Envía un enlace de canje a quien quieras: al abrirlo podrá canjear la tarjeta. También puedes quedarte una.",
+        "missing": "El pago se completó. Tus tarjetas aparecerán en Mis tarjetas de regalo en breve.",
+        "cardTitle": "Tarjeta {{index}} · {{amount}}",
+        "cardMeta": "Termina en {{tail}} · {{status}}",
+        "linkHint": "El enlace de canje es la tarjeta: quien lo abra primero se la queda. Envíalo solo a la persona a quien se la regalas.",
+        "viewAll": "Ver mis tarjetas de regalo",
+        "finish": "Listo"
+      },
+      "list": {
+        "title": "Mis tarjetas de regalo",
+        "description": "Envía un enlace de canje a quien quieras: al abrirlo podrá canjear la tarjeta. Las que no regales nunca caducan y puedes canjearlas tú. Al canjearlas se añaden a tu Saldo de recargas.",
+        "count_one": "{{count}} tarjeta",
+        "count_many": "{{count}} tarjetas",
+        "count_other": "{{count}} tarjetas",
+        "loadMore": "Cargar más",
+        "loadFailed": "No se pudieron cargar tus tarjetas de regalo",
+        "retry": "Volver a cargar",
+        "status": {
+          "unclaimed": "Sin canjear",
+          "claimedBy": "Canjeada por {{name}}",
+          "claimed": "Canjeada",
+          "redeemedByYou": "Canjeada por ti",
+          "refunded": "Reembolsada",
+          "onHold": "En proceso, no disponible por ahora"
+        },
+        "meta": {
+          "purchased": "Comprada el {{date}} · termina en {{tail}}",
+          "claimed": "Canjeada el {{date}} · termina en {{tail}}",
+          "redeemed": "Canjeada el {{date}} · termina en {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar enlace de canje",
+        "copied": "Copiado",
+        "more": "Más acciones",
+        "copyCode": "Copiar código de canje",
+        "redeemSelf": "Canjearla yo",
+        "sendEmail": "Enviar por correo"
+      },
+      "toasts": {
+        "linkCopied": "Enlace de canje copiado",
+        "codeCopied": "Código de canje copiado",
+        "copyFailed": "No se pudo copiar. Inténtalo de nuevo.",
+        "unavailable": "Esta tarjeta ya se canjeó o se reembolsó",
+        "revealFailed": "No se pudo obtener el código de canje. Vuelve a intentarlo más tarde.",
+        "emailQueued": "Enviando a {{email}}"
+      },
+      "email": {
+        "title": "Enviar por correo",
+        "description": "Envía el enlace para canjear esta tarjeta al correo de la persona a la que se la regalas. El correo incluye tu nombre y tu mensaje.",
+        "previewLabel": "Recibirá",
+        "previewWithMessage": "“{{message}}” · con el enlace y el código de canje",
+        "previewLinkOnly": "El enlace y el código de canje",
+        "recipient": "Correo del destinatario",
+        "placeholder": "nombre@ejemplo.com",
+        "hint": "Puedes enviarla a cualquier dirección. Quien abra primero el enlace se queda con la tarjeta.",
+        "cooldown": "Podrás volver a enviarla en {{seconds}} s",
+        "invalid": "Escribe un correo válido",
+        "failed": "No se pudo enviar. Inténtalo más tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando a {{email}}",
+          "sent": "Enviada a {{email}}",
+          "failed": "No se pudo enviar a {{email}}",
+          "failedRetry": "No se pudo enviar a {{email}}. Puedes volver a enviarla."
+        }
       }
     }
   },
@@ -21742,14 +21970,14 @@
     },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
-      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "lead": "Si llevas varias tareas a la vez, la bandeja de entrada las agrupa por estado. En Pendientes verás los nuevos resultados y lo que espera tu respuesta.",
       "pending": {
         "title": "Pendientes",
         "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
       },
       "done": {
         "title": "Hecho",
-        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+        "body": "Acostúmbrate a vaciar la bandeja de entrada. Pulsa Hecho cuando hayas atendido una tarea."
       },
       "snooze": {
         "title": "Pospuestas",
@@ -22084,14 +22312,14 @@
     "openFailed": "No se pudo abrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando con Cindy…",
+    "connecting": "Conectando con el servicio en segundo plano de Cindy…",
     "restoring": "Restaurando el estado de las tareas…",
     "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
     "pairing": "Se necesita autorizar la conexión",
-    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste el servicio en segundo plano de Cindy, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Actualiza la configuración de conexión del Host en el terminal de inicio y vuelve a abrir este cliente experimental."
+    "desktopAuthHelp": "Actualiza la configuración de conexión del servicio en segundo plano de Cindy en el terminal de inicio y vuelve a abrir este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "¿Permitir el control remoto de esta computadora?",

@@ -1332,12 +1332,12 @@ class MemoryRelay {
   }
 
   /** 静默掉线（无 link-close）：之后发往该设备的帧在入口处被丢弃。 */
-  disconnect(deviceId: string): void {
+  disconnect(deviceId: string, code = 1006): void {
     const member = this.members.get(deviceId);
     if (!member?.ws) return;
     const ws = member.ws;
     member.ws = null;
-    ws.emit('close', 1006, 'network lost');
+    ws.emit('close', code, code === 1012 ? 'service restart' : 'network lost');
   }
 
   dropNext(predicate: (senderId: string, env: Envelope) => boolean): void {
@@ -12256,6 +12256,75 @@ describe('confirmed duplicate-open gap repair', () => {
   });
 });
 
+describe('host-triggered recovery of previously reliable links', () => {
+  it.each([1006, 1012])('recovers from relay close %s without replaying writes or disturbing the healthy controller', async (closeCode) => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'host');
+    const phone = makeRelayClient(relay, 'phone');
+    const healthy = makeRelayClient(relay, 'healthy');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executed: string[] = [];
+    host.onFrame(env => {
+      if (!env.src || !env.id) return;
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executed.push(env.src + ':' + (env.payload as InvokePayload).channel);
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: 'ready' });
+      }
+    });
+    const open = (c: DeviceLinkClient) => c.openLink('host', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+    try {
+      for (const c of [host, phone, healthy]) c.start();
+      await vi.advanceTimersByTimeAsync(1); await pump();
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+      const opened = Promise.all([open(phone), open(healthy)]); await pump(); await opened;
+      relay.dropNext((src, env) => src === 'host' && env.dst === 'phone' && env.kind === 'invoke-result');
+      const oldWrite = phone.invoke('host', { channel: 'maker:send', args: ['synthetic'] });
+      await pump();
+      expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
+      relay.disconnect('phone', closeCode);
+      const other = healthy.invoke('host', { channel: 'local-db:sessions:list', args: [] });
+      await vi.advanceTimersByTimeAsync(30);
+      await pump();
+      await expect(other).resolves.toEqual({ ok: true, result: 'ready' });
+      if (closeCode === 1012) {
+        // A service restart applies the 1–5 second reconnect spread even with a short test backoff.
+        expect(phone.getStatus()).toBe('connecting');
+        await vi.advanceTimersByTimeAsync(1_000);
+        await pump();
+      }
+      expect(phone.getStatus()).toBe('online');
+      expect(phone.needsLinkRecovery('host')).toBe(true);
+      // The adapters use this query before admitting fresh work, including a
+      // listing-only subscription, which must reopen its old link.
+      const send = async (channel: string) => {
+        if (phone.needsLinkRecovery('host')) await open(phone);
+        return phone.invoke('host', { channel, args: [] });
+      };
+      const listing = send('device-link:subscribe'); await pump();
+      await expect(listing).resolves.toEqual({ ok: true, result: 'ready' });
+      await expect(oldWrite).resolves.toEqual({ ok: true, result: 'ready' });
+      expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
+      const input = send('remote-desktop'); await pump();
+      await expect(input).resolves.toEqual({ ok: true, result: 'ready' });
+      expect(executed.filter(x => x === 'phone:remote-desktop')).toHaveLength(1);
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+      expect(host.isLinkReady('healthy')).toBe(true);
+      expect(sockets.mock.calls.filter(x => x[0] === 'host')).toHaveLength(1);
+      expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
+      phone.closeLink('host', 'user');
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+    } finally {
+      for (const c of [host, phone, healthy]) c.stop();
+      sockets.mockRestore();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
 
 it('stops automatic reconnect after device removal and permits a new login lifecycle', async () => {
   const h = makeHarness();

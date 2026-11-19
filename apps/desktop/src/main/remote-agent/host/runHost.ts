@@ -1,6 +1,8 @@
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
+import { createSharedImageJobs } from '../../cindy-media/sharedImageJobs.js';
+import { generateSharedImage, type SharedImageStart } from '../../cindy-media/sharedImageClient.js';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
@@ -224,6 +226,8 @@ export interface RemoteAgentHostDeps {
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
   prepareImageEvent?(hostSessionId: string, event: AgentEvent, upstream: GeneratedImageUpstream | undefined, retainForRecovery: boolean): Promise<AgentEvent>;
   imageArtifacts?(hostSessionId: string, request: Extract<RemoteAgentRequest, { op: 'images' }>): Promise<unknown>;
+  generateSharedImage?(request: SharedImageStart, assertAllowed: () => void, signal: AbortSignal): Promise<{ buffer: Buffer; mimeType: string }>;
+  sharedImageMemberAllowed?(providerId: string, member: GroupRelayMember, reshareKey?: string): boolean;
   readLimits?(): RemoteAgentLimits;
   isAgentAvailable(kind: RemoteAgentKind): boolean;
   startHosted(input: HostedStartInput): Promise<AgentSessionHandle>;
@@ -371,7 +375,7 @@ export interface GroupRelayLoad {
 export type GroupRelayPlan =
   /** 组里选中了本机。`load`：要求预占时已计入本机这一台的负载。 */
   | { kind: 'local'; load?: GroupRelayLoad }
-  | ({ kind: 'member'; load?: GroupRelayLoad } & GroupRelayMember)
+  | ({ kind: 'member'; load?: GroupRelayLoad; imageModelId?: string } & GroupRelayMember)
   /** 组里没有能接这个任务的电脑。 */
   | { kind: 'unavailable'; full?: true; usageLimit?: ProviderGroupUsageLimit };
 
@@ -395,6 +399,7 @@ export interface RemoteAgentGroupRelayDeps {
     kind: RemoteAgentKind;
     model: string;
     providerId: string;
+    capability?: 'image.generate';
     exclude: ReadonlySet<string>;
     reserve?: boolean;
     /**
@@ -707,6 +712,7 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
 
 export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
+  const sharedImageJobs = createSharedImageJobs();
   const runs = new Map<string, Run>();
   // A close can finish before native startup returns its handle. Keep that
   // reservation until startup has disposed any resources that arrived late.
@@ -2999,6 +3005,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     wanted: ReadonlyArray<{ runId: string; cursor: number; hold?: true }>,
     waitMs: number,
     signal?: AbortSignal,
+    /** 控制端按回程速度要的上限（协议里已限在 POLL_MIN–POLL_MAX）；旧控制端不带，按 POLL_MAX。 */
+    maxBytes: number = REMOTE_AGENT_POLL_MAX_BYTES,
   ): Promise<RemoteAgentPollResult> {
     const touch = (updateHold: boolean) => {
       const t = now();
@@ -3024,7 +3032,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (!anyReady && waitMs > 0) await waitForAny(initial.map(({ run }) => run.log), waitMs, signal);
     touch(false);
     const out: RemoteAgentPollResult = { runs: [] };
-    let budget = REMOTE_AGENT_POLL_MAX_BYTES;
+    let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
     const start = wanted.length ? pollRotation++ % wanted.length : 0;
     for (let index = 0; index < wanted.length; index += 1) {
       const { runId, cursor } = wanted[(start + index) % wanted.length];
@@ -3524,6 +3532,71 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         assertProvider();
         return result;
       }
+      case 'shared-image': {
+        const generate = deps.generateSharedImage;
+        if (!generate) fail('REMOTE_AGENT_UNSUPPORTED', 'shared image generation is unavailable');
+        if (request.action === 'read') return sharedImageJobs.read(controller, request.requestId, request.offset);
+        if (request.action === 'release') {
+          sharedImageJobs.release(controller, request.requestId);
+          return {};
+        }
+        const owner = deps.captureOwner();
+        const trust = trustOf(controller);
+        const assertAllowed = () => {
+          if (!deps.isOwnerCurrent(owner) || !deps.isControllerAuthorized(controller)
+            || (trust === 'owner' && !request.relay)
+            || (trust === 'guest' && request.relay && !deps.reshare?.allows(controller, request.reshareKey))
+            || !deps.providerAccess?.isAllowed(request.providerId, controller, request.model)) failProviderNotAllowed();
+        };
+        let assertResultRoute = assertAllowed;
+        sharedImageJobs.start(controller, request.requestId, () => assertResultRoute(), async signal => {
+          const reshareKey = reshareKeyForGuest(controller);
+          const groupRelay = trust === 'guest' && !request.relay ? deps.groupRelay : undefined;
+          if (!groupRelay) return generate(request, assertAllowed, signal);
+          const exclude = new Set<string>();
+          while (!signal.aborted) {
+            assertAllowed();
+            const plan = await groupRelay.plan({
+              kind: 'codex', capability: 'image.generate', model: request.model,
+              providerId: request.providerId, exclude, reserve: true, reshareKey,
+            });
+            if (plan?.kind === 'unavailable') throw providerGroupUnavailableError(plan);
+            const member = plan?.kind === 'member' ? plan : plan?.kind === 'local' ? localGroupMember(request.providerId) : null;
+            const assertRoute = () => {
+              assertAllowed();
+              if (member && !deps.sharedImageMemberAllowed?.(request.providerId, member, reshareKey)) failProviderNotAllowed();
+            };
+            try {
+              assertRoute();
+              if (plan?.kind !== 'member') {
+                assertResultRoute = assertRoute;
+                plan?.load?.setRunning(true);
+                return await generate(request, assertRoute, signal);
+              }
+              const { invoke } = groupRelay.connect(plan.agentDeviceId);
+              const supportsImage = await RemoteAgentRunClient.caps(invoke).then(caps => caps.sharedImageGeneration, () => false);
+              if (!supportsImage) {
+                if (exclude.has(plan.memberKey)) fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this image request');
+                exclude.add(plan.memberKey);
+                continue;
+              }
+              plan.load?.setRunning(true);
+              assertResultRoute = assertRoute;
+              return await generateSharedImage(command => {
+                assertRoute();
+                return invoke([command]);
+              }, {
+                ...request, providerId: plan.providerId, model: plan.imageModelId ?? request.model, relay: relayKeyFor(controller),
+                ...(plan.sameAccount ? {} : { reshareKey }),
+              }, signal);
+            } finally {
+              plan?.load?.release();
+            }
+          }
+          throw signal.reason;
+        }, request.relay);
+        return { accepted: true };
+      }
       case 'images': {
         if (trustOf(controller) === 'guest' && !request.relay && deps.directGuestExecution
           && !deps.directGuestExecution.sessionAllowed(controller, request.sessionId)) {
@@ -3559,6 +3632,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.forkHosted ? { nativeFork: true } : {}),
           ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true, nativeHistoryBackup: true } : {}),
           ...(deps.imageArtifacts ? { imageRecovery: true, imageRecoveryRelay: true } : {}),
+          ...(deps.generateSharedImage ? { sharedImageGeneration: true } : {}),
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
@@ -3895,7 +3969,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return {};
       }
       case 'poll':
-        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal);
+        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal, request.maxBytes);
       case 'reply': {
         const run = requireRun(controller, request.runId);
         const pending = run.pending.get(request.requestId);
@@ -4093,6 +4167,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (sweepTimer) clearInterval(sweepTimer);
       sweepTimer = null;
       disposed = true;
+      sharedImageJobs.dispose();
       pendingStandbyCompletions.clear();
       if (forgetRetryTimer) clearTimeout(forgetRetryTimer);
       forgetRetryTimer = null;

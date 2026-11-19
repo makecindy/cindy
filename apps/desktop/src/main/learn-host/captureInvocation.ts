@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 
-import type { AgentKind, ListAgentSkillsResult } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, ListAgentSkillsResult } from '@cindy/maker-core';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
@@ -18,8 +19,12 @@ interface LearnInvocationSession {
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
 }
 
+/** A live session of any engine; plugin-engine tasks are never granted a /learn capture. */
+type AnyEngineLearnSession = Omit<LearnInvocationSession, 'agentKind'> & { agentKind: EngineKind };
+
 interface LearnInvocationCaptureDeps {
-  getSession(id: string): LearnInvocationSession | null | undefined;
+  // Compared by identity only.
+  getSession(id: string): AnyEngineLearnSession | null | undefined;
   builtInSkillDescriptors(): readonly BuiltInSkillDescriptor[];
   isSkillEnabled(source: string): boolean;
   canGrantUnqualifiedClaudeInvocation(id: string): Promise<boolean>;
@@ -29,10 +34,12 @@ interface LearnInvocationCaptureDeps {
 /** Capture the trusted Skill file for this exact persisted and dispatched user turn. */
 export function createCindyLearnInvocationCapture(deps: LearnInvocationCaptureDeps) {
   return async (
-    session: LearnInvocationSession,
+    session: AnyEngineLearnSession,
     persistedContent: unknown,
     dispatchedText: string,
   ): Promise<CindyLearnInvocationGrant | null> => {
+    // /learn reads built-in engine skill catalogs (docs/plans/acp-plugin-bridge.md).
+    if (!hasBuiltinAgentKind(session)) return null;
     const invocationText = visibleMessageTextForConversationSearch(
       'user',
       typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),

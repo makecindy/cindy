@@ -4,6 +4,7 @@
  * Device Link 处理大消息时的卡顿影响，更接近真实部署（中转在服务器上）。
  */
 import net from 'node:net';
+import tls from 'node:tls';
 import dgram from 'node:dgram';
 import { performance } from 'node:perf_hooks';
 
@@ -93,9 +94,11 @@ export class LinkDirection {
 }
 
 /** `listenHost`：设备从哪里连这个代理。默认本机回环；中转放在另一台电脑上时（--remote-network）听所有地址。 */
-export async function startShapedProxy(targetPort: number, up: LinkDirection, down: LinkDirection, listenHost = '127.0.0.1') {
+/** `secure`：代理自己终止 TLS（设备连 https/wss）。客户端只在加密连接上要中转的 UDP 凭据，公网实测要走 UDP 就得加密。 */
+export async function startShapedProxy(targetPort: number, up: LinkDirection, down: LinkDirection, listenHost = '127.0.0.1',
+  secure?: { cert: string; key: string }) {
   const sockets = new Set<net.Socket>();
-  const server = net.createServer((device) => {
+  const accept = (device: net.Socket) => {
     const relay = net.connect(targetPort, '127.0.0.1');
     for (const socket of [device, relay]) {
       sockets.add(socket);
@@ -105,7 +108,8 @@ export async function startShapedProxy(targetPort: number, up: LinkDirection, do
     }
     up.pipe(device, relay);
     down.pipe(relay, device);
-  });
+  };
+  const server = secure ? tls.createServer({ cert: secure.cert, key: secure.key }, accept) : net.createServer(accept);
   await new Promise<void>((resolve) => server.listen(0, listenHost, resolve));
   return {
     port: (server.address() as net.AddressInfo).port,

@@ -103,30 +103,26 @@ describe('session links', () => {
     [{ canonicalDeviceId: 'canonical', deviceLinkDeviceId: 'physical' }, 'canonical'],
     [{ deviceLinkDeviceId: 'physical' }, 'physical'],
     [null, 'route'],
-    [{ canonicalDeviceId: sharedTaskHostPeer('shared', 'host'), deviceLinkDeviceId: 'old' }, null],
   ] as const)('uses current session ownership before the retained route: %j', (session, expected) => {
     const options = { session, deviceId: 'route' };
     expect(parseSessionDeepLinkUrl(buildMobileSessionDeepLink('abc', options))?.deviceId).toBe(expected);
     expect(parseSessionDeepLinkUrl(buildMobileSessionMessageDeepLink('abc', 'm1', options))?.deviceId).toBe(expected);
   });
 
-  it('keeps shared-task links device-less instead of exporting an unscoped physical route', () => {
+  it('keeps the shared task scope even when the same session id is listed on another device', () => {
     const deviceId = sharedTaskHostPeer('shared-task', 'host-device');
-    expect(buildMobileSessionDeepLink('abc', { deviceId })).toBe(
-      'cindy://session/abc',
-    );
-    expect(buildMobileSessionMessageDeepLink('abc', 'm1', { deviceId })).toBe(
-      'cindy://session/abc?message=m1',
-    );
-    const target = parseSessionDeepLinkUrl(buildMobileSessionDeepLink('abc', { deviceId }))!;
+    const target = parseSessionDeepLinkUrl(buildMobileSessionDeepLink('abc', {
+      session: { canonicalDeviceId: 'physical-host', deviceLinkDeviceId: deviceId },
+    }))!;
+    expect(target.deviceId).toBe(deviceId);
+    expect(buildMobileSessionMessageDeepLink('abc', 'm1', { deviceId })).toBe('cindy://session/abc?message=m1');
     expect(resolveSessionLinkDeviceId({
-      listedDeviceId: deviceId,
+      listedDeviceId: 'other-device',
       linkedDeviceId: target.deviceId,
-      currentDeviceId: 'other-device',
     })).toBe(deviceId);
     // 同一共享任务中的旧格式链接可沿用当前已授权句柄,不转向房主的物理设备。
     expect(resolveSessionLinkDeviceId({
-      linkedDeviceId: target.deviceId,
+      linkedDeviceId: null,
       currentDeviceId: deviceId,
     })).toBe(deviceId);
   });

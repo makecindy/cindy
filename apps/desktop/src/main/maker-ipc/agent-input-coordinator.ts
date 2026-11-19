@@ -1,5 +1,6 @@
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
+import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
@@ -228,6 +229,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [TELEGRAM_QUESTION_ORIGIN]?: import('@cindy/maker-core').SendOrigin;
   /** Host-proven non-dispatch: retain this input while preparation is retried. */
   onUndispatchedRetry?: () => void;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
@@ -3476,8 +3478,21 @@ export class AgentInputCoordinator {
           current.generation !== abortBoundaryGeneration ||
           current.abortBoundaryToken !== abortBoundaryToken
         ) {
-          // clearSession, a newer Stop, or a terminal event has superseded this
-          // abort. Its late promise must not touch the current session state.
+          // A replacement turn may have gone live-idle without a terminal.
+          // Re-enter normal drain gates, never settle it with the old abort.
+          // A null token alone also means Session close: require a dispatched
+          // active turn so a late abort cannot revive deliberately closed work.
+          if (
+            current === state &&
+            current.generation === abortBoundaryGeneration &&
+            current.abortBoundaryToken === null &&
+            current.activeTurn !== null &&
+            isActiveTurnDispatched(current.activeTurn)
+          ) {
+            // The replacement may still be busy now and lose its terminal
+            // later. Keep the existing retry alive until it can prove idle.
+            this.scheduleDrainAfterExternalTurnSettles(sessionId, 'stale-abort-replacement');
+          }
           log.info('ignoring stale abort completion', {
             sessionId,
             abortBoundaryGeneration,
@@ -3898,6 +3913,7 @@ export class AgentInputCoordinator {
           },
         });
       }
+      inheritTelegramQuestionRetry(recovery.item, item);
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
@@ -5127,6 +5143,7 @@ export class AgentInputCoordinator {
     const projected = { ...item };
     Reflect.deleteProperty(projected, MCP_APP_MESSAGE_GUARD);
     Reflect.deleteProperty(projected, TASK_ACTION_INPUT_GUARD);
+    Reflect.deleteProperty(projected, TELEGRAM_QUESTION_ORIGIN);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.orcaReportDelivery;
@@ -5823,6 +5840,7 @@ export class AgentInputCoordinator {
           }
         } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
+        [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(head),
         [ASYNC_QUESTION_ANSWER]: head.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
         ...(verifiedOwnerRequestText(head.autoReviewUserText) !== undefined
