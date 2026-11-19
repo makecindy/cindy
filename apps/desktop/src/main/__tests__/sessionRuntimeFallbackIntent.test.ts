@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { transpileModule, ScriptTarget } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { shouldPreserveRuntimeFallbackAutoResume } from '../maker-ipc/interruptedTurnAutoResume';
+import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../shared/modelGroups';
+import { computeModelGroupSwitchOffer } from '../model-groups/switchOffer';
 import { createPendingAgentSwitchRegistry } from '../maker-ipc/sessionAgentSwitchHandler';
 
 const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
@@ -24,7 +26,7 @@ function harness() {
   const switchAgent = vi.fn(async () => ({ switched: true, engineReady: true }));
   const accept = vi.fn();
   const withLock = vi.fn(async (_id: string, task: () => Promise<unknown>) => task());
-  const apply = vi.fn(async (): Promise<{ deferred: boolean; superseded: boolean; generation?: number; contextWindowConfirmationRequired?: number }> => ({ deferred: false, superseded: false }));
+  const apply = vi.fn(async (_id: string, _model: string): Promise<{ deferred: boolean; superseded: boolean; generation?: number; persistedRoute?: true; contextWindowConfirmationRequired?: number }> => ({ deferred: false, superseded: false }));
   const cancel = vi.fn(() => true);
   const clearCredential = vi.fn();
   const pendingCredential = vi.fn(() => ({ model: 'next', providerId: 'openai' }));
@@ -69,7 +71,7 @@ function harness() {
     pending.set('session', { sameAgentSelection: true, targetAgentKind: 'codex', model: 'chosen', providerId: 'xd' });
     generation += 1;
   };
-  return { ...runtime, pending, pick, groupCandidate, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, readSessionAgentDeviceId, current, candidate, generation: () => generation };
+  return { run: runtime.run, allowed: runtime.allowed, pending, pick, groupCandidate, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, readSessionAgentDeviceId, current, candidate, generation: () => generation };
 }
 
 describe('automatic runtime selection respects the user send boundary', () => {
@@ -95,10 +97,65 @@ describe('automatic runtime selection respects the user send boundary', () => {
   it.each([false, true])('uses the session switch for a group candidate (cross-harness=%s)', async crossHarness => {
     const h = harness();
     h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
-    h.groupCandidate.mockResolvedValue({ candidate: crossHarness ? h.candidate : { ...h.current, model: 'second' } });
+    const bindCommittedRoute = vi.fn();
+    h.groupCandidate.mockResolvedValue({ bindCommittedRoute, candidate: crossHarness ? h.candidate : { ...h.current, model: 'second' } });
     expect(await h.run('session', 1, 1, true, undefined, { accountUnavailable: false, hasImages: false })).toMatchObject({ outcome: 'switched' });
     expect(h.switchAgent).toHaveBeenCalledTimes(crossHarness ? 1 : 0);
     expect(h.apply).toHaveBeenCalledTimes(crossHarness ? 0 : 1);
+    expect(bindCommittedRoute).toHaveBeenCalledTimes(crossHarness ? 1 : 0);
+  });
+
+  // Unit, model-groups §6.1: after two failed connections the automatic and banner
+  // pickers must still see C, even when Pi persisted B over the original session row.
+  it('keeps the manual offer and the next automatic hop after persisting a same-harness switch', async () => {
+    const h = harness();
+    const candidates: ModelGroupCandidate[] = ['A', 'B', 'C'].map(id => ({
+      agentKind: 'pi', providerId: id, model: id,
+    }));
+    const selection = { type: 'route' as const, id: 'group' };
+    let row = candidates[0];
+    let pickedKey = modelGroupCandidateKey(row);
+    const unavailable = new Set<string>();
+    const visited = new Set<string>();
+    const deps = {
+      readBinding: () => ({ selection, pickedKey, at: 1 }),
+      readSession: async () => ({ ...row, source: 'desktop' }),
+      isShared: () => false, hasGoal: async () => false, now: () => 1,
+      config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order' as const, candidates }] }),
+      candidateFacts: async () => candidates.map(c => ({
+        available: !unavailable.has(c.providerId), modelName: c.model, sourceName: c.providerId, windows: null,
+      })),
+    };
+    h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
+    h.groupCandidate.mockImplementation(async () => {
+      if (pickedKey !== modelGroupCandidateKey(row)) return null;
+      const offer = await computeModelGroupSwitchOffer(deps, 'session', {
+        current: row, visited, accountUnavailable: true,
+        recordUnavailable: c => visited.add(modelGroupCandidateKey(c)),
+      });
+      if (!offer) return null;
+      const next = candidates.find(c => c.model === offer.model)!;
+      return {
+        candidate: { ...h.current, ...next, agentDeviceId: null },
+        bindCommittedRoute: (profile) => {
+          pickedKey = modelGroupCandidateKey({ agentKind: 'pi', model: profile.model, providerId: profile.providerId });
+        },
+      };
+    });
+    const failAndSwitch = async (from: number) => {
+      Object.assign(h.current, row);
+      unavailable.add(row.providerId);
+      h.apply.mockImplementationOnce(async (_id, model) => {
+        row = candidates.find(c => c.model === model)!;
+        return { deferred: false, superseded: false, persistedRoute: true };
+      });
+      return h.run('session', from + 1, from + 1, true, undefined, { accountUnavailable: true, hasImages: false });
+    };
+    expect(await failAndSwitch(0)).toMatchObject({ outcome: 'switched' });
+    expect(await computeModelGroupSwitchOffer(deps, 'session')).toMatchObject({ model: 'C' });
+    expect(await failAndSwitch(1)).toMatchObject({ outcome: 'switched' });
+    expect(h.apply.mock.calls.map(([, model]) => model)).toEqual(['B', 'C']);
+    expect(pickedKey).toBe(modelGroupCandidateKey(candidates[2]));
   });
 
   // Unit: the ordered group must continue when B fails before the switch commits.

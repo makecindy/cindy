@@ -40,6 +40,9 @@ export type FallbackRuntimeSelection = (
   deferred: boolean;
   superseded: boolean;
   generation?: number;
+  persistedRoute?: true;
+  effectiveModelId?: string;
+  effectiveProviderId?: string | null;
   contextWindowConfirmationRequired?: number;
   contextTokensForConfirmation?: number;
 }>;
@@ -240,6 +243,16 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
               fastExplicit: false,
             },
           );
+          // A live override can leave the saved session on its original route.
+          // Move the durable group binding only when the session row moved too.
+          if (result.persistedRoute && !result.deferred && !result.superseded &&
+              sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+            group?.bindCommittedRoute?.({
+              ...selected,
+              model: result.effectiveModelId ?? selected.model,
+              providerId: result.effectiveProviderId === undefined ? selected.providerId : result.effectiveProviderId,
+            });
+          }
           if (requireRouteChange && result.deferred && result.generation !== undefined &&
               cancelPendingSessionRuntimeMutation(sessionId, result.generation)) {
             const pendingCredential = getPendingCredentialSwitchTarget(sessionId);
