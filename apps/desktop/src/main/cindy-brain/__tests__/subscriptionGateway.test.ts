@@ -557,6 +557,23 @@ describe('indexed task content and state events', () => {
     expect(JSON.stringify(sent)).not.toContain('private');
   });
 
+  // Inbox boards read the snooze pair from task-state (task-inbox-snooze.md); other row fields stay out.
+  it('delivers the snooze pair with the status of a snooze change', async () => {
+    const g = subscriber();
+    g.manifest.subscribe!.topics = ['task-state'];
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'state', sessionId: 'task', state: {
+      status: 'active', snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: '2026-11-20T00:00:00.000Z', title: 'private title',
+    } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent[0]!.payload).toMatchObject({ data: { state: {
+      status: 'active', snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: '2026-11-20T00:00:00.000Z',
+    } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
   it.each(['no-subscriber', 'invalid-install', 'undeclared', 'disabled', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
     const index = new GhostTaskEventIndex();
     const g = subscriber() as InstalledGhost;

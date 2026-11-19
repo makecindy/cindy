@@ -145,6 +145,7 @@ import { captureBotCreatedTaskResponsibility } from '../maker-ipc/botTaskCreatio
 import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
+import { createDesktopTaskInboxWrites, readDesktopTaskInbox } from './taskInboxHost.desktop.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createHistoryToolCallbacks } from './historyToolCallbacks.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller, hostServiceCatalog, setHostToolProviders } from './hostToolCaller.js';
@@ -1093,6 +1094,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       setRemoteSessionsStatus: deps.historyRemote
         ? createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
         : undefined,
+      ...createDesktopTaskInboxWrites({ historyRemote: deps.historyRemote, invokeRemote: deps.invokeRemote }),
       deleteSession: ({ sessionId, callerSessionId }) => withAccountDataAccess(callerSessionId, async assertCurrent => {
         await assertTaskActionCurrent();
         await assertCurrent();
@@ -1552,6 +1554,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }),
       history: {
         ...createHistoryToolCallbacks({ authorizeCall: authorizeTaskToolCall, invokeRemote: deps.invokeRemote }),
+        readTaskInbox: readDesktopTaskInbox,
         readSharedTaskProgress: createSharedTaskProgressReader({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote }),
         readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
           const result = await readDesktopHistoryAttachment(args, context);

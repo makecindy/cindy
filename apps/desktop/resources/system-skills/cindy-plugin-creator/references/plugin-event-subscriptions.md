@@ -15,7 +15,7 @@
 结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；已有宿主授权的本机媒体与交接引用可用
 `cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，manifest 另需声明 `history` 组；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
 `did-task-state-changed` 的 `data` 为 `{sessionId,state}`，只在生命周期变化时发布：一轮开始、结束、出错、等待权限、等待回答、排队或取消，
-以及归档、恢复和删除。归档等变化提供相应状态字段，运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
+以及归档、恢复、删除和稍后处理的设置与取回。归档等变化提供相应状态字段（稍后处理附带 `status`、`snoozedUntil`、`snoozedAt`；到期与被新输入唤醒不发布），运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
 活动摘要、进度、流式输出和仅隐藏状态的变化不触发此主题。
 仅含阶段、时间、运行/等待/注意状态与代次，不含活动摘要、标题派生标签、工具参数或消息内容。
 两种新 topic 包含宿主实际保存的各类任务，不套用下文旧 topic 的主任务/轮次过滤。

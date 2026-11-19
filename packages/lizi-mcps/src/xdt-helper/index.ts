@@ -44,6 +44,15 @@ export {
   type RemoteSessionsStatusResult,
 } from './archive_sessions.js';
 export {
+  registerTaskInboxTools,
+  type TaskInboxDeps,
+  type SessionSnoozeChangeItem,
+  type SetSessionsSnoozeResult,
+  type CompleteSessionItem,
+  type CompleteSessionOutcome,
+  type CompleteSessionBlockReason,
+} from './task_inbox.js';
+export {
   registerSessionImportTools,
   type SessionImportCallbacks,
   type SessionImportDeps,
@@ -230,6 +239,7 @@ export type {
   HistoryWorkdir,
   HistorySession,
   HistoryCompanion,
+  HistoryTaskInboxSignals,
   HistoryMessage,
   ListWorkdirsArgs,
   ListSessionsArgs,

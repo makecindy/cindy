@@ -305,6 +305,26 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 两项支持 `deviceId::sessionId`，复用同账号远程控制。没有原生历史或检查点时返回宿主既有错误；不创建替代任务、不自动重试。
 跨电脑回执未知时先查看目标状态与历史，分叉尤其不能盲目重复，否则会生成多个任务。
 
+## 收件箱：分区、稍后处理与完成
+
+插件看板要和侧栏收件箱（待处理／进行中／稍后处理／已处理）一致时，不要自己推断分区。
+`list_sessions({include_inbox:true})`（`history` 组）每行返回 `inbox:{section,waiting,running,unread,following}`，
+由任务所在电脑用侧栏同一规则计算：`section` 为 `inbox` / `working` / `snoozed` / `archived`，已删除任务为 `null`。
+伙伴任务规则不在这里应用：侧栏会隐藏闲置的伙伴任务，这里仍归 `inbox`，需要时按 `companion` 字段自行过滤。
+`unread`、`waiting` 来自该电脑的内存状态，重启后完成未读不保留。不传 `include_inbox` 时不读取这些实时状态。
+每行在有值时另返回 `snoozedUntil`、`snoozedAt`。旧版本电脑会对 `include_inbox` 报 `INVALID_ARGS`（跨电脑聚合时只影响该电脑分组），去掉参数重试即可。
+
+`snooze_sessions({session_ids,until})`（`control` 组）写侧栏「稍后处理」的同一字段：`until` 为未来一年内的 ISO 时间、
+`"indefinite"`（保存为 `9999-12-31T23:59:59.999Z`）或 `null` 取回。到期或任务收到新输入后自动回到原分区，不暂停执行。
+支持 `deviceId::sessionId`，一次一台电脑，逐项写入、首次失败即停止；目标电脑过旧时返回 `REMOTE_UNSUPPORTED`。
+
+`complete_sessions({session_ids})`（`control` 组）对应侧栏「完成」，仅限本机任务：绑定启用中自动化的任务只把这轮标为已读，
+其余归档。逐项返回 `items[].outcome`（`archived` / `marked_read` / `already_archived` / `blocked`）；
+运行中或被 IM 接管时为 `blocked` 并给出 `reason`。归档时未提交改动保存为快照，恢复任务后可找回。
+其它电脑的任务返回 `REMOTE_UNSUPPORTED`，可改用 `archive_sessions`。
+
+订阅 `task-state` 时，稍后处理的设置与取回会发布 `{status,snoozedUntil,snoozedAt}`；到期和被新输入唤醒不发布事件，看板需要时自行按时间重算。
+
 ## 运行设置与任务消息
 
 `get_session_runtime({session_id})` 返回 `permission_mode` 与运行设置的 `generation`。

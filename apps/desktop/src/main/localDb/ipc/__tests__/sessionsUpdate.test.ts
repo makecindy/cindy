@@ -221,6 +221,7 @@ import {
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
+import { setTaskChangeListener } from '../../taskEvents';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
@@ -2448,6 +2449,21 @@ describe('task snooze persistence', () => {
     });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
+  });
+  // Plugin boards follow the inbox through task-state; a snooze-only event still carries the
+  // task status so existing subscribers never see an event with neither status nor activity.
+  it.each([invokeUpdate, invokePatchMeta])('publishes deferral to task-state subscribers with the status', async (invoke) => {
+    h.captureOwnerScope = true; // events are only delivered with a data-owner stamp
+    const events: unknown[] = [];
+    setTaskChangeListener((event) => { events.push(event); }, ['state']);
+    try {
+      const snoozedUntil = new Date(Date.now() + 3600000).toISOString();
+      await invoke('codex-local', { snoozedUntil });
+      expect(events).toEqual([{ kind: 'state', sessionId: 'codex-local',
+        state: { status: 'active', snoozedUntil, snoozedAt: expect.any(String) } }]);
+    } finally {
+      setTaskChangeListener(undefined);
+    }
   });
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();

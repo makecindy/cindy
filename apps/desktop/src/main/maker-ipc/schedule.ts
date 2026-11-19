@@ -125,6 +125,19 @@ export function broadcastSchedulerChanged(scheduleId: string): void {
 }
 
 /**
+ * Mark the given tasks' finished automation runs read, with the same per-schedule read
+ * broadcast as mark-run-read so sidebars, badges and controllers refresh.
+ */
+export async function markSessionScheduleRunsRead(
+  storage: Pick<DrizzleScheduleStorage, 'markSessionRunsRead'>,
+  sessionIds: readonly string[],
+): Promise<void> {
+  for (const scheduleId of await storage.markSessionRunsRead(sessionIds)) {
+    broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
+  }
+}
+
+/**
  * 把 scheduler 抛的业务 Error 翻成带 code 的 IPC error。
  * Scheduler 当前抛的 message 形态固定为 'schedule {id} not found' 等明文(见
  * engine/scheduler.ts:241/265/272 等),按 message 嗅探一次性收口。

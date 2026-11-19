@@ -11,6 +11,7 @@
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { taskInboxSection } from '@cindy/maker-shared/live-task-priority';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -42,7 +43,11 @@ const DESCRIPTION = [
   '【输出】messageCount 已过滤被 rewind 软删的消息, 是用户可见的真实条数。',
   '本机结果的 queuedCount 是当前尚未消费的输入队列条数，可用 list_session_queue 查看本机明细；远程结果不含队列计数。',
   '时间戳均为 ISO 8601 字符串(对应 DB 里的 unix ms 转换)。',
-  'orcaRole / parentSessionId / userSendAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
+  'orcaRole / parentSessionId / userSendAt / snoozedUntil / snoozedAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
+  'snoozedUntil 为稍后处理的到期时间，9999-12-31T23:59:59.999Z 表示无限期；snoozedAt 是设置时间，之后有新输入即视为已唤醒。',
+  'include_inbox=true 时每行另带 inbox: { section, waiting, running, unread, following }，由任务所在电脑按侧栏收件箱同一规则计算：',
+  'section 为 inbox(待处理) / working(进行中) / snoozed(稍后处理) / archived(已处理)，已删除任务为 null；不应用伙伴任务规则（闲置伙伴任务在侧栏不显示，这里仍归 inbox）。',
+  'unread 与 waiting 来自所属电脑的内存状态，重启后完成未读不保留；旧版本电脑不支持时该设备组报 INVALID_ARGS，请去掉 include_inbox 重试。',
   '',
   '【分页】游标分页, 默认 100 条/次, 最大 1000。串联 nextCursor 拿全量。',
   '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，结束以 hasMore 为准。',
@@ -93,10 +98,17 @@ export function registerListSessionsTool(
         .enum(['asc', 'desc'])
         .default('desc')
         .describe('按 time_field 排序，desc = 最新在前（默认）。'),
+      include_inbox: z
+        .boolean()
+        .optional()
+        .describe('true = 每行附带收件箱分区与实时信号（inbox 字段）。默认不带，避免列表额外读取运行状态。'),
     },
     handler: async (args) => {
       if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'list_sessions', args);
-      const { workdir, from, to, agent_kind, include_deleted, limit, cursor, order, teammate_id, source, time_field } = args;
+      const { workdir, from, to, agent_kind, include_deleted, limit, cursor, order, teammate_id, source, time_field, include_inbox } = args;
+      if (include_inbox && !deps.history.readTaskInbox) {
+        return errorPayload('UNSUPPORTED_CAPABILITY', '当前宿主不能计算任务收件箱分区；请去掉 include_inbox。');
+      }
       const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, null);
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const fromMs = parseIsoMs(from);
@@ -149,6 +161,16 @@ export function registerListSessionsTool(
         }
         queuedCounts = countsResult.counts;
       }
+      let inboxSignals: Record<string, import('./_history_types.js').HistoryTaskInboxSignals> | null = null;
+      if (include_inbox && deps.history.readTaskInbox) {
+        const signalsResult = await deps.history.readTaskInbox(page.items.map((session) => session.id));
+        if (!signalsResult.ok) {
+          return errorPayload(signalsResult.errorCode === 'HOST_NOT_READY' ? 'HOST_NOT_READY' : 'INTERNAL', signalsResult.message);
+        }
+        inboxSignals = signalsResult.signals;
+      }
+      const nowMs = Date.now();
+      const iso = (ms: number | null | undefined) => (ms == null ? null : new Date(ms).toISOString());
       // Token 优化: orcaRole / parentSessionId / userSendAt 这几个字段在绝大多数
       // session 上都是 null, 逐行带 null 会浪费 token。改成 omit-when-null。
       return okPayload({
@@ -175,11 +197,25 @@ export function registerListSessionsTool(
           if (s.orcaRemoteLead) out.orcaRemoteLead = s.orcaRemoteLead;
           if (s.parentSessionId !== null) out.parentSessionId = s.parentSessionId;
           if (s.userSendAt !== null) out.userSendAt = new Date(s.userSendAt).toISOString();
+          if (s.snoozedUntil != null) out.snoozedUntil = iso(s.snoozedUntil);
+          if (s.snoozedAt != null) out.snoozedAt = iso(s.snoozedAt);
+          if (inboxSignals) {
+            const signals = inboxSignals[s.id] ?? { waiting: false, running: false, unread: false, following: false };
+            out.inbox = {
+              section: s.status === 'deleted' ? null : taskInboxSection({
+                status: s.status,
+                snoozedUntil: iso(s.snoozedUntil),
+                snoozedAt: iso(s.snoozedAt),
+                userSendAt: iso(s.userSendAt),
+              }, signals, nowMs),
+              ...signals,
+            };
+          }
           return out;
         }),
         nextCursor: page.nextCursor ? encodeCursor(page.nextCursor) : null,
         hasMore: page.hasMore,
-        query: { workdir, from, to, agent_kind, include_deleted, limit, order, teammate_id, source, time_field },
+        query: { workdir, from, to, agent_kind, include_deleted, limit, order, teammate_id, source, time_field, ...(include_inbox ? { include_inbox } : {}) },
         ...(cursor && !cursorObj ? { warning: 'INVALID_CURSOR_FALLBACK_TO_FIRST_PAGE' } : {}),
       });
     },

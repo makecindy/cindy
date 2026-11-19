@@ -207,6 +207,8 @@ export interface SessionSummary {
   createdAt: number; // unix ms
   updatedAt: number;
   userSendAt: number | null;
+  snoozedUntil: number | null;
+  snoozedAt: number | null;
   messageCount: number;
 }
 
@@ -279,6 +281,8 @@ export async function listSessionsForHistory(
       createdAt: sessions.createdAt,
       updatedAt: sessions.updatedAt,
       userSendAt: sessions.userSendAt,
+      snoozedUntil: sessions.snoozedUntil,
+      snoozedAt: sessions.snoozedAt,
     })
     .from(sessions)
     .where(and(...conds))
@@ -320,6 +324,8 @@ export async function listSessionsForHistory(
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     userSendAt: r.userSendAt,
+    snoozedUntil: r.snoozedUntil,
+    snoozedAt: r.snoozedAt,
     messageCount: countMap.get(r.id) ?? 0,
   })));
   const hasMore = sessionRows.length > items.length;

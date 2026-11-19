@@ -17,7 +17,7 @@ import { requireObject, throwIpcError } from '../../utils/ipcValidate.js';
 
 /** Reuse MCP's strict input validation and the exact same readers/formatters on the source host. */
 export function createHistoryQueryHandler(
-  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates'>,
+  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates' | 'readTaskInbox'>,
 ) {
   const registry = new XdtHelperToolRegistry();
   const unsupported = async () => ({
@@ -57,13 +57,15 @@ export function createHistoryQueryHandler(
   };
 }
 
-export function registerHistoryQueryIpc(): void {
+/** `readTaskInbox` comes from the desktop wiring (live island, scheduler and IM state). */
+export function registerHistoryQueryIpc(ports: Pick<XdtHelperHistoryDeps, 'readTaskInbox'> = {}): void {
   const execute = createHistoryQueryHandler({
     listTeammates: async args => ({ ok: true, page: await readTeammateDirectory({ ...args, remoteVisibleOnly: true }) }),
     listSessions: async (args) => ({
       ok: true,
       page: await listSessionsForHistory({ ...args, remoteVisibleOnly: true }),
     }),
+    ...(ports.readTaskInbox ? { readTaskInbox: ports.readTaskInbox } : {}),
     searchChatHistory: async (args) => ({
       ok: true,
       result: await searchChatHistoryHybrid({ ...args, remoteVisibleOnly: true }),

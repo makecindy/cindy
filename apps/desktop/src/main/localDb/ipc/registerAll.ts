@@ -37,6 +37,7 @@ import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search.desktop';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
+import { readDesktopTaskInbox } from '../../mcp-integrations/taskInboxHost.desktop';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
 import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
 import { botRemoteManagement } from './botRemoteManagement';
@@ -232,7 +233,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
-  registerHistoryQueryIpc();
+  registerHistoryQueryIpc({ readTaskInbox: (ids) => readDesktopTaskInbox(ids) });
   registerBotIpc((id, subject, initialTitle) => { void refineCreatedTaskTitle(id, subject, { initialTitle }); });
   registerBotSkillSettingsIpc();
   registerCompanionImport();

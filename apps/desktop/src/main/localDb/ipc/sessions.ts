@@ -1,4 +1,4 @@
-import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
+import { isAcceptedSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import type { ProjectArchiveGuard } from '../projectArchiveGuard.js';
 import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
 import { runProjectArchive } from '../projectArchive.js';
@@ -491,6 +491,8 @@ export function broadcastSessionPatched(
   sessionId: string,
   patch: Record<string, unknown>,
   ownerScope?: OwnerScope,
+  /** The row's status after the write; lets a snooze-only change reach task-state subscribers. */
+  rowStatus?: string,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
   if (patch.status === 'deleted' || 'sdkSessionId' in patch || 'clearedAt' in patch || 'agentDeviceId' in patch) {
@@ -499,8 +501,13 @@ export function broadcastSessionPatched(
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
-  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && patch.status !== undefined) {
-    publishTaskChange({ kind: 'state', sessionId, state: { status: patch.status } }, ownerStamp);
+  // Snooze changes carry the row's status too, so every state event keeps status or activity.
+  const taskStatus = patch.status ?? ('snoozedUntil' in patch ? rowStatus : undefined);
+  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && taskStatus !== undefined) {
+    publishTaskChange({ kind: 'state', sessionId, state: {
+      status: taskStatus,
+      ...('snoozedUntil' in patch ? { snoozedUntil: patch.snoozedUntil ?? null, snoozedAt: patch.snoozedAt ?? null } : {}),
+    } }, ownerStamp);
   }
   try {
     // 未发送任务只在本机可见，转正前不推给控制端。
@@ -1389,41 +1396,7 @@ export function registerSessionIpc(
         throwIpcError('INVALID_PARAMS', `sessionId 超过长度上限 ${MAX_SESSION_ID_LENGTH}`);
       }
     }
-    const wanted = new Set(ids as string[]);
-    if (wanted.size === 0) return { dismissed: 0, processed: [], failed: [] };
-    const [tailRows, interruptedRows] = await Promise.all([
-      listErrorTailPendingRows(),
-      listInterruptedPendingRows(),
-    ]);
-    // 回报**确切处置成功的 id**(processed),不让调用方用「不在 failed 里」推断成功:
-    // 请求集合里可能有本 handler 根本不处理的告警来源(典型是 WorktreeRestoreBanner
-    // 打的红点 —— 它不进错误尾行/中断查询),那些会话既不成功也不失败。按「非 failed
-    // 即成功」清点会抹掉它们的红点,而 worktree 告警又不在重算范围内、恢复不了
-    // (PR #879 review P1)。
-    const processed = new Set<string>();
-    const failed = new Set<string>();
-    for (const row of tailRows) {
-      if (!wanted.has(row.sessionId)) continue;
-      try {
-        const updated = await dismissErrorMessage(row.sessionId, row.clientId);
-        if (updated) processed.add(row.sessionId);
-        else failed.add(row.sessionId);
-      } catch {
-        failed.add(row.sessionId);
-      }
-    }
-    for (const row of interruptedRows) {
-      if (!wanted.has(row.sessionId)) continue;
-      // CAS 写:带上快照里的 startedAt。快照之后若该会话已启动新 turn,条件不匹配、
-      // 不写入 —— 否则会把刚启动的活跃 turn 记成已收尾,它真被中断时下次启动检测不到
-      // (PR #879 review P1)。返回值已含读回校验。
-      const landed = await ackSessionTurnEndedIfUnchanged(row.sessionId, row.startedAt);
-      if (landed) processed.add(row.sessionId);
-      else failed.add(row.sessionId);
-    }
-    // 同一会话两条腿都命中时,任一失败即整体算失败(它仍有未处置的告警)。
-    for (const id of failed) processed.delete(id);
-    return { dismissed: processed.size, processed: [...processed], failed: [...failed] };
+    return dismissSessionPendingAlerts(ids as string[]);
   });
 
   // interrupted-turn-resume:用户对「疑似中断」提示点「忽略」/「继续」——写一次
@@ -1924,7 +1897,7 @@ export async function updateSessionInDb(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { ...broadcastPatch,
           ...(p.snoozedUntil !== undefined || p.status !== undefined ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {}),
-        }, ownerScope);
+        }, ownerScope, updated.status);
       }
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
@@ -1998,6 +1971,50 @@ export async function restoreArchivedSessionForSend(
   options: { routeLockHeld?: boolean; signal?: AbortSignal } = {},
 ): Promise<void> {
   await restoreArchivedTaskForSend(sessionId, options, { patchSessionMetaInDb, captureOwnerScope, isOwnerScopeCurrent });
+}
+
+/**
+ * Dismiss the error-tail and interrupted-turn alerts behind a red dot, only for sessions that
+ * currently have one. Callers validate the input and the caller's authority first.
+ */
+export async function dismissSessionPendingAlerts(
+  ids: readonly string[],
+): Promise<{ dismissed: number; processed: string[]; failed: string[] }> {
+  const wanted = new Set(ids);
+  if (wanted.size === 0) return { dismissed: 0, processed: [], failed: [] };
+  const [tailRows, interruptedRows] = await Promise.all([
+    listErrorTailPendingRows(),
+    listInterruptedPendingRows(),
+  ]);
+  // 回报**确切处置成功的 id**(processed),不让调用方用「不在 failed 里」推断成功:
+  // 请求集合里可能有本 handler 根本不处理的告警来源(典型是 WorktreeRestoreBanner
+  // 打的红点 —— 它不进错误尾行/中断查询),那些会话既不成功也不失败。按「非 failed
+  // 即成功」清点会抹掉它们的红点,而 worktree 告警又不在重算范围内、恢复不了
+  // (PR #879 review P1)。
+  const processed = new Set<string>();
+  const failed = new Set<string>();
+  for (const row of tailRows) {
+    if (!wanted.has(row.sessionId)) continue;
+    try {
+      const updated = await dismissErrorMessage(row.sessionId, row.clientId);
+      if (updated) processed.add(row.sessionId);
+      else failed.add(row.sessionId);
+    } catch {
+      failed.add(row.sessionId);
+    }
+  }
+  for (const row of interruptedRows) {
+    if (!wanted.has(row.sessionId)) continue;
+    // CAS 写:带上快照里的 startedAt。快照之后若该会话已启动新 turn,条件不匹配、
+    // 不写入 —— 否则会把刚启动的活跃 turn 记成已收尾,它真被中断时下次启动检测不到
+    // (PR #879 review P1)。返回值已含读回校验。
+    const landed = await ackSessionTurnEndedIfUnchanged(row.sessionId, row.startedAt);
+    if (landed) processed.add(row.sessionId);
+    else failed.add(row.sessionId);
+  }
+  // 同一会话两条腿都命中时,任一失败即整体算失败(它仍有未处置的告警)。
+  for (const id of failed) processed.delete(id);
+  return { dismissed: processed.size, processed: [...processed], failed: [...failed] };
 }
 
 export async function patchSessionMetaInDb(
@@ -2138,7 +2155,7 @@ export async function patchSessionMetaInDb(
   const broadcastPatch =
     patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch }, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch }, ownerScope, updated.status);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2931,9 +2948,8 @@ export async function setSessionSourceInDb(
 
 /** Only scheduled wake times are subject to the one-year limit. */
 function validateSnoozeTime(value: unknown): void {
-  if (value === undefined || value === null || value === INDEFINITE_SNOOZE_UNTIL) return;
-  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
-  if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
+  if (value === undefined || value === null) return;
+  if (!isAcceptedSnoozeUntil(value, Date.now())) {
     throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
   }
 }

@@ -85,6 +85,7 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerTaskInboxTools,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerHistoryDevicesTool,
@@ -111,6 +112,7 @@ import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { TaskInboxDeps } from './xdt-helper/task_inbox.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
 import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
@@ -603,6 +605,12 @@ export interface XdtHelperMcpDeps {
   sessionShare?: SessionShareCallbacks;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
+   * 收件箱写操作。注入 setSessionsSnooze 后注册 snooze_sessions(本机与跨电脑);
+   * 另注入 completeSessions 后注册 complete_sessions(仅本机)。
+   */
+  setSessionsSnooze?: TaskInboxDeps['setSessionsSnooze'];
+  completeSessions?: TaskInboxDeps['completeSessions'];
+  /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
    * scan_importable_sessions / import_sessions / get_session_import_status 会被注册。
    */
@@ -743,6 +751,13 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.setSessionsSnooze) {
+    registerTaskInboxTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsSnooze: deps.setSessionsSnooze,
+      completeSessions: deps.completeSessions,
+    });
   }
   if (deps.deleteSession) registerDeleteSessionTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,

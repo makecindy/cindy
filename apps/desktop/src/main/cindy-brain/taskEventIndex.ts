@@ -97,7 +97,7 @@ export class GhostTaskEventIndex {
 /** Select state facts from the canonical projection; content requires the message topic declaration. */
 function taskState(raw: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
-  for (const key of ['status', 'changedAtMs']) if (key in raw) result[key] = raw[key];
+  for (const key of ['status', 'snoozedUntil', 'snoozedAt', 'changedAtMs']) if (key in raw) result[key] = raw[key];
   if (raw.activity === null) result.activity = null;
   else if (raw.activity && typeof raw.activity === 'object') {
     const activity = raw.activity as Record<string, unknown>;

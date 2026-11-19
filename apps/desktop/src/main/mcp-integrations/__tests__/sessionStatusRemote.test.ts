@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
-import { createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker.js';
 import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
@@ -157,5 +157,35 @@ describe('remote session archive status', () => {
     const setStatus = createRemoteSessionsStatusSetter({ invoke, captureAccess: () => { throw new Error('switching'); } });
     expect(await setStatus(request)).toMatchObject({ errorCode: 'HOST_NOT_READY', changed: [] });
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+// Snooze reuses the same patch-meta writer (task-inbox-snooze.md). Unit tier, fake transport.
+// Minimal failing inputs: a host from before the inbox rejects the field by name (nothing was
+// written, so it must not read as "may have applied"); a receipt whose wake time differs only
+// in ISO formatting must still count as applied.
+describe('remote session snooze', () => {
+  const until = '2026-12-01T09:00:00.000Z';
+  it('treats a pre-inbox host as unsupported, not as an unknown outcome', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: false, error: {
+      code: 'IPC_ERROR', message: "Error invoking remote method 'local-db:sessions:patch-meta': Error: [INVALID_PARAMS] field not allowed in patch-meta: snoozedUntil",
+    } }));
+    const snooze = createRemoteSessionsSnoozeSetter({ invoke, captureAccess: () => () => {} });
+    expect(await snooze({ deviceId: 'studio', sessionIds: ['s1', 's2'], snoozedUntil: until })).toMatchObject({
+      ok: false, errorCode: 'REMOTE_UNSUPPORTED', changed: [], failedSessionId: 's1', remainingSessionIds: ['s2'],
+    });
+    expect(invoke).toHaveBeenCalledWith('studio', 'local-db:sessions:patch-meta', ['s1', { snoozedUntil: until }], expect.anything());
+  });
+
+  it('verifies the saved wake time by instant and stops when the receipt disagrees', async () => {
+    const invoke = vi.fn(async (_d: string, _c: string, args: unknown[]): Promise<InvokeResultPayload> => ({ ok: true, result: {
+      id: args[0], title: 't', snoozedUntil: args[0] === 's1' ? '2026-12-01T09:00:00Z' : null, snoozedAt: '2026-11-20T00:00:00.000Z',
+    } }));
+    const snooze = createRemoteSessionsSnoozeSetter({ invoke, captureAccess: () => () => {} });
+    expect(await snooze({ deviceId: 'studio', sessionIds: ['s1', 's2'], snoozedUntil: until })).toMatchObject({
+      ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN',
+      changed: [{ sessionId: 's1', snoozedUntil: '2026-12-01T09:00:00Z', snoozedAt: '2026-11-20T00:00:00.000Z' }],
+      failedSessionId: 's2',
+    });
   });
 });

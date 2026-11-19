@@ -1533,6 +1533,31 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return updated;
   }
 
+  /** Tasks among sessionIds with an unread finished automation run (the sidebar's unread dot). */
+  async listSessionIdsWithUnreadRuns(sessionIds: readonly string[]): Promise<Set<string>> {
+    if (sessionIds.length === 0) return new Set();
+    const rows = await this.getDb()
+      .selectDistinct({ sessionId: scheduleRuns.sessionId })
+      .from(scheduleRuns)
+      .where(and(inArray(scheduleRuns.sessionId, [...sessionIds]), unreadTerminalRunWhere(), publicScheduleRunWhere()));
+    return new Set(rows.flatMap((row) => (row.sessionId ? [row.sessionId] : [])));
+  }
+
+  /**
+   * Mark the finished automation runs of these tasks read, as the inbox "Done" does for a
+   * followed task. Returns the affected schedule ids for the existing read broadcast.
+   */
+  async markSessionRunsRead(sessionIds: readonly string[]): Promise<string[]> {
+    if (sessionIds.length === 0) return [];
+    const db = this.getDb();
+    const where = and(inArray(scheduleRuns.sessionId, [...sessionIds]), unreadTerminalRunWhere(), publicScheduleRunWhere());
+    const rows = await db.selectDistinct({ scheduleId: scheduleRuns.scheduleId }).from(scheduleRuns).where(where);
+    if (rows.length === 0) return [];
+    await db.update(scheduleRuns).set({ readAt: Date.now() }).where(where).run();
+    this.bumpSidebarIndexCache();
+    return rows.map((row) => row.scheduleId);
+  }
+
   /**
    * Legacy compatibility: older/deleted automation data can leave scheduler-created
    * sessions without schedule_runs rows. The sidebar can still surface them through

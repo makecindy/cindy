@@ -90,6 +90,16 @@ export function taskInboxSignalsFromRank(
 /** Reserved ISO value so older inbox clients still classify the task as snoozed. */
 export const INDEFINITE_SNOOZE_UNTIL = '9999-12-31T23:59:59.999Z';
 
+/** The one-year limit applies only to scheduled wake times. */
+export const MAX_SNOOZE_AHEAD_MS = 366 * 86_400_000;
+
+/** A wake time the owning computer saves: the indefinite value, or a future time within a year. */
+export function isAcceptedSnoozeUntil(value: unknown, nowMs: number): value is string {
+  if (value === INDEFINITE_SNOOZE_UNTIL) return true;
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) && ms > nowMs && ms <= nowMs + MAX_SNOOZE_AHEAD_MS;
+}
+
 /** A new input (including an automation trigger) returns the task to its live section. */
 export function taskSnoozeUntil(task: TaskInboxState): number {
   const until = Date.parse(task.snoozedUntil ?? '');

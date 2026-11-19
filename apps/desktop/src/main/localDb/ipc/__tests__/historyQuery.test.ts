@@ -72,6 +72,29 @@ describe('remote history query handler', () => {
       expect.objectContaining({ cursor: { createdAt: 4, id: 'source-cursor' } }),
     );
   });
+  // A controller's list_sessions(include_inbox) is answered here, so the section comes from the
+  // computer that owns the task's live state. Minimal input: one row plus the flag. Unit tier.
+  it('classifies inbox sections on the source computer and refuses the flag without a reader', async () => {
+    const s = setup();
+    s.listSessions.mockResolvedValue({ ok: true, page: { items: [{
+      id: 'run', title: 'Run', workingDir: null, agentKind: 'codex', workspaceKind: 'project', model: 'm', status: 'active',
+      source: 'desktop', orcaRole: null, parentSessionId: null, createdAt: 1, updatedAt: 2, userSendAt: null, messageCount: 1,
+    }], nextCursor: null, hasMore: false } } as any);
+    const readTaskInbox = vi.fn(async () => ({
+      ok: true as const,
+      signals: { run: { waiting: false, running: true, unread: false, following: false } },
+    }));
+    const execute = createHistoryQueryHandler({ listSessions: s.listSessions, searchChatHistory: s.searchChatHistory, readTaskInbox });
+    expect(await execute({ tool: 'list_sessions', args: { include_inbox: true } })).toMatchObject({
+      ok: true,
+      sessions: [{ id: 'run', inbox: { section: 'working', running: true } }],
+    });
+    expect(readTaskInbox).toHaveBeenCalledWith(['run']);
+    expect(await s.execute({ tool: 'list_sessions', args: { include_inbox: true } })).toMatchObject({
+      ok: false,
+      errorCode: 'UNSUPPORTED_CAPABILITY',
+    });
+  });
   it('rejects unknown tools, recursive forwarding and invalid filters without querying', async () => {
     const s = setup();
     await expect(s.execute({ tool: 'get_chat_history', args: {} })).rejects.toThrow(

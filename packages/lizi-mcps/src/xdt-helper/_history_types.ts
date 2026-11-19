@@ -99,6 +99,20 @@ export interface HistorySession {
   messageCount: number;
   lastActivityAt?: number;
   companion?: HistoryCompanion | null;
+  /** Inbox snooze pair (unix ms). Older readers omit both. */
+  snoozedUntil?: number | null;
+  snoozedAt?: number | null;
+}
+
+/** Live inbox facts the owning computer holds in memory; never persisted by this layer. */
+export interface HistoryTaskInboxSignals {
+  /** A reply, permission or plan review is pending, or an error still needs the user. */
+  waiting: boolean;
+  running: boolean;
+  /** A finished round or automation run has not been read yet. */
+  unread: boolean;
+  /** Bound to an enabled automation (any kind). */
+  following: boolean;
 }
 
 export interface HistoryMessage {
@@ -271,6 +285,8 @@ export interface XdtHelperHistoryDeps {
   }) => Promise<ControlResult<{ sessionIds: string[] | null }>>;
   listWorkdirs: (args: ListWorkdirsArgs) => Promise<ControlResult<{ page: HistoryPage<HistoryWorkdir> }>>;
   listSessions: (args: ListSessionsArgs) => Promise<ControlResult<{ page: HistoryPage<HistorySession> }>>;
+  /** list_sessions include_inbox: live inbox facts for one page. Absent = host cannot classify. */
+  readTaskInbox?: (sessionIds: string[]) => Promise<ControlResult<{ signals: Record<string, HistoryTaskInboxSignals> }>>;
   getMessages: (
     args: GetMessagesArgs,
   ) => Promise<ControlResult<{ page: HistoryPage<HistoryMessage> }, HistoryReadErrorCode>>;

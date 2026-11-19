@@ -31,6 +31,8 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'move_session_queued_message',
   'archive_sessions',
   'unarchive_sessions',
+  'snooze_sessions',
+  'complete_sessions',
   'delete_session',
   'fork_session',
   'rewind_session',
