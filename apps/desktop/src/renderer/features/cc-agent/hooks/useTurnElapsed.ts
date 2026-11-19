@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useDocumentVisible } from '@/hooks/useWindowVisible';
 
 interface ClockInput {
   sessionId: string | null;
@@ -28,30 +29,35 @@ interface Sample {
 export function useTurnElapsed({
   sessionId, deviceId, turnKey, running, enabled, endedAt,
 }: ClockInput): number | null {
+  const documentVisible = useDocumentVisible();
+  const [windowHidden, setWindowHidden] = useState(false);
+  useEffect(() => window.electronAPI?.onWindowHiddenChange?.(setWindowHidden), []);
+  const active = enabled && documentVisible && !windowHidden;
   const key = JSON.stringify([deviceId, sessionId, turnKey]);
   const [sample, setSample] = useState<Sample | null>(null);
   const observed = useRef<Sample | null>(null);
   const [now, setNow] = useState(() => performance.now());
 
   useEffect(() => {
-    if (!enabled || !sessionId || turnKey === null) {
+    if (!active || !sessionId || turnKey === null) {
       setSample(null);
       return;
     }
     const id = sessionId;
     let cancelled = false;
-    let version = 0;
+    let inFlight = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let retryDelay = 250;
 
     async function sync() {
-      const request = ++version;
+      if (cancelled || inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
       clearTimeout(retry);
       try {
         const row = (deviceId
           ? await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [id])
           : await window.electronAPI.localDb.sessions.get(id)) as SessionClockRow | null;
-        if (cancelled || request !== version || row?.id !== id) return;
+        if (cancelled || row?.id !== id) return;
         // Old hosts have no elapsed sample. A supported host can temporarily have no
         // marker while its running/terminal event races the durable marker write.
         if (row.turnElapsedMs === undefined) {
@@ -76,7 +82,9 @@ export function useTurnElapsed({
           return;
         }
       } catch {
-        if (cancelled || request !== version) return;
+        if (cancelled) return;
+      } finally {
+        inFlight = false;
       }
       setSample(null);
       // Only retry a missing or racing sample. A settled clock ticks without network traffic.
@@ -91,7 +99,6 @@ export function useTurnElapsed({
     }
     void sync();
     window.addEventListener('focus', resume);
-    document.addEventListener('visibilitychange', resume);
     let lastTick = Date.now();
     const interval = running ? setInterval(() => {
       const wallNow = Date.now();
@@ -106,10 +113,9 @@ export function useTurnElapsed({
       clearTimeout(retry);
       clearInterval(interval);
       window.removeEventListener('focus', resume);
-      document.removeEventListener('visibilitychange', resume);
     };
-  }, [deviceId, enabled, endedAt, key, running, sessionId, turnKey]);
+  }, [deviceId, active, endedAt, key, running, sessionId, turnKey]);
 
-  if (!enabled || sample?.key !== key || sample.running !== running) return null;
+  if (!active || sample?.key !== key || sample.running !== running) return null;
   return sample.elapsedMs + (running ? Math.max(0, now - sample.receivedAt) : 0);
 }

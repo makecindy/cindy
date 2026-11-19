@@ -19,6 +19,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
@@ -81,4 +82,43 @@ it('waits for the new local start marker and hides time for old remote hosts', a
   act(() => vi.advanceTimersByTime(10000));
   expect(result.current).toBeNull();
   expect(remote).toHaveBeenCalledTimes(1);
+});
+
+it('pauses reads and retries while document or native window is hidden, and shares recovery reads', async () => {
+  let nativeHidden!: (hidden: boolean) => void;
+  window.electronAPI.onWindowHiddenChange = callback => { nativeHidden = callback; return () => {}; };
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  const { rerender, result } = renderHook(useTurnElapsed, { initialProps: view });
+  await flush();
+  expect(remote).not.toHaveBeenCalled();
+  let complete!: (value: unknown) => void;
+  remote.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  visibility.mockReturnValue('visible');
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await flush();
+  act(() => {
+    window.dispatchEvent(new Event('focus'));
+    window.dispatchEvent(new Event('focus'));
+    vi.setSystemTime(new Date('2040-01-02'));
+    vi.advanceTimersByTime(1000);
+  });
+  expect(remote).toHaveBeenCalledTimes(1);
+  await act(async () => complete(sample(1000)));
+  act(() => nativeHidden(true));
+  rerender({ ...view, turnKey: 2 });
+  await act(async () => vi.advanceTimersByTimeAsync(20000));
+  expect(remote).toHaveBeenCalledTimes(1);
+  remote.mockRejectedValueOnce(new Error('link recovering'));
+  act(() => nativeHidden(false));
+  await flush();
+  expect(remote).toHaveBeenCalledTimes(2);
+  act(() => nativeHidden(true));
+  await act(async () => vi.advanceTimersByTimeAsync(20000));
+  expect(remote).toHaveBeenCalledTimes(2);
+  remote.mockResolvedValueOnce(sample(3000, 40000));
+  act(() => nativeHidden(false));
+  await flush();
+  expect(remote).toHaveBeenCalledTimes(3);
+  expect(result.current).toBe(3000);
+  visibility.mockRestore();
 });

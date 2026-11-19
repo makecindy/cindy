@@ -235,7 +235,8 @@ function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<v
  *
  * 写入用 MAX 守卫(单语句原子,非读改写):延后的写可能晚于后续 turn 的正常
  * 收尾写入队,盲写会把更新的 ended 回退成旧定格值,让"已正常完成的后续 turn"
- * 在重启后误判为中断。只允许时间戳前进。
+ * 在重启后误判为中断。只允许时间戳前进。已完成的当前轮次保留首次结束时刻，
+ * 后续重复终态或空闲关闭不会把空闲时间计入本轮耗时；显式确认仍走 MAX 语义。
  */
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (isEndedWriteSuppressed()) return;
@@ -247,6 +248,8 @@ export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number
     sessionId,
     endedAt,
     notifyContext,
+    undefined,
+    true,
   );
 }
 
@@ -267,8 +270,8 @@ export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Pro
   const notificationTurn = _notificationTurns.get(sessionId);
   if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   void barrier.then(
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db),
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
   );
 }
 
@@ -344,16 +347,22 @@ export async function ackSessionTurnEndedIfUnchanged(
   return landed;
 }
 
-/** ended 写入的唯一落库实现:MAX 守卫 + per-session 链,见 markSessionTurnEnded 注释。 */
+/** Normal terminal duplicates preserve the first completion; explicit acknowledgements retain MAX semantics. */
 function enqueueEndedWrite(
   sessionId: string, endedAt: number, notifyContext: unknown, db = captureMarkerDb(),
+  preserveCompleted = false,
 ): Promise<void> {
   return chainWrite(sessionId, async () => {
     try {
       if (!db) return;
       await db
         .update(sessions)
-        .set({ lastTurnEndedAt: sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
+        .set({ lastTurnEndedAt: preserveCompleted
+          ? sql`CASE WHEN ${sessions.activeTurnStartedAt} IS NOT NULL
+              AND ${sessions.lastTurnEndedAt} >= ${sessions.activeTurnStartedAt}
+            THEN ${sessions.lastTurnEndedAt}
+            ELSE MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt}) END`
+          : sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
         .where(eq(sessions.id, sessionId));
       if (_onTurnEndedPersisted) {
         // 广播值必须**读回生效值**:MAX 守卫可能保留了比本次 endedAt 更新的已有值
