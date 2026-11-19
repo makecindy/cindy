@@ -142,7 +142,6 @@ import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShar
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
-import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import {
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
@@ -2688,11 +2687,10 @@ export function ProvidersSection() {
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
   const providerGroups = useLocalProviderGroupsState();
-  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
+  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds, ownedShares } = useOwnRemoteProviderList();
   const remoteDisable = useRemoteProviderDisable();
   const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
     ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
-  const ownedShares = useOwnedProviderShares(ownRemoteProviders.map(entry => entry.deviceId));
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
