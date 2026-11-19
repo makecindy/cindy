@@ -19,9 +19,8 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   validateLocalProjectDirectory,
   validateExistingLocalProjectDirectory,
-  withLocalProjectContext,
-  type LocalProjectContext,
-} from './createProjectCore.js';
+} from '../projectDirectoryRoot.js';
+import { withLocalProjectContext, type LocalProjectContext } from './localProjectContext.js';
 
 const identity = (directory: string) =>
   projectKeyComparisonKey(`local:${directory}`, process.platform);
@@ -229,8 +228,8 @@ export async function projectForNewTask(workingDir?: string, projectDir?: string
   return { projectDir: result.projectDir, workspaceKind: result.projectDir ? 'project' as const : 'dialogue' as const };
 }
 
-export { inferProjectsRoot } from '../projectCreation.js';
-import { inferProjectsRoot } from '../projectCreation.js';
+export { inferProjectsRoot } from '../projectRootInference.js';
+import { inferProjectsRoot } from '../projectRootInference.js';
 
 /**
  * Explicit choice first, then visible existing projects, then ~/Projects. Never writes.

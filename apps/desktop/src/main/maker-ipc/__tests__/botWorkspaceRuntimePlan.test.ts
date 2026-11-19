@@ -1,3 +1,4 @@
+import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -70,9 +71,9 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
   it('runs a V2 teammate\'s chats as project sessions so the tasks they open stay in its project', async () => {
     const o = opts('v2-main');
     await prepareBotWorkspaceRuntime(o, deps);
-    expect(o).toMatchObject({ workingDir: '/owner-root/bots/v2/workspace', workspaceKind: 'project', projectDir: '/owner-root/bots/v2/workspace' });
+    expect(o).toMatchObject({ workingDir: path.join('/owner-root', 'bots', 'v2', 'workspace'), workspaceKind: 'project', projectDir: path.join('/owner-root', 'bots', 'v2', 'workspace') });
     expect(h.sqlite!.prepare('SELECT workspace_kind, project_dir FROM sessions WHERE id = ?').get('v2-main'))
-      .toEqual({ workspace_kind: 'project', project_dir: '/owner-root/bots/v2/workspace' });
+      .toEqual({ workspace_kind: 'project', project_dir: path.join('/owner-root', 'bots', 'v2', 'workspace') });
   });
 
   it('keeps a hidden or unregistered buddy project out of the sidebar on resume', async () => {
