@@ -1,5 +1,6 @@
 import type { EditorView } from '@tiptap/pm/view';
 import type { ResolvedPos } from '@tiptap/pm/model';
+import { hasUserVisibleText } from '../../shared/visibleText';
 
 /**
  * Composer 纯文本 Markdown 列表的兼容接续。结构化 bullet / ordered list
@@ -82,7 +83,7 @@ export function computeListContinuation(
   // 空项判定看**整行**(光标前 rest + 光标后正文):否则 `1. |todo`(光标在标记后、
   // 正文前)会被当成空项退出、删掉标记留下裸 "todo"。光标后仍有正文时
   // 走 continue —— 在光标处插换行 + 下一前缀,把 "todo" 顺成下一项(拆分列表)。
-  if (rest.trim().length === 0 && lineAfterCaret.trim().length === 0) return { action: 'exit' };
+  if (!hasUserVisibleText(rest) && !hasUserVisibleText(lineAfterCaret)) return { action: 'exit' };
   return { action: 'continue', insert: match.nextPrefix };
 }
 
@@ -184,10 +185,7 @@ export function applyListBackspace(view: EditorView): boolean {
   if (after && after.type.name !== 'hardBreak') return false;
 
   const { lineText, lineStartOffset } = scanCaretLine($from);
-  const match = matchListPrefix(lineText);
-  if (!match) return false;
-  // 前缀后还有内容 → 正常退格(一个字符一个字符删)。
-  if (lineText.slice(match.prefixLength).trim().length > 0) return false;
+  if (computeListContinuation(lineText)?.action !== 'exit') return false;
 
   const lineStartAbs = $from.start() + lineStartOffset;
   view.dispatch(state.tr.delete(lineStartAbs, $from.pos).scrollIntoView());

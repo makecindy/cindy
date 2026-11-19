@@ -14,6 +14,7 @@ import { canJoin, ReplaceAroundStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
 import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { applyListContinuation } from '@/lib/composerListContinuation';
+import { hasUserVisibleText } from '../../../shared/visibleText';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
@@ -32,8 +33,6 @@ interface OrderedListAttrs {
 }
 
 interface SelectedTaskPrefix {
-  from: number;
-  to: number;
   bodyIsEmpty: boolean;
   caretAtOrAfterPrefix: boolean;
   caretAtParagraphEnd: boolean;
@@ -383,7 +382,7 @@ function selectedListItemIsEmpty(view: EditorView, depth: number): boolean {
   return (
     item.childCount === 1 &&
     paragraph?.type.name === 'paragraph' &&
-    paragraph.content.content.every((node) => node.isText && !(node.text ?? '').trim())
+    paragraph.content.content.every((node) => node.isText && !hasUserVisibleText(node.text))
   );
 }
 
@@ -459,30 +458,10 @@ function selectedTaskPrefix(view: EditorView): SelectedTaskPrefix | null {
   const match = text.match(/^\[[ xX]\](?:[ \t]+|$)/);
   if (!match) return null;
   return {
-    from: $from.start(),
-    to: $from.start() + match[0].length,
-    bodyIsEmpty: text.slice(match[0].length).trim().length === 0,
+    bodyIsEmpty: !hasUserVisibleText(text.slice(match[0].length)),
     caretAtOrAfterPrefix: $from.parentOffset >= match[0].length,
     caretAtParagraphEnd: $from.parentOffset === paragraph.content.size,
   };
-}
-
-function clearTaskPrefixAndLift(
-  view: EditorView,
-  itemDepth: number,
-  taskPrefix: SelectedTaskPrefix,
-): boolean {
-  if (
-    !taskPrefix.bodyIsEmpty ||
-    !taskPrefix.caretAtParagraphEnd ||
-    !selectedListItemIsOnlyTaskParagraph(view, itemDepth)
-  ) {
-    return false;
-  }
-  view.dispatch(view.state.tr.delete(taskPrefix.from, taskPrefix.to));
-  const itemType = view.state.schema.nodes.listItem;
-  if (itemType) liftComposerListItem(view, itemType);
-  return true;
 }
 
 function backspaceAfterStructuredList(view: EditorView): boolean {
@@ -525,7 +504,7 @@ export function handleStructuredListBreak(view: EditorView): boolean {
     taskPrefix.caretAtParagraphEnd
   ) {
     if (!selectedListItemIsOnlyTaskParagraph(view, itemDepth)) return false;
-    return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
+    return liftEmptyStructuredListItem(view, itemType);
   }
   if (selectedListItemIsEmpty(view, itemDepth)) {
     return liftEmptyStructuredListItem(view, itemType);
@@ -628,7 +607,6 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
   ) {
     return false;
   }
-  if (taskPrefix) return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
   return liftEmptyStructuredListItem(view, itemType);
 }
 
