@@ -34,6 +34,54 @@ fn failure(error: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(format!("Windows taskbar: {error}"))
 }
 
+/// Read a browser's default manifest path in the current user's registry view.
+/// Validate the complete UTF-16 value before expanding environment variables.
+#[napi]
+pub fn read_browser_manifest(key: String) -> napi::Result<Option<String>> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+    let key = key.strip_prefix("HKCU\\").filter(|key| !key.contains('\0'))
+        .ok_or_else(|| napi::Error::from_reason("Invalid registry key"))?;
+    let wide: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+    // Longest Windows path, including its terminator. Larger or malformed
+    // values must never be mistaken for an unclaimed registration.
+    let mut buffer = vec![0u16; 32768];
+    let mut bytes = (buffer.len() * 2) as u32;
+    let mut kind = 0;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, wide.as_ptr(), std::ptr::null(),
+            RRF_NOEXPAND | RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &mut kind, buffer.as_mut_ptr().cast(), &mut bytes)
+    };
+    match status {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+        ERROR_SUCCESS => {
+            let raw = buffer.get(..(bytes / 2) as usize)
+                .and_then(|data| data.strip_suffix(&[0]))
+                .filter(|data| bytes % 2 == 0 && !data.is_empty() && !data.contains(&0))
+                .ok_or_else(|| napi::Error::from_reason("Invalid registry value"))?;
+            let mut expanded;
+            let contents = if kind == REG_EXPAND_SZ {
+                expanded = vec![0u16; 32768];
+                let length = unsafe {
+                    ExpandEnvironmentStringsW(buffer.as_ptr(), expanded.as_mut_ptr(), expanded.len() as u32)
+                };
+                if length <= 1 || length as usize > expanded.len() {
+                    return Err(napi::Error::from_reason("Invalid expanded registry path"));
+                }
+                &expanded[..length as usize - 1]
+            } else {
+                raw
+            };
+            String::from_utf16(contents).map(Some)
+                .map_err(|_| napi::Error::from_reason("Invalid registry string"))
+        }
+        _ => Err(napi::Error::from_reason(format!("Registry read failed ({status})"))),
+    }
+}
+
 // Only balance successful CoInitializeEx calls; Electron normally already owns
 // the apartment. A different existing apartment is usable without reinitializing.
 struct Apartment(bool);

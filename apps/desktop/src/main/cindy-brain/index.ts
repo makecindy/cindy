@@ -542,6 +542,8 @@ import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir, relocateGhostPickedDirs, issueGhostPickedDirectory, getGhostPickedDirectory } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
+import { createNativeBinding } from '../browser-extension/native-binding.js';
+import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
@@ -4544,6 +4546,14 @@ let browserExtensionSlotSingleton: GhostBrowserExtensionSlot | null = null;
 export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
   if (!browserExtensionSlotSingleton) {
     browserExtensionSlotSingleton = new GhostBrowserExtensionSlot({
+      createNativeBinding: options => createNativeBinding({
+        ...options,
+        readWindowsManifests: async keys => {
+          const native = await loadWindowsTaskbarNative().catch(() => null);
+          if (!native?.readBrowserManifest) return undefined;
+          return keys.map(key => native.readBrowserManifest(key)).filter(path => path !== null);
+        },
+      }),
       getGhost: findGhostForInstanceId,
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
       wake: async (ghostId) => {

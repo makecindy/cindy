@@ -34,6 +34,8 @@ export interface NativeBindingOptions {
   /** Only an explicit action in the trusted main window may replace another registration. */
   confirmTakeover?(): Promise<boolean>;
   assertCurrent?(): void;
+  /** Undefined selects the portable reader when the desktop addon is unavailable. */
+  readWindowsManifests?(keys: readonly string[]): Promise<readonly string[] | undefined>;
   /** 覆盖浏览器 profile 目录清单(测试用)。 */
   profiles?: string[];
   run?: (
@@ -106,14 +108,12 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     }
   }
 
-  async function registeredBinary(expectedBinary?: string): Promise<string | null> {
-    const requiredFiles = new Set<string>();
-    if (expectedBinary !== undefined && platform === 'win32') {
-      // reg.exe uses the same failure code for missing keys and failed reads. Read the
-      // actual write targets through Registry.GetValue so access errors cannot look absent.
-      const keys = Buffer.from(JSON.stringify(windowsRegistryKeys.map(key =>
-        key.replace(/^HKCU/, 'HKEY_CURRENT_USER')))).toString('base64');
-      const script = `
+  async function queryWindowsManifests(): Promise<string[]> {
+    // reg.exe uses the same failure code for missing keys and failed reads. Read the
+    // actual write targets through Registry.GetValue so access errors cannot look absent.
+    const keys = Buffer.from(JSON.stringify(windowsRegistryKeys.map(key =>
+      key.replace(/^HKCU/, 'HKEY_CURRENT_USER')))).toString('base64');
+    const script = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${keys}')) | ConvertFrom-Json
@@ -126,17 +126,29 @@ $values = @(foreach ($key in $keys) {
 })
 [Console]::Write((ConvertTo-Json -InputObject $values -Compress))
 `;
-      const powershell = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows',
-        'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      const result = await run!(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive',
-        '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { windowsHide: true, timeout: 10000 }) as { stdout: string };
-      const values: unknown = JSON.parse(result.stdout.trim());
-      if (!Array.isArray(values)) throw new Error('NATIVE_PATH_UNSAFE');
-      for (const file of values) {
-        if (typeof file !== 'string' || !file) throw new Error('NATIVE_PATH_UNSAFE');
-        requiredFiles.add(file);
+    const powershell = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows',
+      'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const result = await run!(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive',
+      '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 10000 }) as { stdout: string };
+    const values: unknown = JSON.parse(result.stdout.trim());
+    if (!Array.isArray(values) || !values.every(file => typeof file === 'string' && file))
+      throw new Error('NATIVE_PATH_UNSAFE');
+    return values;
+  }
+
+  async function registeredBinary(expectedBinary?: string): Promise<string | null> {
+    const requiredFiles = new Set<string>();
+    if (expectedBinary !== undefined && platform === 'win32') {
+      let files: readonly string[];
+      try {
+        files = await options.readWindowsManifests?.(windowsRegistryKeys) ?? await queryWindowsManifests();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as Error).message === 'NATIVE_PATH_UNSAFE') throw error;
+        const timedOut = (error as { killed?: boolean }).killed === true;
+        throw new Error(timedOut ? 'REGISTRY_READ_TIMEOUT' : 'REGISTRY_READ_FAILED');
       }
+      for (const file of files) requiredFiles.add(file);
     }
     const files = new Set([registrationFile, ...requiredFiles,
       ...(platform === 'win32' ? [] : browserProfiles().map(profile =>
@@ -355,8 +367,8 @@ $values = @(foreach ($key in $keys) {
       const reason =
         code && ['EACCES', 'EPERM', 'ENOENT', 'EROFS', 'EBUSY'].includes(code)
           ? code
-          : (e as Error)?.message === 'NATIVE_PATH_UNSAFE'
-            ? 'NATIVE_PATH_UNSAFE'
+          : ['NATIVE_PATH_UNSAFE', 'REGISTRY_READ_FAILED', 'REGISTRY_READ_TIMEOUT'].includes((e as Error)?.message)
+            ? (e as Error).message
             : 'INSTALL_FAILED';
       return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason };
     }
