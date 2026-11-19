@@ -405,8 +405,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           : usable(r);
         return {
           key: r.member.key,
+          // 分享的额度只代表分享者的一个账号、不按模型，只用于新任务排先后，不作为任务进行中换号的依据。
           usable: ready && (!schedule || schedule.accounts > 0 || accountFull) && (!input.quotaRebalance
-            || (memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member) && !!quota.quota && !quota.fiveHourTight)),
+            || (r.member.kind !== 'share' && memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member)
+              && !!quota.quota && !quota.fiveHourTight)),
           paused: paused(r),
           running: physicalRunning,
           limit: accountFull ? 0 : effectiveConcurrencyLimit(r.member),
@@ -426,6 +428,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         lastPicked: lastPicked.get(input.providerId) ?? null,
         roundPicks: roundPicks.get(input.providerId),
         random: deps.random,
+        keepUnknownQuota: true,
       });
       if (!key) {
         if (!input.quotaRebalance && providerGroupMembersFull(schedulable, { exclude: input.exclude })) {
@@ -480,7 +483,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const usable = usableFor(input);
       const paused = pausedFor(input);
       return resolved.flatMap((r) => {
-        if (input.exclude.has(r.member.key) || r.providerContinuity?.stale || !usable(r) || paused(r)) return [];
+        if (r.member.kind === 'share' || input.exclude.has(r.member.key) || r.providerContinuity?.stale || !usable(r) || paused(r)) return [];
         if (memberRunning(input.providerId, r) >= effectiveConcurrencyLimit(r.member)) return [];
         const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         if (!state.quota || state.fiveHourTight) return [];
@@ -547,9 +550,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             ...(until !== null ? { coolingUntil: until } : {}),
             // 展示确认的配额原因，不把登录/繁忙等普通冷却说成配额耗尽；不改分配与持久冷却。
             ...(state === 'cooling' && quota.limited ? { usageLimit: { resetAtMs: quota.resetAtMs } } : {}),
-            // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)；分享来的电脑本来就不读配额。
-            ...(quota.quota ? { quota: quota.quota } : {}),
-            ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
+            // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)。分享来的电脑的额度
+            // 只在组所在电脑内部排先后，不随组状态外传(旧版同账号电脑也会丢弃)。
+            ...(quota.quota && r.member.kind !== 'share' ? { quota: quota.quota } : {}),
+            ...(quota.quota && r.member.kind !== 'share' && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
           };
         })),
         ...(providerContinuity ? { providerContinuity } : {}),

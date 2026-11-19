@@ -242,7 +242,7 @@ const MODEL_EFFORTS_MAX = 16;
 const REASON_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MESSAGE_MAX = 200;
 const VERSION_MAX = 64;
-const MODEL_ID_MAX = 256;
+export const GHOST_HARNESS_MODEL_ID_MAX = 256;
 const MODEL_TEXT_MAX = 200;
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f]/;
@@ -318,8 +318,8 @@ function parseHarnessModels(raw: unknown): { ok: true; models: GhostHarnessModel
   const models: GhostHarnessModel[] = [];
   const seen = new Set<string>();
   for (const entry of raw) {
-    if (!isRecord(entry) || !plainText(entry.id, MODEL_ID_MAX) || !plainText(entry.name, MODEL_TEXT_MAX)) {
-      return { ok: false, reason: `each model needs an id (1–${MODEL_ID_MAX}) and a name (1–${MODEL_TEXT_MAX})` };
+    if (!isRecord(entry) || !plainText(entry.id, GHOST_HARNESS_MODEL_ID_MAX) || !plainText(entry.name, MODEL_TEXT_MAX)) {
+      return { ok: false, reason: `each model needs an id (1–${GHOST_HARNESS_MODEL_ID_MAX}) and a name (1–${MODEL_TEXT_MAX})` };
     }
     if (seen.has(entry.id)) return { ok: false, reason: `duplicate model id ${entry.id}` };
     seen.add(entry.id);

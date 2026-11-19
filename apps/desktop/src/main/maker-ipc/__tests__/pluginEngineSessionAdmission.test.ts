@@ -60,6 +60,7 @@ describe('opening a task on a plugin engine', () => {
     });
     expect(admitPluginEngineSession(body({ model: ' ' }), [harness(availability)]).model).toBe('default');
     expect(admitPluginEngineSession(body({ model: 'deepseek-v4' }), [harness(availability)]).model).toBe('deepseek-v4');
+    expect(admitPluginEngineSession(body({ model: ' deepseek-v4 ' }), [harness(availability)]).model).toBe(' deepseek-v4 ');
   });
 
   // 2026-11-19 用户要求插件引擎可选思考深度：只保留该模型列出的档位，其余交给引擎自己的默认。
@@ -113,6 +114,7 @@ describe('switching an existing task onto a plugin engine', () => {
     });
     expect(admitPluginEngineSwitchTarget(target({ effort: 'xhigh' }), engines).effort).toBe('');
     expect(admitPluginEngineSwitchTarget(target({ model: ' ' }), engines).model).toBe('default');
+    expect(admitPluginEngineSwitchTarget(target({ model: ' deepseek-v4 ' }), engines).model).toBe(' deepseek-v4 ');
   });
 
   it.each([

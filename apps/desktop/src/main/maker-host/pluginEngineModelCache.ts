@@ -5,11 +5,13 @@
  *
  * Kept per account in `owners/<account>/plugin-engine-models.json`: model ids, names, descriptions,
  * groups and reasoning levels only (no messages, accounts or credentials), at most 32 engines × 200
- * models. Atomic writes; an unreadable file reads as empty and is replaced by the next report.
+ * models. IDs keep their complete protocol value up to the same limit as the published model
+ * directory. Atomic writes; an unreadable file reads as empty and is replaced by the next report.
  *
  * An engine knows the reasoning levels of its selected model only and marks the others unknown, so
  * a model keeps the levels last seen for it until a report actually knows them again.
  */
+import { GHOST_HARNESS_MODEL_ID_MAX, GHOST_HARNESS_MODELS_MAX } from '@cindy/plugin-protocol';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { PLUGIN_ENGINE_EFFORTS, type PluginEngineEffort } from '../../shared/pluginEngines.js';
@@ -26,7 +28,6 @@ export interface CachedPluginEngineModel {
 
 const MODELS_FILE = 'plugin-engine-models.json';
 const MAX_HARNESSES = 32;
-const MAX_MODELS_PER_HARNESS = 200;
 const MAX_TEXT = 200;
 
 const harnessModels = new Map<string, CachedPluginEngineModel[]>();
@@ -41,10 +42,10 @@ function boundedText(value: unknown): string | undefined {
 function toCachedModels(raw: unknown): CachedPluginEngineModel[] {
   if (!Array.isArray(raw)) return [];
   const models: CachedPluginEngineModel[] = [];
-  for (const item of raw.slice(0, MAX_MODELS_PER_HARNESS)) {
+  for (const item of raw.slice(0, GHOST_HARNESS_MODELS_MAX)) {
     const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-    const id = boundedText(record.id);
-    if (!id) continue;
+    const { id } = record;
+    if (typeof id !== 'string' || id.length > GHOST_HARNESS_MODEL_ID_MAX || !id.trim()) continue;
     const description = boundedText(record.description);
     const group = boundedText(record.group);
     const efforts = Array.isArray(record.efforts)
@@ -52,7 +53,7 @@ function toCachedModels(raw: unknown): CachedPluginEngineModel[] {
       : [];
     models.push({
       id,
-      displayName: boundedText(record.displayName) ?? id,
+      displayName: boundedText(record.displayName) ?? id.slice(0, MAX_TEXT),
       ...(description ? { description } : {}),
       ...(group ? { group } : {}),
       ...(efforts.length ? { efforts } : {}),

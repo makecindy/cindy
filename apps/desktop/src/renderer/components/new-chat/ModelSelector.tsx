@@ -1279,9 +1279,11 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const { accountTier } = useModelAccessStatus();
   // 面板打开时请插件引擎刷新模型列表，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
   const hasPluginEngines = (props.pluginEngines?.engines.length ?? 0) > 0;
+  const readCatalogue = props.pluginEngines?.readCatalogue
+    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
   useEffect(() => {
-    if (hasPluginEngines) requestPluginEnginesRefresh();
-  }, [hasPluginEngines]);
+    readCatalogue?.();
+  }, [readCatalogue]);
   return (
     <ModelSelectorContentView
       {...props}

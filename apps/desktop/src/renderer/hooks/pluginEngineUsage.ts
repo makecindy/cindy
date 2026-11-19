@@ -13,6 +13,6 @@ export function readPluginEngineUsage(owner: DataOwnerGeneration, deviceId: stri
   });
 }
 
-export function invalidateLocalPluginEngineUsage(): void {
-  reader.invalidate(getDataOwnerGeneration(), null);
+export function invalidatePluginEngineUsage(deviceId: string | null): void {
+  reader.invalidate(getDataOwnerGeneration(), deviceId);
 }

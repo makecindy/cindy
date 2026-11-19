@@ -882,8 +882,7 @@
         "loading": "Leyendo cuota…",
         "unavailable": "No se puede leer la cuota de esta computadora en este momento",
         "none": "Este proveedor no tiene información de cuota",
-        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota",
-        "share": "La cuota no se muestra para computadoras compartidas por otros"
+        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota"
       },
       "runningCount_one": "{{count}} tarea en ejecución",
       "runningCount_other": "{{count}} tareas en ejecución",
@@ -13728,6 +13727,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versión todavía no admite este tipo de contenido multimedia de WeChat.",
+          "delayedReply": "Respuesta retrasada, preparada el {{createdAt}} para tu mensaje recibido el {{receivedAt}}. El contenido puede estar desactualizado.",
+          "delayedReplyQuestion": "Mensaje original: {{question}}",
           "stillProcessing": "Sigo trabajando en ello…",
           "ownerOnlyCommands": "Solo el propietario puede usar los comandos del bot.",
           "companionManagedCommand": "Abre a este compañero en Cindy: el modelo se cambia en la configuración del compañero y los permisos, debajo del cuadro de entrada de la conversación.",
@@ -20047,7 +20048,8 @@
         "validityValue_many": "{{count}} de días tras el canje",
         "validityValue_other": "{{count}} días tras el canje",
         "claimBy": "Canjear antes del",
-        "destination": "Se añade a"
+        "destination": "Se añade a",
+        "validityPermanent": "No caduca"
       },
       "doneTitle": "{{amount}} añadidos",
       "doneDescription": "Se añadió a tu Saldo promocional. Válido hasta el {{date}}.",
@@ -20063,10 +20065,13 @@
         "alreadyClaimed": "Esta tarjeta de regalo ya se ha canjeado.",
         "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
         "voided": "Esta tarjeta de regalo se ha anulado.",
+        "voidedPurchased": "Esta tarjeta de regalo no se puede canjear por ahora.",
         "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
         "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
         "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
-      }
+      },
+      "doneDescriptionPurchased": "Se añadió a tu Saldo de recargas. No caduca.",
+      "pendingDescriptionPurchased": "Se está añadiendo {{amount}} y aparecerá en breve en tu Saldo de recargas. No hace falta canjearla de nuevo."
     },
     "usage": {
       "title": "Uso del saldo",
@@ -20112,7 +20117,10 @@
         "noPayment": "No requiere pago",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Página siguiente"
+        "next": "Página siguiente",
+        "giftCard_one": "Tarjeta de regalo × {{count}}",
+        "giftCard_many": "Tarjetas de regalo × {{count}}",
+        "giftCard_other": "Tarjetas de regalo × {{count}}"
       },
       "count": "{{count}} pedidos",
       "orderId": "N.º {{id}}",
@@ -20341,6 +20349,125 @@
         "MONTH": "Incluye {{amount}} cada mes",
         "YEAR": "Incluye {{amount}} cada año",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar tarjeta de regalo",
+      "title": "Comprar tarjeta de regalo",
+      "subtitle": "Regálala o quédatela. Al canjearla se añade a tu Saldo de recargas y nunca caduca.",
+      "previewLabel": "Lo que recibirá",
+      "sameCards_one": "{{count}} tarjeta con su propio código de canje",
+      "sameCards_many": "{{count}} tarjetas con el mismo diseño, importe y mensaje, cada una con su propio código",
+      "sameCards_other": "{{count}} tarjetas con el mismo diseño, importe y mensaje, cada una con su propio código",
+      "fields": {
+        "face": "Diseño",
+        "amount": "Importe",
+        "quantity": "Cantidad",
+        "sender": "De",
+        "senderHint": "Se mostrará como «De {{sender}}»",
+        "senderPlaceholder": "Tu nombre",
+        "message": "Mensaje (opcional)",
+        "messagePlaceholder": "Unas palabras para quien la reciba",
+        "tooLong": "Máximo {{max}} caracteres",
+        "paymentMethod": "Método de pago"
+      },
+      "decrease": "Una tarjeta menos",
+      "increase": "Una tarjeta más",
+      "quantityHint": "Hasta {{limit}} tarjetas cada {{hours}} horas · te quedan {{remaining}}",
+      "quantityLimitReached": "Ya compraste el máximo de {{limit}} tarjetas en {{hours}} horas. Vuelve a intentarlo más tarde.",
+      "orderAmountCap": "Hasta {{amount}} por pedido",
+      "totalDetail_one": "{{count}} tarjeta × {{amount}}",
+      "totalDetail_many": "{{count}} tarjetas × {{amount}}",
+      "totalDetail_other": "{{count}} tarjetas × {{amount}}",
+      "pay": "Continuar al pago",
+      "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "cancel": "Cancelar",
+      "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
+      "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",
+      "checkoutSubtitle_many": "Tarjetas de regalo {{amount}} × {{count}} · se emiten en cuanto se complete el pago",
+      "checkoutSubtitle_other": "Tarjetas de regalo {{amount}} × {{count}} · se emiten en cuanto se complete el pago",
+      "faces": {
+        "cindy": "Cindy · Rojo de marca",
+        "cat": "Gato negro · Noche",
+        "bell": "Campana · Festivo",
+        "leap": "Salto · Marfil"
+      },
+      "errors": {
+        "limitReached": "Alcanzaste el límite de compra de tarjetas de regalo. Vuelve a intentarlo más tarde.",
+        "amountTooLarge": "Este pedido supera el límite de pago por pedido. Elige menos tarjetas e inténtalo de nuevo."
+      },
+      "done": {
+        "title_one": "Tu tarjeta de regalo está lista",
+        "title_many": "Tus {{count}} tarjetas de regalo están listas",
+        "title_other": "Tus {{count}} tarjetas de regalo están listas",
+        "pendingTitle": "Tarjeta de regalo pagada",
+        "loading": "Obteniendo las tarjetas de este pedido…",
+        "description": "Envía un enlace de canje a quien quieras: al abrirlo podrá canjear la tarjeta. También puedes quedarte una.",
+        "missing": "El pago se completó. Tus tarjetas aparecerán en Mis tarjetas de regalo en breve.",
+        "cardTitle": "Tarjeta {{index}} · {{amount}}",
+        "cardMeta": "Termina en {{tail}} · {{status}}",
+        "linkHint": "El enlace de canje es la tarjeta: quien lo abra primero se la queda. Envíalo solo a la persona a quien se la regalas.",
+        "viewAll": "Ver mis tarjetas de regalo",
+        "finish": "Listo"
+      },
+      "list": {
+        "title": "Mis tarjetas de regalo",
+        "description": "Envía un enlace de canje a quien quieras: al abrirlo podrá canjear la tarjeta. Las que no regales nunca caducan y puedes canjearlas tú. Al canjearlas se añaden a tu Saldo de recargas.",
+        "count_one": "{{count}} tarjeta",
+        "count_many": "{{count}} tarjetas",
+        "count_other": "{{count}} tarjetas",
+        "loadMore": "Cargar más",
+        "loadFailed": "No se pudieron cargar tus tarjetas de regalo",
+        "retry": "Volver a cargar",
+        "status": {
+          "unclaimed": "Sin canjear",
+          "claimedBy": "Canjeada por {{name}}",
+          "claimed": "Canjeada",
+          "redeemedByYou": "Canjeada por ti",
+          "refunded": "Reembolsada",
+          "onHold": "En proceso, no disponible por ahora"
+        },
+        "meta": {
+          "purchased": "Comprada el {{date}} · termina en {{tail}}",
+          "claimed": "Canjeada el {{date}} · termina en {{tail}}",
+          "redeemed": "Canjeada el {{date}} · termina en {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar enlace de canje",
+        "copied": "Copiado",
+        "more": "Más acciones",
+        "copyCode": "Copiar código de canje",
+        "redeemSelf": "Canjearla yo",
+        "sendEmail": "Enviar por correo"
+      },
+      "toasts": {
+        "linkCopied": "Enlace de canje copiado",
+        "codeCopied": "Código de canje copiado",
+        "copyFailed": "No se pudo copiar. Inténtalo de nuevo.",
+        "unavailable": "Esta tarjeta ya se canjeó o se reembolsó",
+        "revealFailed": "No se pudo obtener el código de canje. Vuelve a intentarlo más tarde.",
+        "emailQueued": "Enviando a {{email}}"
+      },
+      "email": {
+        "title": "Enviar por correo",
+        "description": "Envía el enlace para canjear esta tarjeta al correo de la persona a la que se la regalas. El correo incluye tu nombre y tu mensaje.",
+        "previewLabel": "Recibirá",
+        "previewWithMessage": "“{{message}}” · con el enlace y el código de canje",
+        "previewLinkOnly": "El enlace y el código de canje",
+        "recipient": "Correo del destinatario",
+        "placeholder": "nombre@ejemplo.com",
+        "hint": "Puedes enviarla a cualquier dirección. Quien abra primero el enlace se queda con la tarjeta.",
+        "cooldown": "Podrás volver a enviarla en {{seconds}} s",
+        "invalid": "Escribe un correo válido",
+        "failed": "No se pudo enviar. Inténtalo más tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando a {{email}}",
+          "sent": "Enviada a {{email}}",
+          "failed": "No se pudo enviar a {{email}}",
+          "failedRetry": "No se pudo enviar a {{email}}. Puedes volver a enviarla."
+        }
       }
     }
   },

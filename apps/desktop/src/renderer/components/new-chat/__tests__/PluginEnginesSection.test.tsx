@@ -13,9 +13,10 @@
  *   没有已知模型时不是 'default'；'acp' 任务的 trigger 写成内置 Harness 名。
  * - 2026-11-19 补：插件引擎的思考深度(行尾档位、配置浮层滑杆、建任务带档、任务内换档)；最小失败输入：
  *   行尾不显示档位、滑杆改档不回调、建任务丢档或带上模型不提供的档。
+ * - PR #11549：同名引擎装在不同电脑，各自使用各自的模型目录；退出账号后旧回包不更新当前选择器。
  * - tier：unit(jsdom，渲染真实组件，外部 hook 用内存替身)。
  */
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -104,7 +105,9 @@ import {
   resolveActivePluginEngine,
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
-import type { PluginEngineView } from '../../../../shared/pluginEngines';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { findPluginEngine, resetPluginEnginesStoreForTests, useRemotePluginEngines } from '@/hooks/usePluginEngines';
+import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
 
 const modes: PluginEngineView['permissionModes'] = [
   { id: 'ask', displayName: 'Ask' },
@@ -169,6 +172,51 @@ function renderDraftPicker(pluginEngines?: React.ComponentProps<typeof ModelSele
 
 afterEach(() => {
   cleanup();
+});
+
+it('reads the selected computer once and discards a former account’s directory reply', async () => {
+  const before = getDataOwnerGeneration();
+  const onFirstComputer = { ...leveled, models: [{ id: 'first', displayName: 'First computer model' }] };
+  const onSecondComputer = { ...leveled, models: [{ id: 'second', displayName: 'Second computer model' }] };
+  const onCurrentAccount = { ...leveled, models: [{ id: 'current', displayName: 'Current account model' }] };
+  let deliverOldReply!: (result: PluginEngineView[]) => void;
+  const delayedReply = new Promise<PluginEngineView[]>((resolve) => { deliverOldReply = resolve; });
+  const invoke = vi.fn()
+    .mockResolvedValueOnce([onFirstComputer])
+    .mockReturnValueOnce(delayedReply)
+    .mockResolvedValueOnce([onCurrentAccount]);
+  const listPluginEngines = vi.fn(async () => [leveled]);
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke }, maker: { listPluginEngines } });
+  setDataOwnerGeneration('account-a');
+  try {
+    const picker = renderHook(({ deviceId }) => {
+      const catalogue = useRemotePluginEngines(deviceId, true);
+      return {
+        read: catalogue.read,
+        engine: findPluginEngine(catalogue.engines ?? [], leveled.providerId),
+      };
+    }, { initialProps: { deviceId: 'computer-a' } });
+    await act(async () => { picker.result.current.read(); });
+    expect(picker.result.current.engine).toEqual(onFirstComputer);
+    expect(invoke.mock.calls).toEqual([['computer-a', PLUGIN_ENGINES_INVOKE.LIST, []]]);
+    expect(listPluginEngines).not.toHaveBeenCalled();
+
+    picker.rerender({ deviceId: 'computer-b' });
+    await act(async () => { picker.result.current.read(); });
+    expect(picker.result.current.engine).toBeNull();
+    expect(invoke).toHaveBeenNthCalledWith(2, 'computer-b', PLUGIN_ENGINES_INVOKE.LIST, []);
+
+    setDataOwnerGeneration('account-b');
+    picker.rerender({ deviceId: 'computer-b' });
+    await act(async () => { deliverOldReply([onSecondComputer]); });
+    expect(picker.result.current.engine).toEqual(onCurrentAccount);
+    expect(invoke).toHaveBeenCalledTimes(3);
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+    setDataOwnerGeneration(before.dataOwnerId, before.generation);
+    resetPluginEnginesStoreForTests();
+  }
 });
 
 describe('plugin engines in the new-task picker', () => {

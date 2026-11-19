@@ -2139,9 +2139,9 @@ export function ChatInput({
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
-  // 插件引擎任务(docs/plans/acp-plugin-bridge.md)只在本机；它能换到内置引擎的条件与换到插件引擎
-  // 相同，由父组件按任务决定是否传 pluginEngines(本机普通任务)。
-  const pluginEngineTaskSwitchable = !!pluginEngineSession && !!sessionId && !!pluginEngines && !deviceLinkDeviceId;
+  // 任务所属电脑支持切换时，插件引擎任务也能在同一选择器切回内置引擎。
+  const pluginEngineTaskSwitchable = !!pluginEngineSession && !!sessionId && !!pluginEngines
+    && (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
   const sessionAgentSwitchSupported =
     (sessionOrcaRole !== undefined && runtimeAgentKind != null &&
       (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch)) ||
@@ -10378,7 +10378,7 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
-                    // 已建任务：父组件只为本机普通任务传 pluginEngines，任务里也能换到 / 换出插件引擎。
+                    // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
                     {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
                       ? { pluginEngines } : {})}
                     // 插件引擎任务待切到内置引擎时，trigger 按内置引擎的「下条：」显示。

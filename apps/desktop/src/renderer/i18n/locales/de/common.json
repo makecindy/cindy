@@ -872,8 +872,7 @@
         "loading": "Kontingent wird gelesen…",
         "unavailable": "Das Kontingent dieses Computers kann gerade nicht gelesen werden",
         "none": "Für diesen Anbieter liegen keine Kontingentinformationen vor",
-        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden",
-        "share": "Für Computer, die andere freigegeben haben, wird kein Kontingent angezeigt"
+        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden"
       },
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
@@ -13614,6 +13613,8 @@
         },
         "reply": {
           "unsupportedMedia": "Diese Version kann diese Art von WeChat-Medien noch nicht verarbeiten.",
+          "delayedReply": "Verzögerte Antwort, erstellt am {{createdAt}} auf deine am {{receivedAt}} empfangene Nachricht. Der Inhalt ist möglicherweise veraltet.",
+          "delayedReplyQuestion": "Ursprüngliche Nachricht: {{question}}",
           "stillProcessing": "Wird noch bearbeitet…",
           "ownerOnlyCommands": "Nur der Besitzer kann Bot-Befehle verwenden.",
           "companionManagedCommand": "Öffne dieses Teammitglied in Cindy: Das Modell änderst du in den Einstellungen des Teammitglieds, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",
@@ -19862,7 +19863,8 @@
         "validityValue_one": "{{count}} Tag nach dem Einlösen",
         "validityValue_other": "{{count}} Tage nach dem Einlösen",
         "claimBy": "Einlösen bis",
-        "destination": "Gutgeschrieben auf"
+        "destination": "Gutgeschrieben auf",
+        "validityPermanent": "Unbegrenzt gültig"
       },
       "doneTitle": "{{amount}} gutgeschrieben",
       "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
@@ -19878,10 +19880,13 @@
         "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
         "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
         "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+        "voidedPurchased": "Diese Geschenkkarte kann derzeit nicht eingelöst werden.",
         "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
         "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
         "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
-      }
+      },
+      "doneDescriptionPurchased": "Deinem Aufladeguthaben gutgeschrieben. Es verfällt nie.",
+      "pendingDescriptionPurchased": "{{amount}} wird gutgeschrieben und erscheint gleich in deinem Aufladeguthaben. Du musst die Karte nicht erneut einlösen."
     },
     "usage": {
       "title": "Guthabenverbrauch",
@@ -19927,7 +19932,9 @@
         "noPayment": "Keine Zahlung erforderlich",
         "page": "Seite {{page}}",
         "previous": "Vorherige Seite",
-        "next": "Nächste Seite"
+        "next": "Nächste Seite",
+        "giftCard_one": "Geschenkkarte × {{count}}",
+        "giftCard_other": "Geschenkkarten × {{count}}"
       },
       "count": "{{count}} Bestellungen",
       "orderId": "Nr. {{id}}",
@@ -20156,6 +20163,120 @@
         "MONTH": "Enthält {{amount}} pro Monat",
         "YEAR": "Enthält {{amount}} pro Jahr",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Geschenkkarte kaufen",
+      "title": "Geschenkkarte kaufen",
+      "subtitle": "Verschenke sie oder behalte sie selbst. Eingelöste Karten landen in deinem Aufladeguthaben und verfallen nie.",
+      "previewLabel": "So sieht die Karte für die beschenkte Person aus",
+      "sameCards_one": "{{count}} Karte mit eigenem Einlösecode",
+      "sameCards_other": "{{count}} Karten mit gleichem Motiv, Betrag und Gruß, jede mit eigenem Einlösecode",
+      "fields": {
+        "face": "Motiv",
+        "amount": "Betrag",
+        "quantity": "Anzahl",
+        "sender": "Von",
+        "senderHint": "Wird als „Von {{sender}}“ angezeigt",
+        "senderPlaceholder": "Dein Name",
+        "message": "Grußbotschaft (optional)",
+        "messagePlaceholder": "Ein paar Worte für die beschenkte Person",
+        "tooLong": "Höchstens {{max}} Zeichen",
+        "paymentMethod": "Zahlungsmethode"
+      },
+      "decrease": "Eine Karte weniger",
+      "increase": "Eine Karte mehr",
+      "quantityHint": "Bis zu {{limit}} Karten in {{hours}} Stunden · noch {{remaining}} möglich",
+      "quantityLimitReached": "Du hast das Maximum von {{limit}} Karten in {{hours}} Stunden erreicht. Bitte versuche es später erneut.",
+      "orderAmountCap": "Höchstens {{amount}} pro Bestellung",
+      "totalDetail_one": "{{count}} Karte × {{amount}}",
+      "totalDetail_other": "{{count}} Karten × {{amount}}",
+      "pay": "Weiter zur Zahlung",
+      "refundNote": "Geschenkkarten lassen sich nicht in Bargeld umtauschen. Eingelöste Karten werden nicht erstattet. Für eine noch nicht eingelöste Karte kannst du dich wegen einer Erstattung an den Support wenden.",
+      "cancel": "Abbrechen",
+      "loadFailed": "Die Kauflimits für Geschenkkarten konnten nicht geladen werden. Bitte versuche es später erneut.",
+      "checkoutSubtitle_one": "Geschenkkarte {{amount}} × {{count}} · wird direkt nach der Zahlung erstellt",
+      "checkoutSubtitle_other": "Geschenkkarten {{amount}} × {{count}} · werden direkt nach der Zahlung erstellt",
+      "faces": {
+        "cindy": "Cindy · Markenrot",
+        "cat": "Schwarze Katze · Nacht",
+        "bell": "Glocke · Festlich",
+        "leap": "Sprung · Elfenbein"
+      },
+      "errors": {
+        "limitReached": "Du hast das Kauflimit für Geschenkkarten erreicht. Bitte versuche es später erneut.",
+        "amountTooLarge": "Diese Bestellung überschreitet das Zahlungslimit pro Bestellung. Wähle weniger Karten und versuche es erneut."
+      },
+      "done": {
+        "title_one": "Deine Geschenkkarte ist bereit",
+        "title_other": "Deine {{count}} Geschenkkarten sind bereit",
+        "pendingTitle": "Geschenkkarte bezahlt",
+        "loading": "Karten dieser Bestellung werden abgerufen…",
+        "description": "Schick den Einlöselink an eine Freundin oder einen Freund – geöffnet, kann die Karte sofort eingelöst werden. Du kannst auch eine für dich behalten.",
+        "missing": "Die Zahlung ist abgeschlossen. Deine Geschenkkarten erscheinen gleich unter „Meine Geschenkkarten“.",
+        "cardTitle": "Karte {{index}} · {{amount}}",
+        "cardMeta": "Endet auf {{tail}} · {{status}}",
+        "linkHint": "Der Einlöselink ist die Karte: Wer ihn zuerst öffnet, bekommt sie. Schick ihn nur an die Person, die du beschenken möchtest.",
+        "viewAll": "Meine Geschenkkarten ansehen",
+        "finish": "Fertig"
+      },
+      "list": {
+        "title": "Meine Geschenkkarten",
+        "description": "Schick einen Einlöselink an eine Freundin oder einen Freund – geöffnet, kann die Karte sofort eingelöst werden. Nicht verschenkte Karten verfallen nie und du kannst sie selbst einlösen. Eingelöste Karten landen im Aufladeguthaben.",
+        "count_one": "{{count}} Karte",
+        "count_other": "{{count}} Karten",
+        "loadMore": "Mehr laden",
+        "loadFailed": "Deine Geschenkkarten konnten nicht geladen werden",
+        "retry": "Neu laden",
+        "status": {
+          "unclaimed": "Nicht eingelöst",
+          "claimedBy": "Von {{name}} eingelöst",
+          "claimed": "Eingelöst",
+          "redeemedByYou": "Von dir eingelöst",
+          "refunded": "Erstattet",
+          "onHold": "In Bearbeitung, derzeit nicht verfügbar"
+        },
+        "meta": {
+          "purchased": "Gekauft am {{date}} · endet auf {{tail}}",
+          "claimed": "Eingelöst am {{date}} · endet auf {{tail}}",
+          "redeemed": "Eingelöst am {{date}} · endet auf {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Einlöselink kopieren",
+        "copied": "Kopiert",
+        "more": "Weitere Aktionen",
+        "copyCode": "Einlösecode kopieren",
+        "redeemSelf": "Selbst einlösen",
+        "sendEmail": "Per E-Mail senden"
+      },
+      "toasts": {
+        "linkCopied": "Einlöselink kopiert",
+        "codeCopied": "Einlösecode kopiert",
+        "copyFailed": "Kopieren fehlgeschlagen. Bitte erneut versuchen.",
+        "unavailable": "Diese Karte wurde bereits eingelöst oder erstattet",
+        "revealFailed": "Der Einlösecode konnte nicht abgerufen werden. Bitte versuche es später erneut.",
+        "emailQueued": "Wird an {{email}} gesendet"
+      },
+      "email": {
+        "title": "Per E-Mail senden",
+        "description": "Sende den Einlöselink dieser Karte an die Person, der du sie schenkst. Die E-Mail enthält deinen Namen und deine Nachricht.",
+        "previewLabel": "Empfänger erhält",
+        "previewWithMessage": "„{{message}}“ · mit Einlöselink und Code",
+        "previewLinkOnly": "Einlöselink und Code",
+        "recipient": "E-Mail des Empfängers",
+        "placeholder": "name@beispiel.de",
+        "hint": "Du kannst sie an jede Adresse senden. Wer den Einlöselink zuerst öffnet, erhält die Karte.",
+        "cooldown": "Erneutes Senden in {{seconds}} s möglich",
+        "invalid": "Gib eine gültige E-Mail-Adresse ein",
+        "failed": "Senden nicht möglich. Versuche es später erneut.",
+        "send": "Senden",
+        "status": {
+          "sending": "Wird an {{email}} gesendet",
+          "sent": "An {{email}} gesendet",
+          "failed": "Senden an {{email}} fehlgeschlagen",
+          "failedRetry": "Senden an {{email}} fehlgeschlagen. Du kannst sie erneut senden."
+        }
       }
     }
   },
