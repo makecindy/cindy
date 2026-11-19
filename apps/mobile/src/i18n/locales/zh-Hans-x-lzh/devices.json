@@ -1,5 +1,9 @@
 {
   "widgetGuideAction": "添小组件",
+  "widgetGuideIntro": "小组件可置于主屏；无须开启 Cindy，即可观订阅余量及今日词元用度。",
+  "widgetGuideExample": "主屏示例",
+  "widgetGuideQuota": "订阅余量",
+  "widgetGuideDaily": "每日用量",
   "widgetGuidePicker": "「编辑」→「添加小组件」",
   "widgetGuideIOS": "长按主屏空处，点{{picker}}。\n\n寻 Cindy，择「订阅余量」或「每日用量」，点「添加小组件」。",
   "widgetGuideAndroid": "长按桌面空处，开「小组件」或「微件」。\n\n寻 Cindy，拖「订阅余量」或「每日用量」至桌面。",

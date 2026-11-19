@@ -1,5 +1,9 @@
 {
   "widgetGuideAction": "Adicionar widget",
+  "widgetGuideIntro": "Os widgets são pequenos cartões no ecrã principal. Veja a quota restante e os tokens usados hoje sem abrir o Cindy.",
+  "widgetGuideExample": "Exemplo no ecrã principal",
+  "widgetGuideQuota": "Quota das subscrições",
+  "widgetGuideDaily": "Utilização diária",
   "widgetGuidePicker": "Editar → Adicionar widget",
   "widgetGuideIOS": "Mantenha premida uma área vazia do ecrã principal e toque em {{picker}}.\n\nProcure Cindy, escolha «Quota das subscrições» ou «Utilização diária» e toque em «Adicionar widget».",
   "widgetGuideAndroid": "Mantenha premida uma área vazia do ecrã principal e toque em «Widgets».\n\nProcure Cindy e arraste «Quota das subscrições» ou «Utilização diária» para o ecrã principal.",

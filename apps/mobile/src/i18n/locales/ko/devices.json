@@ -1,5 +1,9 @@
 {
   "widgetGuideAction": "위젯 추가",
+  "widgetGuideIntro": "위젯은 홈 화면에 놓는 작은 카드예요. Cindy를 열지 않고도 구독 잔여량과 오늘의 토큰 사용량을 확인할 수 있어요.",
+  "widgetGuideExample": "홈 화면 예시",
+  "widgetGuideQuota": "구독 남은 양",
+  "widgetGuideDaily": "일일 사용량",
   "widgetGuidePicker": "편집 → 위젯 추가",
   "widgetGuideIOS": "홈 화면의 빈 곳을 길게 누르고 {{picker}}를 탭하세요.\n\nCindy를 검색하고 ‘구독 남은 양’ 또는 ‘일일 사용량’을 선택한 다음 ‘위젯 추가’를 탭하세요.",
   "widgetGuideAndroid": "홈 화면의 빈 곳을 길게 누르고 ‘위젯’을 탭하세요.\n\nCindy의 ‘구독 남은 양’ 또는 ‘일일 사용량’을 홈 화면으로 드래그하세요.",

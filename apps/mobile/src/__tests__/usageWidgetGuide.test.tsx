@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import { act, type ReactNode } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import UsageScreen from '../../app/usage';
 import zh from '../i18n/locales/zh-CN/devices.json';
 
@@ -8,12 +9,12 @@ const mock = vi.hoisted(() => ({
   platform: { OS: 'ios', Version: '18.0' },
   supported: true,
   nativeButton: false,
-  alert: vi.fn(),
+
   action: undefined as { onPress(): void } | undefined,
 }));
 
-vi.mock('react-native', () => ({ Platform: mock.platform, Alert: { alert: mock.alert }, ScrollView: () => null }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'main' }));
+vi.mock('react-native', () => ({ Platform: mock.platform, View: ({ children }: { children?: ReactNode }) => <div>{children}</div>, StyleSheet: { create: (s: unknown) => s }, ScrollView: () => null }));
+vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('expo-router', () => ({
   useRouter: () => ({}),
   Stack: { Toolbar: Object.assign(({ children }: { children: ReactNode }) => children, {
@@ -21,7 +22,16 @@ vi.mock('expo-router', () => ({
   }) },
 }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
-vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('@/components/AppText', () => ({ Text: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
+vi.mock('@/session/MobileProviderMark', () => ({ MobileProviderMark: () => null }));
+vi.mock('@/components/MobilePrimitives', () => ({
+  MainWindowActionButton: ({ action }: { action: { onPress(): void; label: string } }) =>
+    <button onClick={action.onPress}>{action.label}</button>,
+}));
+vi.mock('@/session/CompanionSheet', () => ({
+  CompanionSheet: ({ visible, children }: { visible: boolean; children: ReactNode }) => visible ? <section>{children}</section> : null,
+}));
 vi.mock('@/components/ErrorNotice', () => ({ ErrorNotice: () => null }));
 vi.mock('@/widgets/UsageDashboard', () => ({ useAutomaticUsage: () => null }));
 vi.mock('@/widgets/usageWidgetSync', () => ({ get usageWidgetsSupported() { return mock.supported; } }));
@@ -40,7 +50,16 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({
   },
 }) }));
 
-beforeEach(() => { mock.supported = true; mock.nativeButton = false; mock.alert.mockClear(); });
+let root: Root;
+let host: HTMLDivElement;
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  mock.supported = true;
+  mock.nativeButton = false;
+  host = document.createElement('div');
+  root = createRoot(host);
+});
+afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); });
 
 it.each([
   ['ios', '17.6', '点+'],
@@ -48,13 +67,16 @@ it.each([
   ['android', '35', '拖到桌面'],
 ])('opens the applicable %s %s guide even without a usage snapshot', (OS, Version, expected) => {
   Object.assign(mock.platform, { OS, Version });
-  renderToStaticMarkup(<UsageScreen />);
-  expect(mock.alert).not.toHaveBeenCalled();
+  act(() => root.render(<UsageScreen />));
+  expect(host.querySelector('section')).toBeNull();
   expect(mock.nativeButton).toBe(OS === 'ios');
-  mock.action!.onPress();
-  const [title, help] = mock.alert.mock.calls[0]!;
-  expect(title).toBe('添加小组件');
-  for (const text of [expected, '订阅余量', '每日用量']) expect(help).toContain(text);
+  act(() => mock.action!.onPress());
+  const guide = host.querySelector('section')!;
+  for (const text of [zh.widgetGuideIntro, zh.widgetGuideExample, zh.widgetGuideQuota, zh.widgetGuideDaily, expected]) {
+    expect(guide.textContent).toContain(text);
+  }
+  act(() => guide.querySelector('button')!.click());
+  expect(host.querySelector('section')).toBeNull();
 });
 
 it.each([
@@ -64,6 +86,6 @@ it.each([
 ])('omits the guide on unsupported builds (%s %s, module %s)', (OS, Version, supported) => {
   Object.assign(mock.platform, { OS, Version });
   mock.supported = supported;
-  renderToStaticMarkup(<UsageScreen />);
+  act(() => root.render(<UsageScreen />));
   expect(mock.action).toBeUndefined();
 });

@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
-import { Alert, Platform, ScrollView } from 'react-native';
+import { Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { UsageDashboard, useAutomaticUsage } from '@/widgets/UsageDashboard';
 import { usageWidgetsSupported } from '@/widgets/usageWidgetSync';
+import { UsageWidgetGuide } from '@/widgets/UsageWidgetGuide';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { useTheme } from '@/theme';
@@ -18,14 +20,12 @@ export default function UsageScreen() {
   const title = t('devices.usageTitle');
   const iosVersion = Platform.OS === 'ios' ? Number.parseInt(String(Platform.Version), 10) : 0;
   const canShowWidgetGuide = usageWidgetsSupported && (iosVersion >= 17 || Platform.OS === 'android');
-  function showWidgetGuide() {
-    const instructions = Platform.OS === 'ios'
-      ? t('devices.widgetGuideIOS', { picker: iosVersion >= 18 ? t('devices.widgetGuidePicker') : '+' })
-      : t('devices.widgetGuideAndroid');
-    Alert.alert(t('devices.widgetGuideAction'), instructions, [{ text: t('devices.widgetGuideDismiss') }]);
-  }
+  const [guideVisible, setGuideVisible] = useState(false);
+  const instructions = Platform.OS === 'ios'
+    ? t('devices.widgetGuideIOS', { picker: iosVersion >= 18 ? t('devices.widgetGuidePicker') : '+' })
+    : t('devices.widgetGuideAndroid');
   const widgetAction = canShowWidgetGuide ? {
-    label: t('devices.widgetGuideAction'), onPress: showWidgetGuide, testID: 'usage.widgetGuide',
+    label: t('devices.widgetGuideAction'), onPress: () => setGuideVisible(true), testID: 'usage.widgetGuide',
   } : undefined;
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={{ flex: 1, backgroundColor: colors.surface }}>
@@ -43,6 +43,7 @@ export default function UsageScreen() {
           ? <UsageDashboard snapshot={state.snapshot} name={state.deviceName} />
           : <ErrorNotice message={t('session.menu.usage.quotaUnavailable')} />}
       </ScrollView>
+      {canShowWidgetGuide && <UsageWidgetGuide visible={guideVisible} instructions={instructions} onClose={() => setGuideVisible(false)} />}
     </SafeAreaView>
   );
 }
