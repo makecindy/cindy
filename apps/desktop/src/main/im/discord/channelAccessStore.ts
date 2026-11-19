@@ -14,6 +14,7 @@ import {
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../../maker-host/override-settings-file.js';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
+import { discordFinalTextGrantStamp, discordGrantTarget, discordGrantTargets, discordGrantValue, reconcileDiscordFinalTextGrants, type DiscordFinalTextGrants } from './authorizationGrants';
 
 const log = desktopMakerLogger.child('discord-channel-access-store');
 
@@ -37,12 +38,27 @@ function ownerOnly(raw: unknown): DiscordChannelAccessConfig {
   };
 }
 
-const file = createOverrideSettingsFile<DiscordChannelAccessConfig>({
+interface AccessDocument extends DiscordChannelAccessConfig { finalTextGrants?: DiscordFinalTextGrants }
+const file = createOverrideSettingsFile<AccessDocument>({
   filePath: () => ownerScopedImUserDataPath('discord-channel-access.json'),
   defaults: EMPTY_DISCORD_CHANNEL_ACCESS,
-  normalize: ownerOnly,
+  normalize: raw => {
+    const access = ownerOnly(raw);
+    const grants = reconcileDiscordFinalTextGrants((raw as AccessDocument)?.finalTextGrants,
+      discordGrantTargets(access).map(target => `personal:${target}`), key => discordGrantValue(access, key.slice('personal:'.length), 'personal'));
+    return { ...access, finalTextGrants: grants };
+  },
+  mergeOverrides: ({ next, overrides }) => {
+    const result = { ...overrides };
+    for (const key of ['channels', 'guilds', 'finalTextGrants'] as const) {
+      if (next[key] === undefined || (key === 'channels' && !next.channels.length)) delete result[key];
+      else if (key !== 'finalTextGrants' || Object.keys(next.finalTextGrants!.targets).length) result[key] = next[key];
+    }
+    return result;
+  },
   log,
   label: 'discord-channel-access',
+  logLoadedValue: false,
   // 文件读不出来（损坏 / 被手改坏）时按「全部不开放」处理，并拒绝覆盖原文件。
   preserveUnreadableFile: true,
 });
@@ -50,13 +66,21 @@ const file = createOverrideSettingsFile<DiscordChannelAccessConfig>({
 export const discordChannelAccessStore: Required<DiscordChannelAccessStore> = {
   read: () => {
     file.invalidateIfChanged();
-    return file.read();
+    return ownerOnly(file.read());
   },
   write(config) {
     file.invalidateIfChanged();
     const access = ownerOnly(config);
     // writePatch 合并已有键，省略 guilds 会留下已撤销的服务器。
     file.writePatch({ ...access, guilds: access.guilds ?? [] });
-    return file.read();
+    return ownerOnly(file.read());
   },
 };
+
+export function personalDiscordFinalTextAuthorization(lane: string): string {
+  file.invalidateIfChanged();
+  const current = file.read();
+  const target = discordGrantTarget(current, lane);
+  const value = discordGrantValue(current, target, 'personal');
+  return discordFinalTextGrantStamp(current.finalTextGrants ?? reconcileDiscordFinalTextGrants(undefined, [], () => value), `personal:${target}`, value);
+}

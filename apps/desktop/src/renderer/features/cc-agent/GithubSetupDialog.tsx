@@ -131,7 +131,7 @@ export function GithubSetupDialog({
         : state.phase;
   const description =
     stage === 'error'
-      ? copy('errors.' + (state.error ?? 'login'))
+      ? copy(state.error === 'network' ? 'account.network' : 'errors.' + (state.error ?? 'login'))
       : copy('stages.' + stage + '.description');
   const readyToAuthorize = stage === 'authorizing' && Boolean(state.userCode);
   const completed = stage === 'connected';

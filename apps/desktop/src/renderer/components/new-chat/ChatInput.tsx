@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
   useLayoutEffect,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -337,10 +338,9 @@ import {
 } from '@/hooks/useComposerSendShortcutPreference';
 import {
   getComposerFollowUpBehavior,
-  useComposerFollowUpHintDismissed,
   useComposerFollowUpPreference,
 } from '@/hooks/useComposerFollowUpPreference';
-import { ComposerFollowUpHint } from './ComposerFollowUpHint';
+import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
@@ -434,6 +434,7 @@ import {
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
+import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
@@ -1487,8 +1488,8 @@ export function ChatInput({
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   const { preference: followUpBehavior, setPreference: setFollowUpBehavior } =
     useComposerFollowUpPreference();
-  const { dismissed: followUpHintDismissed, dismiss: dismissFollowUpHint } =
-    useComposerFollowUpHintDismissed();
+  // 发送键上的投递提示指向「另一种方式」时为 true,发送键图标随之变化。
+  const [alternateSendPreview, setAlternateSendPreview] = useState(false);
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
   const { enabled: recommendationEnabled } = usePromptRecommendationPreference();
@@ -1628,6 +1629,11 @@ export function ChatInput({
   showStopButtonRef.current = showStopButton;
   // Only surfaces that can steer a running turn (the task view) honor a steer default.
   const runningDeliveryMode: MessageDeliveryMode = onQueueSteer ? followUpBehavior : 'queue';
+  const alternateDeliveryMode: MessageDeliveryMode = runningDeliveryMode === 'steer' ? 'queue' : 'steer';
+  // The same surfaces offer both modes for one message: with Enter as the send key,
+  // modifier+Enter (and modifier+click) sends it the other way. Key handlers read the ref.
+  const canSteerRunningTurnRef = useRef(Boolean(onQueueSteer));
+  canSteerRunningTurnRef.current = Boolean(onQueueSteer);
   // What a click or the configured submit command sends: the follow-up default
   // while a turn runs, an ordinary send otherwise.
   const defaultDeliveryMode: MessageDeliveryMode = showStopButton ? runningDeliveryMode : 'queue';
@@ -3054,6 +3060,7 @@ export function ChatInput({
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
           followUpBehavior: getComposerFollowUpBehavior(),
+          alternateOnModifier: canSteerRunningTurnRef.current,
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -3502,8 +3509,10 @@ export function ChatInput({
     attachments: AttachedFile[];
     comments: BrowserCommentDraftItem[];
   } | null>(null);
+  const recordingSamplesRef = useRef<RecordingSamplesRef['current']>(null);
   const voiceInputOptions = useMemo(
     () => ({
+      onSamples: (pcm: ArrayBuffer) => recordingSamplesRef.current?.(pcm),
       onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
       shouldApplyToEditor: () =>
         voiceOwnerStorageKeyRef.current === undefined ||
@@ -3782,6 +3791,7 @@ export function ChatInput({
         turnRunning: showStopButtonRef.current,
         platform,
         followUpBehavior: getComposerFollowUpBehavior(),
+        alternateOnModifier: canSteerRunningTurnRef.current,
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -5124,14 +5134,7 @@ export function ChatInput({
     }
     // A new directory uses the existing Main-issued writable grant. The local
     // picker cannot authorize paths on an SSH or device-link execution host.
-    if (onOpenProjectSettings) {
-      actions.push({
-        id: 'add-extra-dir',
-        label: t('projectSettings.title'),
-        disabled: settingsLocked,
-        run: onOpenProjectSettings,
-      });
-    } else if (
+    if (
       onWritableDirsChange &&
       writableGrantScope &&
       !remoteHostId &&
@@ -5147,10 +5150,18 @@ export function ChatInput({
           totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
-        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
+        disabled: settingsLocked || composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
         opensPanelPage: true,
         run: () => openAddDirectoryViewRef.current(),
+      });
+    }
+    if (onOpenProjectSettings) {
+      actions.push({
+        id: 'project-settings',
+        label: t('projectSettings.title'),
+        disabled: settingsLocked,
+        run: onOpenProjectSettings,
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -9439,12 +9450,6 @@ export function ChatInput({
   }, [showPromptPreview]);
   // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
   const canSend = hasComposerPayload || showRecommendationOverlay;
-  const showFollowUpHint =
-    showStopButton &&
-    Boolean(onQueueSteer) &&
-    hasComposerPayload &&
-    !queueEditActive &&
-    !followUpHintDismissed;
   const makeNeedsNoModel = CINDY_MAKE_ENABLED && (noConnectedSource || selectedSourceDisconnected) && !!editor &&
     !hasPreparedOrPendingAttachments && classifyCindyMakeCommand(
       serializeEditorContent(editor).text, slashCommandsReady ? mergedCommands : null,
@@ -9515,6 +9520,19 @@ export function ChatInput({
       !hasVoiceDraftText &&
       !voiceBusyOnCurrentComposer,
   );
+  // 任务运行中、主槽是可用的发送键、当前界面能插话时,这条消息有「排队 / 插话」两种发法:
+  // 发送键的悬停提示换成 SendDeliveryTip。录音、编辑排队消息、松手发送期间保持原有提示。
+  const deliveryChoiceAvailable =
+    showStopButton &&
+    Boolean(onQueueSteer) &&
+    !queueEditActive &&
+    !mainSlotIsStop &&
+    !mainSlotIsVoice &&
+    !voiceBusyOnCurrentComposer &&
+    !voiceReleaseToSendActive &&
+    !sendButtonDisabled;
+  // Enter 是发送键时,修饰键+Enter 与修饰键+点击按另一种方式发这一条。
+  const modifierSendsAlternate = composerSendShortcutPreference === 'enter';
   // Automatic actions must observe the same gates as the current Send button
   // before consuming their one-shot request, including during subscription effects.
   composerCanSubmitRef.current = !queueEditActive && !sendButtonDisabled;
@@ -9574,7 +9592,7 @@ export function ChatInput({
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0 || showFollowUpHint) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
@@ -9583,13 +9601,6 @@ export function ChatInput({
           ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
-          )}
-          {showFollowUpHint && (
-            <ComposerFollowUpHint
-              behavior={runningDeliveryMode}
-              onSwitch={() => setFollowUpBehavior(runningDeliveryMode === 'steer' ? 'queue' : 'steer')}
-              onDismiss={dismissFollowUpHint}
-            />
           )}
         </div>
       )}
@@ -10055,7 +10066,7 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    addDirViewOpen ? (
+                    addDirViewOpen && !settingsLocked ? (
                       <AddDirectoryPanel
                         addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
                         workingDir={workingDir}
@@ -10402,12 +10413,17 @@ export function ChatInput({
                   {/* 次槽 Stop 必须在语音按钮左边 —— 见 showSecondaryStop 定义处的
                  双槽语义与"语音按钮位置守恒"说明, 不要挪到语音与 Send 之间。 */}
                   {showSecondaryStop && (
-                    <SendButton
-                      disabled={false}
-                      onClick={handleStop}
-                      isStreaming
-                      visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                    />
+                    <span
+                      className="composer-send-slot"
+                      style={{ '--composer-actions-gap': useNarrowToolbar ? '4px' : '8px' } as CSSProperties}
+                    >
+                      <SendButton
+                        disabled={false}
+                        onClick={handleStop}
+                        isStreaming
+                        visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                      />
+                    </span>
                   )}
                   {queueEditActive && (
                     <Tip text={t('newChat.pendingQueue.editCancelAria')} side="top">
@@ -10430,6 +10446,7 @@ export function ChatInput({
                   )}
                   {!queueEditActive && (
                     <VoiceInputButton
+                      samplesRef={recordingSamplesRef}
                       state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
                       // The surrounding controls stay locked during voice input, but
                       // this control must remain enabled so the recording can stop.
@@ -10468,19 +10485,23 @@ export function ChatInput({
                       if (editor?.isFocused) event.preventDefault();
                     }}
                   >
-                    {mainSlotIsStop ? (
-                      <SendButton
-                        ref={voiceConversationButtonRef}
-                        companionVoice={Boolean(onStartVoiceConversation)}
-                        disabled={false}
-                        onClick={handleStop}
-                        isStreaming
-                        visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                      />
-                    ) : (
+                    {/* One persistent Tip + SendButton for send, stop and call: swapping the
+                        tree remounts the button, which drops focus and the send / stop /
+                        settle motion (DESIGN.md §14.4「Desktop composer send / stop」). */}
+                    <SendDeliveryTip
+                      enabled={deliveryChoiceAvailable}
+                      defaultMode={runningDeliveryMode}
+                      modifierSendsAlternate={modifierSendsAlternate}
+                      platform={window.electronAPI?.platform}
+                      onSend={(mode) => void handleClickSend(mode)}
+                      onDefaultChange={setFollowUpBehavior}
+                      onAlternatePreviewChange={setAlternateSendPreview}
+                    >
                       <Tip
                         text={
-                          mainSlotIsVoice
+                          mainSlotIsStop
+                            ? t('newChat.sendButton.stop')
+                            : mainSlotIsVoice
                             ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
                             : queueEditActive
                             ? t('newChat.pendingQueue.editSaveAria')
@@ -10494,14 +10515,14 @@ export function ChatInput({
                                   ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
                                   : selectedSourceDisconnected
                                     ? t('newChat.sourceDisconnected.sendBlocked')
-                                    : onStartVoiceConversation
-                                      // Keep Tip mounted while the shared action is disabled:
-                                      // removing it remounts the button, losing focus and motion.
-                                      ? t('newChat.sendButton.send')
-                                      : null
+                                    // Keep Tip mounted while the action is disabled: removing it
+                                    // remounts the button, losing focus and motion.
+                                    : t('newChat.sendButton.send')
                         }
                         side="top"
                         forceOpen={voiceReleaseToSendActive}
+                        // 两种发法可选时由 SendDeliveryTip 接手,这条纯文本提示不再弹出。
+                        controlledOpen={deliveryChoiceAvailable ? false : undefined}
                       >
                         {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
                             disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
@@ -10510,16 +10531,21 @@ export function ChatInput({
                           <SendButton
                             ref={voiceConversationButtonRef}
                             companionVoice={Boolean(onStartVoiceConversation)}
+                            isStreaming={mainSlotIsStop}
                             disabled={
-                              mainSlotIsVoice
+                              mainSlotIsStop
+                                ? false
+                                : mainSlotIsVoice
                                 ? voiceConversationDisabled || composerEditorLocked || !editor || voiceInput.isBusy
                                 : sendButtonDisabled
                             }
-                            highlighted={voiceReleaseToSendActive}
+                            highlighted={!mainSlotIsStop && voiceReleaseToSendActive}
                             action={queueEditActive ? 'save' : mainSlotIsVoice ? 'voice' : 'send'}
                             visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                             ariaLabel={
-                              mainSlotIsVoice
+                              mainSlotIsStop
+                                ? undefined
+                                : mainSlotIsVoice
                                 ? t('bots.voiceMode.startConversation')
                                 : queueEditActive
                                 ? t('newChat.pendingQueue.editSaveAria')
@@ -10527,14 +10553,24 @@ export function ChatInput({
                                   ? t(`newChat.sendButton.${runningDeliveryMode}`)
                                   : t('newChat.sendButton.send')
                             }
-                            onClick={() => {
-                              if (mainSlotIsVoice) onStartVoiceConversation?.();
-                              else void handleDefaultSend();
+                            alternateGlyph={
+                              deliveryChoiceAvailable && alternateSendPreview ? alternateDeliveryMode : null
+                            }
+                            onClick={(event) => {
+                              if (mainSlotIsStop) handleStop();
+                              else if (mainSlotIsVoice) onStartVoiceConversation?.();
+                              else if (
+                                deliveryChoiceAvailable &&
+                                modifierSendsAlternate &&
+                                hasComposerModifier(event, window.electronAPI?.platform)
+                              ) {
+                                void handleClickSend(alternateDeliveryMode);
+                              } else void handleDefaultSend();
                             }}
                           />
                         </span>
                       </Tip>
-                    )}
+                    </SendDeliveryTip>
                   </span>
                 </div>
               </div>
@@ -10678,6 +10714,7 @@ export function ChatInput({
 }
 
 function VoiceInputButton({
+  samplesRef,
   state,
   onHoldChange,
   emptyComposer,
@@ -10692,6 +10729,7 @@ function VoiceInputButton({
   onReleaseToSendChange,
   className,
 }: {
+  samplesRef: RecordingSamplesRef;
   state: import('@cindy/voice-input-core').VoiceInputState;
   onHoldChange: (holding: boolean) => void;
   emptyComposer: boolean;
@@ -10729,9 +10767,9 @@ function VoiceInputButton({
   const activeRecording = listening || longPressActive;
   const disabledOrBusy = disabled || busy;
 
-  // ── 录音态宽度形变 + 计时(DESIGN.md §14.4 窄变体,≤240ms)──
+  // ── 录音态宽度形变 + 计时(DESIGN.md §14.4「Desktop composer send / stop」)──
   // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
-  // 文案已移除):红点(呼吸,仅 opacity 动画挂 wrapper,规则 7)+ 计时。
+  // 文案已移除):三根实时录音音量条+ 计时。
   // 会话内与新建对话框共用同一套(不再按 create-agent 分叉)。
   // 计时数字 tabular-nums 等宽,配合"分钟位数变化才重新量宽",秒跳动不抖框。
   const [recSeconds, setRecSeconds] = useState(0);
@@ -10760,13 +10798,15 @@ function VoiceInputButton({
 
   const recTimeText = `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`;
   // 宽度过渡走 inline transition(与 class transition-colors 合并声明,避免
-  // tailwind transition-property 工具类互相覆盖的顺序不确定性);reduced-motion 直切
-  const reduceMotion =
-    typeof window !== 'undefined' &&
-    !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const pillTransition = reduceMotion
-    ? undefined
-    : 'width 240ms cubic-bezier(0.3, 0.9, 0.25, 1), background-color 150ms ease, color 150ms ease, border-color 150ms ease';
+  // tailwind transition-property 工具类互相覆盖的顺序不确定性)。全部引用 motion token:
+  // 减少动态效果时 token 归零,直接切换。
+  const pillTransition =
+    'width var(--motion-base) var(--motion-ease-move), background-color var(--motion-fast) var(--motion-ease-out), color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out)';
+  const iconLayer =
+    'col-start-1 row-start-1 flex items-center justify-center transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transform-none';
+  const iconShown = 'scale-100 opacity-100';
+  const iconHidden = 'scale-[0.55] opacity-0';
+  const showBars = (activeRecording || stopping) && !showProcessing;
   let label = t('newChat.chatInput.voiceInput.start');
   if (longPressActive) {
     label = t('newChat.chatInput.voiceInput.releaseToStop');
@@ -10905,7 +10945,9 @@ function VoiceInputButton({
             'bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-chip)]',
           'focus-visible:outline-none',
           disabledOrBusy && 'cursor-not-allowed',
-          disabledOrBusy && !stopping && 'opacity-40',
+          // Busy (stopping / refining) keeps full strength so the transition and the
+          // spinner stay readable; only a truly unavailable control dims.
+          disabled && 'opacity-40',
           className,
         )}
         style={expandable ? { width: pillWidth ?? 30, transition: pillTransition } : undefined}
@@ -10955,27 +10997,25 @@ function VoiceInputButton({
           void (listening ? onStop() : onStart());
         }}
       >
-        {/* 28px 图标位: idle 麦克风 / 录音红点(呼吸动画挂 wrapper,仅 opacity) / 停止后处理 spinner。
-            会话内与新建对话框共用(不再按 create-agent 分叉)。 */}
-        <span className="flex h-[28px] w-[28px] shrink-0 items-center justify-center">
-          {showProcessing ? (
-            <Spinner size={15} />
-          ) : stopping ? (
-            <span className="h-2 w-2 rounded-full bg-[var(--settings-badge-error)]" />
-          ) : activeRecording ? (
-            <span className="inline-flex animate-pulse motion-reduce:animate-none">
-              <span className="h-2 w-2 rounded-full bg-[var(--settings-badge-error)]" />
-            </span>
-          ) : (
+        {/* 28px 图标位: idle 麦克风 / 录音音量条 / 停止后处理 spinner。三层常驻、交叉淡入,
+            不硬切。会话内与新建对话框共用(不再按 create-agent 分叉)。 */}
+        <span className="grid h-[28px] w-[28px] shrink-0 place-items-center" aria-hidden>
+          <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
             <Mic size={15} />
-          )}
+          </span>
+          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
+            <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
+          </span>
+          <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
+            <Spinner size={15} spinning={showProcessing} />
+          </span>
         </span>
         {/* 录音计时(tabular-nums 等宽,秒跳不抖框);非录音态无标签,按钮保持圆形 */}
         <span
           ref={pillLabelRef}
           className={cn(
             'whitespace-nowrap pr-3 text-12 tabular-nums',
-            '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[180ms] ease-out',
+            '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
             expanded && 'translate-x-0 opacity-100',
             'motion-reduce:transition-none',
           )}

@@ -636,6 +636,17 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Unit: first dispatch can select another account before there is anything to hand off.
+  it('keeps a first account selection out of empty task history', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), sdkSessionId: null, contextTokens: 0 });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });

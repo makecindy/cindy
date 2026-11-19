@@ -69,6 +69,7 @@ function makeHost(
     /** 会话是否正在运行一轮(缺省不提供，同旧 Agent)。 */
     isTurnRunning?: (input: HostedStartInput) => boolean;
     managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+    sharedImage?: Pick<Parameters<typeof createRemoteAgentHost>[0], 'generateSharedImage' | 'groupRelay' | 'sharedImageMemberAllowed' | 'reshare'>;
   } = {},
 ) {
   const bindGuestProviderRoute = options.bindGuestProviderRoute === false
@@ -134,6 +135,7 @@ function makeHost(
     captureOwner: () => 'owner',
     isOwnerCurrent: () => options.ownerCurrent?.() ?? true,
     runsRoot,
+    ...options.sharedImage,
   });
 }
 
@@ -183,6 +185,71 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+describe('shared image authorization and relay', () => {
+  const start = {
+    op: 'shared-image', action: 'start', requestId: RUN_1,
+    providerId: 'openai', model: 'openai/gpt-image-2', prompt: 'a blue square',
+  };
+  const read = { op: 'shared-image', action: 'read', requestId: RUN_1, offset: 0 };
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const image = { buffer: png, mimeType: 'image/png' };
+
+  it('checks the existing model grant before local generation and before disclosing its result', async () => {
+    let allowed = false;
+    const generateSharedImage = vi.fn(async (_request, assertAllowed: () => void) => {
+      assertAllowed();
+      return image;
+    });
+    const host = makeHost([], { providerAllowed: () => allowed, sharedImage: { generateSharedImage } });
+    try {
+      await expect(host.handle(GUEST, start)).rejects.toThrow();
+      expect(generateSharedImage).not.toHaveBeenCalled();
+      allowed = true;
+      await expect(host.handle(OWNER, start)).rejects.toThrow();
+      await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
+      await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
+      allowed = false;
+      await expect(host.handle(GUEST, read)).rejects.toThrow();
+      expect(generateSharedImage).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  it('uses the chosen group connection and its authorized image model', async () => {
+    const generateSharedImage = vi.fn(async () => image);
+    const invoke = vi.fn(async ([request]) => {
+      if (request.op === 'caps') return { version: 1, maxRuns: 8, uploadChunkBytes: 1024,
+        maxPayloadBytes: 8192, sharedImageGeneration: true };
+      if (request.action === 'start') return { accepted: true };
+      return { state: 'complete', data: png.toString('base64'), mimeType: image.mimeType, size: png.length };
+    });
+    const plan = vi.fn(async () => ({
+      kind: 'member' as const, sameAccount: true, memberKey: 'member-key', agentDeviceId: 'remote',
+      providerId: 'openai-independent', imageModelId: 'openai-independent/gpt-image-2',
+    }));
+    const groupRelay: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['groupRelay']> = {
+      plan, connect: () => ({ invoke, poller: {} as never }), noteStartFailure: () => false,
+      noteRunFailure: () => false, trackRun: () => ({ setRunning() {}, release() {} }), async forget() {},
+    };
+    let memberAllowed = true;
+    const host = makeHost([], { sharedImage: { generateSharedImage, groupRelay, sharedImageMemberAllowed: () => memberAllowed } });
+    try {
+      await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
+      await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
+      expect(plan).toHaveBeenCalledWith(expect.objectContaining({ capability: 'image.generate', reserve: true }));
+      expect(invoke).toHaveBeenCalledWith([expect.objectContaining({
+        action: 'start', providerId: 'openai-independent', model: 'openai-independent/gpt-image-2',
+      })]);
+      expect(generateSharedImage).not.toHaveBeenCalled();
+      memberAllowed = false;
+      await expect(host.handle(GUEST, read)).rejects.toThrow();
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 describe('guest shadow workspace', () => {
   it('admits each standby turn and releases its receipt after completion or revoked close', async () => {
     const started: Started[] = [];
@@ -215,6 +282,46 @@ describe('guest shadow workspace', () => {
       await host.abortControllers(controller => controller === GUEST);
       await vi.waitFor(() => expect(receipts[1]).toHaveBeenCalledTimes(1));
     } finally { host.dispose(); }
+  });
+
+  // Unit: a second send and Stop can both arrive while the first turn is still
+  // claiming capacity. Observe engine calls and the protocol results.
+  it('rejects overlapping standby admission and honors Stop before dispatch', async () => {
+    const started: Started[] = [];
+    const complete = vi.fn(async () => {});
+    let finishAdmission!: () => void;
+    const admission = new Promise<void>((resolve) => { finishAdmission = resolve; });
+    const begin = vi.fn(
+      async (_controller: string, _session: string, _execution: string, capture: (complete: () => Promise<void>) => void) => {
+        capture(complete);
+        await admission;
+      },
+    );
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true, beginDelegatedTurn: begin,
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const send = (callId: string) => host.handle(GUEST, { op: 'call', runId: RUN_1, callId, method: 'send',
+      payload: { json: [{ content: 'fake turn', attachments: [] }] } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await send(CALL_1);
+      await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(1));
+      await send(RUN_2);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: '44444444-4444-4444-8444-444444444444',
+        method: 'abort', payload: { json: [] } });
+      finishAdmission();
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+      const poll = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+      const events = Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8');
+      for (const callId of [CALL_1, RUN_2]) {
+        expect(events).toContain(`"t":"result","callId":"${callId}","ok":false`);
+      }
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(started[0].sends).toHaveLength(0);
+    } finally { finishAdmission(); host.dispose(); }
   });
 
   // Unit: 4505241080; existing coverage rejected before capturing a reservation.
@@ -278,12 +385,14 @@ describe('guest shadow workspace', () => {
     const started: Started[] = [];
     const accept = vi.fn(async (): Promise<void> => { throw new Error('revoked assignment'); });
     const host = makeHost(started, { directGuestExecution: {
-      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      ownerScope: () => 'fake-owner', sessionAllowed: (_controller, _session, kind) => kind === 'claude-code', sessionDelegated: () => true,
       acceptDelegated: accept, allocate: async () => null, status: () => {}, release: async () => {},
       switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
     } });
     const request = { op: 'open' as const, runId: RUN_1, agentKind: 'claude-code' as const, payload: { json: openPayload('standby-task') } };
     try {
+      await expect(host.handle(GUEST, { ...request, agentKind: 'codex' })).rejects.toThrow('not authorized');
+      expect(accept).not.toHaveBeenCalled();
       await expect(host.handle(GUEST, request)).rejects.toThrow('revoked assignment');
       expect(started).toHaveLength(0);
       accept.mockImplementation(async () => undefined);

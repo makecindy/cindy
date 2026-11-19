@@ -112,6 +112,24 @@ const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
  * 缩短失败窗口不会反复 spawn CLI。
  */
 const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
+/**
+ * 选号时是否等 Codex 额度读完(2026-11-19 用户裁决)。ChatGPT 的请求准入属于上游，额度只用来给
+ * 新分配排序(subscription-account-pools.md「ChatGPT credits 准入修复」)，所以启动任务只等登录读完，
+ * 额度照常在同一次读取里接着读、读完写回缓存：
+ * - `read`：照旧等完整读取(设置页、用量卡、分享与组查询、额度摘要等所有非选号调用)；
+ * - `recent`：多账号新分配。同一登录的额度在 `CODEX_SELECTION_RECENT_QUOTA_MS` 内读到过，就先按它排序；
+ * - `known`：额度改变不了结果(已绑定账号、只剩一个可选账号、启动认证)，登录读完即可。
+ * 先放行的快照带 `quotaPending`；`read` 调用方不采用它，继续等这次读取的最终结果，所以它们看到的额度与
+ * 改动前一致。只影响 OpenAI：Anthropic 的窗口仍决定能否启动。登录与模型检查不受影响。
+ */
+type CodexSelectionQuota = 'read' | 'recent' | 'known';
+/**
+ * 多账号新分配可先用来排序的额度的最长年龄。排序本身只信 10 分钟内的额度
+ * (PROVIDER_GROUP_USAGE_MAX_AGE_MS)，这里留出余量；更旧时照旧在 2 秒窗口内等新读取。
+ */
+const CODEX_SELECTION_RECENT_QUOTA_MS = 5 * 60_000;
+/** 选号本身超过这个耗时才记一条诊断日志(每次运行时启动最多一条，不记身份与目录)。 */
+const SLOW_ACCOUNT_SELECTION_LOG_MS = 500;
 // A broken CLI must not keep a provider read spawning fresh RPC processes.
 const CODEX_MODEL_MAX_PAGES = 10;
 const CODEX_MODEL_MAX_ITEMS = 1_000;
@@ -132,11 +150,17 @@ interface AccountSnapshot {
   unreachable?: boolean;
   at: number;
   usageAt?: number;
+  /**
+   * Published once the login was read while this read still fetches Codex quota.
+   * Selection and runtime authentication can use it before the final snapshot replaces it.
+   */
+  quotaPending?: true;
 }
 interface OwnerRuntime {
   owner: string;
   cache: Map<string, AccountSnapshot>;
-  flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean }>;
+  /** `early` resolves with the selection snapshot once published, or null if the read has none. */
+  flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean; early?: Promise<AccountSnapshot | null> }>;
   running: Map<string, Set<string>>;
   /** Pending reassignments still require admission after an abandoned reservation expires. */
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
@@ -620,11 +644,24 @@ export function observeSubscriptionAccountUsage(
   // The event updates usage, not the last account/endpoint read. Renewing `at`
   // here lets a stream of SDK events postpone authoritative polling indefinitely.
   const next = { ...cached, usage,
-    ...(usage.codexPlan ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
+    // A pending read owns the auth object used by model discovery and applies the final
+    // plan. The event's quota is still merged into the pending read.
+    ...(usage.codexPlan && !cached.quotaPending
+      ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
   };
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider, undefined, 'usage');
+}
+/** Whether account selection may start on a snapshot whose Codex quota is still being read. */
+function selectionMayUseSnapshot(entry: AccountSnapshot, quota: CodexSelectionQuota, now: number): boolean {
+  return quota === 'known' || (quota === 'recent' && !!entry.usage?.codexUsage
+    && entry.usageAt !== undefined && now - entry.usageAt < CODEX_SELECTION_RECENT_QUOTA_MS);
+}
+function deferredSnapshot() {
+  let resolve!: (value: AccountSnapshot | null) => void;
+  const promise = new Promise<AccountSnapshot | null>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 async function snapshot(
   state: OwnerRuntime,
@@ -632,12 +669,16 @@ async function snapshot(
   id: string,
   force = false,
   forceUsage = false,
+  /** Only account selection and runtime authentication can proceed with pending quota. */
+  quota: CodexSelectionQuota = 'read',
 ): Promise<AccountSnapshot> {
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
   const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  // Quota consumers join the read for its full result.
   if (!force && cached && Date.now() - cached.at < ttl
+    && (!cached.quotaPending || selectionMayUseSnapshot(cached, quota, Date.now()))
     && (id !== 'default' || defaultAccountBound(provider))) return cached;
   const readCurrent = async (reading: Promise<AccountSnapshot>): Promise<AccountSnapshot> => {
     const result = await reading;
@@ -649,17 +690,32 @@ async function snapshot(
       return state.cache.get(key) ?? snapshot(state, provider, id, false, forceUsage);
     return result;
   };
+  const usableEarly = (entry: AccountSnapshot | null): entry is AccountSnapshot => {
+    assertOwner(state);
+    return !!entry && state.cache.get(key)?.auth === entry.auth
+      && (id !== 'default' || defaultAccountBound(provider))
+      && selectionMayUseSnapshot(entry, quota, Date.now());
+  };
   const pending = state.flights.get(key);
   if (pending) {
+    if (pending.early && quota !== 'read' && !force && !forceUsage) {
+      const early = await pending.early;
+      if (usableEarly(early)) return early;
+    }
     if (!forceUsage || pending.forceUsage) return readCurrent(pending.promise);
     // A normal read may reuse its cached quota. A manual refresh waits for it,
     // then starts one fresh read shared by any other concurrent refreshes.
     await pending.promise;
-    return snapshot(state, provider, id, force, forceUsage);
+    return snapshot(state, provider, id, force, forceUsage, quota);
   }
   const directory = directoryFor(provider, id);
   const defaultCodexAuthEpoch = state.defaultCodexAuthEpoch;
   const defaultClaudeAuthEpoch = state.defaultClaudeAuthEpoch;
+  // Ordinary Codex reads may publish the login before their quota read (CodexSelectionQuota).
+  // Forced reads (login confirmation, manual refresh) keep publishing only their final result.
+  const early = provider === 'openai' && !force && !forceUsage ? deferredSnapshot() : undefined;
+  let earlySnapshot: AccountSnapshot | undefined;
+  let beforeEarly: AccountSnapshot | undefined;
   const flight = (async (): Promise<AccountSnapshot> => {
     const startedAt = Date.now();
     let result: AccountSnapshot;
@@ -739,6 +795,25 @@ async function snapshot(
           sameAccount(current) &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS;
+        // The login is settled; only the Codex quota read remains. Let account selection start on
+        // the login now while this read continues. A legacy login has no plan metadata until
+        // quota arrives. Keep its auth object stable for the model read started with this login.
+        if (early && auth.authenticated && !reuseUsage
+          && !(id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)) {
+          assertOwner(state);
+          const known = sameAccount(current) ? current : undefined;
+          beforeEarly = state.cache.get(key);
+          earlySnapshot = {
+            ...(accountKey ? { accountKey } : {}),
+            auth: { ...auth, planType: auth.planType ?? auth.plan },
+            ...(known?.usage ? { usage: known.usage } : {}),
+            at: Date.now(),
+            ...(known?.usageAt !== undefined ? { usageAt: known.usageAt } : {}),
+            quotaPending: true,
+          };
+          state.cache.set(key, earlySnapshot);
+          early.resolve(earlySnapshot);
+        }
         let readSucceeded = false;
         let usage = auth.authenticated
           ? reuseUsage
@@ -754,6 +829,12 @@ async function snapshot(
               })
           : undefined;
         const latest = state.cache.get(key);
+        // Startup can invalidate this login while quota is in flight. A late quota reply
+        // cannot restore that login, and must not leave quota readers on an unfinished entry.
+        if (earlySnapshot && latest?.auth !== earlySnapshot.auth) {
+          assertOwner(state);
+          return latest ?? { auth: { authenticated: false }, at: 0 };
+        }
         const eventDuringRead = auth.authenticated && sameAccount(latest)
           && latest?.usage !== current?.usage;
         // A successful read owns the full snapshot; overlay only concurrent
@@ -786,11 +867,17 @@ async function snapshot(
             }) };
           }
         }
+        const plan = auth.plan ?? usage?.codexPlan
+          ?? (earlySnapshot && eventDuringRead ? latest?.usage?.codexPlan : undefined);
+        const planType = auth.planType ?? plan;
+        if (earlySnapshot) {
+          earlySnapshot.auth.plan = plan;
+          earlySnapshot.auth.planType = planType;
+        }
         result = {
           ...(accountKey ? { accountKey } : {}),
-          auth: { ...auth, plan: auth.plan ?? usage?.codexPlan,
-            ...(provider === 'openai' ? { planType: auth.planType ?? auth.plan ?? usage?.codexPlan } : {}) },
-          usage: provider === 'openai' && usage ? { ...usage, codexPlan: auth.planType ?? auth.plan ?? usage.codexPlan } : usage,
+          auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
+          usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
           at: Date.now(),
           usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
@@ -835,7 +922,11 @@ async function snapshot(
       planTier: result.auth.planTier, planDisplayName: result.auth.planDisplayName,
       accountFingerprint: usageFingerprint(provider, result),
     } } };
-    const previous = state.cache.get(key);
+    // The early snapshot (or a quota event applied to it) is this read's own intermediate state:
+    // announcements compare against what was cached before the read, exactly as without it.
+    const latestEntry = state.cache.get(key);
+    const previous = earlySnapshot && latestEntry?.quotaPending && latestEntry.auth === earlySnapshot.auth
+      ? beforeEarly : latestEntry;
     state.cache.set(key, result);
     if (!result.auth.authenticated && !result.unavailable && (!previous || previous.auth.authenticated)) {
       await writeStoredAccountUsage(provider, id, null, () => accountStillPresent(state, provider, id)
@@ -851,12 +942,17 @@ async function snapshot(
     noteSignInEvidence(state, provider, previous, result);
     return result;
   })();
-  state.flights.set(key, { promise: flight, forceUsage });
+  state.flights.set(key, { promise: flight, forceUsage, ...(early ? { early: early.promise } : {}) });
   void flight
     .finally(() => {
       state.flights.delete(key);
+      early?.resolve(null);
     })
     .catch(() => {});
+  if (early && quota !== 'read') {
+    const value = await early.promise;
+    if (usableEarly(value)) return value;
+  }
   return readCurrent(flight);
 }
 
@@ -2048,7 +2144,7 @@ export interface SubscriptionAccountLease {
  * binding or advancing either cursor. Quota previews deliberately remain separate. */
 export async function readSubscriptionPoolScheduling(
   providerId: string, model: string,
-  options: { remote?: boolean; ownComputer?: boolean } = {},
+  options: { remote?: boolean; ownComputer?: boolean; capability?: 'image.generate' } = {},
 ): Promise<SubscriptionPoolScheduling | null> {
   let summary: SubscriptionPoolScheduling | null = null;
   await acquireSubscriptionAccount(providerId, model, [], false, {
@@ -2066,6 +2162,8 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
+    /** Images use the media catalog, but still require an exact model ID for remote grants. */
+    capability?: 'image.generate';
     /** 远程调用来自自己的其他电脑(不是受邀者)。 */
     ownComputer?: boolean;
     accountId?: string;
@@ -2113,31 +2211,48 @@ export async function acquireSubscriptionAccount(
   const selectionProvider = pinnedTarget ? accountProviderId(provider, pinnedTarget) : ref.providerId;
   if (pool.disconnected && selectionProvider === provider) throw new Error('Subscription provider was disconnected');
   const scoped = providerAccounts(provider, pool.accounts, selectionProvider);
-  const needsModelMembership = provider === 'openai' && !control && !!model && options.resuming !== true;
+  const needsModelMembership = provider === 'openai' && !control && !!model
+    && options.resuming !== true && options.capability !== 'image.generate';
   // A task resumes only its own home. For fresh assignment each profile completes its own
   // auth + model discovery; one slow sibling must not put a barrier in front of healthy peers.
   const snapshots = new Map<string, AccountSnapshot>();
   const pendingReads = new Set<Promise<void>>();
-  const prepareAccount = async (id: string) => {
-    const info = await snapshot(state, provider, id);
-    if (needsModelMembership) await refreshSubscriptionPoolCodexModels(false, undefined, new Set([id]));
+  // Diagnostics only: the slowest account (login) read and model read of this selection.
+  const selectionStartedAt = performance.now();
+  let accountReadMs = 0;
+  let modelReadMs = 0;
+  const prepareAccount = async (id: string, quota: CodexSelectionQuota) => {
+    const readStartedAt = performance.now();
+    // Read-only previews (anonymous group summaries, switch probes) keep waiting for quota: an
+    // outer group ranks computers by the urgency they report.
+    const info = await snapshot(state, provider, id, false, false, options.dryRun ? 'read' : quota);
+    const modelsStartedAt = performance.now();
+    accountReadMs = Math.max(accountReadMs, modelsStartedAt - readStartedAt);
+    if (needsModelMembership) {
+      await refreshSubscriptionPoolCodexModels(false, undefined, new Set([id]));
+      modelReadMs = Math.max(modelReadMs, performance.now() - modelsStartedAt);
+    }
     assertOwner(state);
     snapshots.set(id, info);
   };
   const boundConfig = binding && pool.accounts.find(account => account.id === binding.accountId);
   const pausedBinding = options.resuming === false && !options.accountId && !!binding
     && (!boundConfig || boundConfig.paused);
-  if (pinnedTarget && !pausedBinding) await prepareAccount(pinnedTarget);
+  // The task's own account is chosen without comparing quota (a blocked binding falls back to it
+  // only when no other account can take the task), so a known quota is never re-read for its start.
+  if (pinnedTarget && !pausedBinding) await prepareAccount(pinnedTarget, 'known');
   const currentBoundConfig = binding && readPool(provider)?.accounts.find(account => account.id === binding.accountId);
   const rebind = options.resuming === false && !options.accountId && !!binding
     && (!currentBoundConfig || currentBoundConfig.paused
       || (!control && readSubscriptionAccountBlocked(provider, binding.accountId, model)));
   if (!pinnedTarget || rebind) {
-    for (const account of scoped) {
-      if (snapshots.has(account.id) || (!control && account.paused) || [...state.logins].some(
-        ([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id,
-      )) continue;
-      const read = prepareAccount(account.id);
+    const reads = scoped.filter(account => !snapshots.has(account.id) && (control || !account.paused)
+      && ![...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id));
+    // Quota only orders a choice between at least two accounts that may still take this task;
+    // accounts already tried this round are read for identity, never ranked.
+    const ranked = reads.filter(account => !options.exclude?.has(account.id)).length > 1;
+    for (const account of reads) {
+      const read = prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known');
       pendingReads.add(read);
       void read.finally(() => pendingReads.delete(read)).catch(() => {});
     }
@@ -2292,6 +2407,18 @@ export async function acquireSubscriptionAccount(
     await Promise.race(pendingReads);
     selection = selectAccount();
   }
+  const selectionMs = performance.now() - selectionStartedAt;
+  // One line per slow runtime start, so a reported pause can be attributed to login or model reads.
+  if (!control && !options.dryRun && selectionMs >= SLOW_ACCOUNT_SELECTION_LOG_MS) {
+    log.info('subscription account selection was slow', {
+      provider,
+      pinned: !!pinnedTarget && !rebind,
+      accounts: snapshots.size,
+      elapsedMs: Math.round(selectionMs),
+      accountReadMs: Math.round(accountReadMs),
+      modelReadMs: Math.round(modelReadMs),
+    });
+  }
   if ('scheduling' in selection) return null;
   const { selected, pinned, pending, pendingKey } = selection;
   if (options.dryRun) return null;
@@ -2375,7 +2502,9 @@ export async function acquireSubscriptionAccount(
       assertCurrent,
       readState: async () => {
         assertCurrent();
-        const result = await snapshot(state, provider, selected);
+        // The native host checks the login after acquiring this lease. Quota is only
+        // needed by account ranking and quota views, not by Codex authentication.
+        const result = await snapshot(state, provider, selected, false, false, 'known');
         assertCurrent();
         // Preserve read failure evidence for request-time auth checks. A failed
         // CLI read is not proof of logout and must not cool this account as auth.
@@ -2392,6 +2521,7 @@ export async function acquireSubscriptionAccount(
             ...cached,
             auth: { ...cached.auth, authenticated: false, errorReason: reason },
             at: Date.now(),
+            quotaPending: undefined,
           });
         changed(provider);
       },

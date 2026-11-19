@@ -1121,14 +1121,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意鍵或 Touch ID 鍵鎖定，再用指紋或密碼解鎖",
+    "hint": "按任意鍵進入解鎖畫面",
     "lockFailed": {
       "status": "Cindy 沒能鎖定這台電腦",
       "hint": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Touch ID 或密碼驗證後即可撤下。也可以闔上螢幕或按電源鍵鎖定。",
       "hintWindows": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Windows Hello 或 PIN 驗證後即可撤下。也可以按 Windows 標誌鍵 + L 鎖定。"
     },
-    "hintWindows": "按任意鍵鎖定，用 Windows Hello 或密碼解鎖",
-    "hintLinux": "按任意鍵鎖定，用密碼解鎖",
+    "hintWindows": "按任意鍵進入解鎖畫面",
+    "hintLinux": "按任意鍵進入解鎖畫面",
     "verifyReason": "撤下隱私畫面"
   },
   "appBadge": {
@@ -3443,7 +3443,7 @@
         "end": "以上是從 {{source}} 匯入的記錄",
         "endHandoff": "以上是從 {{source}} 匯入的記錄，接下來由 {{harness}} 接著做"
       },
-      "projectMenu": "匯入此專案在其他工具裡的任務…"
+      "projectMenu": "匯入任務…"
     },
     "connections": {
       "codex": {
@@ -4075,6 +4075,7 @@
         "refreshSpeechAdded": "已更新模型，補充了 1 個語音參考型號",
         "refreshNoNew": "模型列表已是最新，無新增",
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
+        "refreshReconnect": "模型列表重新整理失敗。重新連線此供應商後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
         "paymentRequired": "付費",
@@ -6032,7 +6033,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任務模型自動降級",
-        "description": "連線或容量故障連續發生時，先切換到同名模型的其他已連線來源，再嘗試目前 Agent 明確推薦的模型；不會切換 Agent，也不會改掉你儲存的選擇。預設關閉。"
+        "description": "模型組遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
       },
       "toggleAria": "切換任務模型自動降級",
       "toast": {
@@ -8161,6 +8162,7 @@
         "cindyEmbedText": "可把文字送去算成向量（用於語義檢索）",
         "cindyModelsDecisions": "可呼叫決策模型（使用你的模型配額）",
         "cindyModelsRerank": "可呼叫重排模型（使用你的模型配額）",
+        "cindyModelsMediaRequest": "可直接呼叫 Cindy AI 生成圖片、影片、合成語音及轉錄（使用你的模型配額）",
         "cindyEmbedTextDetail": "文字會送到系統的向量模型算成一串數字，單次最多 {{max}} 條，可能產生模型費用。算出的向量只交給插件自己保管，不寫入你的資料庫。",
         "cindySearchWeb": "可使用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢會存取公開網路，並可能消耗 Cindy AI 配額。",
@@ -9458,6 +9460,31 @@
     "preparing": "正在連線登入服務",
     "preparingSubtitle": "將為你載入當前區域可用的登入方式",
     "unavailable": "暫時無法登入",
+    "hostUnavailable": {
+      "title": "Cindy 後台服務沒有啟動",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "這份資料屬於另一個帳號，和 Cindy 後台服務儲存的登入不一致。",
+          "action": "請用原來的帳號執行 cindy-host login，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一個 Cindy 程式正在使用這份資料。",
+          "action": "請先關閉它，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "這個帳號的資料打不開。",
+          "action": "如果最近用過較新版本的 Cindy，請先把這台電腦上的 Cindy 更新到最新版本，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy；否則執行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 後台服務啟動時連不上登入服務。",
+          "action": "請檢查網路，再重新啟動 Cindy 後台服務，然後重新開啟 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 後台服務啟動時出錯。",
+          "action": "請重新啟動 Cindy 後台服務，然後重新開啟 Cindy。如果還是出錯，執行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "重試",
     "browserWaiting": "請在瀏覽器中完成驗證",
     "browserCallback": {
@@ -11438,7 +11465,7 @@
         "projectDirChoose": "選擇",
         "projectDirChange": "更換",
         "projectDirClear": "清除",
-        "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+        "projectDirNote": "可選擇這台電腦上現有的專案。留空時，優先使用儲存庫對應的專案，其次使用執行夥伴自己的專案。Git 專案分工使用獨立 worktree。",
         "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
@@ -11777,15 +11804,15 @@
           "replyModeAssistant": "Cindy 回答",
           "replyModeAssistantNote": "由群裡的 Cindy 回答。",
           "work": "分工",
-          "ownFolder": "群組自己的資料夾",
+          "ownFolder": "自動選擇",
           "projectDirHint": "只在這台電腦上生效。",
-          "projectDirClearHint": "改用群組自己的資料夾",
+          "projectDirClearHint": "恢復自動選擇專案",
           "project": "專案",
           "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
           "githubRepo": "GitHub 儲存庫",
-          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "程式碼儲存庫",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等貼上儲存庫連結。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repositoryHint": "GitHub 可填 owner/name，其他儲存庫可貼上連結。Cindy 會在這台電腦上尋找唯一相符的既有專案。",
           "repositoryPlaceholder": "owner/name 或儲存庫連結",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
           "folderRepoFilled": "已依這個資料夾填好儲存庫 {{repo}}，群裡其他人的電腦也會使用它。",
@@ -14567,12 +14594,14 @@
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
     },
-    "followUpHint": {
-      "queueDefault": "任務執行中傳送的訊息預設排隊。",
-      "steerDefault": "任務執行中傳送的訊息預設插話到當前任務。",
+    "sendDelivery": {
+      "menuAria": "這條訊息的傳送方式",
+      "queueHint": "等這一輪結束",
+      "steerHint": "下一步就處理",
+      "setDefault": "設為預設",
+      "nowDefault": "已設為預設",
       "switchToSteer": "預設改為插話",
-      "switchToQueue": "預設改為排隊",
-      "dismiss": "關閉提示"
+      "switchToQueue": "預設改為排隊"
     }
   },
   "onboarding": {
@@ -14942,6 +14971,7 @@
       "credentialSwitchBusy": "Codex 正在其他任務中執行，暫時無法按本任務選擇的模型來源切換（需要重啟共享的 Codex 背景處理程序）。等它結束後點「重試」即可。",
       "accountBoundaryPending": "Cindy 正在切換帳號狀態，暫時無法開始這個任務。稍等片刻後點「重試」；如果一直出現，請重新啟動 Cindy。",
       "codexThreadStale": "Codex 驗證模式已切換，目前任務無法繼續 —— 請新建任務以套用。",
+      "codexSharedAuthLinkUnavailable": "本機的 Codex 已經登入，但這個任務讀不到那份登入：指向它的連結建立不出來（Windows 上通常是一般權限建立不了）。請確認這台電腦上的 {{appName}} 有權限建立連結（Windows 上可以用系統管理員身分執行一次，或開啟開發人員模式），然後點「重試」。也可以點「重新登入 ChatGPT」，讓 Cindy 用自己的一份登入來跑這個任務。",
       "codexResumeNotReady": "Codex 暫時無法恢復這個任務，請稍後重試",
       "claudeGatewayOpusPlanMismatch": "這次 Opus 請求實際走的是 XD Gateway，不是你的 Claude.ai 訂閱；該閘道器路由拒絕了此模型。可切換到 Claude.ai 訂閱後重試，或換一個模型。",
       "claudeSubscriptionOpusPlanMismatch": "目前連線的 Claude Pro 方案不支援 Opus。請切換到方案支援的模型；如果剛升級方案，請在設定中重新連線 Anthropic 後重試。",
@@ -16417,7 +16447,7 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "dirtyWorktreeWarning": "目前的任務有尚未提交的檔案變更。歸檔時預設會儲存這些變更，之後可在任務中還原。",
         "discardChanges": "捨棄未提交的變更",
         "discardWarning": "未提交的變更和新檔案將無法復原。",
         "discardAndArchive": "捨棄並歸檔",
@@ -16456,6 +16486,7 @@
         "empty": "此自動化沒有可歸檔的任務"
       },
       "archiveAll": {
+        "projectTitle": "封存「{{name}}」下的所有任務？",
         "title": "歸檔全部任務",
         "confirm": "歸檔全部",
         "cancel": "取消",
@@ -16600,18 +16631,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」專案選單",
+        "previewFailed": "無法讀取這個專案的任務。請重試。",
+        "remotePreviewFailed": "無法讀取遠端專案的任務。請檢查連線，並確認遠端電腦上的 Cindy 已更新。",
         "rename": "重新命名專案",
         "pin": "置頂專案",
         "unpin": "取消置頂專案",
-        "removeFromSidebar": "從側欄移除專案",
-        "removeFromSidebarConfirmTitle": "移除「{{name}}」？",
-        "removeFromSidebarConfirmDescription": "這會從側欄移除該專案。電腦上的檔案不會被刪除。現有任務會移到「對話」分組，仍可正常使用。",
+        "removeFromSidebar": "從 Cindy 移除專案…",
+        "removeFromSidebarConfirmTitle": "從 Cindy 移除「{{name}}」？",
+        "removeFromSidebarConfirmDescription": "未封存的 {{count}} 個任務仍可在「對話」中使用。",
         "removeFromSidebarConfirmAction": "移除專案",
-        "removeFromSidebarFailed": "無法從側欄移除專案，請重試",
-        "showFiles": "檢視檔案",
-        "archivedAll": "全部歸檔",
-        "unarchiveAll": "全部取消歸檔",
-        "openInExplorer": "在檔案管理器中開啟",
+        "removeFromSidebarFailed": "移除專案失敗，請重試。",
+        "archiveOnRemove": "同時封存任務（{{count}} 個）",
+        "keepSkippedOnRemove": "{{skip}}的任務會保留在「對話」中。",
+        "removedArchived": "{{count}} 個任務將移至「已封存」。",
+        "removeAndArchive": "移除專案並封存任務",
+        "removeKeepFiles": "專案的釘選、自訂名稱和圖示會清除。電腦上的檔案和資料夾會保留。",
+        "showFiles": "在側邊欄檢視任務檔案",
+        "archivedAll": "封存所有任務",
+        "unarchiveAll": "還原所有任務",
+        "openInFinder": "在 Finder 中開啟專案資料夾",
+        "openInExplorer": "在檔案總管中開啟專案資料夾",
+        "openInFileManager": "在檔案管理員中開啟專案資料夾",
         "newInDirectory": "在此目錄新建任務",
         "copyDeepLink": "複製專案連結",
         "search": "在專案內搜尋任務"
@@ -16649,6 +16690,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下週",
+        "indefinite": "無限期",
         "custom": "自訂…",
         "wakeAt": "喚回日期與時間",
         "timeZone": "本地時間（{{zone}}）",
@@ -19104,6 +19146,9 @@
     },
     "errors": {
       "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
+      "hostProfileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+      "hostProfileInUseByDesktopAtStart": "這份資料正被單獨執行的 Cindy 電腦端使用，Cindy 後台服務沒有啟動。請先結束它，重新啟動 Cindy 後台服務，然後重新開啟目前這個 Cindy 視窗。",
+      "hostProfileInUseByDesktopRetry": "這份資料正被單獨執行的 Cindy 電腦端使用，暫時不能修改。請先結束它，再試一次。",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
@@ -19391,6 +19436,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本輪執行失敗。",
+    "blockedReasonUnknown": "未提供具體受阻原因。",
+    "blockedNextStep": "可在目前任務中補充資訊；處理受阻原因後，點擊「{{action}}」繼續。",
     "status": {
       "active": "目標推進中",
       "paused": "已暫停",
@@ -19725,6 +19773,7 @@
         "empty": "當前沒有贈送記錄。",
         "incomplete": "贈送記錄較多，當前僅顯示最近的 {{count}} 筆。",
         "unnamed": "贈送餘額",
+        "rolloverName": "滾存額度",
         "giftCard": "禮品卡 · 來自 {{sender}}",
         "original": "原始金額",
         "used": "已用",
@@ -19962,6 +20011,8 @@
       "basicModels": "可用部分模型",
       "subscription": "訂閱方案",
       "rollover": "剩餘餘額可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩餘餘額最多滾存 {{amount}}，轉為贈送餘額\n1 個月內有效，不再繼續滾存\n優先於訂閱餘額和儲值餘額使用",
+      "rolloverMonthlySummary": "剩餘餘額最多滾存 {{amount}}，1 個月內有效",
       "nextPeriod": {
         "MONTH": "下個月",
         "YEAR": "下一年",
@@ -21426,14 +21477,14 @@
     },
     "taskInbox": {
       "title": "認識收件匣",
-      "lead": "任務會依狀態自動分成待處理、進行中、稍後處理和已處理。最好的習慣是隨手清空收件匣：處理完按完成，不急的稍後處理。",
+      "lead": "收件匣適合同時追蹤多項任務的人。任務會依狀態自動分類，有新結果或需要你回應的，都在「待處理」裡。",
       "pending": {
         "title": "待處理",
         "body": "任務跑完有了結果，或者在等你回答，都會出現在這裡。"
       },
       "done": {
         "title": "完成",
-        "body": "處理好了按一下完成，任務移到已處理；之後有新進展會自動回來。"
+        "body": "養成清空收件匣的好習慣，處理完就按「完成」。"
       },
       "snooze": {
         "title": "稍後處理",
@@ -21768,14 +21819,14 @@
     "openFailed": "無法開啟 GitHub"
   },
   "hostConnection": {
-    "connecting": "正在連線 Cindy 後台…",
+    "connecting": "正在連線 Cindy 後台服務…",
     "restoring": "正在恢復任務狀態…",
     "retrying": "任務狀態尚未同步，正在重試…",
     "pairing": "需要重新授權連線",
-    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台服務的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
     "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
     "retry": "重試連線",
-    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
+    "desktopAuthHelp": "請在啟動終端更新 Cindy 後台服務的連線設定，然後重新開啟這個實驗客戶端。"
   },
   "remoteControlConsent": {
     "title": "允許遠端控制這台電腦？",

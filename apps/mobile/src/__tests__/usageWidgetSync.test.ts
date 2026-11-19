@@ -103,3 +103,19 @@ it.each(['list', 'peer', 'last-peer'] as const)('discards an expired refresh wai
   expect(invoke).toHaveBeenCalledTimes(stage === 'list' ? 0 : 1);
   expect(native.writeSnapshot).not.toHaveBeenCalled();
 });
+
+// Both mobile surfaces subscribe to the widget's automatic selection. A pinned
+// computer finishing later must not replace it or expose another account's data.
+it('publishes the automatic reading to the active account only', async () => {
+  const { automaticUsageState, readUsageWidgetStore, subscribeUsageWidgetStore, writeUsageWidgetStore } = await import('@/widgets/usageWidgetSync');
+  const store = await refreshUsageWidgetStore(null, [device('a'), device('b')],
+    (async () => ({ ok: true, snapshot })) as never, ['b']);
+  const notify = vi.fn();
+  const unsubscribe = subscribeUsageWidgetStore(notify);
+  writeUsageWidgetStore({ ...store, accountId: 'owner' });
+  expect(notify).toHaveBeenCalledOnce();
+  expect(automaticUsageState(readUsageWidgetStore(), 'owner')).toBe(store.states.a);
+  expect(automaticUsageState(readUsageWidgetStore(), 'other')).toBeNull();
+  expect(automaticUsageState(readUsageWidgetStore())).toBeNull();
+  unsubscribe();
+});

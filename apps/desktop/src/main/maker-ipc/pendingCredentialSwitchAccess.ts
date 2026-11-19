@@ -115,3 +115,24 @@ export function getPendingCredentialSwitchTargetWith(
     ...(pending.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
     ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}) } : undefined;
 }
+
+/** register.ts's settlePendingCredentialSwitch (a task's turn settled), with its holder and logger. */
+export function settlePendingCredentialSwitchWith(
+  ports: {
+    pendingCredentialSwitchHolder: PendingCredentialSwitchService | null;
+    log: { warn(message: string, meta?: Record<string, unknown>): void };
+  },
+  sessionId: string,
+  source: string,
+): void {
+  const { pendingCredentialSwitchHolder, log } = ports;
+  const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  if (!pending) return;
+  void pending.catch((err) => {
+    log.warn('pending credential switch settle failed', {
+      sessionId,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}

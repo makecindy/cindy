@@ -1,5 +1,4 @@
 import { beginCompanyTurn } from '../usage/companyTokenFacts.js';
-import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { NATIVE_HISTORY_CHECKPOINT } from '../remote-agent/nativeHistoryTransfer.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
@@ -8,18 +7,12 @@ import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from './sessionContextSnapshot.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
-import type {
-  AgentEvent,
-  InteractionDecision,
-  InteractionRequest,
-  SendOrigin,
-  Session,
-} from '@cindy/maker-core';
+import type { AgentEvent, SendOrigin, Session } from '@cindy/maker-core';
 
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
-import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import { readTerminalTurnErrorSignals } from './terminalTurnErrorSignals.js';
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
 
 import { createLogger } from '../logger.js';
@@ -35,11 +28,9 @@ import {
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
-import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
-import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
@@ -48,7 +39,7 @@ import {
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
-import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
+import { SILENT_STOP_DECISION_DELAY_MS, SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
   endsForegroundTurnByStatus,
@@ -63,15 +54,15 @@ import {
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
+import {
+  claudeOpusPlanTerminalErrorData,
+  handleInteractionDismissedEvent,
+  localizeRuntimeRecoveryEvent,
+  routeStandaloneTextEvent,
+  type InteractionDismissedDeps,
+} from './sessionEventPreparationSteps.js';
 
-interface DismissedInteraction {
-  kind: InteractionRequest['kind'];
-  resolve: (decision: InteractionDecision) => void;
-  request: InteractionRequest;
-  persistId?: string;
-}
-
-export interface PrepareSessionEventDeps {
+export interface PrepareSessionEventDeps extends InteractionDismissedDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
@@ -83,20 +74,6 @@ export interface PrepareSessionEventDeps {
   /** 限额自动继续：有实质产出时重算连续自动继续次数。 */
   readonly usageLimitAutoResume?: Pick<UsageLimitAutoResume, 'noteProgress'>;
   readonly redactEventForRenderer: (event: AgentEvent) => AgentEvent;
-  readonly handleAgentIslandInteractionDismissed: (sessionId: string, requestId: string) => void;
-  readonly clearPendingInteraction: (requestId: string) => DismissedInteraction | null;
-  readonly defaultDecisionForPending: (
-    kind: InteractionRequest['kind'],
-    reason: string,
-  ) => InteractionDecision;
-  readonly persistInteractionDecision: (
-    sessionId: string,
-    persistId: string | undefined,
-    kind: InteractionRequest['kind'],
-    request: InteractionRequest,
-    decision: InteractionDecision | Record<string, unknown>,
-  ) => void;
-  readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
   /** Starts live delivery; resolves with the tool events it published (never rejects). */
   readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
@@ -176,58 +153,14 @@ export function prepareSessionEvent(
     });
     return;
   }
-  // Helper readiness is Host-authored, not vendor prose. Translate fixed codes
-  // before either error-banner delivery or the independent durable message;
-  // preserve the original event for other listeners and never rewrite model text.
-  if (event.source === 'codex' && (event.type === 'error' || event.type === 'text' && event.standaloneText)) {
-    const data = event.data as Record<string, unknown> | null;
-    const text = data?.code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE'
-      ? t('chat.errorBanner.codexHelperUnavailable')
-      : data?.code === 'CINDY_EXPECTED_HELPER_UNVERIFIED'
-        ? t('chat.errorBanner.codexHelperUnverified') : undefined;
-    if (text !== undefined) {
-      event = { ...event, data: { ...data, ...(event.type === 'error' ? { message: text } : { text }) } };
-    }
-  }
-  // Post-terminal Host recovery bypasses the model. Localize before both
-  // persistence and renderer delivery, without mutating the internal receipt.
-  if (event.runtimeRecovery && event.source === 'pi' && event.type === 'text') {
-    event = {
-      ...event,
-      data: {
-        ...(event.data as Record<string, unknown>),
-        text: t('settings.piPackages.failure.runtimeRetirementFailed'),
-      },
-    };
-  }
+  event = localizeRuntimeRecoveryEvent(event, t);
   if (event.turnScope !== 'background'
     && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
     revealScheduledOutput(event.turnOrigin);
   }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
-  if (event.type === 'text' && event.standaloneText === true) {
-    if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
-    // Deliver through the existing persisted-row channel only. Sending a text
-    // event as well would let older renderers adopt the notice as their active
-    // assistant stream and overwrite/misdate the next model reply.
-    const redacted = deps.redactEventForRenderer(event);
-    const text = (redacted.data as { text?: unknown } | null)?.text;
-    const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
-    // Private-message visibility is still owned by the accepted input, even
-    // though the notice is independent of the model's reply/usage state.
-    const inputProvenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
-    const replyInputId = inputId && inputProvenance?.clientId === inputId && inputProvenance.autoResume
-      ? inputProvenance.retrySourceClientId ?? inputId : inputId;
-    const privateReply = inputId
-      ? isBotGroupClientId(inputId) || (!!replyInputId?.startsWith('bot-dm:') && !event.runtimeRecovery)
-      : event.agentMeta?.botPrivateReply;
-    if (typeof text === 'string') {
-      onStandaloneTextEvent(session.id, text,
-        typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
-    }
-    return;
-  }
+  if (routeStandaloneTextEvent(deps, session, event, onStandaloneTextEvent)) return;
   // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
   // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
   // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
@@ -279,59 +212,15 @@ export function prepareSessionEvent(
       ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyToClientId: inputClientId },
     };
   }
-  if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
-    const reason =
-      !session.remoteHostId && session.agentKind === 'claude-code'
-        ? consumeClaudeOpusPlanMismatch(session.id)
-        : null;
-    if (reason) {
-      const eventData =
-        event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-          ? (event.data as Record<string, unknown>)
-          : {};
-      attributedEvent = { ...attributedEvent, data: { ...eventData, reason } };
-      deps.log.warn('Claude Opus plan error normalized for renderer', {
-        sessionId: session.id,
-        model: session.model,
-        reason,
-      });
-    }
-  }
+  const opusPlanErrorData = claudeOpusPlanTerminalErrorData(deps, session, event);
+  if (opusPlanErrorData) attributedEvent = { ...attributedEvent, data: opusPlanErrorData };
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'done' && broadcastEvent.data && typeof broadcastEvent.data === 'object'
     && NATIVE_HISTORY_CHECKPOINT in broadcastEvent.data) {
     const { [NATIVE_HISTORY_CHECKPOINT]: _checkpoint, ...data } = broadcastEvent.data as Record<string, unknown>;
     broadcastEvent.data = data;
   }
-  if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
-    if (typeof data.requestId === 'string') {
-      deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
-      const entry = deps.clearPendingInteraction(data.requestId);
-      if (entry) {
-        const decision = deps.defaultDecisionForPending(
-          entry.kind,
-          typeof data.reason === 'string' ? data.reason : 'dismissed',
-        );
-        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
-          && typeof data.withdrawalReason === 'string'
-          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
-        entry.resolve(decision);
-        deps.persistInteractionDecision(
-          session.id,
-          entry.persistId,
-          entry.kind,
-          entry.request,
-          persistedDecision,
-        );
-      }
-    }
-    deps.broadcastToAllWindows(MAKER_PUSH.INTERACTION_DISMISSED, {
-      sessionId: session.id,
-      ...(event.data as object),
-    });
-    return;
-  }
+  if (handleInteractionDismissedEvent(deps, session, event)) return;
   if (event.type === 'image' && event.source === 'codex') {
     if (!isQuietScheduledOutput(event)) {
       // Hold the stream until the stored result is published so IM / hook
@@ -494,7 +383,7 @@ export function prepareSessionEvent(
           silentStopTurnLeaseId!,
           silentStopTurnOrigin,
         );
-      }, 1_500);
+      }, SILENT_STOP_DECISION_DELAY_MS);
     }
   }
   // 提前声明在终止型 error 块与 done/terminal 边界块两处均需使用的持久化条件标志。
@@ -513,27 +402,8 @@ export function prepareSessionEvent(
       // A paired done may still carry usage after this error. Retain its billing
       // identity until done; a new product turn overwrites it using wasInTurn.
     }
-    const errData =
-      attributedEvent.type === 'error'
-        ? (attributedEvent.data as
-            | {
-                message?: unknown;
-                reason?: unknown;
-                sdkError?: unknown;
-                errorStatus?: unknown;
-                toolLoop?: unknown;
-                outputLimit?: unknown;
-                usageLimit?: unknown;
-                usageResetAt?: unknown;
-                codexErrorInfo?: unknown;
-              }
-            | undefined)
-        : undefined;
-    // Terminal error details cross the coordinator/device-link boundary as untrusted data.
-    // Keep only the bounded tool-loop shape; never let a provider-controlled object become
-    // live projection state or renderer interpolation.
-    const toolLoop = parseAgentInputToolLoopDetails(errData?.toolLoop);
-    const outputLimit = parseOutputLimitDetails(errData?.outputLimit);
+    const { errData, message: terminalErrorMessage, signals: terminalErrorSignals } =
+      readTerminalTurnErrorSignals(attributedEvent, broadcastEvent);
     // 计划内 cc-mgr 升级窗口的 daemon 关闭(reason='remote_daemon_closed')是
     // 预期噪音: renderer 事件路径按同语义静默 banner, 这里同样不给 coordinator
     // 记 error —— 否则 paired-done 保留会让升级后的 projection 复现
@@ -559,27 +429,8 @@ export function prepareSessionEvent(
       deps.agentInputCoordinatorHolder?.onTurnEvent(
         session.id,
         'error',
-        typeof broadcastEvent.data === 'object' &&
-          broadcastEvent.data !== null &&
-          typeof (broadcastEvent.data as { message?: unknown }).message === 'string'
-          ? (broadcastEvent.data as { message: string }).message
-          : undefined,
-        // 结构化信号:自动续跑的判据靠它们收紧(见 isInterruptedTurnError),不靠文本猜。
-        {
-          ...(typeof errData?.sdkError === 'string' ? { sdkError: errData.sdkError } : {}),
-          ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
-          ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
-          ...(toolLoop ? { toolLoop } : {}),
-          ...(outputLimit ? { outputLimit } : {}),
-          // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。
-          ...(errData?.usageLimit === true ? { usageLimit: true } : {}),
-          ...(typeof errData?.usageResetAt === 'number' && Number.isFinite(errData.usageResetAt)
-            ? { usageResetAt: errData.usageResetAt }
-            : {}),
-          ...(typeof errData?.codexErrorInfo === 'string'
-            ? { codexErrorInfo: errData.codexErrorInfo }
-            : {}),
-        },
+        terminalErrorMessage,
+        terminalErrorSignals,
         {
           sessionTurnGeneration: event.sessionTurnGeneration,
           sessionInstanceId: event.sessionInstanceId,

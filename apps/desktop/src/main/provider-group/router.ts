@@ -32,6 +32,21 @@ import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_G
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
 export { PROVIDER_GROUP_FAILURE_COOLDOWN_MS, type ProviderGroupPersistedCooling } from './cooling.js';
 
+/** Subscription image IDs may be scoped to the member connection. Only map the connection prefix. */
+export function providerGroupImageModelId(
+  view: NonNullable<ResolvedProviderGroupMember['view']>,
+  providerId: string,
+  model: string,
+): string | undefined {
+  const sourcePrefix = `${providerId}/`;
+  const memberModel = model.startsWith(sourcePrefix) ? `${view.id}/${model.slice(sourcePrefix.length)}` : model;
+  return view.imageModels?.find(item => item.id === memberModel && !item.disabled
+    && item.availability !== 'requires_payment'
+    && (!view.remoteModelIds || view.remoteModelIds.includes(item.id))
+    && (!view.availableMediaModelIds || view.availableMediaModelIds.includes(item.id))
+    && (!item.modalities || (item.modalities.input.includes('text') && item.modalities.output.includes('image'))))?.id;
+}
+
 /** 撞到用量上限但拿不到重置时刻时，默认冷却多久。 */
 export const PROVIDER_GROUP_DEFAULT_COOLDOWN_MS = 30 * 60_000;
 /**
@@ -53,7 +68,7 @@ export interface ProviderGroupRouterDeps {
   /** ownComputer：选电脑请求来自自己的其他电脑，本机账号池里的旧 Codex 连接按同账号授权核对(与实际启动一致)。 */
   readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<boolean | null>;
   /** Owner-only anonymous new-assignment facts. Old/unknown peers remain one physical member. */
-  readPoolScheduling?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<SubscriptionPoolScheduling | null>;
+  readPoolScheduling?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean; capability?: 'image.generate' }): Promise<SubscriptionPoolScheduling | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -78,6 +93,7 @@ export interface ProviderGroupPickInput {
   providerId: string;
   agentKind: AgentKind;
   model: string;
+  capability?: 'image.generate';
   /**
    * 仅本机任务入口设置：本机任务与其他使用方走同一组策略(2026-10-15 用户裁决)，只是本机的「暂停对外分配」
    * 不拦本机自己的任务。远程请求与分享中转不传，也不从请求载荷读取，不能借它绕过暂停。
@@ -281,18 +297,24 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   }
 
   /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */
-  function offersModel(resolved: ResolvedProviderGroupMember, agentKind: AgentKind, model: string): boolean {
+  function offersModel(
+    resolved: ResolvedProviderGroupMember,
+    { agentKind, model, capability, providerId }: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>,
+  ): boolean {
     if (resolved.state !== 'ok' || !resolved.view) return false;
+    if (capability === 'image.generate') {
+      return providerGroupImageModelId(resolved.view, providerId, model) !== undefined;
+    }
     const found = findCatalogModel(resolved.view, model, agentKind);
     return found !== undefined
       && isModelSelectableForNewRoute(found, { userProvider: resolved.view.source === 'user' });
   }
 
   /** 能接这个模型的任务：提供模型、不在冷却、配额没用完，且目录预算尚未到期。 */
-  function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model'>) {
+  function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>) {
     return (r: ResolvedProviderGroupMember) =>
       (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
-      && offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+      && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model) === null
       && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
   }
 
@@ -335,7 +357,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         ...(input.fresh ? { fresh: true } : {}),
       });
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
-        && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
+        && offersModel(r, input) && !paused(r) && !input.exclude?.has(r.member.key))
         .map((r) => {
           const options = poolReadOptions(input, r.member);
           return recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer);
@@ -343,13 +365,19 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const schedules = new Map<string, SubscriptionPoolScheduling>();
       if (deps.readPoolScheduling && !input.quotaRebalance) await Promise.all(resolved
         .filter(r => !r.pending && !r.providerContinuity?.stale && r.member.kind !== 'share'
-          && offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+          && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model) === null
           && !paused(r) && !input.exclude?.has(r.member.key))
         .map(async r => {
+          const model = input.capability === 'image.generate' && r.view
+            ? providerGroupImageModelId(r.view, input.providerId, input.model) : input.model;
+          if (!model) return;
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const summary = await Promise.race([
-              deps.readPoolScheduling!(r.member, input.model, poolReadOptions(input, r.member)).catch(() => null),
+              deps.readPoolScheduling!(r.member, model, {
+                ...poolReadOptions(input, r.member),
+                ...(input.capability ? { capability: input.capability } : {}),
+              }).catch(() => null),
               new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS); }),
             ]);
             if (summary) schedules.set(r.member.key, summary);
@@ -372,7 +400,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         // physical continuity, model authorization and machine cooling still apply.
         const ready = schedule
           ? (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
-            && offersModel(r, input.agentKind, input.model)
+            && offersModel(r, input)
             && coolingUntil(input.providerId, r.member.key, input.model) === null
           : usable(r);
         return {
@@ -406,7 +434,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         // Only members that could take this model after a quota reset count. A paused,
         // offline or model-mismatched member must not supply a misleading reset time.
         const limited = resolved.filter((r) => !paused(r) && !input.exclude?.has(r.member.key)
-          && offersModel(r, input.agentKind, input.model))
+          && offersModel(r, input))
           .map((r) => {
             const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
             // A reset is useful only once this member's existing cooldown also ends.

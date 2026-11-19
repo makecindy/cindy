@@ -84,7 +84,7 @@ import { projectHostAuthState } from './auth-state.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
-import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge } from '../../desktop/src/main/maker-host/cli-proxy-bridge.js';
 import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
@@ -1732,7 +1732,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => mcpRuntime?.close());
     platformClient?.close(); platformClient = null;
     await attempt(() => platformTools?.close());
-    await attempt(closeClaudeCliProxyBridge);
+    await attempt(closeCliProxyBridge);
     await attempt(() => makerMemory?.dispose());
     await attempt(() => drainedPlugins);
     await attempt(() => drainedApps);
@@ -1881,6 +1881,11 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
+      || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    onProjectTaskStatus: (sessionId, status) => {
+      eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
+    },
     preparePiSkillRuntime: (id, dir, route) => preparePiSkillRuntime(id, dir, route, inputQueue.capturePiSkillPreparation(id)),
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();

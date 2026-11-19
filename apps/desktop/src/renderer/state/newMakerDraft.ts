@@ -322,7 +322,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
   const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
-  const workingDir = normalizeDraftWorkingDir(r.workingDir);
+  // Device-link identity is transient in an unfinished draft. Never reload its path as local.
+  const workingDir = r.deviceLinkDeviceId ? null : normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
       ? r.remoteHostId.trim()

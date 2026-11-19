@@ -6,15 +6,17 @@
  * Unit: memory filesystem/OS-vault/auth/network boundaries; no user data/I/O.
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { randomBytes } from 'node:crypto';
-import { generateIdentity, createPrivateNetwork, verifyRequestProof } from '@cindy/agent-net-relay';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createDelegation, generateIdentity, createPrivateNetwork, issueCertificate, signature, verifyRequestProof } from '@cindy/agent-net-relay';
+import { delegationPayload, type Delegation } from '@cindy/agent-net-protocol';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net';
-import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
+import { RoutedDeviceLinkClient, providerShareGuestPeer, providerShareHostPeer, sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({ key: 'owner-a', pending: false, api: null as any,
   relay: null as any, config: null as any, allowLegacy: false, privateSharing: false,
   files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(), agentNetEnabled: true, onlyEncrypted: false,
   sessionRoute: null as null | ((peer: string) => unknown),
+  scopedTarget: vi.fn(),
 }));
 vi.mock('node:fs', () => ({ default: {
   existsSync: (file: string) => state.files.has(file), statSync: (file: string) => ({ size: state.files.get(file)?.length ?? 0 }),
@@ -44,23 +46,50 @@ vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => (
 // Production accessors refuse a pending account boundary; only the outgoing
 // variants used by the handover close still resolve the old owner's client.
 vi.mock('../agentNetRuntime.js', () => ({ supportsPrivateAgentNetSharing: () => state.privateSharing, currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
+  currentAgentNetScopedTarget: state.scopedTarget,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
   agentNetAllowsLegacy: () => state.allowLegacy, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn(), setAgentNetScopedSessionRoute: (route: (peer: string) => unknown) => { state.sessionRoute = route; } }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
   listAgentNetSharedTasks, rememberAgentNetSharingHost, retireAgentNetSharingGuest } from '../agentNetSharing.js';
-import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
+import { checkProviderShareDelegation, resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
   state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false; state.allowLegacy = false;
   state.privateSharing = false;
   state.http.mockReset(); state.card.mockReset();
+  state.scopedTarget.mockReset();
   const identity = generateIdentity('self-device'), { bootstrap } = createPrivateNetwork('Unit fixture', identity);
   state.api = new AgentNetClient('https://private.example.test', identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
   state.card.mockResolvedValue({ card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() });
 });
 afterEach(() => stopAgentNetSharing());
+
+// Unit: the production authorization entry consumes one owner signature
+// from the authenticated socket during a business API outage.
+it('confirms the signed executor scope without an HTTP authorization request', async () => {
+  const owner = generateIdentity('other-owner'), guest = generateIdentity('guest');
+  const { root, bootstrap } = createPrivateNetwork('Signature fixture', owner);
+  const executor = state.api.identity;
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject,
+    identity: executor, role: 'member' });
+  state.api = new AgentNetClient(state.api.base, executor, certificate, bootstrap.rootPublicKey);
+  const generation = randomUUID(), expiresAt = Date.now() + 25_000;
+  const value = createDelegation(owner, bootstrap.ownerCertificate, { kind: 'provider-share', resourceId: 'share',
+    guest, scope: { memberId: 'member', guestSubject: 'guest-account', memberVersion: 1 } });
+  const plain = { ...value, executors: [{ generation, expiresAt, certificate }] };
+  const signed: Delegation = { ...plain, signature: signature(owner.signingPrivateKey, delegationPayload(plain)) };
+  state.scopedTarget.mockReturnValue({ delegation: signed });
+  state.http.mockRejectedValue(new TypeError('offline'));
+  const input = { shareId: 'share', memberId: 'member', guestDeviceId: guest.deviceId, executorDeviceId: executor.deviceId };
+  await expect(checkProviderShareDelegation(input, generation)).resolves.toEqual({
+    active: true, ownerDeviceId: owner.deviceId, expiresAt, generation, proofId: signed.id,
+  });
+  expect(state.scopedTarget).toHaveBeenCalledWith(providerShareGuestPeer('share', 'member', guest.deviceId));
+  expect(state.card).not.toHaveBeenCalled();
+  expect(state.http).not.toHaveBeenCalled();
+});
 
 // #11276: a second paired desktop must see the relay owner's task as its own.
 // Unit, real directory routing with one same-subject row from the other host.

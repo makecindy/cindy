@@ -1,6 +1,7 @@
 import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+  isSharedTaskPeer,
 } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
@@ -163,6 +164,8 @@ export function extractMobileSessionReferences(
   while ((match = pattern.exec(text)) !== null) {
     const target = parseSessionDeepLinkUrl(trimSessionLinkMatch(match[0]));
     if (!target) continue;
+    // Keep the complete guest link for get_shared_task_progress on the task host.
+    if (!target.messageClientId && isSharedTaskPeer(target.deviceId)) continue;
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);

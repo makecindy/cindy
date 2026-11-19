@@ -20,6 +20,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
@@ -2024,6 +2025,41 @@ describe('Maker start-option lifecycle hooks', () => {
     await vi.waitFor(() => expect(leased.size).toBe(0));
   });
 
+  // Unit: a failed native unsubscribe leaves the workdir guarded before an adapter
+  // can be entered again. Retry must drain captured cleanup before prepareStartOptions.
+  it('retries unpublished adapter cleanup before reopening a guarded task', async () => {
+    const stopped = createDeferred();
+    let guarded = false;
+    const retryCleanup = vi.fn().mockRejectedValueOnce(new Error('still unconfirmed'))
+      .mockImplementation(async () => { stopped.resolve(); });
+    const pending = new AgentStartupCleanupPendingError('startup cleanup pending', {
+      cause: new Error('native unsubscribe failed'), whenStopped: stopped.promise, retryCleanup,
+    });
+    const startSession = vi.fn().mockRejectedValueOnce(pending)
+      .mockResolvedValueOnce(createHandle({ id: 'reopened-thread' }));
+    const onStartCleanupSucceeded = vi.fn(async () => { guarded = false; });
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: () => { if (guarded) throw new Error('workdir still guarded'); },
+        onStartFailed: ({ runtimeMayBeAlive }) => { guarded = runtimeMayBeAlive === true; },
+        onStartCleanupSucceeded,
+      },
+    });
+    const options: CreateSessionOptions = { id: 'guarded-reopen', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4' };
+    await expect(maker.createSession(options)).rejects.toBe(pending);
+    expect(guarded).toBe(true);
+    await expect(maker.createSession(options)).rejects.toThrow('Previous session startup cleanup is still pending');
+    expect(guarded).toBe(true);
+    expect(startSession).toHaveBeenCalledOnce();
+    const reopened = await maker.createSession(options);
+    expect(retryCleanup).toHaveBeenCalledTimes(2);
+    expect(onStartCleanupSucceeded).toHaveBeenCalledOnce();
+    expect(guarded).toBe(false);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await reopened.close();
+  });
+
   it('does not release adapter startup resources when exit confirmation fails', async () => {
     let rejectStopped!: (error: unknown) => void;
     const whenStopped = new Promise<void>((_resolve, reject) => { rejectStopped = reject; });
@@ -2115,6 +2151,20 @@ describe('Maker start-option lifecycle hooks', () => {
       sessionId: 'unknown-startup-exit', stage: 'agent-start', runtimeMayBeAlive: true,
     }));
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
+  // #11380: a shared Codex process can keep healthy tasks while the unpublished
+  // thread is confirmed released. Unit, real Maker entry: release only its lease
+  // and do not turn that thread proof into process-exit proof for scheduler retry.
+  it.each([false, true])('releases task resources without claiming shared-process exit (preserve: %s)', async preserve => {
+    const cause = new Error('post-resume startup failed');
+    const onStartFailed = vi.fn();
+    const agent = createAgent(vi.fn().mockRejectedValue(new AgentStartupResourcesReleasedError(cause)));
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed } });
+    await expect(maker.createSession({ id: 'released-thread', agentKind: 'codex', workingDir: '/repo',
+      model: 'gpt-5.4', preserveStartupStoppedError: preserve })).rejects.toBe(cause);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: false, error: cause }));
   });
 
   it('does not run the success hook when agent startup fails', async () => {
@@ -4840,3 +4890,42 @@ it.each(['unpublished', 'published'] as const)(
     await maker.shutdown();
   },
 );
+
+// #9323: the sync quit hook must fence persistent tasks and application
+// sessions while leaving every transport untouched for the Windows tree reaper.
+describe('Maker synchronous app quit reservation', () => {
+  it.each(['claude-code', 'codex'] as const)('fences both %s registries and preserves adapter shutdown terminals', async (agentKind) => {
+    const handles: AgentSessionHandle[] = [];
+    const maker = new Maker({ storage: createStorage(), logger: createLogger(),
+      agents: { [agentKind]: createAgent(async () => {
+        const handle = createHandle({ id: `quit-${handles.length}`, agentKind });
+        handle.close = vi.fn(async () => {});
+        handle.abort = vi.fn(async () => {});
+        handles.push(handle);
+        return handle;
+      }, agentKind) } });
+    const task = await maker.createSession({ id: 'quit-task', agentKind, workingDir: '/repo', model: 'm' });
+    const client = await maker.startLocalAgentSession(agentKind, { sessionId: 'quit-client', workingDir: '/repo', model: 'm',
+      [LOCAL_AGENT_CLIENT]: { url: 'http://127.0.0.1:1', token: 'fixture', hostToolsOnly: true } });
+    const seen: AgentEvent[] = [];
+    task.onEvent(event => seen.push(event));
+    client.onEvent(event => seen.push(event));
+    await task.send('task');
+    await client.send('client');
+    maker.prepareForAppQuit();
+    maker.prepareForAppQuit();
+    expect(seen).toEqual([]);
+    for (const handle of handles) {
+      expect(handle.close).not.toHaveBeenCalled();
+      expect(handle.abort).not.toHaveBeenCalled();
+    }
+    await expect(maker.createSession({ id: 'too-late', agentKind, workingDir: '/repo', model: 'm' }))
+      .rejects.toThrow('shutting down');
+    await maker.shutdown({ reason: 'app-quit' });
+    for (const handle of handles) expect(handle.close).toHaveBeenCalledOnce();
+    expect(seen.map(event => [event.type, event.data])).toEqual(agentKind === 'claude-code' ? [
+      ['done', { status: 'cancelled' }], ['done', { status: 'cancelled' }],
+    ] : []);
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+});

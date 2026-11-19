@@ -1121,14 +1121,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正勞作",
-    "hint": "按任一鍵或 Touch ID 鍵即鎖屏，再以指紋或密碼解之",
+    "hint": "按任一鍵，乃可解鎖",
     "lockFailed": {
       "status": "Cindy 未能鎖此機",
       "hint": "觸機則再試鎖屏；仍不能鎖，以 Touch ID 或密碼驗之，乃可撤。亦可闔蓋或按電源鍵以鎖。",
       "hintWindows": "觸機則再試鎖屏；仍不能鎖，以 Windows Hello 或 PIN 驗之，乃可撤。亦可按 Windows 徽鍵 + L 以鎖。"
     },
-    "hintWindows": "按任一鍵即鎖屏，以 Windows Hello 或密碼解之",
-    "hintLinux": "按任一鍵即鎖屏，以密碼解之",
+    "hintWindows": "按任一鍵，乃可解鎖",
+    "hintLinux": "按任一鍵，乃可解鎖",
     "verifyReason": "撤隱私畫面"
   },
   "appBadge": {
@@ -3443,7 +3443,7 @@
         "end": "以上為自 {{source}} 納入之記錄",
         "endHandoff": "以上為自 {{source}} 納入之記錄，此後由 {{harness}} 接續"
       },
-      "projectMenu": "納此案於他器中之差事…"
+      "projectMenu": "匯入差事…"
     },
     "connections": {
       "codex": {
@@ -4075,6 +4075,7 @@
         "refreshSpeechAdded": "模型已更，補 1 個語音參考型號",
         "refreshNoNew": "模型清單已是最新，無所增",
         "refreshFailed": "模型清單重整未成，請稍後再試",
+        "refreshReconnect": "模型清單重整未成。請重連此供方，再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟，已略重整",
         "disableModel": "停此模型",
         "paymentRequired": "付費",
@@ -6032,7 +6033,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "差事模型自降",
-        "description": "連線或容量之故障連發時，先切至同名模型之他處已連來源，再試當前 Agent 明確所薦之模型；不換 Agent，亦不改君所存之選擇。常例為闔。"
+        "description": "模型組遇故，試組內可用之餘模。更換引擎，依舊法交接，存其新選。尋常差事屢敗，方於本引擎另試來源或所薦模型。初設為關。"
       },
       "toggleAria": "切換差事模型自降",
       "toast": {
@@ -8147,6 +8148,7 @@
         "cindyEmbedText": "可將文字送算為向量（用於語義檢索）",
         "cindyModelsDecisions": "可用決策模型（耗模型額度）",
         "cindyModelsRerank": "可用重排模型（耗模型額度）",
+        "cindyModelsMediaRequest": "可直用 Cindy AI 生圖、影片、語音合成及轉寫（耗模型額度）",
         "cindyEmbedTextDetail": "文字將送至系統之向量模型算為一串數字，每次至多 {{max}} 條，或生模型費用。所得向量僅交法器自存，不寫入君之資料庫。",
         "cindySearchWeb": "可用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢將存取公網，或耗 Cindy AI 限額。",
@@ -9458,6 +9460,31 @@
     "preparing": "方連登入服務",
     "preparingSubtitle": "將為君載當前區域可用之登入方式",
     "unavailable": "暫不能登入",
+    "hostUnavailable": {
+      "title": "Cindy 後臺服務沒有啟動",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "這份資料屬於另一個帳號，和 Cindy 後臺服務儲存的登入不一致。",
+          "action": "請用原來的帳號執行 cindy-host login，再重新啟動 Cindy 後臺服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一個 Cindy 程式正在使用這份資料。",
+          "action": "請先關閉它，再重新啟動 Cindy 後臺服務，然後重新開啟 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "這個帳號的資料打不開。",
+          "action": "如果最近用過較新版本的 Cindy，請先把這台電腦上的 Cindy 更新到最新版本，再重新啟動 Cindy 後臺服務，然後重新開啟 Cindy；否則執行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 後臺服務啟動時連不上登入服務。",
+          "action": "請檢查網路，再重新啟動 Cindy 後臺服務，然後重新開啟 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 後臺服務啟動時出錯。",
+          "action": "請重新啟動 Cindy 後臺服務，然後重新開啟 Cindy。如果還是出錯，執行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "再試",
     "browserWaiting": "請於瀏覽器中完成驗證",
     "browserCallback": {
@@ -11438,7 +11465,7 @@
         "projectDirChoose": "擇",
         "projectDirChange": "易",
         "projectDirClear": "清",
-        "projectDirNote": "分工行事時，同伴於此勞作。不擇亦可，將用此群議自有之卷匣；若擇 git 專案，每次分工將新開一 worktree 與分支，不動君手中之程式碼。",
+        "projectDirNote": "可擇本機既有之專案。未擇，則先取倉庫所繫，次取行事同伴之專案。Git 分工另闢 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
         "allowMemberInvites": "許諸成員邀友",
@@ -11766,15 +11793,15 @@
           "replyModeAssistant": "Cindy 答之",
           "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分職",
-          "ownFolder": "群自有之卷匣",
+          "ownFolder": "自動擇取",
           "projectDirHint": "唯此機有效。",
-          "projectDirClearHint": "改用群自有之卷匣",
+          "projectDirClearHint": "復為自動擇項",
           "project": "案",
           "projectCaption": "同僚於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
           "githubRepo": "GitHub 庫",
-          "githubRepoHint": "書 owner/name。未擇資料夾之機，用本機此案；無之，則自取一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代碼之庫",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等，貼庫之連結。未擇夾之機，用本機此項目，無則自取一份。",
+          "repositoryHint": "GitHub 可書 owner/name，餘庫可貼其址。此機既有之項，獨一相合者用之。",
           "repositoryPlaceholder": "owner/name 或庫之連結",
           "githubRepoSaveFailed": "庫未存，請察而再試。",
           "folderRepoFilled": "已依此夾填庫 {{repo}}，群中他人之機亦用之。",
@@ -14567,12 +14594,14 @@
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之訊，默從排隊。",
-      "steerDefault": "差事行中所遣之訊，默為插話於今之差事。",
+    "sendDelivery": {
+      "menuAria": "此訊遣法",
+      "queueHint": "待此輪畢",
+      "steerHint": "次步即理",
+      "setDefault": "立為默",
+      "nowDefault": "已立為默",
       "switchToSteer": "默改插話",
-      "switchToQueue": "默改排隊",
-      "dismiss": "關閉提示"
+      "switchToQueue": "默改排隊"
     }
   },
   "onboarding": {
@@ -14934,6 +14963,7 @@
       "credentialSwitchBusy": "Codex 方行於他差事，暫不能依此差事所擇之模型來源而易（須重啟共用之 Codex 後臺程序）。俟其畢，點「再試」即可。",
       "accountBoundaryPending": "Cindy 方易名籍之態，暫不能始此差事。稍候片刻，點「再試」；若屢見之，請重啟 Cindy。",
       "codexThreadStale": "Codex 鑑權之式已易，此差事不能續 —— 請新開差事，方生效。",
+      "codexSharedAuthLinkUnavailable": "本機之 Codex 已登入，而此差事不能讀其登入：指向其之連結建不出來（Windows 常權之下，通常建不了）。請確認此電腦之 {{appName}} 有權建立連結（Windows 上可以管理員之身執行一次，或開啟開發人員模式），而後點「再試」。亦可點「重登 ChatGPT」，使 Cindy 以自有之一份登入行此差事。",
       "codexResumeNotReady": "Codex 暫不能復此差事，請稍後再試",
       "claudeGatewayOpusPlanMismatch": "此番 Opus 請求實經 XD Gateway，非君之 Claude.ai 訂閱；該閘道路由拒此模型。可易為 Claude.ai 訂閱再試，或另擇模型。",
       "claudeSubscriptionOpusPlanMismatch": "今所連之 Claude Pro 方案不支援 Opus。請易為方案所支援之模型；若方升級方案，請於規制中重連 Anthropic，再試。",
@@ -16417,7 +16447,7 @@
       "confirmArchive": {
         "title": "封存差事",
         "description": "確欲封存此差事乎？封存後將自錄中除去。",
-        "dirtyWorktreeWarning": "未提交之改動，歸檔前先存之，日後可於任務中復原。",
+        "dirtyWorktreeWarning": "此差事有檔案改動尚未提交。封存時照例存之，日後可於差事中復原。",
         "discardChanges": "棄未提交之改動",
         "discardWarning": "未提交之改動及新檔，將不可復原。",
         "discardAndArchive": "棄而歸檔",
@@ -16456,6 +16486,7 @@
         "empty": "此自運無可封存之差事"
       },
       "archiveAll": {
+        "projectTitle": "盡封存「{{name}}」諸差事乎？",
         "title": "盡封存差事",
         "confirm": "盡封存",
         "cancel": "罷",
@@ -16600,18 +16631,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」專案之目",
+        "previewFailed": "未能讀取此專案諸務，請再試。",
+        "remotePreviewFailed": "遠機專案之差事未得讀取。請察連線，並核遠機 Cindy 是否為新版。",
         "rename": "案易名",
         "pin": "置頂此案",
         "unpin": "解置頂此案",
-        "removeFromSidebar": "自側欄除案",
-        "removeFromSidebarConfirmTitle": "除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "此舉將自側欄除此案。機上之卷不刪。現有差事將移至“言談”分組，仍可如常使用。",
-        "removeFromSidebarConfirmAction": "除此案",
-        "removeFromSidebarFailed": "不能自側欄除案，請再試",
-        "showFiles": "覽卷",
-        "archivedAll": "盡封存",
-        "unarchiveAll": "盡解封存",
-        "openInExplorer": "於卷管理器中啟",
+        "removeFromSidebar": "自 Cindy 移除此案…",
+        "removeFromSidebarConfirmTitle": "自 Cindy 移除「{{name}}」乎？",
+        "removeFromSidebarConfirmDescription": "未歸檔之差事凡 {{count}}，仍可於「對話」續辦。",
+        "removeFromSidebarConfirmAction": "移除此案",
+        "removeFromSidebarFailed": "移案未成，請重試。",
+        "archiveOnRemove": "並歸檔差事（{{count}}）",
+        "keepSkippedOnRemove": "{{skip}}之差事仍留於「對話」。",
+        "removedArchived": "差事 {{count}} 將入歸檔。",
+        "removeAndArchive": "移案並歸檔差事",
+        "removeKeepFiles": "案之置頂、別名、圖記皆除。機中卷冊與卷夾俱留。",
+        "showFiles": "於側欄覽差事之卷",
+        "archivedAll": "盡歸檔諸差事",
+        "unarchiveAll": "盡復諸差事",
+        "openInFinder": "於 Finder 中啟案之卷夾",
+        "openInExplorer": "於檔案總管中啟案之卷夾",
+        "openInFileManager": "於卷管理器中啟案之卷夾",
         "newInDirectory": "於此目錄新開差事",
         "copyDeepLink": "錄案之連結",
         "search": "於案內尋差事"
@@ -16649,6 +16690,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下週",
+        "indefinite": "無期",
         "custom": "自定…",
         "wakeAt": "喚回日期時辰",
         "timeZone": "本地時辰（{{zone}}）",
@@ -19104,6 +19146,9 @@
     },
     "errors": {
       "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
+      "hostProfileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+      "hostProfileInUseByDesktopAtStart": "這份資料正被單獨執行的 Cindy 電腦端使用，Cindy 後臺服務沒有啟動。請先結束它，重新啟動 Cindy 後臺服務，然後重新開啟目前這個 Cindy 視窗。",
+      "hostProfileInUseByDesktopRetry": "這份資料正被單獨執行的 Cindy 電腦端使用，暫時不能修改。請先結束它，再試一次。",
       "openFileFailed": "無從於系統中啟此卷",
       "emptyResponse": "模型無所答。請再試；上下文甚長者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未報謬誤詳情），請再試。",
@@ -19391,6 +19436,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此輪未成。",
+    "blockedReasonUnknown": "受阻之由未詳。",
+    "blockedNextStep": "可於此任務補述詳情；解其阻後，按「{{action}}」續行。",
     "status": {
       "active": "方趨目標",
       "paused": "已暫止",
@@ -19725,6 +19773,7 @@
         "empty": "今無贈予之記。",
         "incomplete": "贈予之記甚多，今唯示最近 {{count}} 筆。",
         "unnamed": "贈予餘資",
+        "rolloverName": "滾存額度",
         "giftCard": "禮品卡 · 來自 {{sender}}",
         "original": "原額",
         "used": "已用",
@@ -19962,6 +20011,8 @@
       "basicModels": "可用若干模型",
       "subscription": "訂閱之約",
       "rollover": "所餘可留至{{period}}，至多 {{amount}}",
+      "rolloverMonthly": "剩餘餘額最多滾存 {{amount}}，轉為贈送餘額\n1 個月內有效，不再繼續滾存\n優先於訂閱餘資和儲值餘資使用",
+      "rolloverMonthlySummary": "剩餘餘額最多滾存 {{amount}}，1 個月內有效",
       "nextPeriod": {
         "MONTH": "次月",
         "YEAR": "次年",
@@ -21555,14 +21606,14 @@
     },
     "taskInbox": {
       "title": "識收件匣",
-      "lead": "任務依其狀自分為待處理、進行中、待後處理、已處理。善用之道，在常清其匣：事畢者點「畢」，未及者待後處理。",
+      "lead": "數事並行，收件匣依其狀而分類。凡有新報或待君答者，皆列於待處理。",
       "pending": {
         "title": "待處理",
         "body": "任務事竣有果，或待君答，則現於此。"
       },
       "done": {
         "title": "畢",
-        "body": "事畢點「畢」，任務移入已處理；後有新進，自返其處。"
+        "body": "宜常清其匣，事畢即點「畢」。"
       },
       "snooze": {
         "title": "待後處理",
@@ -21768,14 +21819,14 @@
     "openFailed": "未能開啟 GitHub"
   },
   "hostConnection": {
-    "connecting": "正連 Cindy 後臺…",
+    "connecting": "正連 Cindy 後臺服務…",
     "restoring": "正復差事之態…",
     "retrying": "差事之態未同步，正重試…",
     "pairing": "連接須再授權",
-    "pairingHelp": "請留此頁。於啟動 Cindy 後臺之終端重行打開網頁之命令，於新頁配對畢，再返此頁。",
+    "pairingHelp": "請留此頁。於啟動 Cindy 後臺服務之終端重行打開網頁之命令，於新頁配對畢，再返此頁。",
     "keepDraft": "草稿仍存。連接復通，差事之態將自同步。",
     "retry": "重試連接",
-    "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
+    "desktopAuthHelp": "請於啟動終端更新 Cindy 後臺服務之連接設定，再啟此實驗客戶端。"
   },
   "remoteControlConsent": {
     "title": "許遠控此機乎？",

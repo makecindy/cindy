@@ -116,7 +116,7 @@ import {
 } from '@/lib/remoteProviderGroups';
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
-import { readProviderShareGroupSize } from '@cindy/device-link';
+import { isProviderAccessDeniedError, readProviderShareGroupSize } from '@cindy/device-link';
 import { SharedProviderGroupStatus } from '@/features/provider-share/SharedProviderGroupStatus';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
@@ -880,9 +880,10 @@ export interface ModelSelectorBaseProps {
   triggerVariant?: 'toolbar' | 'field' | 'settings';
   /**
    * field 形态的面板宽度：默认 trigger(与表单字段等宽)；content = 与输入框里的模型选择器一样随内容撑开，
-   * 至少与 trigger 等宽(用于窄 trigger 的「添加」类入口，见 DESIGN.md §4 Select & Dropdown)。
+   * 至少与 trigger 等宽。readable = 为 IM 项目模型的来源栏和型号留出阅读宽度，
+   * 超过视口时收缩（见 DESIGN.md §4 Select & Dropdown）。
    */
-  fieldPanelWidth?: 'trigger' | 'content';
+  fieldPanelWidth?: 'trigger' | 'content' | 'readable';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
@@ -1162,6 +1163,7 @@ export interface ModelSelectorContentBaseProps {
    * trigger width」),主菜单列由固定 320 改为撑满外层 PopoverContent。
    */
   fluidWidth?: boolean;
+  readableRows?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
@@ -1308,6 +1310,7 @@ function ModelSelectorContentView({
   pointerRevealRequiresIntent = false,
   optionsPanelUsesLayoutPositioning = false,
   fluidWidth = false,
+  readableRows = false,
   agentSwitch,
   discoveringModels = false,
   interactionDisabled = false,
@@ -3755,7 +3758,7 @@ function ModelSelectorContentView({
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
             } : {})}
-            {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
+            {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
                   catalogNotice: (
                     <RemoteModelLoadNotice
@@ -3791,6 +3794,7 @@ function ModelSelectorContentView({
             query={query}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
+            readableRows={readableRows}
             // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
             selected={pluginModels?.active || modelGroups?.active ? NO_MODEL_SELECTION : panelSelection}
             selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !modelGroups?.active ? selectedFavoriteUid : null}
@@ -4531,8 +4535,6 @@ export function ModelSelector({
   });
   const remoteModelLoading = providersOverrideState?.status === 'loading' ||
     (sshCodexCurrent && sshCodex?.status === 'loading') || (!!deviceId && remoteModelListStatus === 'loading');
-  const remoteModelLoadFailed = providersOverrideState?.status === 'error' ||
-    (sshCodexCurrent && sshCodex?.status === 'error') || (!!deviceId && remoteModelListStatus === 'error');
   const localModelLoading = !deviceId && !providersOverride && !sshCodexCurrent && !localProviders.loadFailed && (
     localProviders.loading ||
     (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
@@ -4566,6 +4568,15 @@ export function ModelSelector({
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
     : visibleModels.find((m) => m.id === modelId);
+  // Keep directory refresh errors in the picker when the task model is known
+  // and the selected engine still reports its capabilities.
+  const agentCapabilities = agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi;
+  const confirmedRemoteModel = actualRoute && agentIdentity?.state === 'current' && !!currentModel &&
+    agentCapabilities.capabilities != null && !agentCapabilities.error &&
+    !isProviderAccessDeniedError(remoteProviders.error);
+  const remoteModelLoadFailed = providersOverrideState?.status === 'error' ||
+    (sshCodexCurrent && sshCodex?.status === 'error') ||
+    (!!deviceId && remoteModelListStatus === 'error' && !confirmedRemoteModel);
   // Wire IDs can differ from catalog IDs during a switch. Resolve display metadata
   // through the existing alias lookup without changing routing/capability decisions.
   const displayProvider = agentKind
@@ -4820,6 +4831,7 @@ export function ModelSelector({
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
+  const readableFieldPanel = isFieldTrigger && fieldPanelWidth === 'readable';
   const fieldPanelFollowsTrigger = isFieldTrigger && fieldPanelWidth === 'trigger';
   const isSettingsTrigger = triggerVariant === 'settings';
   const modelDescription = isSettingsTrigger && unknownLabel && !localizedName &&
@@ -5248,7 +5260,8 @@ export function ModelSelector({
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}
       optionsPanelUsesLayoutPositioning={isCreateAgentVariant}
-      fluidWidth={fieldPanelFollowsTrigger}
+      fluidWidth={fieldPanelFollowsTrigger || readableFieldPanel}
+      readableRows={readableFieldPanel}
       agentSwitch={agentSwitch}
       discoveringModels={showDiscoveryPending && discovery.pending}
       interactionDisabled={switching || disabled}
@@ -5303,11 +5316,10 @@ export function ModelSelector({
         side={popoverSide}
         align="end"
         sideOffset={4}
-        collisionPadding={8}
+        collisionPadding={readableFieldPanel ? 12 : 8}
         className={cn(
-          // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          fieldPanelFollowsTrigger ? 'w-[var(--radix-popover-trigger-width)]'
+          readableFieldPanel ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
+            : fieldPanelFollowsTrigger ? 'w-[var(--radix-popover-trigger-width)]'
             : isFieldTrigger ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',

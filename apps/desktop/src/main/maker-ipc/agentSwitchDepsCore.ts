@@ -5,6 +5,8 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { setThinkingEnabledInMemory } from '../maker-host/newMakerDefaultsCache.js';
+import { MAKER_PUSH } from './channels.js';
 import { lookupVerifiedContextWindow } from './contextOverflowRollover.js';
 import type { MakerSessionAgentSwitchHandlerDeps } from './sessionAgentSwitchHandler.js';
 
@@ -157,5 +159,25 @@ export function createSwitchedSessionBootstrap({
       await ensureRemoteReadyForSessionStart({ createOpts: co });
       await bootstrapSession(co, assertOwner, opts?.nativeHistoryResume);
       broadcastSessionCreated(sessionId);
+  };
+}
+
+/** register.ts's rememberThinkingIntent of the agent switch deps (a committed switch's thinking choice). */
+export function createRememberThinkingIntent(ports: {
+  broadcastToAllWindows: (channel: string, payload: unknown) => void;
+}): NonNullable<SwitchDeps['rememberThinkingIntent']> {
+  const { broadcastToAllWindows } = ports;
+  return ({ agentKind, providerId, model, thinking }) => {
+    setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
+    // 同步本机 renderer 的记忆：主进程写的只是镜像，renderer 才是 providerModelMemory
+    // 的真相源。不写回这一笔，renderer 的全量快照会一直「尚未包含该选择」，提交时写入
+    // 的钉子也就撤不掉，反而会长期压住用户在被控端后来的显式改动（Greptile P1）。
+    broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
+      agent: agentKind,
+      providerId: providerId ?? '',
+      modelId: model,
+      active: false,
+      thinking,
+    });
   };
 }

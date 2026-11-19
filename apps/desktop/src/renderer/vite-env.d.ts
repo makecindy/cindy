@@ -2361,6 +2361,8 @@ interface ElectronAPI {
     accountDeletionRestored: boolean;
     /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687)。 */
     credentialStoreUnavailable?: boolean;
+    /** Client mode only: why the Host serving this window did not start (shared/hostStartFailure.ts). */
+    hostUnavailable?: { reason: string } | null;
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
@@ -5177,6 +5179,8 @@ interface ElectronAPI {
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        Promise<import('../shared/projectArchive').ProjectArchiveMember[] | import('../shared/projectArchive').ProjectArchiveReceipt>;
       restoreIfArchived: (
         id: string,
         expected: {

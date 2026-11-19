@@ -56,8 +56,8 @@ export async function openSession<T = void>(input: {
 }, commit?: (row: OpenedSessionRow, assertCurrent: () => void) => Promise<T>): Promise<{ row: OpenedSessionRow; value: T }> {
   const owner = getCurrentDbClientSnapshot();
   const assertCurrent = () => {
-    if (!owner || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新新建任务');
     input.assertCurrent?.();
+    if (!owner || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新新建任务');
   };
   assertCurrent();
   const db = getDbClient().drizzle;

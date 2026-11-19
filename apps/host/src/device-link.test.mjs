@@ -44,7 +44,12 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
-  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('task','Shared task','desktop','active',1,1)");
+  sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);
+    CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
+      kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision));
+    INSERT INTO sessions(id,title,source,status,working_dir,workspace_kind,created_at,updated_at)
+    VALUES ('task','Shared task','desktop','active','/project','project',1,1)`);
   const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(db, 'test-headless-owner');
   const hub = createEventHub();
@@ -109,6 +114,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    isBusyForProjectArchive: () => false,
+    onProjectTaskStatus: (sessionId, status) => hub.publish({ type: 'session_changed', sessionId, status, patch: { status } }),
     preparePiSkillRuntime: async (id, dir, route) => {
       assert.equal(id, 'task'); assert.equal(dir, '/project');
       if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
@@ -134,6 +141,20 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // A full round trip from the desktop controller must preview and mutate the Host's project.
+  const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
+    args: [{ directory: '/project', ...input }] });
+  const removal = await projectArchive({ action: 'archiveOnRemoval', operation: 'apply', sessionId: 'task' });
+  assert.equal(removal.ok, false, 'project removal is local to the owning desktop');
+  const preview = await projectArchive({ action: 'archive', operation: 'preview' });
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  assert.deepEqual(preview.result, [{ id: 'task', hasWorktree: false, blocked: null }]);
+  for (const [action, expected] of [['archive', 'archived'], ['unarchive', 'active']]) {
+    const result = await projectArchive({ action, operation: 'apply', sessionId: 'task' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result, 'updated');
+    assert.equal(sqlite.prepare("SELECT status FROM sessions WHERE id='task'").pluck().get(), expected);
+  }
   // 2026-11-18: exercise the real Host registry over the existing integration relay.
   // A positive controller window on either picker channel or Skill preparation must fail before applying it.
   const numericSelections = [
@@ -192,6 +213,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   hold = new Promise(resolve => { release = resolve; });
   const mobileWrite = clients[0].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'during-handoff', text: 'still connected' }] });
   await waitFor(() => writes === 2);
+  const startedAt = Date.now() - 252000;
+  sqlite.prepare('UPDATE sessions SET active_turn_started_at=? WHERE id=?').run(startedAt, 'task');
   clients[2].stop();
   await waitFor(() => !sockets.has('desktop'));
   release();
@@ -201,6 +224,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(host.state().status, 'online');
   assert.equal(clients[0].getStatus(), 'online');
   clients[2] = await connect('desktop');
+  const clock = await clients[2].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] });
+  assert.equal(clock.result.activeTurnStartedAt, startedAt);
+  assert.ok(clock.result.turnElapsedMs >= 252000 && clock.result.turnElapsedMs <= Date.now() - startedAt);
+  sqlite.prepare('UPDATE sessions SET last_turn_ended_at=? WHERE id=?').run(startedAt + 252731, 'task');
   assert.equal(writes, 2, 'reattaching the desktop must not replay mobile writes');
   hold = undefined;
   await host.revoke('ios');
@@ -209,6 +236,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const neighbor = await clients[1].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] });
   assert.equal(neighbor.ok, true);
   assert.equal(neighbor.result.id, 'task');
+  assert.equal(neighbor.result.turnElapsedMs, 252731);
   const forbidden = await clients[2].invoke('host', { channel: 'host:execute-arbitrary', args: [] }).catch(error => ({ denied: error }));
   assert.ok(forbidden.denied || forbidden.ok === false);
   await host.setEnabled(false);

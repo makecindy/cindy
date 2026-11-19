@@ -1150,14 +1150,14 @@
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Appuyez sur une touche ou sur la touche Touch ID pour verrouiller, puis déverrouillez avec votre empreinte ou votre mot de passe",
+    "hint": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "lockFailed": {
       "status": "Cindy n'a pas pu verrouiller ce Mac",
       "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Touch ID ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
       "hintWindows": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Windows Hello ou votre code PIN pour retirer l'écran. Vous pouvez aussi appuyer sur la touche du logo Windows + L."
     },
-    "hintWindows": "Appuyez sur une touche pour verrouiller ; déverrouillez avec Windows Hello ou votre mot de passe",
-    "hintLinux": "Appuyez sur une touche pour verrouiller ; déverrouillez avec votre mot de passe",
+    "hintWindows": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
+    "hintLinux": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "verifyReason": "retirer l'écran de confidentialité"
   },
   "appBadge": {
@@ -3529,7 +3529,7 @@
         "end": "Tout ce qui précède a été importé depuis {{source}}",
         "endHandoff": "Tout ce qui précède a été importé depuis {{source}}. {{harness}} poursuit ici."
       },
-      "projectMenu": "Importer les sessions de ce projet depuis d’autres outils…",
+      "projectMenu": "Importer des tâches…",
       "hiddenCount_many": "{{count}} masquées",
       "groupTasks_many": "{{count}} sessions",
       "selectedSummary_many": "{{count}} sélectionnées · {{size}}",
@@ -4171,6 +4171,7 @@
         "refreshSpeechAdded": "Modèles mis à jour ; 1 modèle vocal suggéré ajouté",
         "refreshNoNew": "La liste des modèles est à jour : rien de nouveau",
         "refreshFailed": "Impossible d'actualiser la liste des modèles : réessayez plus tard",
+        "refreshReconnect": "La liste des modèles n’a pas pu être actualisée. Reconnectez ce fournisseur, puis réessayez.",
         "refreshFetchDisabled": "La récupération du catalogue de modèles distant est désactivée : actualisation ignorée",
         "disableModel": "Désactiver ce modèle",
         "paymentRequired": "Payant",
@@ -6133,7 +6134,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modèle de secours automatique pour les tâches",
-        "description": "Après des échecs répétés de connexion ou de capacité, essaie une autre source connectée pour le même modèle, puis un modèle explicitement recommandé pour l'Agent actuel. Ne change jamais d'Agent et ne modifie pas votre sélection enregistrée. Désactivé par défaut."
+        "description": "En cas d’échec, un groupe essaie ses autres modèles disponibles. Un changement d’Agent transfère la tâche et enregistre le nouveau choix. Après plusieurs échecs, les autres tâches essaient une autre source ou un modèle recommandé du même Agent. Désactivé par défaut."
       },
       "toggleAria": "Activer/désactiver le modèle de secours automatique pour les tâches",
       "toast": {
@@ -8276,6 +8277,7 @@
         "cindyEmbedText": "Peut envoyer du texte à convertir en vecteurs (pour la recherche sémantique)",
         "cindyModelsDecisions": "Peut utiliser les modèles de décision (consomme votre quota de modèles)",
         "cindyModelsRerank": "Peut utiliser les modèles de reclassement (consomme votre quota de modèles)",
+        "cindyModelsMediaRequest": "Peut générer des images et des vidéos, synthétiser la voix et transcrire avec Cindy AI (consomme votre quota de modèles)",
         "cindyEmbedTextDetail": "Le texte est envoyé au modèle d'embedding du système et converti en nombres, jusqu'à {{max}} éléments par appel. Des frais de modèle peuvent s'appliquer. Les vecteurs sont transmis uniquement au plugin : rien n'est écrit dans votre propre bibliothèque.",
         "cindySearchWeb": "Peut effectuer des recherches sur le Web public avec Cindy AI",
         "cindySearchWebDetail": "Les requêtes de recherche accèdent au Web public et peuvent consommer du quota Cindy AI.",
@@ -9573,6 +9575,31 @@
     "preparing": "Préparation de la connexion",
     "preparingSubtitle": "Chargement des méthodes disponibles pour cette région",
     "unavailable": "Connexion indisponible pour l'instant",
+    "hostUnavailable": {
+      "title": "Service d’arrière-plan Cindy arrêté",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Ces données appartiennent à un autre compte que la connexion enregistrée par le service d’arrière-plan Cindy.",
+          "action": "Exécutez cindy-host login avec le compte d’origine, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Une autre application Cindy utilise ces données.",
+          "action": "Fermez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Les données de ce compte ne peuvent pas être ouvertes.",
+          "action": "Si vous avez récemment utilisé une version plus récente, mettez Cindy à jour sur ce poste, redémarrez le service d’arrière-plan Cindy et rouvrez Cindy. Sinon, lancez cindy-host status pour voir la cause."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Au démarrage, le service d’arrière-plan Cindy n’a pas pu joindre le service de connexion.",
+          "action": "Vérifiez votre réseau, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "Le service d’arrière-plan Cindy a rencontré une erreur au démarrage.",
+          "action": "Redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy. Si cela se reproduit, exécutez cindy-host status pour en voir la raison."
+        }
+      }
+    },
     "retry": "Réessayer",
     "browserWaiting": "Terminez la vérification dans votre navigateur",
     "browserCallback": {
@@ -11572,7 +11599,7 @@
         "projectDirChoose": "Choisir un dossier",
         "projectDirChange": "Changer de dossier",
         "projectDirClear": "Effacer le dossier",
-        "projectDirNote": "Les amis travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
+        "projectDirNote": "Choisissez un projet existant sur cet ordinateur. Sans sélection, le projet associé au dépôt est utilisé, puis celui du compagnon chargé du travail. Les tâches réparties dans Git utilisent un arbre de travail distinct.",
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
@@ -11906,15 +11933,15 @@
           "replyModeAssistant": "Cindy répond",
           "replyModeAssistantNote": "La Cindy du groupe répond.",
           "work": "Répartitions du travail",
-          "ownFolder": "Dossier propre au groupe",
+          "ownFolder": "Automatique",
           "projectDirHint": "S’applique uniquement sur cet ordinateur.",
-          "projectDirClearHint": "Utiliser plutôt le dossier propre au groupe",
+          "projectDirClearHint": "Revenir au choix automatique du projet",
           "project": "Projet",
           "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
           "githubRepo": "Dépôt GitHub",
-          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Dépôt",
-          "repositoryHint": "GitHub : saisissez owner/name. GitLab (y compris auto-hébergé), CNB et autres : collez le lien du dépôt. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet, ou en téléchargent une.",
+          "repositoryHint": "Pour GitHub, saisissez owner/name ou collez l’URL du dépôt. Cindy cherche un projet correspondant sans ambiguïté sur cet ordinateur.",
           "repositoryPlaceholder": "owner/name ou lien du dépôt",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
           "folderRepoFilled": "Le dépôt {{repo}} a été renseigné à partir de ce dossier. Les ordinateurs des autres membres l’utiliseront aussi.",
@@ -14749,12 +14776,14 @@
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
     },
-    "followUpHint": {
-      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
-      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+    "sendDelivery": {
+      "menuAria": "Comment envoyer ce message",
+      "queueHint": "Après cette réponse",
+      "steerHint": "À la prochaine étape",
+      "setDefault": "Définir par défaut",
+      "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
-      "switchToQueue": "File d'attente par défaut",
-      "dismiss": "Fermer l'astuce"
+      "switchToQueue": "File d'attente par défaut"
     }
   },
   "onboarding": {
@@ -15104,6 +15133,7 @@
       "credentialSwitchBusy": "Une autre tâche Codex est toujours en cours d'exécution : le fournisseur de cette session ne peut donc pas encore être appliqué (le processus Codex partagé doit redémarrer). Réessayez une fois ces tâches terminées.",
       "accountBoundaryPending": "Cindy est encore en train de changer l'état du compte : cette tâche ne peut donc pas encore démarrer. Patientez un instant, puis cliquez sur Réessayer. Si le problème persiste, redémarrez Cindy.",
       "codexThreadStale": "Le mode d'authentification Codex a changé : cette session ne peut pas continuer. Démarrez une nouvelle session pour l'appliquer.",
+      "codexSharedAuthLinkUnavailable": "Codex est connecté sur cet ordinateur, mais cette session ne peut pas l’utiliser : le lien vers ce compte ne peut pas être créé (avec un profil Windows standard, c’est généralement impossible). Vérifiez que {{appName}} a le droit de créer ce lien sur cet ordinateur (sous Windows, exécutez-le une fois en tant qu’administrateur ou activez le mode développeur), puis cliquez sur « Réessayer ». Vous pouvez aussi cliquer sur « Se reconnecter à ChatGPT » pour que Cindy utilise sa propre connexion pour cette session.",
       "codexResumeNotReady": "Codex ne peut pas reprendre cette tâche pour le moment. Réessayez dans un instant.",
       "claudeGatewayOpusPlanMismatch": "Cette requête Opus est passée par XD Gateway, et non par votre abonnement Claude.ai. Cette route de la passerelle a refusé le modèle. Passez à votre abonnement Claude.ai et réessayez, ou choisissez un autre modèle.",
       "claudeSubscriptionOpusPlanMismatch": "Opus n'est pas disponible avec l'offre Claude Pro connectée. Passez à un modèle inclus dans votre offre. Si vous avez récemment changé d'offre, reconnectez Anthropic dans les paramètres, puis réessayez.",
@@ -16647,7 +16677,7 @@
       "confirmArchive": {
         "title": "Archiver la session",
         "description": "Archiver cette session ? Elle sera retirée de la liste.",
-        "dirtyWorktreeWarning": "Les modifications non validées seront enregistrées avant l’archivage. Vous pourrez les restaurer depuis la tâche.",
+        "dirtyWorktreeWarning": "Cette tâche contient des modifications de fichiers non validées. Par défaut, elles sont enregistrées lors de l’archivage. Vous pourrez les restaurer depuis la tâche.",
         "discardChanges": "Ignorer les modifications non validées",
         "discardWarning": "Les modifications non validées et les nouveaux fichiers seront perdus.",
         "discardAndArchive": "Ignorer et archiver",
@@ -16688,6 +16718,7 @@
         "empty": "Cette automatisation n'a aucune session à archiver."
       },
       "archiveAll": {
+        "projectTitle": "Archiver toutes les tâches du projet « {{name}} » ?",
         "title": "Archiver toutes les sessions",
         "confirm": "Tout archiver",
         "cancel": "Annuler",
@@ -16836,18 +16867,28 @@
         }
       },
       "projectAction": {
+        "menu": "Menu du projet {{name}}",
+        "previewFailed": "Impossible de charger les tâches de ce projet. Réessayez.",
+        "remotePreviewFailed": "Impossible de lire les tâches du projet distant. Vérifiez la connexion et la version de Cindy sur l’ordinateur distant.",
         "rename": "Renommer le projet",
         "pin": "Épingler le projet",
         "unpin": "Désépingler le projet",
-        "removeFromSidebar": "Retirer le projet de la barre latérale",
-        "removeFromSidebarConfirmTitle": "Retirer {{name}} ?",
-        "removeFromSidebarConfirmDescription": "Le projet sera retiré de la barre latérale. Les fichiers sur votre ordinateur ne seront pas supprimés. Les sessions existantes seront déplacées dans la section Conversations et resteront disponibles.",
+        "removeFromSidebar": "Retirer le projet de Cindy…",
+        "removeFromSidebarConfirmTitle": "Retirer {{name}} de Cindy ?",
+        "removeFromSidebarConfirmDescription": "Tâches actives : {{count}}. Elles resteront accessibles dans les conversations.",
         "removeFromSidebarConfirmAction": "Retirer le projet",
-        "removeFromSidebarFailed": "Impossible de retirer le projet de la barre latérale : réessayez.",
-        "showFiles": "Afficher les fichiers",
-        "archivedAll": "Tout archiver",
-        "unarchiveAll": "Tout restaurer",
-        "openInExplorer": "Ouvrir dans le gestionnaire de fichiers",
+        "removeFromSidebarFailed": "Impossible de retirer le projet.",
+        "archiveOnRemove": "Archiver aussi les tâches ({{count}})",
+        "keepSkippedOnRemove": "Ces tâches resteront dans les conversations ({{skip}}).",
+        "removedArchived": "Tâches à déplacer vers les archives : {{count}}.",
+        "removeAndArchive": "Retirer le projet et archiver les tâches",
+        "removeKeepFiles": "L’épinglage, le nom personnalisé et l’icône du projet seront effacés. Les fichiers et dossiers seront conservés.",
+        "showFiles": "Afficher les fichiers de la tâche dans la barre latérale",
+        "archivedAll": "Archiver toutes les tâches",
+        "unarchiveAll": "Restaurer toutes les tâches",
+        "openInFinder": "Ouvrir le dossier du projet dans le Finder",
+        "openInExplorer": "Ouvrir le dossier du projet dans l’Explorateur de fichiers",
+        "openInFileManager": "Ouvrir le dossier du projet dans le gestionnaire de fichiers",
         "newInDirectory": "Nouvelle session dans ce répertoire",
         "copyDeepLink": "Copier le lien du projet",
         "search": "Rechercher des sessions dans ce projet"
@@ -16885,6 +16926,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",
@@ -19362,6 +19404,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
+      "hostProfileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+      "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez cette fenêtre Cindy.",
+      "hostProfileInUseByDesktopRetry": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; cette modification n’est donc pas possible pour le moment. Quittez-la, puis réessayez.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",
       "turnFailed": "La tâche a échoué (le modèle n'a fourni aucun détail sur l'erreur). Veuillez réessayer.",
@@ -19651,6 +19696,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "L’exécution de ce tour a échoué.",
+    "blockedReasonUnknown": "Aucune raison précise du blocage n’a été fournie.",
+    "blockedNextStep": "Vous pouvez ajouter des informations dans cette tâche. Une fois la cause résolue, cliquez sur « {{action}} » pour continuer.",
     "status": {
       "active": "Objectif en cours",
       "paused": "En pause",
@@ -19987,6 +20035,7 @@
         "empty": "Aucune attribution promotionnelle disponible.",
         "incomplete": "Il existe de nombreuses attributions. Seules les {{count}} plus récentes sont affichées.",
         "unnamed": "Attribution promotionnelle",
+        "rolloverName": "Report",
         "giftCard": "Carte cadeau · de la part de {{sender}}",
         "original": "Initial",
         "used": "Utilisé",
@@ -20224,6 +20273,8 @@
       "basicModels": "Accès à certains modèles",
       "subscription": "Forfait d'abonnement",
       "rollover": "Conservez jusqu'à {{amount}} de solde inutilisé pour {{period}}",
+      "rolloverMonthly": "Reportez jusqu’à {{amount}} de solde inutilisé en solde promotionnel\nValable 1 mois, sans nouveau report\nUtilisé avant le Solde du forfait et le Solde rechargé",
+      "rolloverMonthlySummary": "Reportez jusqu’à {{amount}} de solde inutilisé, valable 1 mois",
       "nextPeriod": {
         "MONTH": "le mois suivant",
         "YEAR": "l'année suivante",
@@ -21714,14 +21765,14 @@
     },
     "taskInbox": {
       "title": "Découvrir la boîte de réception",
-      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. La meilleure habitude : vider la boîte de réception au fil de l’eau. Cliquez sur Terminé quand une tâche est réglée, reportez ce qui peut attendre.",
+      "lead": "Quand vous suivez plusieurs tâches en parallèle, la boîte de réception les classe par statut. À traiter regroupe les nouveaux résultats et les tâches qui attendent votre réponse.",
       "pending": {
         "title": "À traiter",
         "body": "Les tâches arrivent ici quand elles ont un résultat ou attendent votre réponse."
       },
       "done": {
         "title": "Terminé",
-        "body": "C’est réglé ? Un clic sur Terminé la range dans Traitées. Elle revient d’elle-même s’il y a du nouveau."
+        "body": "Prenez l’habitude de vider votre boîte de réception. Cliquez sur Terminé dès que la tâche est réglée."
       },
       "snooze": {
         "title": "Reportées",
@@ -22056,14 +22107,14 @@
     "openFailed": "Impossible d’ouvrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Connexion à Cindy…",
+    "connecting": "Connexion au service d’arrière-plan Cindy…",
     "restoring": "Restauration de l’état des tâches…",
     "retrying": "État des tâches non synchronisé. Nouvelle tentative…",
     "pairing": "Autorisation de connexion requise",
-    "pairingHelp": "Gardez cette page ouverte. Dans le terminal utilisé pour lancer Cindy Host, relancez la commande d’ouverture du client web. Associez la nouvelle page, puis revenez ici.",
+    "pairingHelp": "Gardez cette page ouverte. Dans le terminal utilisé pour lancer le service d’arrière-plan Cindy, relancez la commande d’ouverture du client web. Associez la nouvelle page, puis revenez ici.",
     "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
     "retry": "Reconnecter",
-    "desktopAuthHelp": "Mettez à jour les paramètres de connexion à Cindy Host dans le terminal de lancement, puis rouvrez ce client expérimental."
+    "desktopAuthHelp": "Mettez à jour les paramètres de connexion au service d’arrière-plan Cindy dans le terminal de lancement, puis rouvrez ce client expérimental."
   },
   "remoteControlConsent": {
     "title": "Autoriser le contrôle à distance de cet ordinateur ?",

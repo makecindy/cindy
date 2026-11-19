@@ -1,5 +1,6 @@
+import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
-import { SessionProjectSettingsDialog } from './sidebar/SessionProjectSettingsButton';
+import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
@@ -95,6 +96,8 @@ import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { isOverloadErrorMessage } from '@/utils/overloadError';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
 import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
@@ -238,6 +241,7 @@ import {
   useDeviceLinkConnectionIssue,
   useRemoteSessionConnection,
 } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
+import { useTurnElapsed } from './hooks/useTurnElapsed';
 import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionTurnActiveTruth';
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
@@ -891,7 +895,8 @@ function CCAgentSessionContent({
   const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
-  const ownsWindowRoute = navigationMode === 'route-owner';
+  const paneFocused = useSplitPaneFocus();
+  const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
   useEffect(
@@ -1004,17 +1009,18 @@ function CCAgentSessionContent({
   // 路由主实例判据(与 SessionContentHeaderRegistration 同款):默认只有全屏路由
   // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
   // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
-  const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
+  const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));
   // Header/right-sidebar ownership is narrower than hardware task actions.
   // A visible file-browse rail is still the open task, even when it is compact.
   // Split panes stay mounted together; only the route-owning pane may consume
   // hardware commands. The compact files rail is not a split pane.
   const ownsHardwareTaskActions =
-    ownsRoute ||
-    (Boolean(sessionId) &&
-      viewVisible &&
-      navigationMode !== 'sidebar-embedded' &&
-      navigationMode !== 'split-pane');
+    paneFocused &&
+    (ownsRoute ||
+      (Boolean(sessionId) &&
+        viewVisible &&
+        navigationMode !== 'sidebar-embedded' &&
+        navigationMode !== 'split-pane'));
   const showComposerControlledBanner = viewVisible && (ownsRoute || showControlledBanner);
   const controlledBy = useControlledBy();
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
@@ -2662,7 +2668,7 @@ function CCAgentSessionContent({
   const modelGroupSwitchOffer = useModelGroupSwitchOffer(
     sessionId,
     !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
-      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true),
+      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error)),
     errorPersistId ?? error,
     // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
     `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,
@@ -6111,6 +6117,10 @@ function CCAgentSessionContent({
                 <RunningStatusBar
                   key={sessionId}
                   sessionKey={sessionId ?? null}
+                  clockDeviceId={turnActiveDeviceId}
+                  clockOnline={viewVisible && (remoteConn === 'local' || remoteConn === 'connected')}
+                  lastStartedAt={agentStatus.lastStartedAt ?? null}
+                  endedAt={session?.id === sessionId ? session?.lastTurnEndedAt ?? null : null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
                   preparing={waitingRemoteStart}
@@ -6541,7 +6551,7 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus || !paneFocused}
                   focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
@@ -6960,6 +6970,10 @@ export function RunningStatusBar({
   rightLeadingSlot = null,
   suppressContent = false,
   sessionKey = null,
+  clockDeviceId = null,
+  clockOnline = true,
+  lastStartedAt = null,
+  endedAt = null,
   className,
 }: {
   status: string;
@@ -7014,6 +7028,10 @@ export function RunningStatusBar({
   suppressContent?: boolean;
   /** 会话身份：速度历史按它做进程内缓存，切任务再切回图表不清零。 */
   sessionKey?: string | null;
+  clockDeviceId?: string | null;
+  clockOnline?: boolean;
+  lastStartedAt?: number | null;
+  endedAt?: number | null;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -7044,25 +7062,16 @@ export function RunningStatusBar({
     }
   }, [visible]);
 
-  const [elapsed, setElapsed] = useState(0);
-
-  // Local timer (F-SDK-3: render-side setInterval)
-  useEffect(() => {
-    if (!startedAt) {
-      // Keep the last completed turn duration visible while a pinned panel lingers.
-      return;
-    }
-
-    setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [startedAt]);
-
   const isHidden = suppressContent || (!showContent && !visible);
+  const elapsed = useTurnElapsed({
+    sessionId: sessionKey,
+    deviceId: clockDeviceId,
+    enabled: clockOnline && !preparing && (!isHidden || ratePanelPinned)
+      && !backgroundTasksRunning && !workflowStatus && !sideTaskRunning,
+    turnKey: startedAt ?? lastStartedAt,
+    running: startedAt !== null,
+    endedAt: startedAt === null ? endedAt : null,
+  });
   const workflowWaiting = workflowStatus !== undefined;
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
@@ -7090,7 +7099,7 @@ export function RunningStatusBar({
   // the icon answers "what is it doing right now".
   const isCompacting = typeof status === 'string' && status.toLowerCase().startsWith('compact');
 
-  const elapsedText = formatSessionDuration(elapsed * 1000, t, {
+  const elapsedText = elapsed === null ? null : formatSessionDuration(Math.floor(elapsed / 1000) * 1000, t, {
     minimumSeconds: 0,
     alwaysShowRemainder: true,
   });
@@ -7198,7 +7207,7 @@ export function RunningStatusBar({
       (!workflowWaiting &&
         !sideTaskRunning &&
         !backgroundTasksRunning &&
-        usageMeta.kind === 'rate'));
+        (elapsedText !== null || displayTokens > 0) && usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
@@ -7288,13 +7297,13 @@ export function RunningStatusBar({
                   workflowWaiting ||
                   sideTaskRunning ||
                   backgroundTasksRunning ||
-                  (tokenSpeed && !tokenSpeed.streaming)
+                  (elapsedText !== null && tokenSpeed && !tokenSpeed.streaming)
                     ? null
-                    : rateText ?? (displayTokens > 0 ? tokenCountText : null)
+                    : (elapsedText === null ? null : rateText) ?? (displayTokens > 0 ? tokenCountText : null)
                 }
                 isTokenCount={
                   usageMeta.kind === 'tokens' ||
-                  (usageMeta.kind === 'rate' && rateText === null && displayTokens > 0)
+                  (usageMeta.kind === 'rate' && (rateText === null || elapsedText === null) && displayTokens > 0)
                 }
                 tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
@@ -7328,14 +7337,10 @@ export function RunningStatusBar({
               </button>
             ) : preparing || workflowWaiting || showRatePanel ? null : (
               <>
-                <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                  {elapsedText}
-                </span>
+                {elapsedText && <span className="text-13 font-medium text-[var(--status-bar-meta)]">{elapsedText}</span>}
                 {!reconnecting && !sideTaskRunning && usageMeta.kind !== 'none' && (
                   <>
-                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      &middot;
-                    </span>
+                    {elapsedText && <span className="text-13 font-medium text-[var(--status-bar-meta)]">&middot;</span>}
                     <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       <RunningTokenCount tokenUsage={tokenUsage} />

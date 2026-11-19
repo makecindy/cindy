@@ -50,6 +50,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
 } from './agents/base-agent.js';
 import type {
@@ -180,6 +181,7 @@ export interface MakerDeps {
 
 /** A previous attempt still owns native resources; retry without changing route/history. */
 export class SessionCreationCleanupPendingError extends Error {
+  readonly code = 'SESSION_CLEANUP_PENDING';
   constructor(options?: ErrorOptions) {
     super('Previous session startup cleanup is still pending; retry the task.', options);
     this.name = 'SessionCreationCleanupPendingError';
@@ -492,7 +494,7 @@ export interface MakerShutdownReport {
 }
 
 interface FailedHandleCleanup {
-  handle: AgentSessionHandle;
+  handle: Pick<AgentSessionHandle, 'close'>;
   promise: Promise<void> | null;
   onCleaned?: () => void;
 }
@@ -755,7 +757,13 @@ export class Maker {
       return this.createSessionWhileRunning(opts, signal);
     }
     if (existing?.getStatus() === 'error') {
-      await existing.close();
+      try {
+        await existing.close();
+      } catch (error) {
+        // This is still the old runtime's teardown, not replacement startup.
+        throw error instanceof SessionCreationCleanupPendingError
+          ? error : new SessionCreationCleanupPendingError({ cause: error });
+      }
       signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);
@@ -827,16 +835,20 @@ export class Maker {
         });
       }
     };
-    const notifyStartCleanupSucceeded = (): void => {
+    let startCleanupNotification: Promise<void> | undefined;
+    const notifyStartCleanupSucceeded = (): Promise<void> => {
+      if (startCleanupNotification) return startCleanupNotification;
       const cleanup = Promise.resolve()
         .then(() => this.lifecycleHooks.onStartCleanupSucceeded?.(id, startOpts))
         .catch((error) => this.logger.warn('lifecycleHooks.onStartCleanupSucceeded threw', {
           sessionId: id, error: String(error),
         }));
       this.pendingLifecycleCloses.add(cleanup);
+      startCleanupNotification = cleanup;
       void cleanup.then(() => {
         this.pendingLifecycleCloses.delete(cleanup);
       });
+      return cleanup;
     };
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
@@ -947,16 +959,24 @@ export class Maker {
     } catch (error) {
       codexThreadClaim?.release();
       // A generic adapter error does not prove its process stopped. Preserve
-      // host guards; only pre-adapter failure or explicit exit evidence releases them.
+      // host guards; only pre-adapter failure or explicit process/task-release proof releases them.
       const runtimeStopped = error instanceof AgentStartupStoppedError;
+      const resourcesReleased = runtimeStopped || error instanceof AgentStartupResourcesReleasedError;
       const authenticationFailed = error instanceof AgentNotAuthenticatedError;
-      const startupError = runtimeStopped ? error.cause : error;
+      const startupError = resourcesReleased ? error.cause : error;
       await notifyStartFailed(
         'agent-start',
         startupError,
-        agentStartAttempted && !runtimeStopped && !authenticationFailed,
+        agentStartAttempted && !resourcesReleased && !authenticationFailed,
       );
       if (error instanceof AgentStartupCleanupPendingError) {
+        if (error.retryCleanup) {
+          const retryCleanup = error.retryCleanup;
+          this.failedHandleCleanups.set(id, {
+            handle: { close: async () => { await retryCleanup(); await notifyStartCleanupSucceeded(); } },
+            promise: null,
+          });
+        }
         // The adapter still owns this unpublished process. Its eventual close
         // must release only this startup's resources, even after a rebuild.
         void error.whenStopped.then(notifyStartCleanupSucceeded).catch((cleanupError) => {
@@ -1552,6 +1572,17 @@ export class Maker {
     return this.closeFacts.get(session) ?? { reason: 'unexpected', transient: false };
   }
 
+  /** Reserve app exit synchronously, without aborting any process before the host reaper. */
+  prepareForAppQuit(): void {
+    this.shutdownStarted = true;
+    for (const session of [...this.activeSessions.values(), ...this.localAgentSessions]) {
+      if (!this.closeFacts.has(session)) {
+        this.closeFacts.set(session, { reason: 'requested', transient: false });
+      }
+      session.prepareForHostShutdown();
+    }
+  }
+
   /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
@@ -1573,6 +1604,7 @@ export class Maker {
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
   async shutdown(opts?: { reason?: AgentSessionTeardownReason }): Promise<MakerShutdownReport> {
+    if (opts?.reason === 'app-quit') this.prepareForAppQuit();
     this.shutdownStarted = true;
     // Fail closed: a caller that cannot name its boundary is treated as an
     // account boundary, so adapters with detached, credential-holding children
