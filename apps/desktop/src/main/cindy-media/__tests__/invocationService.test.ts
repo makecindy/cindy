@@ -1764,10 +1764,11 @@ describe('Cindy Core media invocation state and security boundary', () => {
     const prepared = await callCindyMedia({ action: 'prepare', providerId, modelId, capability: 'image.generate' });
     expect(prepared).toMatchObject({ ok: true, provider_id: providerId, model_id: modelId });
     const invocationId = prepared.invocation_id as string;
-    const result = await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'a cat' } });
+    const nativeParameters = { rendering: { seed: 7 } };
+    const result = await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'a cat', ...nativeParameters } });
     expect(result).toMatchObject({ ok: true });
     expect(mocks.remoteInvoke).toHaveBeenCalledWith(providerId,
-      expect.objectContaining({ action: 'start', providerId: 'openai', model: modelId, requestId: invocationId }),
+      expect.objectContaining({ action: 'start', providerId: 'openai', model: modelId, requestId: invocationId, nativeParameters }),
       expect.any(Function));
     expect(mocks.ingestMedia).toHaveBeenCalledWith(expect.objectContaining({ buffer: PNG }), mocks.db.drizzle);
     expect(mocks.providerInvoke).not.toHaveBeenCalled();

@@ -1055,7 +1055,6 @@ async function submitProviderInvocation(
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
   const input = await providerImageRequest(invocation, body, providerModel);
-  const { output_format, output_compression, background, moderation } = input.nativeParameters ?? {};
   assertAuthScope(scope, invocation.owner);
   const claimed = await transitionMediaInvocation(
     {
@@ -1090,10 +1089,7 @@ async function submitProviderInvocation(
       op: 'shared-image', action: 'start', requestId: invocation.id, providerId: shared.providerId,
       model: providerModel.id, prompt: input.prompt, size: input.size,
       aspectRatio: input.aspectRatio, quality: input.quality,
-      outputFormat: output_format as 'png' | 'jpeg' | 'webp' | undefined,
-      outputCompression: output_compression as number | undefined,
-      background: background as 'auto' | 'transparent' | 'opaque' | undefined,
-      moderation: moderation as 'auto' | 'low' | undefined,
+      resolution: input.resolution, nativeParameters: input.nativeParameters,
     }, signal) : await invokeProviderMedia({
       providerId,
       modelId: providerModel.id,

@@ -177,9 +177,8 @@ export type RemoteAgentRequest =
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
   | { op: 'shared-image'; action: 'start'; requestId: string; providerId: string; model: string;
-      prompt: string; size?: string; aspectRatio?: string; quality?: string;
-      outputFormat?: 'png' | 'jpeg' | 'webp'; outputCompression?: number;
-      background?: 'auto' | 'transparent' | 'opaque'; moderation?: 'auto' | 'low';
+      prompt: string; size?: string; aspectRatio?: string; quality?: string; resolution?: string;
+      nativeParameters?: Record<string, unknown>;
       relay?: string; reshareKey?: string }
   | { op: 'shared-image'; action: 'read'; requestId: string; offset: number }
   | { op: 'shared-image'; action: 'release'; requestId: string }
@@ -663,13 +662,14 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         op: 'shared-image', action, requestId, providerId: text(v.providerId, 512),
         model: text(v.model, 512), prompt: text(v.prompt, 32768),
       };
-      for (const field of ['size', 'aspectRatio', 'quality'] as const) {
+      for (const field of ['size', 'aspectRatio', 'quality', 'resolution'] as const) {
         if (v[field] !== undefined) result[field] = text(v[field], 64);
       }
-      if (v.outputFormat !== undefined) result.outputFormat = oneOf(v.outputFormat, ['png', 'jpeg', 'webp'] as const);
-      if (v.outputCompression !== undefined) result.outputCompression = count(v.outputCompression, 100);
-      if (v.background !== undefined) result.background = oneOf(v.background, ['auto', 'transparent', 'opaque'] as const);
-      if (v.moderation !== undefined) result.moderation = oneOf(v.moderation, ['auto', 'low'] as const);
+      if (v.nativeParameters !== undefined) {
+        const parameters = record(v.nativeParameters);
+        if (JSON.stringify(parameters).length > 65_536) invalid();
+        result.nativeParameters = parameters;
+      }
       for (const field of ['relay', 'reshareKey'] as const) {
         if (v[field] === undefined) continue;
         const key = text(v[field], 64);

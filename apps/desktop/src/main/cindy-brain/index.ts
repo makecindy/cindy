@@ -5946,12 +5946,12 @@ function resolveCustomVideoConnection(providerId: string, modelId: string, agent
 
 configureProviderMediaRuntime({
   async generateSharedSubscriptionImage(request, assertAllowed, signal) {
-    const { providerId, model, prompt, size, aspectRatio, quality } = request;
+    const { providerId, model, prompt, size, aspectRatio, quality, resolution, nativeParameters } = request;
     const beforeDispatch = () => {
       assertAllowed();
       const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
       if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
-        || !listLocalProviderMediaModels(true, ['image.generate']).some(candidate =>
+        || !listLocalProviderMediaModels(false, ['image.generate']).some(candidate =>
           candidate.providerId === providerId && candidate.id === model)) {
         throw new Error('SHARED_IMAGE_UNAVAILABLE');
       }
@@ -5968,13 +5968,7 @@ configureProviderMediaRuntime({
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
         beforeDispatch: () => { beforeDispatch(); remoteAuth.assertDispatchable(); },
       });
-      const nativeParameters = {
-        ...(request.outputFormat !== undefined ? { output_format: request.outputFormat } : {}),
-        ...(request.outputCompression !== undefined ? { output_compression: request.outputCompression } : {}),
-        ...(request.background !== undefined ? { background: request.background } : {}),
-        ...(request.moderation !== undefined ? { moderation: request.moderation } : {}),
-      };
-      return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, nativeParameters, signal }));
+      return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, resolution, nativeParameters, signal }));
     } finally {
       remoteAuth.release();
     }

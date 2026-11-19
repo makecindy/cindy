@@ -27,9 +27,11 @@ describe('shared image request', () => {
     model: 'openai/gpt-image-2', prompt: 'A blue square', size: '1024x1024',
   };
 
-  it('projects only text-to-image input fields', () => {
-    expect(parseRemoteAgentRequest({ ...request, imagePaths: ['/owner/private.png'], nativeParameters: { n: 20 } }))
-      .toEqual(request);
+  it('preserves native options without forwarding host-owned fields', () => {
+    const nativeParameters = { rendering: { seed: 7 }, n: 1 };
+    expect(parseRemoteAgentRequest({ ...request, imagePaths: ['/owner/private.png'], nativeParameters }))
+      .toEqual({ ...request, nativeParameters });
+    expect(() => parseRemoteAgentRequest({ ...request, nativeParameters: { value: 'x'.repeat(65_537) } })).toThrow('REMOTE_AGENT_INVALID');
     expect(() => parseRemoteAgentRequest({ ...request, prompt: 'a'.repeat(32769) })).toThrow('REMOTE_AGENT_INVALID');
     expect(() => parseRemoteAgentRequest({ ...request, reshareKey: 'a'.repeat(32) })).toThrow('REMOTE_AGENT_INVALID');
   });
