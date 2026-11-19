@@ -127,3 +127,22 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
 数组启动入口。上例中的参数为固定值。
 
 引擎在安装插件的电脑上运行。手机可以选择被控电脑提供的引擎来新建普通任务。每次新建本机任务的自动化也可以选择插件引擎。
+
+### 显示账号用量
+
+当引擎可用，并且主 Node worker 使用 `json-rpc-stdio` 时，可以在 `PUT /harnesses` 对应条目设置
+`reportsUsage: true`。用户查看任务时，Cindy 向该插件主 worker 调用 JSON-RPC 方法 `usage`，
+参数为 `{ "harnessId": "dsh" }`。插件设置页也可以复用这个方法。无数据时返回 `null`。
+worker 只返回账号可显示的快照，例如：
+
+```json
+{
+  "updatedAt": 1893456000000,
+  "windows": [{ "label": "Weekly", "remainingPercent": 80, "resetsAt": 1894060800000 }],
+  "balances": [{ "currency": "CNY", "amount": "12.30" }]
+}
+```
+
+时间使用 Unix 毫秒，额度填剩余百分比（0–100），余额填币种及十进制字符串。只返回有依据的字段：
+可单独提供窗口或余额，也可两者都提供。标签应能区分套餐、模型组和周期。账号用量按需读取，
+请把凭据留在 worker，避免把快照写入引擎列表。任务本身的上下文占用继续由 ACP `usage_update` 上报。
