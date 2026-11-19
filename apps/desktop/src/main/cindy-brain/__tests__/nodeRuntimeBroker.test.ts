@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { adaptPluginNodeProcess } from '../nodeRuntimeProcessAdapter';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
@@ -420,6 +421,55 @@ afterEach(() => {
 });
 
 describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
+  // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
+  // tests did not cover lost exits, unknown identity or kill requests without exit.
+  it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
+    const native = new FakeUtilityProcess();
+    const probe = vi.fn(() => { if (code !== 'alive') throw Object.assign(new Error('probe'), { code }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    const exit = vi.fn();
+    proc.on('exit', exit);
+    proc.kill();
+    expect(proc.reconcileExit!()).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+    native.emit('exit', 0);
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0, null);
+  });
+
+  it('reconciles an observed PID once despite missing PID and late events', () => {
+    const native = new FakeUtilityProcess();
+    const probe = vi.fn(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    const exit = vi.fn();
+    proc.on('exit', exit);
+    native.pid = undefined;
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(4321, 0);
+    native.emit('exit', 1);
+    native.emit('error', 'late', 'channel');
+    native.emit('message', { type: 'ready' });
+    expect(proc.kill('SIGKILL')).toBe(false);
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(null, null);
+    expect(native.kill).not.toHaveBeenCalled();
+    expect(proc.readStartupState!().readySeen).toBe(false);
+  });
+
+  it('does not probe without a PID, then captures the native spawn identity', () => {
+    const native = new FakeUtilityProcess();
+    native.pid = undefined;
+    const probe = vi.fn(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    expect(proc.reconcileExit!()).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    native.pid = 4322;
+    native.emit('spawn');
+    native.pid = undefined;
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(4322, 0);
+  });
+
   describe.each(['darwin', 'win32', 'linux'] as const)('%s 系统权限责任归属', (platform) => {
     it.each([
       { mode: '普通工作进程', childArgs: undefined },
@@ -2958,6 +3008,63 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       expect(spawned[0].child.killed).toBe(true);
       expect(worker.lastOf('child-exit')).toMatchObject({ childId });
     });
+  });
+
+  // #10189, unit: real broker+adapter; fake probe isolates system absence from
+  // native transport. Existing quota tests only delivered native exit. Four live
+  // children must block; one ESRCH must admit the next spawn without a restart.
+  it('10189 reclaims a missing exit on the next spawn and before stop snapshot', async () => {
+    const natives: FakeUtilityProcess[] = [];
+    const dead = new Set<number>();
+    const { broker, worker, spawned } = await bootWorker(childSpawnGhost(), () => {
+      const native = new FakeUtilityProcess();
+      native.pid = 8000 + natives.length;
+      natives.push(native);
+      native.kill.mockImplementation(() => { queueMicrotask(() => native.emit('exit', 0)); return true; });
+      const proc = adaptPluginNodeProcess(native, true, pid => {
+        if (dead.has(pid)) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      });
+      queueMicrotask(() => native.emit('message', { type: 'ready' }));
+      return proc as unknown as FakeRawChild;
+    }, false);
+    try {
+      for (let i = 0; i < 4; i++) worker.emitControl({ type: 'spawn-child', reqId: `r${i}`, entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.sentControl.filter(m => m.type === 'spawn-child-result' && m.ok)).toHaveLength(4));
+      worker.emitControl({ type: 'spawn-child', reqId: 'full', entry: 'node/maker.cjs' });
+      expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'full', ok: false });
+      dead.add(8000);
+      worker.emitControl({ type: 'spawn-child', reqId: 'recovered', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'recovered', ok: true }));
+      expect(spawned).toHaveLength(5);
+      natives[0].emit('exit', 1);
+      natives[0].emit('error', 'late', 'channel');
+      expect(worker.sentControl.filter(m => m.type === 'child-exit')).toHaveLength(1);
+      dead.add(8001);
+      await broker.stopAndWait('node-ghost');
+      expect(natives[0].kill).not.toHaveBeenCalled();
+      expect(natives[1].kill).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
+  // #10189, unit: ready resolves a Promise, but exit can arrive in the same
+  // turn before promotion to children. The old suite covered only exit-before-ready.
+  it('10189 rejects a child that exits in the ready turn without retaining quota', async () => {
+    let attempt = 0;
+    const { broker, worker, spawned } = await bootWorker(childSpawnGhost(), () => {
+      const child = new FakeRawChild();
+      const exits = attempt++ === 0;
+      queueMicrotask(() => { child.emit('spawn'); if (exits) child.emit('exit', 0); });
+      return child;
+    }, false);
+    try {
+      worker.emitControl({ type: 'spawn-child', reqId: 'race', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'race', ok: false }));
+      for (let i = 0; i < 4; i++) worker.emitControl({ type: 'spawn-child', reqId: `next${i}`, entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.sentControl.filter(m => m.type === 'spawn-child-result' && m.ok)).toHaveLength(4));
+      expect(spawned).toHaveLength(5);
+      expect(spawned[0].child.killed).toBe(false);
+      await broker.stopAndWait('node-ghost');
+    } finally { broker.destroyAll(); }
   });
 
   it('数量顶:同插件同时在世子进程超 4 个即拒', async () => {
