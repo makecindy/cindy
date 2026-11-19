@@ -842,7 +842,12 @@ export function normalizeMarkdownImageSrc(
   // Legacy hostless image URLs describe a local file, not a session cache entry.
   // Reuse the local-file bridge only after the privileged-link check (#8951).
   if (src.startsWith('xdt-image:///')) {
-    return normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
+    const normalized = normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
+    const localPath = new URL(normalized).searchParams.get('path') ?? '';
+    // Decode before checking: encoded slashes must not turn this compatibility
+    // bridge into a Windows SMB/WebDAV or device-namespace read.
+    if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
+    return normalized;
   }
   if (
     src.startsWith('data:') ||

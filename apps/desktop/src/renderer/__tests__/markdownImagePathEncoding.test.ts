@@ -108,6 +108,18 @@ describe('Markdown local image path encoding', () => {
     );
   });
 
+  // Hostless compatibility must not turn a previously rejected cache URL into
+  // an automatic Windows SMB/WebDAV/device access via the local-file protocol.
+  it.each([
+    'xdt-image:////attacker/share/a.png',
+    'xdt-image:///%2Fattacker/share/a.png',
+    'xdt-image:///%5C%5Cattacker%5Cshare%5Ca.png',
+    'xdt-image:///%3F%3F/UNC/attacker/share/a.png',
+    'xdt-image:///%5C%5C%3F%5CC:%5Ca.png',
+  ])('rejects hostless network/device destinations before routing: %s', (url) => {
+    expect(normalizeMarkdownImageSrc(url, 'C:/repo', true)).toBeUndefined();
+  });
+
   it('keeps legacy POSIX paths and cache-busting revisions intact', () => {
     const path = '/Users/test/My Pictures/image.png';
     expect(
