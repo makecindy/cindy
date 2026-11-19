@@ -872,6 +872,12 @@ from the connection that carries it」；`device-link-relay` interop 通过，�
 一块遇到链路类错误按同一块号重发，最多 2 次、500 毫秒起倍增退避（被控端去重，重发不多占暂存）；失败、取消或任务
 结束后不再发新块，等在途的块结束后报错。全部块收到回执后才发引用它的 `open` / `call` / `reply`，不依赖链路保序。
 实现见 `runClient.ts` 的 `uploadChunks`，回归见 `runClientReply.test.ts`「pipelined upload」。
+在 Agent-Net 会话上，上传块走后台通道（`sessionLinks.ts` 按 `isRemoteAgentUploadChunk` 判断，只换通道、排队名额不变）：
+会话的跨通道顺序让交互请求等普通通道上更早的请求，块放普通通道时停止要排在在途的块后面。Device Link 上照旧按普通
+优先级发：它的后台优先级在检查中转连通时直接拒收，块会失败。2026-11-19 经 xdt-server 中转的对照（26 块、每块 64KiB）：
+每秒 250 KB 档上传 16.3 秒 → 10.0 秒，期间停止往返中位 0.40～0.42 → 0.24 秒（空闲 0.22 秒；块放普通通道时 1.27 秒）；
+每秒 64 KB 档 51.7 → 39.2 秒，停止往返 1.76 → 0.47 秒（空闲 0.44 秒；块放普通通道时 5.6 秒）。回归见
+`agentNetSessionLinks.test.ts`「remote-agent upload chunks on the background lane」。
 为保留原容量，大载荷会增大块大小以符合旧接收端最多 128 块、每块 512KiB、总共 64MiB 的合同；
 这些数值仍是接收上限，不能因发送偏好变小而拒收旧端的大块。既有取消检查继续覆盖压缩与各块之间。
 `abort` / `requestGracefulStop` 还会使此前尚在准备或上传的 `send` / `steer` 失效；

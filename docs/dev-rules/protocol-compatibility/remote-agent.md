@@ -210,7 +210,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   2026-11-19 两处只在 A 端生效、旧 B 照常工作的改动：`upload` 块同时在途（每台 B 最多 4 块，B 本来就按
   `(uploadId, index)` 存块、引用时才检查齐全），链路类错误按同一块号重发最多 2 次；`poll` 可选 `maxBytes`，
   B 在 64KB–1.5MB 之间取（超出范围按范围取，不拒绝），A 超时就减半、按实测回程速度定下一次，旧 B 忽略该字段。
-  都不新增 op、能力位或中转字段，官方与自建中转照常转发。恢复规则见
+  都不新增 op、能力位或中转字段，官方与自建中转照常转发。Agent-Net 会话上 A 把 `upload` 块放后台通道，
+  这是发送端的通道选择，旧 B 的会话层本来就收三个通道。恢复规则见
   [远程与手机适配](../remote-and-mobile-adaptation.md)「远程 Agent 的拉取与恢复」。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。

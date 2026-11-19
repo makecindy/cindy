@@ -373,10 +373,10 @@ export async function setup(profile: LinkProfile, module: WebAssembly.Module, mo
     host, controller, meters, diagnostics, hostReceivedAt, bulkPayload,
     /** 读一份最新的线路计量，算一段的总字节前调用。 */
     syncMeters: () => network.syncMeters(),
-    /** 控制端发一个请求，带上 Desktop 的建链恢复。 */
-    async request(payload: InvokePayload, timeoutMs: number | undefined) {
+    /** 控制端发一个请求，带上 Desktop 的建链恢复。`background`：同业务调用的后台提示（远程任务的上传块）。 */
+    async request(payload: InvokePayload, timeoutMs: number | undefined, options?: { background?: boolean }) {
       await ensureLink();
-      return controller.invoke('a-host', payload, timeoutMs);
+      return controller.invoke('a-host', payload, timeoutMs, options?.background ? { background: true } : undefined);
     },
     socket(role: 'host' | 'controller'): AgentNetAppSocket {
       const value = sockets.get(role);
@@ -435,10 +435,10 @@ async function sessionFixture(devices: { host: DeviceConnection; controller: Dev
     host: null as unknown as DeviceLinkClient, controller: null as unknown as DeviceLinkClient,
     meters: network.meters, diagnostics: { warnings: 0, headRetries: 0 }, hostReceivedAt, bulkPayload,
     syncMeters: () => network.syncMeters(),
-    async request(payload: InvokePayload, timeoutMs: number | undefined) {
+    async request(payload: InvokePayload, timeoutMs: number | undefined, options?: { background?: boolean }) {
       const current = controller.session('a-host');
       if (!current) return { ok: false as const, error: { code: 'DEVICE_OFFLINE', message: 'no session' } };
-      return current.request(payload.channel, payload.args ?? [], { timeoutMs });
+      return current.request(payload.channel, payload.args ?? [], { timeoutMs, ...(options?.background ? { background: true } : {}) });
     },
     socket(role: 'host' | 'controller'): AgentNetAppSocket { return (role === 'host' ? host : controller) as unknown as AgentNetAppSocket; },
     async close() { for (const dispose of cleanup.splice(0).reverse()) { try { await dispose(); } catch { /* best effort */ } } },

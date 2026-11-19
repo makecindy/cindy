@@ -38,6 +38,15 @@ export const REMOTE_AGENT_POLL_MAX_BYTES = 1536 * 1024;
  * 超时后按同一游标重拉同样大小，会一直卡住。旧被控端忽略这个字段，照旧按上限回。
  */
 export const REMOTE_AGENT_POLL_MIN_BYTES = 64 * 1024;
+/**
+ * 远程任务的上传块（op: 'upload'，2026-11-19）：只是按 (uploadId, index) 暂存字节，引用它们的 open／reply／call 等全部回执后才发，
+ * 块和其他调用之间不需要先后。Agent-Net 会话据此把它们放后台通道，停止等交互请求不排在在途的块后面（会话的跨通道顺序只等普通通道上
+ * 更早的请求）。Device Link 不看这个：它的后台优先级在检查中转连通时会直接拒收，块会失败。
+ */
+export function isRemoteAgentUploadChunk(payload: { channel?: unknown; args?: unknown }): boolean {
+  const request = Array.isArray(payload.args) ? payload.args[0] as { op?: unknown } | null | undefined : undefined;
+  return payload.channel === REMOTE_AGENT_CHANNEL && request?.op === 'upload';
+}
 /** 没有新数据时被控端最多挂起 poll 的时长；远低于通道超时，留出回程余量。 */
 export const REMOTE_AGENT_READ_WAIT_MS = 10_000;
 /** 一次 poll 最多带的任务数。 */
