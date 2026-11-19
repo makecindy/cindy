@@ -791,17 +791,23 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           unavailable.push(name);
           continue;
         }
-        if (image) images--; else files--;
         try {
-          const bytes = await api.download(item.guid);
+          const cached = image ? await this.host.media?.getCachedImage('imessage', `${this.botContextId}:${item.guid}`,
+            { staging: true, shouldReuse: () => this.live(generation) }) : null;
           this.assertLive(generation);
-          const stored = await this.stageAttachment(item, bytes);
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined = cached;
+          if (!stored) {
+            const bytes = await api.download(item.guid);
+            this.assertLive(generation);
+            stored = await this.stageAttachment(item, bytes);
+          }
           if (!this.live(generation)) await stored?.discard?.();
           this.assertLive(generation);
           if (!stored) { unavailable.push(name); continue; }
           const url = 'url' in stored ? stored.url : undefined;
           const key = url ?? stored.absPath;
           if (provided.has(key)) { await stored.discard?.(); continue; }
+          if (image) images--; else files--;
           providedBy.push({ originalName: name, author: original.handle?.address || 'iMessage' });
           provided.add(key);
           attachments.push({ absPath: stored.absPath, originalName: name, mimeType: ('mimeType' in stored && stored.mimeType) || kind.mimeType,
