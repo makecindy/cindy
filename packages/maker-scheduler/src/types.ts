@@ -227,6 +227,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Optional structured PR check output, annotated on the executing host. */
+  prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;
