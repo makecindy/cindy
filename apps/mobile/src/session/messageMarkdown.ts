@@ -108,6 +108,11 @@ interface MarkdownReferenceContext {
 }
 const referenceContexts = new WeakMap<MobileMarkdownParseResult, MarkdownReferenceContext>();
 
+function singleLineMathBody(line: string): string | null {
+  const match = line.trim().match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
+  return match && match[1].trim() ? match[1] : null;
+}
+
 function isOpeningMathFence(line: string): boolean {
   const trimmed = line.trim();
   return trimmed === '$$' || (trimmed.startsWith('$$') && !trimmed.slice(2).includes('$$'));
@@ -158,7 +163,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
-    if (/^\$\$(?:(?!\$\$).)+\$\$$/.test(line.trim())) {
+    if (singleLineMathBody(line)) {
       leaveListScopes(leadingIndentColumns(line));
       html = false;
       rawHtmlEnd = undefined;
@@ -534,11 +539,11 @@ export function parseMobileMarkdownDocument(
     // 形态;模型也会原生输出)。单行 $$x$$ 直接成块(不含内嵌 $$);
     // 裸 $$ 或以 $$ 开头但未在同行闭合的行开围栏跨行收集。
     const mathTrimmed = line.trim();
-    const singleLineMath = mathTrimmed.match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
-    if (singleLineMath && singleLineMath[1].trim()) {
+    const singleLineMath = singleLineMathBody(line);
+    if (singleLineMath) {
       flushParagraph(index);
       pushBlock(
-        buildMathBlock(singleLineMath[1], index, blockNumber(), withSrc, lineOffset),
+        buildMathBlock(singleLineMath, index, blockNumber(), withSrc, lineOffset),
         index,
         index + 1,
       );

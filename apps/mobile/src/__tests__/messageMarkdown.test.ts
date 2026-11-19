@@ -2532,6 +2532,27 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / review 4624231454: whitespace-only display math remains a
+  // paragraph. Unit production entry; prior math cases only used nonempty bodies.
+  it('preserves open paragraphs around whitespace-only display math', () => {
+    for (const body of [' ', '\t', ' \t ']) {
+      const prefix = '[site][s]\n\n$$' + body + '$$';
+      const source = prefix + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+      expect(inlines(prefix + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const valid = '[site][s]\n\n$$ x $$\n[s]: https://example.com/';
+    expect(inlines(valid).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    expect(parseMobileMarkdownDocument(valid).blocks.some(block => block.type === 'math')).toBe(true);
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
