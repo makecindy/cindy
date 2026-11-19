@@ -4235,6 +4235,20 @@ export function MessageStream({
     () => toRemoteMediaOrigin(sessionFileValue.origin, sessionFileValue.workingDir),
     [sessionFileValue],
   );
+  // 任务内全部图片的有序集合。每条消息各持一份会把翻图限制在单条消息里，
+  // 用户逐条发送的图片就只能开一张关一张。打开任一张时固定这份顺序，
+  // 查看器按它翻页；新到的消息不插入已打开的查看器。
+  const sessionImageGallery = useMemo(
+    () =>
+      collectSessionImageSrcs(
+        renderMetadataItems,
+        galleryMediaOrigin,
+        ghostCardSnapshot,
+        isSessionStreaming,
+      ),
+    [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+  );
+
   const messageImageCollections = useMemo(
     () =>
       new Map(
@@ -6760,7 +6774,7 @@ export function MessageStream({
                           value={messageAttachmentCollections.get(item.key) ?? null}
                         >
                           <ImageGalleryContext.Provider
-                            value={messageImageCollections.get(item.key) ?? null}
+                            value={sessionImageGallery}
                           >
                             {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
