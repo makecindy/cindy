@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正勞作",
-    "hint": "按任一鍵或 Touch ID 鍵即鎖屏，再以指紋或密碼解之",
+    "hint": "按任一鍵，乃可解鎖",
     "lockFailed": {
       "status": "Cindy 未能鎖此機",
       "hint": "觸機則再試鎖屏；仍不能鎖，以 Touch ID 或密碼驗之，乃可撤。亦可闔蓋或按電源鍵以鎖。",
       "hintWindows": "觸機則再試鎖屏；仍不能鎖，以 Windows Hello 或 PIN 驗之，乃可撤。亦可按 Windows 徽鍵 + L 以鎖。"
     },
-    "hintWindows": "按任一鍵即鎖屏，以 Windows Hello 或密碼解之",
-    "hintLinux": "按任一鍵即鎖屏，以密碼解之",
+    "hintWindows": "按任一鍵，乃可解鎖",
+    "hintLinux": "按任一鍵，乃可解鎖",
     "verifyReason": "撤隱私畫面"
   },
   "appBadge": {

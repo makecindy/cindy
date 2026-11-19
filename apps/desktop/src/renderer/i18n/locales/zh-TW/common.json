@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意鍵或 Touch ID 鍵鎖定，再用指紋或密碼解鎖",
+    "hint": "按任意鍵進入解鎖畫面",
     "lockFailed": {
       "status": "Cindy 沒能鎖定這台電腦",
       "hint": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Touch ID 或密碼驗證後即可撤下。也可以闔上螢幕或按電源鍵鎖定。",
       "hintWindows": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Windows Hello 或 PIN 驗證後即可撤下。也可以按 Windows 標誌鍵 + L 鎖定。"
     },
-    "hintWindows": "按任意鍵鎖定，用 Windows Hello 或密碼解鎖",
-    "hintLinux": "按任意鍵鎖定，用密碼解鎖",
+    "hintWindows": "按任意鍵進入解鎖畫面",
+    "hintLinux": "按任意鍵進入解鎖畫面",
     "verifyReason": "撤下隱私畫面"
   },
   "appBadge": {

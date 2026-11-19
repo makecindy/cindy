@@ -1132,14 +1132,14 @@
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine beliebige Taste oder die Touch ID-Taste zum Sperren und entsperre dann mit Fingerabdruck oder Passwort",
+    "hint": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
       "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
       "hintWindows": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Windows Hello oder deiner PIN, um den Sichtschutz zu entfernen. Du kannst auch Windows-Logo-Taste + L drücken."
     },
-    "hintWindows": "Zum Sperren eine beliebige Taste drücken; entsperren mit Windows Hello oder deinem Passwort",
-    "hintLinux": "Zum Sperren eine beliebige Taste drücken; entsperren mit deinem Passwort",
+    "hintWindows": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
+    "hintLinux": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "verifyReason": "den Sichtschutz entfernen"
   },
   "appBadge": {
