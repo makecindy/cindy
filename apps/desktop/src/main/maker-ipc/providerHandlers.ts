@@ -4,6 +4,7 @@ import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
+import { randomUUID } from 'node:crypto';
 import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
@@ -224,7 +225,7 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
@@ -244,8 +245,14 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
       || Object.keys(target).some(key => key !== 'agent' && key !== 'modelId')
       || !VALID_AGENTS.includes((target as { agent?: unknown }).agent as AgentKind)
       || typeof (target as { modelId?: unknown }).modelId !== 'string'
-      || !(target as { modelId: string }).modelId || (target as { modelId: string }).modelId.length > 512))) return null;
+      || !(target as { modelId: string }).modelId))) return null;
+  // Any ID the store can persist must be removable; bound the payload as a whole instead.
+  if (withdrawn && (withdrawn as { modelId: string }[]).reduce((sum, target) => sum + target.modelId.length, 0) > 4_000_000) return null;
   if (withdrawn && (append || refreshAgents)) return null;
+  const receipts = (input as Record<string, unknown>).listingReceipts;
+  if (receipts !== undefined && (!receipts || typeof receipts !== 'object' || Array.isArray(receipts)
+    || Object.entries(receipts).some(([agent, value]) => !VALID_AGENTS.includes(agent as AgentKind)
+      || typeof value !== 'string' || !value || value.length > 128))) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
@@ -253,6 +260,7 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
     ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
       .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
+    ...(receipts ? { listingReceipts: { ...(receipts as Partial<Record<AgentKind, string>>) } } : {}),
   };
 }
 
@@ -704,10 +712,29 @@ export function registerProviderHandlers(
   // The dispatch revision is intentionally Codex-specific for config-only edits.
   // Keep a discovery-only stamp for other runtimes, including edit-away/edit-back.
   const modelSourceConfigGenerations = new Map<string, symbol>();
+  // #11298 listing receipts: which credential/config generation a saved-provider fetch saw.
+  const listingReceipts = new Map<string, { providerId: string; agent: AgentKind; revision: number; configGeneration: symbol | undefined }>();
+  const issueListingReceipt = (providerId: string, agent: AgentKind, revision: number, configGeneration: symbol | undefined) => {
+    const receipt = randomUUID();
+    listingReceipts.set(receipt, { providerId, agent, revision, configGeneration });
+    while (listingReceipts.size > 64) listingReceipts.delete(listingReceipts.keys().next().value!);
+    return receipt;
+  };
+  // Not single-use: a save retried after a reload confirmation reuses it. Any successful
+  // save bumps the config generation, which voids every receipt issued before it.
+  const consumeListingReceipt = (receipt: string, providerId: string, agent: AgentKind): boolean => {
+    const entry = listingReceipts.get(receipt);
+    const id = storedCustomProviderId(providerId);
+    return !!entry && entry.providerId === id && entry.agent === agent
+      && getProviderRouteCredentialRevision(id) === entry.revision
+      && modelSourceConfigGenerations.get(id) === entry.configGeneration;
+  };
   const sanitizeModelSources = (
     config: CustomProviderConfig, previous: CustomProviderConfig | null,
     keys: Record<string, string>, headers: CustomProviderHeaderSecrets,
     credentialAgents: ReadonlySet<string> = new Set(),
+    // #11298: runtimes whose newly submitted listing markers are proven current.
+    markerAgents: ReadonlySet<string> | 'all' = new Set(),
   ): CustomProviderConfig => ({ ...config, runtimes: Object.fromEntries(
     Object.entries(config.runtimes).map(([agent, runtime]) => {
       if (!runtime) return [agent, runtime];
@@ -758,13 +785,14 @@ export function registerProviderHandlers(
         // context inherits it; a changed endpoint/key/header drops it, because the new
         // catalog is a different source and its absences are not withdrawals.
         const priorModel = sameContext ? prior?.models.find(m => m.id === model.id) : undefined;
-        const listedUpstream = sameContext && (submittedListed === true || (priorModel?.listedUpstream === true
+        const proven = markerAgents === 'all' || markerAgents.has(agent);
+        const listedUpstream = sameContext && ((proven && submittedListed === true) || (priorModel?.listedUpstream === true
           && JSON.stringify(priorModel.route ?? null) === JSON.stringify(model.route ?? null)));
         // A stale renderer cannot restore a source invalidated by another edit/request.
         return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
           ...(listedUpstream ? { listedUpstream: true as const } : {}),
           // The absence receipt is never inherited: only the refresh that observed it may set it.
-          ...(listedUpstream && submittedMissing === true ? { missingUpstream: true as const } : {}) };
+          ...(listedUpstream && proven && submittedMissing === true ? { missingUpstream: true as const } : {}) };
       }) }];
     }),
   ) });
@@ -2579,8 +2607,13 @@ export function registerProviderHandlers(
           config.id,
           planProviderHeaderMutations(config, separated.headers, 'update', previous),
         );
+        // Withdrawal removal derives its config from the stored one; refresh saves must
+        // prove each runtime's listing with a receipt still matching this connection.
+        const markerAgents = options.removeWithdrawnModels ? 'all' as const : new Set(
+          Object.entries(options.listingReceipts ?? {}).flatMap(([agent, receipt]) =>
+            receipt && consumeListingReceipt(receipt, config.id, agent as AgentKind) ? [agent] : []));
         separated.config = sanitizeModelSources(separated.config, previous, keys, separated.headers,
-          new Set([...keyMutations, ...headerMutations].map(mutation => mutation.agent)));
+          new Set([...keyMutations, ...headerMutations].map(mutation => mutation.agent)), markerAgents);
         const codexCredentialGenerationChanged =
           keyMutations.some((mutation) => mutation.agent === 'codex') ||
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
@@ -2982,7 +3015,9 @@ export function registerProviderHandlers(
       });
     }
     bindModelSourceSnapshot(result.models, id ?? undefined, current);
-    return result;
+    return id && result.ok
+      ? { ...result, listingReceipt: issueListingReceipt(id, parsed.agent, revision, configGeneration) }
+      : result;
   };
   registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, fetchModelsFromInput);
 

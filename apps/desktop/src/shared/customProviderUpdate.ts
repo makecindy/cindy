@@ -15,6 +15,13 @@ export interface CustomProviderUpdateOptions {
    * `listedUpstream` (not routed, not manual); the submitted config is ignored.
    */
   removeWithdrawnModels?: WithdrawnModelTarget[];
+  /**
+   * #11298: per-runtime listing receipts returned by the models fetch of this refresh.
+   * Main accepts newly submitted `listedUpstream` / `missingUpstream` markers only for a
+   * runtime whose receipt still matches the connection's credential and config
+   * generation; a save from another window in between voids them.
+   */
+  listingReceipts?: Partial<Record<AgentKind, string>>;
 }
 
 export interface WithdrawnModelTarget {

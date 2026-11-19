@@ -107,6 +107,8 @@ export interface ProviderModelsFetchResult {
    * Absent means unknown: callers must not infer that a missing model was withdrawn.
    */
   complete?: boolean;
+  /** Saved-provider fetches only: opaque receipt binding this listing to the credential generation. */
+  listingReceipt?: string;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */

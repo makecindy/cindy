@@ -3219,6 +3219,8 @@ export function ProvidersSection() {
         let withdrawnSuspicious = false;
         const withdrawn = new Map<string, { id: string; name: string; agents: AgentKind[] }>();
         const absentByAgent = new Map<AgentKind, Set<string>>();
+        // Main accepts new listing markers only with a receipt still matching this connection.
+        const listingReceipts: Partial<Record<AgentKind, string>> = {};
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -3250,6 +3252,7 @@ export function ProvidersSection() {
             return;
           }
           refreshedAgents.add(agent);
+          if (r.listingReceipt) listingReceipts[agent] = r.listingReceipt;
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
@@ -3298,6 +3301,7 @@ export function ProvidersSection() {
           const result = await updateCustomProvider(config, {}, {
             ...options,
             ...(providerSpeechSetup(p) ? { speechReferenceRefreshAgents: [...refreshedAgents] } : {}),
+            ...(Object.keys(listingReceipts).length ? { listingReceipts } : {}),
           });
           speechReferenceAdded = result.ok && result.speechReferenceAdded === true;
           return result;
@@ -3398,7 +3402,9 @@ export function ProvidersSection() {
         // Visibility is per runtime; the disable choice is provider-wide, so only clear
         // it for models no runtime still offers. The disable IPC accepts 512 IDs per call.
         const disableBatches: string[][] = [];
-        for (let index = 0; index < goneIds.length; index += 512) disableBatches.push(goneIds.slice(index, index + 512));
+        // IDs longer than the disable IPC accepts (256) can never carry a disable choice.
+        const disableIds = goneIds.filter((id) => id.length <= 256);
+        for (let index = 0; index < disableIds.length; index += 512) disableBatches.push(disableIds.slice(index, index + 512));
         const cleanup = await Promise.allSettled([
           resetModelVisibilities(provider.id, removed),
           ...disableBatches.map((modelIds) => window.electronAPI.maker.setModelDisable({
