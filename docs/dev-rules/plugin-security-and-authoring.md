@@ -1503,7 +1503,8 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   receipt `approvedHarnesses` 已批准；握手期间批准版本、目录或停止代次变化即杀进程拒绝。
 - **生命周期**：引擎进程计入 broker 的真实进程账本，`stop`（停用）与 `stopAndWait`（更新、卸载、换源）先结束它们再
   替换目录；stop 后关闭启动闸，只有「该在场了」的统一入口（`spawnIfResident`：启用、更新／回滚完成、应用启动）重新放行，
-  回滚失败路径保持关闭。账号切换随 broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
+  回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
+  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
 - **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。

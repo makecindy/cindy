@@ -18,6 +18,7 @@
  * `key = ${ghostId}:${harnessId}` 无歧义。
  */
 import { ghostHarnessText, storedGhostHarnessAvailability, type GhostHarnessMode, type GhostHarnessModel } from '@cindy/plugin-protocol';
+import { AgentStartupStoppedError } from '@cindy/maker-core';
 
 import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -158,11 +159,16 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
     },
     async spawn(key) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
-      const fresh = compute();
-      const harness = fresh.find((item) => item.key === key);
-      if (!harness) throw new Error(`Task engine ${key} is not available: the plugin is not enabled, approved or declaring it`);
-      if (harness.availability.state === 'unavailable') {
-        throw new Error(`Task engine ${harness.name} is unavailable${harness.availability.message ? `: ${harness.availability.message}` : ''}`);
+      let harness: PluginHarness;
+      try {
+        const current = compute().find((item) => item.key === key);
+        if (!current) throw new Error(`Task engine ${key} is not available: the plugin is not enabled, approved or declaring it`);
+        if (current.availability.state === 'unavailable') {
+          throw new Error(`Task engine ${current.name} is unavailable${current.availability.message ? `: ${current.availability.message}` : ''}`);
+        }
+        harness = current;
+      } catch (error) {
+        throw new AgentStartupStoppedError(error);
       }
       return deps.spawn(harness.ghostId, harness.harnessId);
     },

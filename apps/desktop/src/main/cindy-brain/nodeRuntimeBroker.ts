@@ -5,6 +5,7 @@ import type {
   PluginAuthorizationInput,
 } from '../plugin-oauth/deviceCard.js';
 import { parseDeviceAuthorizationUrl } from '@cindy/device-link';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '../plugin-oauth/targetPolicy.js';
 /**
  * nodeRuntimeBroker — 随意识安装的本地 Node 工作进程守门与 stdio 中继。
@@ -1417,9 +1418,12 @@ export class GhostNodeRuntimeBroker {
    * 片段。插件停用、更新、卸载与账号切换时,broker 在替换安装目录前结束这些进程。
    */
   async spawnHarness(ghostId: string, harnessId: string): Promise<NodeWorkerProcess> {
-    const reject = (reason: string): never => {
+    const logRejection = (reason: string): void => {
       this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
-      throw new Error(reason);
+    };
+    const reject = (reason: string): never => {
+      logRejection(reason);
+      throw new AgentStartupStoppedError(new Error(reason));
     };
     if (this.destroyed) reject('Plugin runtime is shutting down');
     if (this.harnessSpawnBlocked.has(ghostId)) {
@@ -1450,11 +1454,18 @@ export class GhostNodeRuntimeBroker {
     const processes = this.harnessProcesses.get(ghostId) ?? new Set<HarnessProcEntry>();
     processes.add(entry);
     this.harnessProcesses.set(ghostId, processes);
-    proc.once('exit', () => this.forgetHarnessProcess(entry));
+    let exited = false;
+    const whenStopped = new Promise<void>((resolve) => {
+      proc.once('exit', () => {
+        exited = true;
+        this.forgetHarnessProcess(entry);
+        resolve();
+      });
+    });
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
-    this.logHarnessStderr(entry);
     try {
+      this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
         const settle = (outcome: () => void) => {
@@ -1469,20 +1480,31 @@ export class GhostNodeRuntimeBroker {
         proc.once('error', (error) => settle(() => fail(error)));
         proc.once('exit', (code) => settle(() => fail(new Error(`Task engine exited before it was ready (code=${code})`))));
       });
+      // Recheck admission after the handshake, before yielding the process.
+      const current = this.deps.getGhost(ghostId);
+      if (
+        this.destroyed || exited || entry.stopping || this.harnessSpawnBlocked.has(ghostId)
+        || (this.stopGeneration.get(ghostId) ?? 0) !== generation
+        || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)
+        || !current || harnessIdentity(current) !== identity || !this.resolveHarness(current, harnessId)
+      ) {
+        throw new Error('The plugin changed while the task engine was starting');
+      }
     } catch (error) {
-      this.stopHarnessProcess(entry, true);
-      return reject(error instanceof Error ? error.message : 'Task engine failed to start');
-    }
-    // 握手期间可能已停用、更新、卸载或换账号:就地收掉,不交出孤儿进程。
-    const current = this.deps.getGhost(ghostId);
-    if (
-      this.destroyed || entry.stopping || this.harnessSpawnBlocked.has(ghostId)
-      || (this.stopGeneration.get(ghostId) ?? 0) !== generation
-      || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)
-      || !current || harnessIdentity(current) !== identity || !this.resolveHarness(current, harnessId)
-    ) {
-      this.stopHarnessProcess(entry, true);
-      return reject('The plugin changed while the task engine was starting');
+      if (!exited) this.stopHarnessProcess(entry, true);
+      const cause = error instanceof Error ? error : new Error('Task engine failed to start');
+      logRejection(cause.message);
+      if (exited) throw new AgentStartupStoppedError(cause);
+      throw new AgentStartupCleanupPendingError(cause.message, {
+        cause,
+        whenStopped,
+        retryCleanup: async () => {
+          if (exited) return;
+          const stopped = this.waitForProcessExit(proc, ghostId);
+          try { proc.kill('SIGKILL'); } catch { /* Wait for the exit event. */ }
+          await stopped;
+        },
+      });
     }
     this.deps.log?.info('ghost harness spawned', { ghostId, harnessId, pid: proc.pid });
     return proc;

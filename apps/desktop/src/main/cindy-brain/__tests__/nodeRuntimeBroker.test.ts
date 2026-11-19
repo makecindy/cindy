@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
@@ -3195,7 +3196,7 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
   ])('refuses to fork when %s', async (_label, patch) => {
     const { broker, spawned } = setupHarness(harnessGhost(patch));
     try {
-      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow();
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toBeInstanceOf(AgentStartupStoppedError);
       expect(spawned).toHaveLength(0);
     } finally { broker.destroyAll(); }
   });
@@ -3210,6 +3211,35 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     try {
       await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('owner');
       expect(spawnChildProcess).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit regression for PR #11549: broker startup can fail before ACP has a
+  // transport. A failed process must keep its task's cleanup receipt until exit.
+  it('hands the failed startup process back for confirmed cleanup', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost(), false);
+    try {
+      const starting = broker.spawnHarness('node-ghost', 'dsh').catch((error: unknown) => error);
+      const proc = spawned[0]!.proc;
+      const kill = vi.spyOn(proc, 'kill').mockReturnValue(true);
+      proc.emit('error', new Error('bootstrap failed'));
+      const error = await starting;
+      expect(error).toBeInstanceOf(AgentStartupCleanupPendingError);
+      if (!(error instanceof AgentStartupCleanupPendingError)) throw error;
+      const release = vi.fn();
+      void error.whenStopped.then(release);
+      await Promise.resolve();
+      expect(release).not.toHaveBeenCalled();
+      expect(broker.harnessProcessCount('node-ghost')).toBe(1);
+
+      const retry = error.retryCleanup?.();
+      expect(kill).toHaveBeenCalledTimes(2);
+      expect(kill).toHaveBeenLastCalledWith('SIGKILL');
+      proc.emit('exit', null, 'SIGKILL');
+      await retry;
+      await error.whenStopped;
+      expect(release).toHaveBeenCalledOnce();
+      expect(broker.harnessProcessCount('node-ghost')).toBe(0);
     } finally { broker.destroyAll(); }
   });
 
