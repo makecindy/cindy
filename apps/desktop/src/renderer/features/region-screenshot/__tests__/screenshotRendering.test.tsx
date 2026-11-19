@@ -191,9 +191,10 @@ describe('screenshot rendering recovery', () => {
     expect(screen.getByText('100 × 100')).toBeTruthy(); // top window occludes cached content
     fireEvent.pointerMove(root, { clientX: 250, clientY: 80 });
     expect(screen.getByText('500 × 350')).toBeTruthy();
-    fireEvent.keyDown(window, { key: 'Enter' });
+    // With a nested element highlighted, Space takes its window and Enter takes the element.
+    fireEvent.keyDown(window, { key: snapshot ? ' ' : 'Enter' });
     fireEvent.pointerMove(root, { clientX: 550, clientY: 450 });
-    expect(screen.getByText('500 × 350')).toBeTruthy();
+    expect(screen.getByText(snapshot ? '500 × 400' : '500 × 350')).toBeTruthy();
     // A new capture cannot inherit a region or a late reply from this capture.
     await act(async () => begin({ ...payload, token: 'next', windows: [{ ...outer, snapRects: [] }] }));
     await act(async () => replies[5]({ window: outer, rects: [], preferredRect: content }));

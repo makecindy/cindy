@@ -982,8 +982,8 @@
       "loading": "Loading image…"
     },
     "moveToolbar": "Move toolbar left or right",
-    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · C: copy color · Esc: exit",
-    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · R: last area · C: copy color · Esc: exit",
+    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · C: copy color · Esc: exit",
+    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · R: last area · C: copy color · Esc: exit",
     "copy": "Copy",
     "cancel": "Exit Screenshot",
     "captureFailed": "Could not capture the screen",

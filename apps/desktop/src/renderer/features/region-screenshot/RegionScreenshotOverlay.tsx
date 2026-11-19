@@ -185,7 +185,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const longResultRef = useRef(longResult);
   longResultRef.current = longResult;
   const [selection, setSelection] = useState<RegionRect | null>(null);
-  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number; defaultRect: RegionRect } | null>(null);
+  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number; defaultRect: RegionRect; windowRect?: RegionRect } | null>(null);
   const [pointer, setPointer] = useState<RegionPoint | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<AnnotationTool | null>(null);
@@ -523,9 +523,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       const selected = previous && sameRegion(previous.defaultRect, defaultRect)
         ? candidates.findIndex((rect) => sameRegion(rect, previous.candidates[previous.level])) : -1;
       const level = selected >= 0 ? selected : defaultLevel;
-      const keep = previous && previous.level === level && previous.candidates.length === candidates.length
+      const keep = previous && previous.windowRect === window?.rect && previous.level === level && previous.candidates.length === candidates.length
         && previous.candidates.every((rect, index) => sameRegion(rect, candidates[index]));
-      return keep && sameRegion(previous.defaultRect, defaultRect) ? previous : { candidates, level, defaultRect };
+      return keep && sameRegion(previous.defaultRect, defaultRect) ? previous : { candidates, level, defaultRect, windowRect: window?.rect };
     });
   }, []);
 
@@ -964,9 +964,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       }
       const rect = s.selection;
       if (!rect) {
-        if (key === ' ') {
+        if (key === ' ' && !s.drag && !(event.target instanceof HTMLElement && event.target.closest('button, input, select, textarea'))) {
           event.preventDefault();
-          selectRegion({ x: 0, y: 0, ...s.session.viewport });
+          selectRegion(s.hover?.windowRect ?? { x: 0, y: 0, ...s.session.viewport });
         } else if (key.toLowerCase() === 'r' && !mod && s.session.lastRegion) {
           event.preventDefault();
           selectRegion(s.session.lastRegion);

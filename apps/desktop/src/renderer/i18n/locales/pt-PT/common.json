@@ -999,8 +999,8 @@
       "loading": "A carregar imagem…"
     },
     "moveToolbar": "Mover a barra de ferramentas para a esquerda ou para a direita",
-    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: ecrã inteiro · C: copiar cor · Esc: sair",
-    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: ecrã inteiro · R: última área · C: copiar cor · Esc: sair",
+    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: selecionar toda a janela · C: copiar cor · Esc: sair",
+    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: selecionar toda a janela · R: última área · C: copiar cor · Esc: sair",
     "copy": "Copiar",
     "cancel": "Sair da captura de ecrã",
     "captureFailed": "Não foi possível capturar o ecrã",
