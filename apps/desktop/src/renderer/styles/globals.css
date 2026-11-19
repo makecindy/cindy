@@ -727,7 +727,6 @@ html:lang(ko) {
 .composer-recording-bar {
   width: 2.5px;
   height: 14px;
-  border-radius: 999px;
   background: var(--settings-badge-error);
   transition: transform var(--motion-instant) var(--motion-ease-out);
 }
@@ -1377,6 +1376,7 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .composer-recording-bar[data-starting],
   [data-voice-mic-active='true'] [data-voice-mic-bar],
   .composer-send [data-send-icon],
   .composer-send-slot,

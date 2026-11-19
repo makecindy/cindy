@@ -39,7 +39,7 @@ export function ComposerRecordingBars({ samplesRef }: { samplesRef?: RecordingSa
   return levels.map((level, index) => (
     <span
       key={index}
-      className="composer-recording-bar"
+      className="composer-recording-bar rounded-full"
       data-starting={starting || undefined}
       style={{ transform: `scaleY(${(2 + 12 * level) / 14})` }}
     />

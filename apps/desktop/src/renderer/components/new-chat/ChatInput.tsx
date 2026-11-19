@@ -11002,7 +11002,7 @@ function VoiceInputButton({
           <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
             <Mic size={15} />
           </span>
-          <span className={cn(iconLayer, 'h-4 gap-[2px]', showBars ? iconShown : iconHidden)}>
+          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
             <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
           </span>
           <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
