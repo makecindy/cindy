@@ -100,6 +100,7 @@ import {
 
 import {
   deriveGhostSessionContext,
+  isValidGhostId,
   GHOST_HANDOFF_FILES_ARG,
   GHOST_HANDOFF_MAX_BATCH_BYTES,
   GHOST_HANDOFF_MAX_BYTES_PER_FILE,
@@ -1850,13 +1851,13 @@ function getCindyGhostsMcpDeps(
     if (pageCall) return sessionCtx;
     return sessionCtx ? resolveLiziMcpSessionContext(sessionCtx) : getLiziMcpSessionContext();
   };
-  const installConsentPrompt = (): GhostInstallConsentPrompt => {
-    const context = resolveSessionContext();
+  const installConsentPrompt = (publisher?: string | null, context = resolveSessionContext()): GhostInstallConsentPrompt => {
     return requireService('createTaskInstallConsentPrompt')(
       context?.sessionId && context.sessionInstanceId
         ? { sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId }
         : null,
       hostDeps.requestHostPermission,
+      publisher,
     );
   };
   const marketTools = hostDeps.pluginMarket && requireService('createPluginMarketAgentTools')({
@@ -1896,9 +1897,28 @@ function getCindyGhostsMcpDeps(
       // 确认卡可能等几分钟，不能占用 owner mutation lease；切号只要等十秒。
       // 捕获当前 owner 只为边界期 fail closed。落位由市场装入出口自行取租约。
       captureGhostMutationOwnerForMcp();
-      return { assertCurrent, release: () => undefined, consentPrompt: installConsentPrompt() };
+      return {
+        assertCurrent, release: () => undefined, ownerGeneration: getActiveAppSession().generation,
+        consentPrompt: publisher => installConsentPrompt(publisher, context),
+      };
     },
   });
+  async function visibilityFailure(
+    failure: Extract<ReturnType<typeof classifyGhostVisibility>, { ok: false }>,
+    installed: InstalledGhost[], ghostId: string, namespace?: string | null,
+  ) {
+    // GHOST_NOT_FOUND can also hide a signed-out or tool-less installation.
+    // Plugin pages and stale grants must never discover marketplace identities.
+    if (pageCall || failure.errorCode !== 'GHOST_NOT_FOUND' || !isValidGhostId(ghostId) ||
+        installed.some(ghost => ghost.manifest.id === ghostId)) return failure;
+    const identity = JSON.stringify({ ghost_id: ghostId, ...(namespace !== undefined ? { namespace } : {}) });
+    const next = marketTools
+      ? 'If this plugin is required for the request, use ghost_market_search with query ' + JSON.stringify(ghostId) +
+        ' and match the exact identity ' + identity + '. When sources are complete and one exact listing matches, use ghost_market_install with its plugin_id and release_id to present the native confirmation. ' +
+        'If sources are incomplete or ambiguous, show the host-generated Plugins settings link for the task computer. After acceptance inspect ghost_info and resume only the unfinished step. If declined, stop prompting.'
+      : 'Use the host-generated Plugins settings link for the task computer. Confirm availability there before continuing the unfinished step.';
+    return { ...failure, message: failure.message + ' ' + next };
+  }
   const contributionAuthority = async (write: boolean) => {
     const context = resolveSessionContext();
     const owner = requireService('contributionOwnerKey')();
@@ -2012,7 +2032,7 @@ function getCindyGhostsMcpDeps(
         const visible = classifyGhostVisibility(
           target.id, context?.workingDir ?? null, ghostVisibilityDeps, target.namespace,
         );
-        if (!visible.ok) return visible;
+        if (!visible.ok) return visibilityFailure(visible, getGhostManager().list(), target.id, target.namespace);
         return service.request(sessionId, {
           kind: 'plugin',
           id: visible.ghost.manifest.id,
@@ -2023,7 +2043,7 @@ function getCindyGhostsMcpDeps(
       const workingDir = context?.workingDir ?? null;
       const visible = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps,
         target.kind === 'plugin' ? target.namespace : undefined);
-      if (!visible.ok) return visible;
+      if (!visible.ok) return visibilityFailure(visible, getGhostManager().list(), target.id, target.namespace);
       const instanceId = installedGhostStoragePart(visible.ghost);
       const assessment = getGhostSetupAssessment(instanceId);
       const ghCliSecret = visible.ghost.manifest.network?.secrets?.find((secret) => secret.source === 'gh-cli');
@@ -2208,7 +2228,7 @@ function getCindyGhostsMcpDeps(
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const installed = await listInstalledGhostsAsync();
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
-      if (!visibility.ok) return visibility;
+      if (!visibility.ok) return visibilityFailure(visibility, installed, ghostId, namespace);
       // classifyGhostVisibility already picked the version among discoverable
       // copies; here only check the winner (or an exact instance) is listed.
       const visible = visibleChipGhosts(workdir, installed, false).some(
@@ -2229,11 +2249,9 @@ function getCindyGhostsMcpDeps(
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) {
         return {
-          ok: false,
           manual: [],
           content: '',
-          errorCode: visibility.errorCode,
-          message: visibility.message,
+          ...await visibilityFailure(visibility, installed, ghostId, namespace),
         };
       }
       if (!ghostHasManual(visibility.ghost)) {
@@ -2280,7 +2298,7 @@ function getCindyGhostsMcpDeps(
         { ...ghostVisibilityDeps, listGhosts: () => installed },
         namespace,
       );
-      if (!initialVisibility.ok) return initialVisibility;
+      if (!initialVisibility.ok) return visibilityFailure(initialVisibility, installed, ghostId, namespace);
       const target = { ...initialVisibility.ghost };
       if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
           target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
