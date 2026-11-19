@@ -113,6 +113,32 @@ describe('Ghost card ImageLightbox gallery positioning', () => {
     expect(screen.getByText('800 × 600')).toBeTruthy();
   });
 
+  // 测试价值：同一条消息还有 PDF/文件时，图片侧不能跳过同条附件直接走任务图集。
+  // 最小失败输入 = 消息集合为图片 + PDF、任务图集 3 张；旧实现显示 1 / 3。
+  it('keeps a mixed message collection instead of the task gallery', () => {
+    const imageSrc = 'xdt-image://gallery/a.png';
+    render(
+      <ImageGalleryContext.Provider
+        value={[
+          { src: imageSrc },
+          { src: 'xdt-image://gallery/b.png' },
+          { src: 'xdt-image://gallery/c.png' },
+        ]}
+      >
+        <AttachmentCollectionContext.Provider
+          value={[
+            { id: 'a', name: 'a.png', source: imageSrc, kind: 'image', media: true },
+            { id: 'doc', name: 'spec.pdf', source: '/tmp/spec.pdf', kind: 'pdf' },
+          ]}
+        >
+          <ImageLightbox src={imageSrc} enableGallery onClose={vi.fn()} />
+        </AttachmentCollectionContext.Provider>
+      </ImageGalleryContext.Provider>,
+    );
+
+    expect(screen.getByText('1 / 2')).toBeTruthy();
+  });
+
   it('opens the exact duplicate image selected inside a plugin card iframe', () => {
     const repeated = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     render(

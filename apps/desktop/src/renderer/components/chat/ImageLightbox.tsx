@@ -324,7 +324,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const openingCollection = useOpeningCollection(source);
   const [collectionItems] = useState(() => openingCollection);
   const sessionImages = useContext(ImageGalleryContext);
-  // 图片优先走已加载任务历史的画廊：同一条消息里的附件集合可能只包含其中一张，
+  // 纯图片消息优先走已加载任务历史的画廊：同一条消息里的附件集合可能只包含其中一张，
   // 逐条发送的图片更是各成一组；两者都会把翻页限制在局部。
   // 这个选择在打开时定死：查看期间新到的图片不能让组件从集合查看器切成
   // 画廊查看器,否则未保存的标注会随卸载丢失。
@@ -332,6 +332,8 @@ export function ImageLightbox(props: ImageLightboxProps) {
     () =>
       props.enableGallery === true &&
       (sessionImages?.length ?? 0) > 1 &&
+      // 混合附件消息（图片 + PDF/文件）保留同条集合，别让图片侧跳过同条附件。
+      !(openingCollection?.some((item) => item.kind !== 'image') ?? false) &&
       (sessionImages?.some(
         (image) =>
           image.src === source ||
