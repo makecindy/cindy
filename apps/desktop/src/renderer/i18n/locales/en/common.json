@@ -6082,7 +6082,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatic task model fallback",
-        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+        "description": "On failure, a model group tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
       },
       "toggleAria": "Toggle automatic task model fallback",
       "toast": {
@@ -14634,12 +14634,14 @@
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
     },
-    "followUpHint": {
-      "queueDefault": "Messages sent while a task is running are queued.",
-      "steerDefault": "Messages sent while a task is running steer the current task.",
+    "sendDelivery": {
+      "menuAria": "How to send this message",
+      "queueHint": "After this reply",
+      "steerHint": "At the next step",
+      "setDefault": "Set as default",
+      "nowDefault": "Now the default",
       "switchToSteer": "Steer by default",
-      "switchToQueue": "Queue by default",
-      "dismiss": "Dismiss tip"
+      "switchToQueue": "Queue by default"
     }
   },
   "onboarding": {
@@ -16742,6 +16744,7 @@
         "thisEvening": "This evening",
         "tomorrow": "Tomorrow",
         "nextWeek": "Next week",
+        "indefinite": "Indefinitely",
         "custom": "Custom…",
         "wakeAt": "Wake-up date and time",
         "timeZone": "Local time ({{zone}})",
@@ -19486,6 +19489,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "This turn failed.",
+    "blockedReasonUnknown": "No specific reason was provided for this block.",
+    "blockedNextStep": "You can add information in this task. After addressing the cause, click “{{action}}” to continue.",
     "status": {
       "active": "Advancing goal",
       "paused": "Paused",

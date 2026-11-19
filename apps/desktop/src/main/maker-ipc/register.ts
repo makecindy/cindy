@@ -1407,6 +1407,11 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
+import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { modelGroupRouteFor } from '../model-groups/routeFor.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -1466,6 +1471,7 @@ import {
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
+  recordFailedSessionRuntimeFallbackCandidate,
   clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
@@ -17637,12 +17643,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({ getDesktopProviderService, log });
 
+  async function activeModelGroupBinding(sessionId: string, row: {
+    agentKind?: string | null; model?: string | null; providerId?: string | null;
+  }) {
+    const binding = await readModelGroupBindingForDispatch(sessionId);
+    if (!binding || !row.providerId || !row.model ||
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+    if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
+    return modelGroupRouteFor(readModelGroupsConfig(), binding.selection, Date.now()).outcome === 'missing' ? null : binding;
+  }
+
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
   const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
     maker,
     readSessionRuntimeProfiles: (sessionId) => readSessionRuntimeProfiles(sessionId),
     canApplyAutomaticRuntimeSelection: (sessionId, generation) => canApplyAutomaticRuntimeSelection(sessionId, generation),
     readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
+    readModelGroupFallbackCandidate: async (sessionId, current, visited, recovery, generation) => {
+      const row = await getSessionRowSnapshot(sessionId);
+      const binding = row && await activeModelGroupBinding(sessionId, row);
+      if (!binding || !current.providerId || current.agentDeviceId) return null;
+      const excluded = new Set(visited.map(key => key.replace(/^claude-code\u0000/, 'cc\u0000')));
+
+      const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, ...recovery,
+        recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
+          ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
+        }),
+        current: { agentKind: makerToDbAgentKind(current.agentKind), providerId: current.providerId, model: current.model },
+      });
+      if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
+        offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
+      return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
+        providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: false },
+        bindCommittedRoute: profile => {
+          if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
+            agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
+          }));
+        } };
+    },
     readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),
     readSessionRuntimeFallbackSettings, getDesktopProviderService, pendingSessionRuntimeFallbackRebuilds,
     applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
@@ -18806,6 +18844,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
+  const modelGroupInputs = new WeakSet<object>();
   const scheduledQuotaInputs = new WeakSet<object>();
   // The coordinator and the stable-session lookup are assembled below; both are read when a hook runs.
   const interruptedTurnAutoResumeHooks = createInterruptedTurnAutoResumeHooks<Session>({
@@ -18814,7 +18853,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
+    resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18843,6 +18883,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          agentKind: sessions.agentKind, providerId: sessions.providerId, model: sessions.model,
           orcaRole: sessions.orcaRole,
           orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
@@ -18874,6 +18915,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           && ((origin?.kind === 'scheduler' && origin.runId) || ownsQuotaRoute())) {
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
+        const groupFallback = origin?.kind !== 'scheduler' && !ownsQuotaRoute() && botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
+          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
+        if (groupFallback) modelGroupInputs.add(args[2]);
+        else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
           botFallbackInputs.add(args[2]);
         } else {

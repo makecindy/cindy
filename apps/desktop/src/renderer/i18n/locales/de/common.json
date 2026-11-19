@@ -6082,7 +6082,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatischer Modellwechsel für Aufgaben",
-        "description": "Nach wiederholten Verbindungs- oder Kapazitätsfehlern wird zunächst eine andere verbundene Quelle für dasselbe Modell versucht, dann ein ausdrücklich für den aktuellen Agent empfohlenes Modell. Dabei wird weder der Agent gewechselt noch deine gespeicherte Auswahl geändert. Standardmäßig deaktiviert."
+        "description": "Bei einem Fehler versucht eine Modellgruppe andere verfügbare Modelle der Gruppe. Bei einem Agentenwechsel wird die Aufgabe übergeben und die neue Auswahl gespeichert. Andere Aufgaben versuchen nach wiederholten Fehlern eine andere Quelle oder ein empfohlenes Modell desselben Agenten. Standardmäßig aus."
       },
       "toggleAria": "Automatischen Modellwechsel für Aufgaben umschalten",
       "toast": {
@@ -14634,12 +14634,14 @@
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
     },
-    "followUpHint": {
-      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
-      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+    "sendDelivery": {
+      "menuAria": "So wird diese Nachricht gesendet",
+      "queueHint": "Nach dieser Antwort",
+      "steerHint": "Beim nächsten Schritt",
+      "setDefault": "Als Standard setzen",
+      "nowDefault": "Jetzt Standard",
       "switchToSteer": "Standardmäßig steuern",
-      "switchToQueue": "Standardmäßig einreihen",
-      "dismiss": "Hinweis schließen"
+      "switchToQueue": "Standardmäßig einreihen"
     }
   },
   "onboarding": {
@@ -16742,6 +16744,7 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
         "timeZone": "Ortszeit ({{zone}})",
@@ -19486,6 +19489,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Diese Runde ist fehlgeschlagen.",
+    "blockedReasonUnknown": "Es wurde kein konkreter Grund für die Blockierung angegeben.",
+    "blockedNextStep": "Du kannst in dieser Aufgabe Informationen ergänzen. Sobald die Ursache behoben ist, klicke auf „{{action}}“, um fortzufahren.",
     "status": {
       "active": "Ziel wird weiterverfolgt",
       "paused": "Pausiert",

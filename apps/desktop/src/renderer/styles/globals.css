@@ -793,6 +793,17 @@ html:lang(ko) {
   opacity: 0;
   transform: scale(0.55);
 }
+/* Delivery tip points at the other mode (SendDeliveryTip, §14.6): the plane gives way to
+   that mode's glyph and comes back when the pointer or modifier lets go. */
+.composer-send [data-send-icon='alternate'],
+.composer-send[data-send-alternate='true'] [data-send-icon='plane'] {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.composer-send[data-send-alternate='true'] [data-send-icon='alternate'] {
+  opacity: 1;
+  transform: none;
+}
 /* Send → Stop: the plane flies out up-right, then the square lands. */
 .composer-send[data-send-action='stop'] [data-send-icon='plane'] {
   opacity: 0;

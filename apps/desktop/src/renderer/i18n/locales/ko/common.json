@@ -6039,7 +6039,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "작업 모델 자동 대체",
-        "description": "연결 또는 용량 오류가 반복되면 같은 모델의 다른 연결된 제공자를 먼저 시도하고, 이어서 현재 Agent에 명시적으로 추천된 모델을 시도합니다. Agent나 저장된 선택은 바꾸지 않습니다. 기본값은 꺼짐입니다."
+        "description": "오류가 발생하면 그룹 내 다른 사용 가능한 모델을 시도합니다. 에이전트가 바뀌면 작업을 인계하고 새 선택을 저장합니다. 일반 작업은 오류가 반복되면 같은 에이전트의 다른 공급처나 추천 모델을 시도합니다. 기본값은 꺼짐입니다."
       },
       "toggleAria": "작업 모델 자동 대체 전환",
       "toast": {
@@ -14574,12 +14574,14 @@
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
     },
-    "followUpHint": {
-      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
-      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+    "sendDelivery": {
+      "menuAria": "이 메시지를 보내는 방법",
+      "queueHint": "이번 응답이 끝난 후",
+      "steerHint": "다음 단계에서 처리",
+      "setDefault": "기본값으로 설정",
+      "nowDefault": "기본값으로 설정됨",
       "switchToSteer": "기본값을 끼어들기로",
-      "switchToQueue": "기본값을 대기열 추가로",
-      "dismiss": "안내 닫기"
+      "switchToQueue": "기본값을 대기열 추가로"
     }
   },
   "onboarding": {
@@ -16668,6 +16670,7 @@
         "thisEvening": "오늘 저녁",
         "tomorrow": "내일",
         "nextWeek": "다음 주",
+        "indefinite": "무기한",
         "custom": "직접 설정…",
         "wakeAt": "다시 표시할 날짜와 시간",
         "timeZone": "현지 시간 ({{zone}})",
@@ -19410,6 +19413,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "이번 턴을 실행하지 못했습니다.",
+    "blockedReasonUnknown": "진행이 막힌 구체적인 이유가 제공되지 않았습니다.",
+    "blockedNextStep": "현재 작업에 정보를 추가할 수 있습니다. 원인을 해결한 후 “{{action}}” 버튼을 눌러 계속할 수 있습니다.",
     "status": {
       "active": "목표 추진 중",
       "paused": "일시중지",

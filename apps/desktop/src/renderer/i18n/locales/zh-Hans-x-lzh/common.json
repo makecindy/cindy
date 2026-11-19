@@ -6039,7 +6039,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "差事模型自降",
-        "description": "连接或容量之故障连发时，先切至同名模型之他处已连来源，再试当前 Agent 明确所荐之模型；不换 Agent，亦不改君所存之选择。常例为阖。"
+        "description": "模型组遇故，试组内可用之余模。更换引擎，依旧法交接，存其新选。寻常差事屡败，方于本引擎另试来源或所荐模型。初设为关。"
       },
       "toggleAria": "切换差事模型自降",
       "toast": {
@@ -14574,12 +14574,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之讯，默从排队。",
-      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+    "sendDelivery": {
+      "menuAria": "此讯遣法",
+      "queueHint": "待此轮毕",
+      "steerHint": "次步即理",
+      "setDefault": "立为默",
+      "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
-      "switchToQueue": "默改排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默改排队"
     }
   },
   "onboarding": {
@@ -16668,6 +16670,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下周",
+        "indefinite": "无期",
         "custom": "自定…",
         "wakeAt": "唤回日期时辰",
         "timeZone": "本地时辰（{{zone}}）",
@@ -19410,6 +19413,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此轮未成。",
+    "blockedReasonUnknown": "受阻之由未详。",
+    "blockedNextStep": "可于此任务补述详情；解其阻后，按“{{action}}”续行。",
     "status": {
       "active": "方趋目标",
       "paused": "已暂止",

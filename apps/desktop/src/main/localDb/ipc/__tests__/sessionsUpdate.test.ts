@@ -2360,7 +2360,9 @@ describe('task snooze persistence', () => {
     }));
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
     await expect(invoke('codex-local', { snoozedUntil: null })).resolves.toMatchObject({ snoozedUntil: null, snoozedAt: null });
-    await invoke('codex-local', { snoozedUntil });
+    await expect(invoke('codex-local', { snoozedUntil: '9999-12-31T23:59:59.999Z' })).resolves.toMatchObject({
+      snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: expect.any(String),
+    });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
   });

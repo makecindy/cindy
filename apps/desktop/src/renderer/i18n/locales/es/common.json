@@ -6140,7 +6140,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modelo alternativo automático para tareas",
-        "description": "Tras varios fallos de conexión o capacidad, prueba otra fuente conectada para el mismo modelo y, después, un modelo recomendado explícitamente para el Agent actual. Nunca cambia de Agent ni modifica tu selección guardada. Desactivado de forma predeterminada."
+        "description": "Si hay un fallo, el grupo prueba otros modelos disponibles del grupo. Al cambiar de agente se transfiere la tarea y se guarda la nueva selección. Las demás tareas prueban otra fuente o un modelo recomendado del mismo agente tras fallos repetidos. Desactivado de forma predeterminada."
       },
       "toggleAria": "Activar o desactivar el modelo alternativo automático para tareas",
       "toast": {
@@ -14756,12 +14756,14 @@
       "runningWithWorktree_other": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_many": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias."
     },
-    "followUpHint": {
-      "queueDefault": "Los mensajes enviados mientras la tarea se ejecuta se ponen en cola.",
-      "steerDefault": "Los mensajes enviados mientras la tarea se ejecuta dan indicaciones a la tarea en curso.",
+    "sendDelivery": {
+      "menuAria": "Cómo enviar este mensaje",
+      "queueHint": "Tras esta respuesta",
+      "steerHint": "En el siguiente paso",
+      "setDefault": "Usar por defecto",
+      "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
-      "switchToQueue": "Poner en cola por defecto",
-      "dismiss": "Cerrar sugerencia"
+      "switchToQueue": "Poner en cola por defecto"
     }
   },
   "onboarding": {
@@ -16904,6 +16906,7 @@
         "thisEvening": "Esta tarde",
         "tomorrow": "Mañana",
         "nextWeek": "La próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "wakeAt": "Fecha y hora de regreso",
         "timeZone": "Hora local ({{zone}})",
@@ -19670,6 +19673,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Este turno ha fallado.",
+    "blockedReasonUnknown": "No se ha indicado un motivo concreto del bloqueo.",
+    "blockedNextStep": "Puedes añadir información en esta tarea. Tras resolver la causa, haz clic en «{{action}}» para continuar.",
     "status": {
       "active": "Avanzando hacia el objetivo",
       "paused": "En pausa",

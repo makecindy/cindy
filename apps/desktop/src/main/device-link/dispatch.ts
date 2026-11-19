@@ -68,7 +68,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
 
 import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
-import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
+import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -448,6 +448,7 @@ export interface InboundDispatchPorts {
   stopFilePeers?: typeof stopFilePeers;
   requestTaskMigration?: typeof requestTaskMigration;
   delegatedProviderShareGuestAccess?: typeof delegatedProviderShareGuestAccess;
+  locallyProvenProviderShareDelegation?: typeof locallyProvenProviderShareDelegation;
   delegatedProviderShareLeases?: typeof delegatedProviderShareLeases;
   invalidateProviderShareDelegation?: typeof invalidateProviderShareDelegation;
   app: Pick<typeof app, "getVersion">;
@@ -506,6 +507,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     stopFilePeers,
     requestTaskMigration = unavailable('requestTaskMigration'),
     delegatedProviderShareGuestAccess,
+    locallyProvenProviderShareDelegation,
     delegatedProviderShareLeases,
     invalidateProviderShareDelegation,
     app,
@@ -4890,10 +4892,11 @@ function projectProviderListForShare(
 async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
-  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)
-    && payload.args.some((value: unknown) => !!value && typeof value === 'object' && 'op' in value && value.op === 'open')
-    && delegatedProviderShareGuestAccess?.(src)) {
-    try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)) {
+    const request = payload.args[0] as { op?: unknown } | undefined;
+    if (request?.op === 'open' && delegatedProviderShareGuestAccess?.(src) && !locallyProvenProviderShareDelegation?.(src)) {
+      try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+    }
   }
   const access = providerShareGuestAccess(src);
   if (!access) {

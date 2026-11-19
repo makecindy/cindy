@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "添小工具",
+  "widgetGuideIntro": "小工具可置於主畫面；無須開啟 Cindy，即可觀訂閱餘量及今日詞元用度。",
+  "widgetGuideExample": "主畫面上，Cindy 小工具與應用圖示並列。",
+  "widgetGuidePicker": "「編輯」→「加入小工具」",
+  "widgetGuideIOS": "長按主畫面空處，點{{picker}}。\n\n尋 Cindy，擇「訂閱餘量」或「每日用量」，點「加入小工具」。",
+  "widgetGuideAndroid": "長按桌面空處，開「小工具」。\n\n尋 Cindy，拖「訂閱餘量」或「每日用量」至桌面。",
+  "widgetGuideHome": "主畫面",
+  "widgetGuideLock": "鎖定畫面",
+  "widgetGuideLockIOS": "鎖定畫面亦可置之：長按鎖定畫面，點「自訂」。",
+  "widgetGuideDismiss": "已悉",
+  "usageOther": "其餘",
+  "usageTitle": "用度總覽",
+  "usageOnlyDevice": "唯 {{name}}",
+  "usagePlans": "諸約餘量",
+  "usageBudget": "本期預算之餘",
   "management": {
     "title": "器物總管",
     "openDevice": "察 {{name}} 之詳情",
@@ -445,6 +460,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下週",
+        "indefinite": "無期",
         "custom": "自定…",
         "invalidTime": "請選擇來歲以內之未來日期時辰。"
       },

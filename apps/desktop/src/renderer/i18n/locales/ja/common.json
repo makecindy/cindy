@@ -6039,7 +6039,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "タスクモデルの自動フォールバック",
-        "description": "接続または容量エラーが続くと、同じモデルの別の接続済みプロバイダー、次に現在の Agent で明示的に推奨されたモデルを試します。Agent や保存済みの選択は変更しません。デフォルトはオフです。"
+        "description": "障害時にはグループ内の別の利用可能なモデルを試します。エージェントが変わる場合はタスクを引き継ぎ、新しい選択を保存します。通常のタスクは失敗が続くと同じエージェント内で別の提供元や推奨モデルを試します。初期設定はオフです。"
       },
       "toggleAria": "タスクモデルの自動フォールバックを切り替え",
       "toast": {
@@ -14574,12 +14574,14 @@
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
     },
-    "followUpHint": {
-      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
-      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+    "sendDelivery": {
+      "menuAria": "このメッセージの送信方法",
+      "queueHint": "この返信の完了後",
+      "steerHint": "次のステップで処理",
+      "setDefault": "デフォルトにする",
+      "nowDefault": "デフォルトにしました",
       "switchToSteer": "デフォルトを割り込みにする",
-      "switchToQueue": "デフォルトをキューに追加にする",
-      "dismiss": "ヒントを閉じる"
+      "switchToQueue": "デフォルトをキューに追加にする"
     }
   },
   "onboarding": {
@@ -16668,6 +16670,7 @@
         "thisEvening": "今夜",
         "tomorrow": "明日",
         "nextWeek": "来週",
+        "indefinite": "無期限",
         "custom": "カスタム…",
         "wakeAt": "再表示する日時",
         "timeZone": "現地時間（{{zone}}）",
@@ -19410,6 +19413,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "このターンの実行に失敗しました。",
+    "blockedReasonUnknown": "停止した具体的な理由は示されていません。",
+    "blockedNextStep": "このタスクで情報を補足できます。原因に対処した後、「{{action}}」で続行できます。",
     "status": {
       "active": "目標を推進中",
       "paused": "一時停止",

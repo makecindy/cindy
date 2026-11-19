@@ -6140,7 +6140,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modèle de secours automatique pour les tâches",
-        "description": "Après des échecs répétés de connexion ou de capacité, essaie une autre source connectée pour le même modèle, puis un modèle explicitement recommandé pour l'Agent actuel. Ne change jamais d'Agent et ne modifie pas votre sélection enregistrée. Désactivé par défaut."
+        "description": "En cas d’échec, un groupe essaie ses autres modèles disponibles. Un changement d’Agent transfère la tâche et enregistre le nouveau choix. Après plusieurs échecs, les autres tâches essaient une autre source ou un modèle recommandé du même Agent. Désactivé par défaut."
       },
       "toggleAria": "Activer/désactiver le modèle de secours automatique pour les tâches",
       "toast": {
@@ -14756,12 +14756,14 @@
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
     },
-    "followUpHint": {
-      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
-      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+    "sendDelivery": {
+      "menuAria": "Comment envoyer ce message",
+      "queueHint": "Après cette réponse",
+      "steerHint": "À la prochaine étape",
+      "setDefault": "Définir par défaut",
+      "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
-      "switchToQueue": "File d'attente par défaut",
-      "dismiss": "Fermer l'astuce"
+      "switchToQueue": "File d'attente par défaut"
     }
   },
   "onboarding": {
@@ -16904,6 +16906,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",
@@ -19670,6 +19673,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "L’exécution de ce tour a échoué.",
+    "blockedReasonUnknown": "Aucune raison précise du blocage n’a été fournie.",
+    "blockedNextStep": "Vous pouvez ajouter des informations dans cette tâche. Une fois la cause résolue, cliquez sur « {{action}} » pour continuer.",
     "status": {
       "active": "Objectif en cours",
       "paused": "En pause",

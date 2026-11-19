@@ -186,14 +186,16 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime, authorizeSharedTaskTransportRequest } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
-import { providerShareGuestPeer, shortDeviceRef } from '@cindy/device-link';
+import { providerShareGuestPeer, providerShareHostPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied, isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
 import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
 import {
   isProviderShareRefusal,
+  findReceivedShareForExecution,
   getReceivedShares,
+  parseProviderShareAgentDeviceId,
   providerShareAccessEpoch,
   noteProviderShareAccessFailure,
   PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
@@ -2621,7 +2623,14 @@ export async function remoteBackgroundInvoke(
   assertCurrent();
   options?.preSend?.();
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
-  const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  // The bounded metadata reader can use the existing catalog during a
+  // temporary business-list outage while the signed Agent Net link is valid.
+  const shareId = !options?.liveProviderMetadata && isShareAvailabilityRead(channel, args)
+    ? parseProviderShareAgentDeviceId(agentDeviceId) : null;
+  const retained = shareId ? findReceivedShareForExecution(shareId) : null;
+  const deviceId = retained?.status === 'active'
+    ? providerShareHostPeer(retained.shareId, retained.hostDeviceId)
+    : await resolveRemoteAgentTargetWhenReady(agentDeviceId);
   assertCurrent();
   options?.preSend?.();
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';

@@ -6039,7 +6039,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任务模型自动降级",
-        "description": "连接或容量故障连续发生时，先切换到同名模型的其他已连接来源，再尝试当前 Agent 明确推荐的模型；不会切换 Agent，也不会改掉你保存的选择。默认关闭。"
+        "description": "模型组遇到故障时会尝试组内其他可用模型。跨引擎时沿用任务交接流程，并保存新选择。普通任务连续失败时会在当前引擎内尝试其他来源或推荐模型。默认关闭。"
       },
       "toggleAria": "切换任务模型自动降级",
       "toast": {
@@ -14574,12 +14574,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "任务运行中发送的消息默认排队。",
-      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+    "sendDelivery": {
+      "menuAria": "这条消息的发送方式",
+      "queueHint": "等这一轮结束",
+      "steerHint": "下一步就处理",
+      "setDefault": "设为默认",
+      "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
-      "switchToQueue": "默认改为排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默认改为排队"
     }
   },
   "onboarding": {
@@ -16668,6 +16670,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "wakeAt": "唤回日期和时间",
         "timeZone": "本地时间（{{zone}}）",
@@ -19410,6 +19413,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本轮执行失败。",
+    "blockedReasonUnknown": "未提供具体受阻原因。",
+    "blockedNextStep": "可在当前任务中补充信息；处理受阻原因后，点击“{{action}}”继续。",
     "status": {
       "active": "目标推进中",
       "paused": "已暂停",
