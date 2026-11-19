@@ -1314,6 +1314,8 @@ describe('BillingPage remote catalog rendering', () => {
       ['NOT_AVAILABLE', () => ({ ok: false as const, reason: 'NOT_AVAILABLE' as const }), 'billing.giftCardPurchase.toasts.unavailable'],
       // 截止时间在用例执行时才算，不在加载测试文件时算。
       ['COOLDOWN', () => ({ ok: false as const, reason: 'COOLDOWN' as const, retryAt: Date.now() + 42_000 }), 'billing.giftCardPurchase.email.cooldown:{"seconds":42}'],
+      // 冷却中却没给出剩余时间：按服务端的 60 秒冷却倒计时，不能立刻又能发送。
+      ['COOLDOWN without a deadline', () => ({ ok: false as const, reason: 'COOLDOWN' as const, retryAt: null }), 'billing.giftCardPurchase.email.cooldown:{"seconds":60}'],
     ])('explains %s in the dialog', async (_reason, result, message) => {
       freezeClock();
       window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));

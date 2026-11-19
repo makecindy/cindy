@@ -27,6 +27,12 @@ type SendError =
   | { kind: 'cooldown'; until: number | null }
   | { kind: 'failed' };
 
+/**
+ * 服务端说「冷却中」却没给出剩余时间（没有可用的 Retry-After）时按这个时长倒计时：与服务端
+ * 的单卡冷却（emailCooldownSeconds，60 秒）一致。期间不能再点发送，到时间后可以再试。
+ */
+export const GIFT_CARD_EMAIL_FALLBACK_COOLDOWN_MS = 60_000;
+
 /** 距离冷却结束还有几秒；已结束或时间不可读时为 0。 */
 export function giftCardEmailCooldownSeconds(until: number | null, now: number): number {
   if (until === null || !Number.isFinite(until)) return 0;
@@ -44,6 +50,17 @@ export function GiftCardEmailDialog({ card, onClose, onSend }: GiftCardEmailDial
       {card && <GiftCardEmailForm key={card.cardId} card={card} onClose={onClose} onSend={onSend} />}
     </Dialog.Root>
   );
+}
+
+/**
+ * 冷却到什么时候：优先用服务端这次给的时间；没有时用这张卡记录的下次可发时间；都没有（或已过）
+ * 就从现在起按 GIFT_CARD_EMAIL_FALLBACK_COOLDOWN_MS 计，不能当作已经冷却完毕。
+ */
+function cooldownDeadline(retryAt: number | null, card: BillingPurchasedGiftCard, now: number): number {
+  if (retryAt !== null && Number.isFinite(retryAt) && retryAt > now) return retryAt;
+  const recorded = card.email ? Date.parse(card.email.nextAvailableAt) : Number.NaN;
+  if (Number.isFinite(recorded) && recorded > now) return recorded;
+  return now + GIFT_CARD_EMAIL_FALLBACK_COOLDOWN_MS;
 }
 
 function GiftCardEmailForm({
@@ -92,10 +109,11 @@ function GiftCardEmailForm({
         onClose();
         return;
       }
-      setNow(Date.now());
+      const rejectedAt = Date.now();
+      setNow(rejectedAt);
       setError(
         result.reason === 'COOLDOWN'
-          ? { kind: 'cooldown', until: result.retryAt }
+          ? { kind: 'cooldown', until: cooldownDeadline(result.retryAt, card, rejectedAt) }
           : result.reason === 'INVALID_EMAIL'
             ? { kind: 'invalid' }
             : { kind: 'unavailable' },
