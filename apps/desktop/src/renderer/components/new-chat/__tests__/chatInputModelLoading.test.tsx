@@ -17,7 +17,7 @@ import { SessionSubscriptionAccountProvider } from '../SessionSubscriptionAccoun
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
-import { clearDraft } from '@/lib/composerDraftStore';
+import { clearDraft, getDraft, saveDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
 import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -155,6 +155,43 @@ const props = {
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+// #11533 review, unit: the actual composer must release a menu selection after
+// changing its execution context, without requiring a text edit. Store-only
+// identity tests did not cover prop changes while the same editor stays mounted.
+it.each([
+  ['engine', { runtimeAgentKind: 'codex', vendorKey: 'codex' }],
+  ['project', { initialWorkingDir: '/other-project' }],
+  ['device', { deviceLinkDeviceId: 'another-host' }],
+  ['agent location', { agentDeviceId: 'another-agent' }],
+] as const)('releases the selected Pi identity when changing %s', async (_label, changed) => {
+  // jsdom has no Range geometry; draft hydration asks ProseMirror to scroll.
+  const createRange = document.createRange.bind(document);
+  vi.spyOn(document, 'createRange').mockImplementation(() => {
+    const range = createRange();
+    range.getClientRects = () => Object.assign([], { item: () => null });
+    range.getBoundingClientRect = () => new DOMRect();
+    return range;
+  });
+  const key = 'pi-context-change';
+  const initial: ComponentProps<typeof ChatInput> = { ...props, sessionId: key,
+    runtimeAgentKind: 'pi', vendorKey: 'pi', deviceLinkDeviceId: null, onSend: vi.fn() };
+  const view = render(<ChatInput {...initial} />);
+  const text = plainTextToTiptapDoc('/demo first');
+  try {
+    act(() => saveDraft(key, { text, attachments: [], piProjectSkillIntent: {
+      commandName: 'demo', path: '/workspace/.agents/skills/demo/SKILL.md', runtimeCommandName: 'skill:demo',
+    } }));
+    expect(getDraft(key)?.piProjectSkillIntent).toBeDefined();
+    view.rerender(<ChatInput {...initial} {...changed} />);
+    await waitFor(() => expect(getDraft(key)?.piProjectSkillIntent).toBeUndefined());
+    expect(getDraft(key)?.text).toEqual(text);
+    act(() => saveDraft(key, { text: plainTextToTiptapDoc('/demo edited'), attachments: [] }, { silent: true }));
+    expect(getDraft(key)?.piProjectSkillIntent).toBeUndefined();
+  } finally {
+    view.unmount(); clearDraft(key);
+  }
+});
 
 afterEach(() => {
   h.setThinkingEnabled.mockReset();

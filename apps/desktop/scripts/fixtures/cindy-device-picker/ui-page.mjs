@@ -36,7 +36,7 @@ export default {
       partial: `export const useBotProfiles=()=>${data}.bots;export const useBotUnreadCounts=()=>${data}.unread;`,
     },
     'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
-    'src/renderer/features/device-link/useDeviceLinkDeviceList': `export const useDeviceLinkDeviceList=()=>${data}.devices;`,
+    'src/renderer/features/device-link/useDeviceLinkDeviceList': `export const useDeviceLinkDeviceListRequestState=()=>({status: "ready",error: null}); export const useDeviceLinkDeviceList=()=>${data}.devices;`,
   },
   cases: {
     'unselected-hover': {

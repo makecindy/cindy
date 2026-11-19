@@ -1,3 +1,5 @@
+import type { PiProjectSkillDraftIntent } from '@/lib/composerDraftStore';
+
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -202,11 +204,12 @@ import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/session
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, buildCreateOptsForCurrentSession } from '@/lib/makerChatStore';
 import {
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
   rewritePiSkillMessageForSend,
+  rebindPiProjectSkillToWorktree,
   rewriteBuiltInSkillDraftForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
@@ -4398,6 +4401,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       mentions?: MentionedResource[],
       opts?: {
         providerId?: string | null;
+        piProjectSkillIntent?: PiProjectSkillDraftIntent;
         quotesEncoded?: boolean;
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
@@ -4553,6 +4557,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const sourceDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
       const targetDraft = getDraft();
       const builtInSkillIntent = sourceDraft?.builtInSkillIntent;
+      const piProjectSkillIntent = opts?.piProjectSkillIntent ?? sourceDraft?.piProjectSkillIntent;
       const isCurrentDataOwner = () =>
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
         isDataOwnerGenerationCurrent(dataOwnerAtSend);
@@ -4781,6 +4786,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               attachments: excludeCommentScreenshots(files, sourceDraft?.browserComments ?? []),
               browserComments: sourceDraft?.browserComments ?? [],
               builtInSkillIntent,
+              piProjectSkillIntent,
             };
             if (!isCurrentDataOwner()) return;
             previewRemoteCreation({
@@ -5137,6 +5143,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             setPending(remoteSessionId, {
               text: message,
               builtInSkillIntent: currentBuiltInSkillIntent(),
+              piProjectSkillIntent,
               files: rehydratedFiles,
               mentions,
               ...(shouldEnableCollab
@@ -5298,10 +5305,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               // 走 catch 恢复原附件,行为与迁移前一致(fail-soft)。
               let rehomedFiles = files;
               let rehomedComments = preNavBrowserComments;
+              let worktreePiSkillIntent = piProjectSkillIntent;
               const restoreFirstMessageDraft = () => {
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message),
                   ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
+                  piProjectSkillIntent: worktreePiSkillIntent,
                   attachments: excludeCommentScreenshots(rehomedFiles, rehomedComments),
                   browserComments: rehomedComments,
                 });
@@ -5357,6 +5366,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   name: branchName,
                 });
                 const newDir = resp.meta.path;
+                let persistedWorkingDir = newDir;
+                if (worktreePiSkillIntent) {
+                  const rebound = rebindPiProjectSkillToWorktree(worktreePiSkillIntent, baseRepo, newDir);
+                  if (!rebound) throw new Error(t('richAnswer.sendFailed'));
+                  worktreePiSkillIntent = rebound;
+                }
                 const latestSession = await sessionService.get(newSession.id).catch((err) => {
                   log.warn('[draft worktree send] get latest session failed', err);
                   return null;
@@ -5371,8 +5386,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   return;
                 }
                 try {
-                  await sessionService.update(newSession.id, { workingDir: newDir });
-                  sessionsStore.patchLocal(newSession.id, { workingDir: newDir });
+                  const updated = await sessionService.update(newSession.id, { workingDir: newDir });
+                  // Windows storage uses canonical separators. Native runtime
+                  // preparation must use that exact persisted directory.
+                  persistedWorkingDir = updated.workingDir ?? newDir;
+                  sessionsStore.patchLocal(newSession.id, { workingDir: persistedWorkingDir });
                 } catch (err) {
                   log.error('[draft worktree send] update session workingDir failed', err);
                   worktreeCreationStore.set(newSession.id, {
@@ -5443,6 +5461,18 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
 
                 const dispatchedMessage = builtInSkillIntent ? message : await rewritePiSkillMessageForSend({
                   agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+                  piProjectSkillIntent: worktreePiSkillIntent,
+                  onCatalogUnavailable: () => { throw new Error(t('richAnswer.sendFailed')); },
+                  prepareRuntime: async () => {
+                    if (!isCurrentDataOwner()) throw new Error(t('richAnswer.sendFailed'));
+                    const receipt = await window.electronAPI.maker.prewarmSession?.(newSession.id, {
+                      ...buildCreateOptsForCurrentSession(newSession.id, model, submittedEffort, permissionMode, persistedWorkingDir),
+                      purpose: 'pi-skill-dispatch',
+                    });
+                    if (!(receipt as { piRuntimePrepared?: boolean } | undefined)?.piRuntimePrepared) {
+                      throw new Error(t('richAnswer.sendFailed'));
+                    }
+                  },
                   message,
                   workingDir: newDir,
                   sessionId: newSession.id,
@@ -5668,6 +5698,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               setPending(newSession.id, {
                 text: message,
                 builtInSkillIntent: currentBuiltInSkillIntent(),
+                piProjectSkillIntent,
                 files: rehydratedFiles,
                 mentions,
                 ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),

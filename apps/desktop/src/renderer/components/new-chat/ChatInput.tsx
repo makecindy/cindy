@@ -112,6 +112,7 @@ import {
   removeRemoteOptimisticDraftFragment,
   type RemoteOptimisticTransitionCheckpoint,
   type BuiltInSkillDraftIntent,
+  type PiProjectSkillDraftIntent,
   saveDraft as saveComposerDraft,
   saveComposerTextAfterAsyncTransition,
   clearDraft as clearComposerDraft,
@@ -286,7 +287,7 @@ import {
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
-  isSlashCommandUnavailable,
+  isSlashCommandSelectable,
   isSlashCommandRosterReady,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
@@ -555,6 +556,7 @@ interface ChatInputProps {
     opts?: {
       deliveryMode?: MessageDeliveryMode;
       builtInSkillIntent?: BuiltInSkillDraftIntent;
+      piProjectSkillIntent?: PiProjectSkillDraftIntent;
       providerId?: string | null;
       baselineRecovery?: boolean;
       /** chat-text-quote:message 开头的 blockquote 为引用功能拼接产出。 */
@@ -2482,6 +2484,24 @@ export function ChatInput({
     null,
   );
   draftSaveSchedulerRef.current ??= createComposerDraftSaveScheduler();
+  const piDraftContextKey = JSON.stringify([
+    currentModelAgentKind, (sessionId ? initialWorkingDir : workingDir) ?? null,
+    remoteHostId ?? null, deviceLinkDeviceId ?? null, effectiveAgentDeviceId ?? null,
+  ]);
+  const previousPiDraftContextRef = useRef({ storageKey, contextKey: piDraftContextKey });
+  useEffect(() => {
+    const previous = previousPiDraftContextRef.current;
+    previousPiDraftContextRef.current = { storageKey, contextKey: piDraftContextKey };
+    // A directory/engine/device choice changes what /name means. Keep the text,
+    // but release the old selection; ordinary sends resolve in the new context.
+    // Switching between draft keys is hydration, not an execution-context edit.
+    if (!storageKey || previous.storageKey !== storageKey || previous.contextKey === piDraftContextKey) return;
+    draftSaveSchedulerRef.current?.flush();
+    const draft = getComposerDraft(storageKey);
+    if (draft?.piProjectSkillIntent) {
+      saveComposerDraft(storageKey, { ...draft, piProjectSkillIntent: undefined });
+    }
+  }, [storageKey, piDraftContextKey]);
   useEffect(() => storageKey ? registerDraftFlush(storageKey, () => {
     if (storageKeyForDraftRef.current === storageKey) draftSaveSchedulerRef.current?.flush();
   }) : undefined, [storageKey]);
@@ -4494,6 +4514,7 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.builtInSkillIntent ? { builtInSkillIntent: existing.builtInSkillIntent } : {}),
+            piProjectSkillIntent: existing?.piProjectSkillIntent,
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
@@ -5245,7 +5266,7 @@ export function ChatInput({
   useEffect(() => {
     setSlashFocus((current) =>
       current >= filteredCommands.length ||
-      (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+      (filteredCommands[current] && !isSlashCommandSelectable(filteredCommands[current]))
         ? firstAvailableSlashCommandIndex(filteredCommands)
         : current,
     );
@@ -5391,7 +5412,7 @@ export function ChatInput({
                 if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
                 return true;
               }
-              if (isSlashCommandUnavailable(focusedCommand)) {
+              if (!isSlashCommandSelectable(focusedCommand)) {
                 setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
                 if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
                   setSuppressedSlashAt(trigger.from);
@@ -5446,7 +5467,7 @@ export function ChatInput({
         trigger.kind !== 'slash' ||
         composerMutationLockedRef.current ||
         editor.view.composing ||
-        isSlashCommandUnavailable(cmd)
+        !isSlashCommandSelectable(cmd)
       ) {
         return;
       }
@@ -5505,11 +5526,27 @@ export function ChatInput({
           return true;
         })
         .run();
+      const draftKey = storageKeyForDraftRef.current;
+      if (applied && !planModeCommandConsumed && trigger.sigil === '/' && draftKey
+        && editor.state.doc.textBetween(1, from).trim() === '') {
+        draftSaveSchedulerRef.current?.flush();
+        const draft = getComposerDraft(draftKey);
+        saveComposerDraft(draftKey, {
+          ...draft,
+          text: editor.getJSON(),
+          attachments: draft?.attachments ?? [],
+          builtInSkillIntent: undefined,
+          piProjectSkillIntent: currentModelAgentKind === 'pi' && cmd.kind === 'agent-skill'
+            && cmd.source === 'skill' && cmd.scope === 'repo' && cmd.path && cmd.runtimeCommandName
+            ? { commandName: cmd.name, path: cmd.path, runtimeCommandName: cmd.runtimeCommandName }
+            : undefined,
+        });
+      }
       if (applied && planModeCommandConsumed) {
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
+    [editor, currentModelAgentKind, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -5843,6 +5880,7 @@ export function ChatInput({
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
       const builtInSkillIntent = sourceStorageKey ? getComposerDraft(sourceStorageKey)?.builtInSkillIntent : undefined;
+      const piProjectSkillIntent = sourceStorageKey ? getComposerDraft(sourceStorageKey)?.piProjectSkillIntent : undefined;
       dispatchSendInFlightKeysRef.current.add(sendInFlightKey);
       // 发送新消息时立即递增 turnGen，并在任何 await / clearContent 前消费来源 session
       // 的推荐：旧 Promise 不能落地，正文程序化清空时也不会闪回上一轮推荐。
@@ -6426,6 +6464,7 @@ export function ChatInput({
             {
               clientId,
               ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
+              piProjectSkillIntent,
               text: tiptapDocHasContent(documentBeforeOptimisticClear)
                 ? documentBeforeOptimisticClear
                 : null,
@@ -6609,6 +6648,7 @@ export function ChatInput({
               deliveryMode,
               providerId: sendProviderId,
               ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
+              piProjectSkillIntent,
               ...(builtInSkillIntent
                 ? {
                     builtInSkillIntent: {

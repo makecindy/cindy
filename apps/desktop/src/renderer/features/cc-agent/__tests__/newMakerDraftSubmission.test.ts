@@ -384,7 +384,8 @@ async function submit(options: {
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: vi.fn(),
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
-    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
+    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }),
+      update: async (_id: string, patch: { workingDir: string }) => ({ ...patch }) },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
     refreshWorktreeForSession: async () => {},
     worktreeCreationStore: { clear: finishWorktree, set: (_id: string, state: { status: string }) => {

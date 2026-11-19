@@ -20,7 +20,7 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
-import type { BuiltInSkillDraftIntent } from './composerDraftStore';
+import type { BuiltInSkillDraftIntent, PiProjectSkillDraftIntent } from './composerDraftStore';
 
 export { leadingSlashInvocation };
 
@@ -60,10 +60,24 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && (
-      (command.scope === 'repo' && command.runtimeStatus === 'discovered')
+      command.enabled === false
+      || (command.scope === 'repo' && command.runtimeStatus === 'discovered')
       || command.runtimeStatus === 'unknown'
       || command.runtimeStatus === 'failed'
     );
+}
+
+/** Selection only writes a draft. Sending must still confirm this path in Pi's catalog. */
+export function isSlashCommandSelectable(command: UnifiedCommand): boolean {
+  return !isSlashCommandUnavailable(command) || (
+    command.kind === 'agent-skill'
+    && command.enabled !== false
+    && command.source === 'skill'
+    && command.scope === 'repo'
+    && command.runtimeStatus === 'discovered'
+    && Boolean(command.path)
+    && command.runtimeCommandName === `skill:${command.name}`
+  );
 }
 
 export function isCindyOfficialSlashCommand(command: UnifiedCommand): boolean {
@@ -71,7 +85,7 @@ export function isCindyOfficialSlashCommand(command: UnifiedCommand): boolean {
 }
 
 export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
-  return commands.some((command) => !isSlashCommandUnavailable(command));
+  return commands.some(isSlashCommandSelectable);
 }
 
 export function slashCommandInvocationName(command: UnifiedCommand): string {
@@ -124,14 +138,35 @@ export async function rewritePiSkillMessageForSend(params: {
   message: string;
   workingDir?: string | null;
   sessionId?: string;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
+  onCatalogUnavailable?: () => never;
+  prepareRuntime?: () => Promise<void>;
 }): Promise<string> {
+  if (params.piProjectSkillIntent && params.agentKind !== 'pi') {
+    params.onCatalogUnavailable?.();
+    throw new Error('Selected project skill is unavailable');
+  }
   if (params.agentKind !== 'pi' && params.agentKind !== 'claude-code') return params.message;
   const leading = leadingSlashInvocation(params.message);
   if (!leading) return params.message;
   const commands = await loadAllCommands(params.agentKind, params.workingDir, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
-  const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  const hit = params.piProjectSkillIntent
+    ? (await reconcilePiRuntimeCommandForSessionDispatch({
+        agentKind: params.agentKind, sessionId: params.sessionId, commandName: leading.name,
+        commands, piProjectSkillIntent: params.piProjectSkillIntent,
+        prepareRuntime: params.prepareRuntime, onCatalogUnavailable: params.onCatalogUnavailable,
+        reload: () => loadAllCommands(params.agentKind, params.workingDir, {
+          sessionId: params.sessionId, forceReload: true,
+        }),
+      })).command
+    : commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  if (params.piProjectSkillIntent && (!matchesPiProjectSkillIntent(hit, params.piProjectSkillIntent)
+    || hit?.kind !== 'agent-skill' || hit.runtimeStatus !== 'loaded' || isSlashCommandUnavailable(hit))) {
+    params.onCatalogUnavailable?.();
+    throw new Error('Selected project skill is unavailable');
+  }
   return params.agentKind === 'pi' ? rewritePiSkillAliasFromCommand(params.message, hit)
     : rewriteAgentSkillInvocationForDispatch(params.message, hit);
 }
@@ -190,11 +225,11 @@ export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: nu
 
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
-  const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
+  const index = commands.findIndex(isSlashCommandSelectable);
   return index >= 0 ? index : 0;
 }
 
-/** Move with wraparound while skipping unavailable discovered project skills. */
+/** Move with wraparound while skipping rows that cannot be selected into a draft. */
 export function nextAvailableSlashCommandIndex(
   commands: readonly UnifiedCommand[],
   current: number,
@@ -204,7 +239,7 @@ export function nextAvailableSlashCommandIndex(
   let index = current;
   for (let step = 0; step < commands.length; step++) {
     index = (index + delta + commands.length) % commands.length;
-    if (!isSlashCommandUnavailable(commands[index])) return index;
+    if (isSlashCommandSelectable(commands[index])) return index;
   }
   return current;
 }
@@ -540,6 +575,33 @@ export async function loadAllCommands(
   return mergeCommands(desktop, agentBuiltin, agentSkill);
 }
 
+/** Only use after a successful checkout creation, never for an arbitrary directory switch. */
+export function rebindPiProjectSkillToWorktree(
+  intent: PiProjectSkillDraftIntent,
+  sourceDirectory: string,
+  targetDirectory: string,
+): PiProjectSkillDraftIntent | null {
+  const slash = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const source = slash(sourceDirectory);
+  const skill = slash(intent.path);
+  const windows = /^[a-z]:\//i.test(source) || source.startsWith('//');
+  const prefix = `${source}/`;
+  if (!(windows ? skill.toLowerCase().startsWith(prefix.toLowerCase()) : skill.startsWith(prefix))) return null;
+  const relative = skill.slice(prefix.length);
+  if (!relative || relative.split('/').some(part => !part || part === '.' || part === '..')) return null;
+  const rebound = `${slash(targetDirectory)}/${relative}`;
+  return { ...intent, path: targetDirectory.includes('\\') ? rebound.replace(/\//g, '\\') : rebound };
+}
+
+export function matchesPiProjectSkillIntent(
+  command: UnifiedCommand | undefined,
+  intent: PiProjectSkillDraftIntent,
+): boolean {
+  return command?.kind === 'agent-skill' && command.source === 'skill' && command.scope === 'repo'
+    && command.name === intent.commandName && command.path === intent.path
+    && command.runtimeCommandName === intent.runtimeCommandName;
+}
+
 /**
  * A Pi runtime catalog may finish after the palette/dispatch snapshot was
  * created. Recheck desktop hits before executing them so a newly loaded
@@ -550,12 +612,19 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   sessionId?: string;
   commandName: string;
   commands: UnifiedCommand[];
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   reload: () => Promise<UnifiedCommand[]>;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   const findCommand = (commands: UnifiedCommand[]) => commands.find(
     (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
   );
-  const current = findCommand(params.commands);
+  const selected = params.piProjectSkillIntent;
+  // The selected identity survives the draft/route handoff. The latest catalog
+  // may already contain a different same-name skill before this function runs.
+  const current: UnifiedCommand | undefined = selected ? {
+    kind: 'agent-skill', source: 'skill', scope: 'repo', runtimeStatus: 'discovered',
+    name: selected.commandName, path: selected.path, runtimeCommandName: selected.runtimeCommandName,
+  } : findCommand(params.commands);
   const shouldReload = !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
@@ -565,6 +634,18 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   try {
     const refreshed = await params.reload();
     const refreshedCommand = findCommand(refreshed);
+    // A cold-start preview may disappear or lose a name collision once Pi
+    // starts. Never substitute a different Skill (or Desktop command) for it.
+    // Keep the unavailable preview so the existing retry/failure path owns it.
+    if (current?.kind === 'agent-skill' && current.scope === 'repo'
+      && current.runtimeStatus === 'discovered' && current.path
+      && (refreshedCommand?.kind !== 'agent-skill'
+        || refreshedCommand.path !== current.path
+        || refreshedCommand.scope !== current.scope
+        || refreshedCommand.runtimeCommandName !== current.runtimeCommandName
+        || (selected && refreshedCommand.runtimeStatus !== 'loaded'))) {
+      return { command: current, commands: [current, ...params.commands.filter(command => command.name !== current.name)] };
+    }
     return refreshedCommand || !current
       ? { command: refreshedCommand, commands: refreshed }
       : { command: current, commands: params.commands };
@@ -604,6 +685,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   sessionId?: string;
   commandName: string;
   commands: UnifiedCommand[];
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   reload: () => Promise<UnifiedCommand[]>;
   prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
@@ -622,7 +704,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   );
   const mayStillBeLoading = params.prepareRuntime !== undefined
     || (current !== undefined && isSlashCommandUnavailable(current));
-  const shouldPrepareRuntime = !current
+  const shouldPrepareRuntime = params.piProjectSkillIntent !== undefined || !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
   if (

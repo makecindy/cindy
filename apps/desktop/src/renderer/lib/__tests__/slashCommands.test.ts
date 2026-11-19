@@ -15,8 +15,10 @@ import {
   nextAvailableSlashCommandIndex,
   pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  rebindPiProjectSkillToWorktree,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
+  reconcilePiRuntimeCommandForSessionDispatch,
   rewriteAgentSkillInvocationForDispatch,
   rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
@@ -36,6 +38,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// #11507, unit: production palette navigation and cold dispatch. Existing
+// tests covered unavailable previews and loaded commands separately, not a
+// selectable preview becoming a confirmed invocation on the first message.
+describe('Pi first-message project skill selection', () => {
+  const preview = skill({ scope: 'repo', runtimeStatus: 'discovered',
+    path: '/repo/.agents/skills/demo/SKILL.md', runtimeCommandName: 'skill:demo' });
+
+  it('lets keyboard focus reach the preview while dispatch still waits for Pi', async () => {
+    const failed = skill({ name: 'failed', runtimeStatus: 'failed' });
+    const commands = [failed, preview];
+    expect(firstAvailableSlashCommandIndex(commands)).toBe(1);
+    expect(nextAvailableSlashCommandIndex(commands, 0, 1)).toBe(1);
+    expect(hasAvailableSlashCommand(commands)).toBe(true);
+    expect(rewriteAgentSkillInvocationForDispatch('/demo first', preview)).toBe('/demo first');
+    let prepared = false;
+    const loaded = { ...preview, runtimeStatus: 'loaded' as const };
+    const result = await reconcilePiRuntimeCommandForSessionDispatch({
+      agentKind: 'pi', sessionId: 'new-task', commandName: 'demo', commands: [preview],
+      prepareRuntime: async () => { prepared = true; }, retryDelaysMs: [],
+      reload: async () => prepared ? [loaded] : [preview],
+      onCatalogUnavailable: () => { throw new Error('unconfirmed'); },
+    });
+    expect(rewriteAgentSkillInvocationForDispatch('/demo first', result.command)).toBe('/skill:demo first');
+  });
+
+  it.each(['missing', 'different-path', 'disabled', 'unconfirmed'] as const)(
+    'does not dispatch a %s replacement of the preview', async (state) => {
+      let prepared = false;
+      const replacement = { ...preview, runtimeStatus: 'loaded' as const,
+        ...(state === 'different-path' ? { path: '/another/demo/SKILL.md' } : {}),
+        ...(state === 'disabled' ? { enabled: false } : {}) };
+      await expect(reconcilePiRuntimeCommandForSessionDispatch({
+        agentKind: 'pi', sessionId: 'new-task', commandName: 'demo', commands: [preview],
+        prepareRuntime: async () => { prepared = true; }, retryDelaysMs: [],
+        reload: async () => !prepared || state === 'unconfirmed' ? [preview]
+          : state === 'missing' ? [] : [replacement],
+        onCatalogUnavailable: () => { throw new Error('unconfirmed'); },
+      })).rejects.toThrow('unconfirmed');
+    },
+  );
+});
+
 function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {
   vi.stubGlobal('window', {
     electronAPI: {
@@ -50,6 +94,27 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
     },
   });
 }
+
+// #11533 review, unit: the direct first-send path after checkout creation must
+// prepare Pi and dispatch the same relative skill in the new checkout. Earlier
+// dispatch tests stayed in one directory and never exercised this public entry.
+it.each([
+  ['/repo', '/repo/.agents/skills/demo/SKILL.md', '/worktree', '/worktree/.agents/skills/demo/SKILL.md'],
+  ['C:/Repo', 'c:/Repo/.agents/skills/demo/SKILL.md', 'D:/Worktree', 'D:/Worktree/.agents/skills/demo/SKILL.md'],
+])('confirms the selected skill after checkout creation from %s', async (source, path, target, expectedPath) => {
+  const intent = rebindPiProjectSkillToWorktree({ commandName: 'demo', path, runtimeCommandName: 'skill:demo' }, source, target)!;
+  expect(intent.path).toBe(expectedPath);
+  const catalog = { success: true, skills: [skill({ scope: 'repo', path: expectedPath,
+    runtimeStatus: 'discovered', runtimeCommandName: 'skill:demo' })] };
+  stubCommandLists(catalog);
+  const output = await rewritePiSkillMessageForSend({ agentKind: 'pi', sessionId: `checkout-${source}`,
+    workingDir: target, message: '/demo first', piProjectSkillIntent: intent,
+    prepareRuntime: async () => { catalog.skills = [{ ...catalog.skills[0], runtimeStatus: 'loaded' }]; },
+    onCatalogUnavailable: () => { throw new Error('unconfirmed selection'); },
+  });
+  expect(output).toBe('/skill:demo first');
+  expect(rebindPiProjectSkillToWorktree({ ...intent, path: `${source}-other/demo/SKILL.md` }, source, target)).toBeNull();
+});
 
 // Unit: repeated palette consumers previously logged each identical conflict.
 // Existing merge tests checked precedence but not repeated renderer log IPC.
