@@ -89,3 +89,29 @@ it('reopens the saved directory even when its tree was collapsed before handoff'
   expect(reopened.queryByText(i18n.t('rightSidebar.fileBrowser.loadFailed'))).toBeNull();
   reopened.unmount();
 });
+
+// #11392, unit: an evicted preview or a new window restores the user's HTML
+// view from serialized tab data. Older records can still open as source.
+it('restores the selected HTML view after the preview must be recreated', async () => {
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: {
+      listDir: async () => [], onEvent: () => () => {}, startWatch: vi.fn(), stopWatch: vi.fn(),
+      readFile: async () => ({ ok: true, data: { content: '<p>draft</p>', size: 12, mtimeMs: 1, truncated: false } }),
+    },
+    search: { onEvent: () => () => {} }, onRsbBrowserCommand: () => () => {},
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const save = vi.fn();
+  const view = mountBrowser('/html-mode', { selectedFilePath: 'draft.html' }, save);
+  fireEvent.click(await view.findByRole('button', { name: i18n.t('ccAgent.workdirBrowse.previewFile') }));
+  await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('draft.html'));
+  view.unmount();
+  const hydrate = getTabKind('file-browser')!.hydrateState!;
+  const saved = hydrate(JSON.parse(JSON.stringify(save.mock.lastCall![0]))) as FileBrowserState;
+  const reopened = mountBrowser('/html-mode', saved, save);
+  await waitFor(() => expect(reopened.container.querySelector('webview')?.getAttribute('src')).toContain('draft.html'));
+  fireEvent.click(reopened.getByRole('button', { name: i18n.t('chat.markdownRenderer.viewSourceFile') }));
+  expect(reopened.container.querySelector('webview')).toBeNull();
+  expect(hydrate(save.mock.lastCall![0])).not.toHaveProperty('previewHtmlPath');
+  reopened.unmount();
+});

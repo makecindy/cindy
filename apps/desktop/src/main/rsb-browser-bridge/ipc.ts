@@ -28,6 +28,7 @@ import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
   RSB_BROWSER_BRIDGE_REPORT_CHANNEL,
+  RSB_FILE_PREVIEW_OPENER_CHANNEL,
   RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL,
   RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL,
   RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL,
@@ -99,7 +100,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     return getNativePopupOwnerWebContents?.(target.id) ?? null;
   };
 
-  ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload: unknown) => {
+  const reportGuest = (sender: WebContents, payload: unknown, previewOnly: boolean) => {
     const obj = requireObject(payload, 'report payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const tabId = requireString(obj.tabId, 'tabId');
@@ -131,7 +132,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     }
     // hostWebContents is non-standard but exposed; cast for the typing gap.
     const host = resolveOwner(target);
-    if (!host || host.id !== event.sender.id) {
+    if (!host || host.id !== sender.id) {
       throwIpcError(
         'INVALID_PARAMS',
         `webContentsId ${webContentsId} is not hosted by the sender`,
@@ -139,9 +140,12 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     }
 
     const record: RsbBrowserBridgeReportPayload = { sessionId, tabId, webContentsId };
-    registry.report(record);
+    if (previewOnly) registry.reportPreviewOpener(record, target);
+    else registry.report(record);
     return { ok: true };
-  });
+  };
+  ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload) => reportGuest(event.sender, payload, false));
+  ipcMain.handle(RSB_FILE_PREVIEW_OPENER_CHANNEL, (event, payload) => reportGuest(event.sender, payload, true));
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_RELEASE_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'release payload');

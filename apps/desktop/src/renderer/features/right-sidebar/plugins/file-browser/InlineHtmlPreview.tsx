@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BROWSER_PARTITION } from '@/../shared/webviewPartition';
+import { useBrowserWebview } from '../../hooks/useBrowserWebview';
+import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { pathToFileUrl } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { toOsAbsolutePath } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
@@ -17,13 +18,22 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
 }) {
   const host = useRef<HTMLDivElement>(null);
   const reloadGuest = useRef<(() => void) | null>(null);
-  const [webview, setWebview] = useState<Electron.WebviewTag | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
   const { t } = useTranslation();
   const origin = useMemo(() => deviceId === undefined && !remoteHostId ? null :
     resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId), [deviceId, remoteHostId]);
   const absPath = toOsAbsolutePath(workdir, relPath);
   const localUrl = origin?.kind === 'local' ? pathToFileUrl(absPath) : '';
+  // File guests share the browser's bounded lifetime. Only their popup owner
+  // is reported to main; they do not register as browser automation targets.
+  const { wrapper, webview } = useBrowserWebview(tabId, undefined, active, !!origin);
+  useLayoutEffect(() => {
+    if (!host.current || !wrapper) return;
+    host.current.appendChild(wrapper);
+    return () => {
+      if (browserWebviewPool.peek(tabId)?.wrapper === wrapper) browserWebviewPool.release(tabId);
+    };
+  }, [wrapper, tabId]);
   useHiddenPageAudioMute(webview, active);
   useLocalHtmlAutoReload({
     sessionId, workdir, url: localUrl, enabled: active && !!localUrl, reload: () => reloadGuest.current?.(),
@@ -48,16 +58,31 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
     });
   }, [active, sessionId, tabId, webview]);
   useEffect(() => {
-    const target = host.current;
     setStatus('loading');
-    setWebview(null);
-    if (!target || !origin) return;
+    if (!webview || !origin) return;
     const requestId = crypto.randomUUID();
     let disposed = false;
-    const guest = document.createElement('webview') as Electron.WebviewTag;
-    guest.setAttribute('partition', BROWSER_PARTITION);
+    const guest = webview;
     guest.setAttribute('title', relPath);
-    guest.style.cssText = 'display:flex;width:100%;height:100%';
+    let reportedId: number | undefined;
+    const reportOpener = () => {
+      const bridge = window.electronAPI.rsbBrowserBridge;
+      if (!bridge?.reportPreviewOpener) return;
+      try {
+        const webContentsId = guest.getWebContentsId();
+        if (reportedId === webContentsId) return;
+        reportedId = webContentsId;
+        void bridge.reportPreviewOpener({ sessionId, tabId, webContentsId }).catch(error => {
+          if (reportedId === webContentsId) reportedId = undefined;
+          log.warn('File preview opener report failed', error);
+        });
+      } catch {
+        // The id is available after attachment. dom-ready retries early reports.
+      }
+    };
+    guest.addEventListener('did-attach', reportOpener);
+    guest.addEventListener('dom-ready', reportOpener);
+    reportOpener();
     let canReload = false;
     let pendingReload = false;
     reloadGuest.current = () => {
@@ -84,18 +109,17 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
         (await window.electronAPI.fileBrowser.previewHtml({ origin, absPath, workdir, requestId })).url;
       if (disposed) return;
       guest.setAttribute('src', url);
-      target.appendChild(guest);
-      setWebview(guest);
     })().catch(() => { if (!disposed) setStatus('failed'); });
     return () => {
       disposed = true;
       reloadGuest.current = null;
       guest.removeEventListener('did-finish-load', ready);
       guest.removeEventListener('did-fail-load', failed);
-      guest.remove();
+      guest.removeEventListener('did-attach', reportOpener);
+      guest.removeEventListener('dom-ready', reportOpener);
       if (origin.kind !== 'local') void window.electronAPI.fileBrowser.cancelHtmlPreview(requestId).catch(() => {});
     };
-  }, [absPath, localUrl, origin, relPath, workdir]);
+  }, [absPath, localUrl, origin, relPath, sessionId, tabId, webview, workdir]);
   return <div className="relative min-h-0 flex-1">
     <div ref={host} className="absolute inset-0" />
     {status !== 'ready' && <div role="status" className="absolute inset-0 grid place-items-center bg-content-area p-3 text-sm text-muted-foreground">

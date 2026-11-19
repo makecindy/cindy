@@ -112,6 +112,32 @@ describe('useFileTree refresh scheduling', () => {
     src.unmount();
   });
 
+  // #11392, unit: a renamed ancestor or a missing-path read must invalidate the
+  // visible directory, including previously cached nested entries.
+  it.each(['parent event', 'missing path'])('drops stale directory listings after a %s', async (signal) => {
+    const workdir = '/directory-removal-' + signal;
+    const folder: DirEntry = { name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 };
+    const nested: DirEntry = { ...folder, name: 'draft', relPath: 'docs/draft' };
+    const item: DirEntry = { ...folder, type: 'file', name: 'a.txt', relPath: 'docs/draft/a.txt' };
+    let deleted = false;
+    mocks.listDir.mockImplementation(async ({ relPath }) => {
+      if (!relPath) return deleted && signal === 'parent event' ? [] : [folder];
+      if (deleted && signal === 'missing path') throw Object.assign(new Error('directory gone'), { code: 'ENOENT' });
+      return relPath === 'docs' ? [nested] : [item];
+    });
+    const view = renderHook(() => useFileTree({ workdir, displayedDirectory: 'docs/draft' }));
+    await waitFor(() => expect(view.result.current.entries.get('docs/draft')).toEqual([item]));
+    deleted = true;
+    if (signal === 'parent event') {
+      act(() => { for (const cb of mocks.eventCallbacks) cb({ workdir, relPath: 'docs', type: 'unlinkDir' }); });
+    } else {
+      await act(async () => { await view.result.current.refresh(); });
+    }
+    await waitFor(() => expect(view.result.current.entries.has('docs/draft')).toBe(false));
+    expect(view.result.current.loadError).toBeNull();
+    view.unmount();
+  });
+
   // PR #11392: a cached child can finish refreshing after its root failed. Only
   // a successful root read should clear the error. Existing tests use the opposite order.
   it('keeps a root error after a child succeeds and reloads both on retry', async () => {

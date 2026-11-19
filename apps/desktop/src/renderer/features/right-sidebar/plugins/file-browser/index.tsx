@@ -33,6 +33,8 @@ const FileBrowserBody = lazy(() =>
 export interface FileBrowserState {
   /** 当前选中的 workdir-relative POSIX 路径;null = 显示目录。 */
   selectedFilePath: string | null;
+  /** Keep the chosen HTML view when a guest is evicted or hosted in another window. */
+  previewHtmlPath?: string | null;
   /** Workdir-relative location retained across task switches and window handoff. */
   currentDirectory?: string;
   /**
@@ -107,6 +109,7 @@ const plugin: TabKindPlugin<FileBrowserState> = {
     const path = obj.selectedFilePath;
     return {
       selectedFilePath: typeof path === 'string' ? path : null,
+      ...(typeof path === 'string' && obj.previewHtmlPath === path ? { previewHtmlPath: path } : {}),
       ...(typeof obj.currentDirectory === 'string' ? { currentDirectory: obj.currentDirectory } : {}),
       // 目录定位请求透传(见字段注释);形状不合法按"无请求"。
       ...(typeof obj.revealDirPath === 'string' && obj.revealDirPath

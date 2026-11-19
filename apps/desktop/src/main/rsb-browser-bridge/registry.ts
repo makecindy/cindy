@@ -56,6 +56,7 @@ export type PinChangeListener = (tabId: string, pinned: boolean) => void;
  * In-memory tab registry. Singleton lifetime is the desktop app's main process.
  */
 export class TabRegistry {
+  private readonly previewOpeners = new WeakMap<WebContents, TabRecord>();
   private readonly records = new Map<string, TabRecord>(); // tabId → record
   /** tabId set of automation-active tabs that must not be LRU-evicted. */
   private readonly pinned = new Set<string>();
@@ -88,6 +89,15 @@ export class TabRegistry {
     this.detachDestroyedListener(record.tabId);
     this.records.set(record.tabId, record);
     this.attachDestroyedListener(record);
+    this.notifyReport(record);
+  }
+
+  reportPreviewOpener(record: TabRecord, guest: WebContents): void {
+    this.previewOpeners.set(guest, record);
+    this.notifyReport(record);
+  }
+
+  private notifyReport(record: TabRecord): void {
     for (const l of this.reportListeners) {
       try {
         l(record);
@@ -184,7 +194,8 @@ export class TabRegistry {
     for (const record of this.records.values()) {
       if (record.webContentsId === webContentsId) return record;
     }
-    return null;
+    const guest = this.opts.lookupWebContents(webContentsId);
+    return guest && !guest.isDestroyed() ? this.previewOpeners.get(guest) ?? null : null;
   }
 
   /** Read by tab id. Returns null if unknown OR if the webContents is dead. */

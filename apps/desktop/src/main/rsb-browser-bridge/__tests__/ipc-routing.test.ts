@@ -15,13 +15,14 @@ vi.mock('electron', () => {
   };
 });
 
-import { ipcMain } from 'electron';
+import { ipcMain, webContents, type WebContents } from 'electron';
 import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
+  RSB_FILE_PREVIEW_OPENER_CHANNEL,
 } from '../../../shared/rsbBrowserBridge.js';
 import { _resetRsbBrowserBridgeIpcForTests, registerRsbBrowserBridgeIpc } from '../ipc.js';
-import type { TabRegistry } from '../registry.js';
+import { TabRegistry } from '../registry.js';
 
 function handler(channel: string) {
   const handlers = (ipcMain as unknown as {
@@ -76,6 +77,30 @@ afterEach(() => {
 });
 
 describe('RSB browser bridge ownership routing', () => {
+  // #11392, unit: preview links need task attribution without exposing local
+  // documents as browser automation targets. Exercise the real IPC and registry.
+  it('attributes preview links to their host for the lifetime of the guest', () => {
+    const mockGuest = fakeGuest(7);
+    const guest = mockGuest as unknown as WebContents;
+    vi.mocked(webContents.fromId).mockReturnValue(guest);
+    const registry = new TabRegistry({ lookupWebContents: webContents.fromId, logger: { info: vi.fn(), warn: vi.fn() } });
+    register(registry);
+    const report = handler(RSB_FILE_PREVIEW_OPENER_CHANNEL);
+    const record = { sessionId: 'source-task', tabId: 'file-preview', webContentsId: 101 };
+    const notify = vi.fn();
+    registry.onReport(notify);
+    expect(() => report({ sender: { id: 9 } }, record)).toThrow(/INVALID_PARAMS/);
+    expect(registry.findByWebContentsId(101)).toBeNull();
+    report({ sender: { id: 7 } }, record);
+    expect(notify).toHaveBeenCalledWith(record);
+    expect(registry.findByWebContentsId(101)).toEqual(record);
+    expect(registry.listBySession('source-task')).toEqual([]);
+    expect(registry.getWebContentsByTabId('file-preview')).toBeNull();
+    mockGuest.isDestroyed = () => true;
+    expect(registry.findByWebContentsId(101)).toBeNull();
+    vi.mocked(webContents.fromId).mockReset();
+  });
+
   it('routes pin changes to the renderer that owns the tab', () => {
     const guest = fakeGuest(7);
     const owner = { id: 7, send: vi.fn(), isDestroyed: () => false };

@@ -5663,6 +5663,7 @@ interface ElectronAPI {
    * 跟 localDb 平级放在 ElectronAPI 顶层。
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbBrowserBridgeReportPayload) => Promise<unknown>;
     /** webview dom-ready 后调,上报 (sessionId, tabId, webContentsId)。 */
     report: (input: {
       sessionId: string;

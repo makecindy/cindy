@@ -157,8 +157,8 @@ function FileBrowserBodyWithWorkdir({
     workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs,
     displayedDirectory: state.selectedFilePath ? undefined : directory,
   });
-  const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
-  const renderingHtml = !!htmlPreview && state.selectedFilePath === htmlPreview;
+  const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
+    && isHtmlFilePath(state.selectedFilePath);
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId);
   const [treeOpen, setTreeOpen] = useState(false);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
@@ -243,9 +243,9 @@ function FileBrowserBodyWithWorkdir({
       // 切到同一文件 / 当前没有 active dirty editor → 直接放行;否则弹三选一。
       const ok = await confirmSwitchAway(state.selectedFilePath, isHtmlFilePath(relPath) ? null : relPath);
       if (!ok) return;
-      setHtmlPreview(isHtmlFilePath(relPath) ? relPath : null);
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory });
+      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory,
+        previewHtmlPath: isHtmlFilePath(relPath) ? relPath : null });
     },
     [confirmSwitchAway, ctx, directory, state.selectedFilePath],
   );
@@ -259,9 +259,8 @@ function FileBrowserBodyWithWorkdir({
     async (relPath: string) => {
       const ok = await confirmSwitchAway(state.selectedFilePath, relPath);
       if (!ok) return;
-      setHtmlPreview(null);
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory });
+      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory, previewHtmlPath: null });
       setMode('tree');
     },
     [confirmSwitchAway, ctx, directory, state.selectedFilePath],
@@ -289,7 +288,7 @@ function FileBrowserBodyWithWorkdir({
       setExternalFile(null);
       setDirectoryFilter('');
       setPreviousEntry(null);
-      ctx.patchState({ revealDirPath: null, selectedFilePath: null, currentDirectory: revealDirPath });
+      ctx.patchState({ revealDirPath: null, selectedFilePath: null, currentDirectory: revealDirPath, previewHtmlPath: null });
     })();
     return () => {
       cancelled = true;
@@ -315,8 +314,7 @@ function FileBrowserBodyWithWorkdir({
       setMode('tree');
       setFilterQuery('');
       setExternalFile(null);
-      setHtmlPreview(null);
-      ctx.patchState({ selectedFilePath: revealFilePath, currentDirectory: dirname(revealFilePath) });
+      ctx.patchState({ selectedFilePath: revealFilePath, currentDirectory: dirname(revealFilePath), previewHtmlPath: null });
       await revealFileInTree(revealFilePath);
       if (cancelled) return;
       ctx.patchState({ revealFilePath: null });
@@ -434,7 +432,7 @@ function FileBrowserBodyWithWorkdir({
         setExternalFile(null);
         setMode('tree');
         setFilterQuery('');
-        ctx.patchState({ selectedFilePath: localRelPath, currentDirectory: directory });
+        ctx.patchState({ selectedFilePath: localRelPath, currentDirectory: directory, previewHtmlPath: null });
         void revealFileInTree(localRelPath);
         return;
       }
@@ -450,7 +448,7 @@ function FileBrowserBodyWithWorkdir({
       setMode('tree');
       setFilterQuery('');
       setExternalFile(external);
-      ctx.patchState({ selectedFilePath: null, currentDirectory: directory });
+      ctx.patchState({ selectedFilePath: null, currentDirectory: directory, previewHtmlPath: null });
     },
     [confirmSwitchAway, ctx, directory, isRemote, revealFileInTree, state.selectedFilePath, t, workdir],
   );
@@ -592,7 +590,7 @@ function FileBrowserBodyWithWorkdir({
     setPreviousEntry(activeRelPath ?? directory);
     if (directory !== path) setDirectoryFilter('');
     setExternalFile(null);
-    if (state.selectedFilePath || directory !== path) ctx.patchState({ selectedFilePath: null, currentDirectory: path });
+    if (state.selectedFilePath || directory !== path) ctx.patchState({ selectedFilePath: null, currentDirectory: path, previewHtmlPath: null });
     void tree.expandToPath(path, 'directory', !!activeRelPath);
   }, [activeRelPath, confirmSwitchAway, ctx, directory, state.selectedFilePath, tree.expandToPath]);
 
@@ -635,7 +633,7 @@ function FileBrowserBodyWithWorkdir({
         )}
         {!externalFile && activeRelPath && isHtmlFilePath(activeRelPath) && (
           <Button size="xs" compact variant="secondary" className="ml-auto"
-            onClick={() => renderingHtml ? setHtmlPreview(null) : void handleSelectFile(activeRelPath)}>
+            onClick={() => renderingHtml ? ctx.patchState({ previewHtmlPath: null }) : void handleSelectFile(activeRelPath)}>
             {t(renderingHtml ? 'chat.markdownRenderer.viewSourceFile' : 'ccAgent.workdirBrowse.previewFile')}
           </Button>
         )}
@@ -665,6 +663,7 @@ function FileBrowserBodyWithWorkdir({
         ) : (
           <div className="rsb-fbody-compact flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {renderingHtml && !externalFile ? <InlineHtmlPreview
+              key={JSON.stringify([activeRelPath, deviceId, remoteHostId])}
               workdir={workdir} relPath={activeRelPath} remoteHostId={remoteHostId}
               deviceId={deviceId}
               sessionId={ctx.sessionId} tabId={ctx.tabId} active={active !== false && shellVisible !== false}

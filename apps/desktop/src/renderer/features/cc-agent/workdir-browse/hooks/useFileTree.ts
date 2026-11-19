@@ -545,6 +545,20 @@ function getOrCreateStore(opts: FileTreeStoreOptions): FileTreeStore {
   return store;
 }
 
+/** Invalidate cached descendants and outstanding reads of a directory that disappeared. */
+function dropMissingDirectories(store: FileTreeStore, entries: Map<string, readonly DirEntry[]>, missing: ReadonlySet<string>): void {
+  if (!missing.size) return;
+  for (const path of new Set([...entries.keys(), ...store.inFlight.keys()])) {
+    let ancestor = path;
+    while (ancestor && !missing.has(ancestor)) ancestor = parentPath(ancestor);
+    if (!ancestor) continue;
+    entries.delete(path);
+    store.tokens.set(path, (store.tokens.get(path) ?? 0) + 1);
+    const request = store.inFlight.get(path);
+    if (request) request.trailing = false;
+  }
+}
+
 /** 把 fetchDir 抽成 store 方法 —— 所有订阅者(无论挂在哪个 hook 实例)共享同
  *  一份 entries / loadingPaths 状态。 */
 async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void> {
@@ -587,9 +601,13 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       return;
     }
     const nextEntries = new Map(store.snapshot.entries);
-    const aliases = new Map(list.filter(entry => entry.symlinkTarget !== undefined)
-      .map(entry => [entry.relPath, entry.symlinkTarget]));
-    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !== aliases.get(old.relPath));
+    const directoriesAndLinks = new Map(list.filter(entry => entry.type === 'directory' || entry.symlinkTarget !== undefined)
+      .map(entry => [entry.relPath, entry]));
+    const missing = new Set((prevList ?? [])
+      .filter(old => old.type === 'directory' && directoriesAndLinks.get(old.relPath)?.type !== 'directory')
+      .map(old => old.relPath));
+    dropMissingDirectories(store, nextEntries, missing);
+    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !== directoriesAndLinks.get(old.relPath)?.symlinkTarget);
     const displayed = retargeted.length ? displayedDirectoryPaths(store) : undefined;
     const reload: string[] = [];
     for (const key of nextEntries.keys()) {
@@ -612,6 +630,7 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       pruneExpandedForCurrentTree(store, wasSeeded ? { keep: store.persistedExpanded } : undefined);
     }
   } catch (err) {
+    if (store.tokens.get(relPath) !== myToken) return;
     log.warn(`listDir failed for ${relPath}`, err);
     // root 失败要可见:空树 + 无提示会被读成"项目是空的"。device-link 的
     // 版本偏差(老被控端无 remote-op channel)单独标记,渲染升级提示。
@@ -631,8 +650,12 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       // pruneExpandedForCurrentTree（getOrCreateStore）完成；root 首次失败时
       // snapshot.entries 已被清空，再调 prune 会因缺 ROOT_KEY 直接早退，不重复。
       emit(store);
+    } else if (/\b(?:ENOENT|ENOTDIR|NOT_FOUND)\b/.test(String((err as { code?: unknown })?.code) + ' ' + String(err))) {
+      const entries = new Map(store.snapshot.entries);
+      dropMissingDirectories(store, entries, new Set([relPath]));
+      store.snapshot = { ...store.snapshot, entries };
+      emit(store);
     }
-    // Keep prior state; user can refresh manually.
   }
 }
 
