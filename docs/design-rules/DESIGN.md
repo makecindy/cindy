@@ -1639,6 +1639,29 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
   the right sidebar (`components/layout`, `components/sidebar`, `components/title-bar`,
   `features/cc-agent/sidebar`, and `features/right-sidebar`). Legacy feature-local controls
   outside those roots migrate when touched; their existence is not an exemption for new work.
+- **Send button delivery tip (owner decision, 2026-11-19).** While a task is running, the
+  composer has something to send and the task can be steered, the Send button's tip becomes
+  `SendDeliveryTip` (`components/new-chat/SendDeliveryTip.tsx`). It replaces the banner that
+  used to sit above the composer; the composer itself gains nothing at rest or while typing.
+  - **When it opens.** After the standard 500ms hover, on keyboard focus, on right-click or
+    on a touch long-press (which does not send). It never moves focus out of the editor.
+  - **Two rows.** The row next to the button is always the default — what a click and the
+    send key do — and carries the single glide highlight; the row above is the other mode.
+    Clicking a row sends this one message that way and leaves the default unchanged.
+  - **Modifier.** With Enter as the send key, holding ⌘ / Ctrl slides the highlight to the
+    other row and the Send glyph follows (↑ for Steer, the glyph the queued-message Steer
+    action uses; a clock for Queue); modifier+Enter and modifier+click send the other way.
+    With modifier+Enter as the send key the other row names no key.
+  - **Changing the default.** The swap icon at the left edge trades the two rows in place and
+    sends nothing. Its visible label is the note inside the rows (「设为默认」 while pointed
+    at or focused, 「已设为默认」 afterwards) rather than a `Tip` nested in a tip; its
+    accessible name states the action. Settings keeps the same preference.
+  - **Surface.** It is the one interactive layer that wears the tooltip surface:
+    `--tooltip-bg` / `--tooltip-text` in both modes, with secondary text, the highlight and
+    keycap fills mixed from `--tooltip-text` (`color-mix`), and the same text-derived hairline
+    as the usage chart tooltip. No new tokens. Radii follow §5 (12px panel, 8px rows and swap
+    button, 4px keycaps); motion uses `--motion-fast` and a 250ms row exchange (§14.4), both
+    off under reduced motion. Every other tooltip stays plain text through `Tip`.
 
 ## 15. CINDY Skin Family(品牌化 family,新用户默认)
 

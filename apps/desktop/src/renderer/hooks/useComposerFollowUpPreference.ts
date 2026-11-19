@@ -10,7 +10,7 @@
  * 规则 20：localStorage 只存 override，选回默认（queue）即删除 key；未知值回落默认。
  * `chat.followUpBehavior` 与 appPreferenceControl / 迁移助理白名单共用同一个键。
  * 模块级内存是事件处理函数的同步真相源，`storage` 事件负责跨窗口同步。
- * 提示条的「已关闭」是独立的本机状态（HINT_DISMISSED_STORAGE_KEY），不属于该偏好。
+ * 发送键悬停提示（SendDeliveryTip）里的「对调」写的也是这个偏好，与设置页同步。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,7 +18,6 @@ import { useCallback, useEffect, useState } from 'react';
 export type ComposerFollowUpBehavior = 'queue' | 'steer';
 
 export const COMPOSER_FOLLOW_UP_STORAGE_KEY = 'chat.followUpBehavior';
-export const COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY = 'chat.followUpHint.dismissed';
 export const DEFAULT_COMPOSER_FOLLOW_UP: ComposerFollowUpBehavior = 'queue';
 
 function parseBehavior(raw: string | null): ComposerFollowUpBehavior | null {
@@ -84,57 +83,8 @@ export function useComposerFollowUpPreference(): {
   };
 }
 
-let hintDismissedMemory: boolean | null = null;
-const hintListeners = new Set<() => void>();
-
-function readHintDismissed(): boolean {
-  if (hintDismissedMemory !== null) return hintDismissedMemory;
-  try {
-    return localStorage.getItem(COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-/** 运行中提示条是否已被用户关闭；仅本机记忆，不随偏好同步。 */
-export function useComposerFollowUpHintDismissed(): {
-  dismissed: boolean;
-  dismiss: () => void;
-} {
-  const [dismissed, setDismissed] = useState<boolean>(readHintDismissed);
-
-  const dismiss = useCallback(() => {
-    hintDismissedMemory = true;
-    try {
-      localStorage.setItem(COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY, '1');
-    } catch {
-      // Memory still hides the hint for this renderer.
-    }
-    hintListeners.forEach((fn) => fn());
-  }, []);
-
-  useEffect(() => {
-    const sync = () => setDismissed(readHintDismissed());
-    hintListeners.add(sync);
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY) return;
-      hintDismissedMemory = event.newValue === '1';
-      hintListeners.forEach((fn) => fn());
-    };
-    window.addEventListener('storage', onStorage);
-    return () => {
-      hintListeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
-
-  return { dismissed, dismiss };
-}
-
 /** Test-only reset for the module-level sources of truth. */
 export function _resetComposerFollowUpPreferenceForTests(): void {
   memoryValue = null;
-  hintDismissedMemory = null;
   listeners.clear();
-  hintListeners.clear();
 }

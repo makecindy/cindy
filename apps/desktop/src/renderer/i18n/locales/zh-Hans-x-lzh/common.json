@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之讯，默从排队。",
-      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+    "sendDelivery": {
+      "menuAria": "此讯遣法",
+      "queueHint": "待此轮毕",
+      "steerHint": "次步即理",
+      "setDefault": "立为默",
+      "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
-      "switchToQueue": "默改排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默改排队"
     }
   },
   "onboarding": {

@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
     },
-    "followUpHint": {
-      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
-      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+    "sendDelivery": {
+      "menuAria": "이 메시지를 보내는 방법",
+      "queueHint": "이번 응답이 끝난 후",
+      "steerHint": "다음 단계에서 처리",
+      "setDefault": "기본값으로 설정",
+      "nowDefault": "기본값으로 설정됨",
       "switchToSteer": "기본값을 끼어들기로",
-      "switchToQueue": "기본값을 대기열 추가로",
-      "dismiss": "안내 닫기"
+      "switchToQueue": "기본값을 대기열 추가로"
     }
   },
   "onboarding": {

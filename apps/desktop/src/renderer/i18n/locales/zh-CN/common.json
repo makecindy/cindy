@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "任务运行中发送的消息默认排队。",
-      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+    "sendDelivery": {
+      "menuAria": "这条消息的发送方式",
+      "queueHint": "等这一轮结束",
+      "steerHint": "下一步就处理",
+      "setDefault": "设为默认",
+      "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
-      "switchToQueue": "默认改为排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默认改为排队"
     }
   },
   "onboarding": {

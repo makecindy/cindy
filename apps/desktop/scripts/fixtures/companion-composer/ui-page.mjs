@@ -4,7 +4,7 @@ export default {
   name: 'companion-composer',
   entry: './companion-composer-fixture.tsx',
   viewport: { width: 760, height: 360 },
-  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, ComposerFollowUpHint, follow-up preference, tooltips, send dispatch, themes and translations',
+  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, SendDeliveryTip, follow-up preference, tooltips, send dispatch, themes and translations',
   notCovered:
     'Microphone/ASR, live companion tasks, real media IO and speech synthesis; host services, delayed image cache, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
   stubs: {
@@ -47,15 +47,15 @@ export default {
       about: 'Recording explains above the composer that the voiceprint filter ignored someone else',
     },
     'follow-up-queue': {
-      about: 'Running turn, queue default: the hint states the default; mouse, Enter and Cmd+Enter all queue',
+      about: 'Running turn, queue default: typing adds nothing; hovering Send opens the delivery tip. Click and Enter queue, Cmd+Enter and the other row steer, the swap makes steer the default',
       data: { followUp: 'queue' },
     },
     'follow-up-steer': {
-      about: 'Running turn, steer default: the hint flips; mouse, Enter and Cmd+Enter all steer',
+      about: 'Running turn, steer default: the tip mirrors. Click and Enter steer, Cmd+Enter and the other row queue, the swap restores queue',
       data: { followUp: 'steer' },
     },
     'follow-up-modifier': {
-      about: 'Cmd/Ctrl+Enter is the send key: it sends the selected mode, Enter and Shift+Enter stay newlines',
+      about: 'Cmd/Ctrl+Enter is the send key: it sends the selected mode and the other row has no key; Enter and Shift+Enter stay newlines',
       data: { followUp: 'steer', sendKey: 'modifier-enter' },
     },
     'follow-up-voice': {
@@ -63,7 +63,7 @@ export default {
       data: { followUp: 'steer' },
     },
     'follow-up-narrow': {
-      about: 'Hint stays readable and dismissible at narrow width',
+      about: 'Delivery tip stays inside the window at narrow width',
       data: { followUp: 'queue' },
       viewport: { width: 360, height: 420 },
     },
@@ -130,40 +130,112 @@ export default {
     }
     if (typeof ui.data.followUp === 'string') {
       const editor = page.locator('[contenteditable]');
-      const hint = page.locator('[data-composer-follow-up-hint]');
-      const isSteer = ui.data.followUp === 'steer';
-      assert.equal(await hint.count(), 0, 'no hint before there is something to send');
-      await editor.click();
-      await page.keyboard.type('Add a regression test too');
-      await hint.waitFor();
-      assert.ok((await hint.textContent()).length > 20);
-      await ui.capture('hint');
-      // Long single words and wrapped copy must not overflow the card.
-      const box = await hint.boundingBox();
-      assert.ok(box.x >= 0 && box.x + box.width <= ui.viewport.width, 'hint stays inside the viewport');
-      const button = page.getByRole('button', { name: await ui.t('newChat.sendButton.' + (isSteer ? 'steer' : 'queue')), exact: true });
-      await button.hover();
-      await ui.capture('send-tooltip');
-      await button.click();
-      await page.waitForFunction((expected) => document.querySelector('[data-testid="sent"]')?.textContent === expected,
-        (isSteer ? 'steer' : 'queue') + ':Add a regression test too');
-      // The configured send key uses the same selected mode; nothing reverses it.
-      await editor.click();
-      await page.keyboard.type('Second note');
-      await page.keyboard.press('ControlOrMeta+Enter');
-      await page.waitForFunction((expected) => document.querySelector('[data-testid="sent"]')?.textContent === expected,
-        (isSteer ? 'steer' : 'queue') + ':Second note');
-      await editor.click();
-      await page.keyboard.type('Third note');
-      await hint.waitFor();
-      // Switching the default from the hint changes the next send, then dismissing remembers.
-      await hint.getByRole('button').first().click();
-      await ui.capture('hint-switched');
-      await page.getByRole('button', { name: await ui.t('newChat.sendButton.' + (isSteer ? 'queue' : 'steer')), exact: true }).waitFor();
-      await hint.getByRole('button', { name: await ui.t('newChat.followUpHint.dismiss'), exact: true }).click();
-      assert.equal(await hint.count(), 0);
-      assert.equal(await page.evaluate(() => localStorage.getItem('chat.followUpHint.dismissed')), '1');
-      await ui.capture('dismissed');
+      const tip = page.locator('.send-delivery-tip');
+      const mode = ui.data.followUp === 'steer' ? 'steer' : 'queue';
+      const other = mode === 'steer' ? 'queue' : 'steer';
+      const modifierIsSendKey = ui.data.sendKey === 'modifier-enter';
+      const sendButton = async (delivery) =>
+        page.getByRole('button', { name: await ui.t('newChat.sendButton.' + delivery), exact: true });
+      const sent = (expected) => page.waitForFunction(
+        (value) => document.querySelector('[data-testid="sent"]')?.textContent === value, expected);
+      const draft = async (text) => { await editor.click(); await page.keyboard.type(text); };
+      const openTip = async () => { await (await sendButton(mode)).hover(); await tip.waitFor(); };
+
+      // Typing while the task runs adds nothing to the composer.
+      await draft('Add a regression test too');
+      assert.equal(await tip.count(), 0, 'nothing appears while typing');
+      await ui.capture('typing');
+
+      // Regression: both press and release during the 500ms hover delay must be reflected
+      // when the tip opens (DESIGN.md §14.6 modifier preview). Existing checks only press
+      // after opening, missing the stale-state window reported in review.
+      if (!modifierIsSendKey) {
+        for (const heldAtEntry of [false, true]) {
+          if (heldAtEntry) await page.keyboard.down('Control');
+          await (await sendButton(mode)).hover();
+          await page.keyboard[heldAtEntry ? 'up' : 'down']('Control');
+          await tip.waitFor();
+          await tip.locator('[data-row="' + (heldAtEntry ? 'default' : 'alternate') + '"][data-active]').waitFor({ timeout: 2000 });
+          await page.keyboard.up('Control');
+          await page.mouse.move(0, 0);
+          await tip.waitFor({ state: 'hidden' });
+        }
+      }
+
+      // Resting on Send opens the tip: the lit row next to the button is the default.
+      await openTip();
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
+      assert.equal(await tip.locator('[data-row="default"][data-active]').count(), 1);
+      const box = await tip.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= ui.viewport.width, 'tip stays inside the viewport');
+      assert.equal(await tip.locator('[data-row="alternate"] kbd').count(), modifierIsSendKey ? 0 : 2,
+        'the other mode names a key only when Enter is the send key');
+      await ui.capture('tip');
+      if (!modifierIsSendKey) {
+        // Holding the modifier slides the highlight to the other mode; nothing is sent.
+        await page.keyboard.down('Control');
+        await tip.locator('[data-row="alternate"][data-active]').waitFor();
+        await ui.capture('tip-modifier-held');
+        await page.keyboard.up('Control');
+        await tip.locator('[data-row="default"][data-active]').waitFor();
+      }
+      await (await sendButton(mode)).click();
+      await sent(mode + ':Add a regression test too');
+      assert.equal(await tip.count(), 0, 'sending closes the tip');
+
+      // Keys: the send key delivers the default; with Enter as the send key, modifier+Enter sends the other way.
+      await draft('Second note');
+      await page.keyboard.press(modifierIsSendKey ? 'ControlOrMeta+Enter' : 'Enter');
+      await sent(mode + ':Second note');
+      if (!modifierIsSendKey) {
+        await draft('Third note');
+        await page.keyboard.press('ControlOrMeta+Enter');
+        await sent(other + ':Third note');
+      }
+
+      // The other row sends this one message the other way and leaves the default alone.
+      await draft('Fourth note');
+      await openTip();
+      await tip.locator('[data-row="alternate"]').hover();
+      await tip.locator('[data-row="alternate"][data-active]').waitFor();
+      await ui.capture('tip-other-row');
+      await tip.locator('[data-row="alternate"]').click();
+      await sent(other + ':Fourth note');
+      assert.equal(await page.evaluate(() => localStorage.getItem('chat.followUpBehavior')), mode === 'steer' ? 'steer' : null);
+
+      // The swap makes the other mode the default in place: the rows trade places, nothing is sent.
+      await draft('Fifth note');
+      await openTip();
+      const swap = tip.getByRole('menuitem', {
+        name: await ui.t('newChat.sendDelivery.' + (other === 'steer' ? 'switchToSteer' : 'switchToQueue')), exact: true,
+      });
+      await swap.hover();
+      await tip.locator('[data-row="alternate"][data-note]').waitFor();
+      const swapBox = await tip.boundingBox();
+      assert.ok(swapBox.x >= 0 && swapBox.x + swapBox.width <= ui.viewport.width, 'tip stays inside the viewport');
+      assert.equal(Math.round(swapBox.width), Math.round(box.width), 'pointing at the swap does not resize the tip');
+      await ui.capture('swap-hover');
+      await swap.click();
+      await page.waitForFunction(
+        (expected) => localStorage.getItem('chat.followUpBehavior') === expected, other === 'steer' ? 'steer' : null);
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), other);
+      assert.equal(await editor.textContent(), 'Fifth note', 'changing the default sends nothing');
+      await ui.capture('swapped');
+      await (await sendButton(other)).click();
+      await sent(other + ':Fifth note');
+
+      // Swapping again restores the original default; the run ends on the resting tip.
+      await draft('Sixth note');
+      await (await sendButton(other)).hover();
+      await tip.waitFor();
+      await tip.getByRole('menuitem', {
+        name: await ui.t('newChat.sendDelivery.' + (mode === 'steer' ? 'switchToSteer' : 'switchToQueue')), exact: true,
+      }).click();
+      await page.waitForFunction(
+        (expected) => localStorage.getItem('chat.followUpBehavior') === expected, mode === 'steer' ? 'steer' : null);
+      await (await sendButton(mode)).hover();
+      await tip.locator('[data-row="default"][data-active]:not([data-note])').waitFor();
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
       return;
     }
     if (ui.data.recommendation) {
