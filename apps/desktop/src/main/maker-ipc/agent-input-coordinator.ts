@@ -7660,6 +7660,13 @@ export class AgentInputCoordinator {
     );
   }
 
+  resumeModelGroupQuotaWait(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void {
+    const state = this.states.get(sessionId);
+    if (state?.recovery?.kind !== 'active-turn' || state.recovery.item.clientId !== item.clientId ||
+        state.activeTurn || state.usageLimitWait || this.isExecutionPaused(sessionId)) return;
+    this.notifyUsageLimitedTurnError(sessionId, item, signals.message, signals);
+  }
+
   private notifyUsageLimitedTurnError(
     sessionId: string,
     item: AgentInputQueuedMessage,

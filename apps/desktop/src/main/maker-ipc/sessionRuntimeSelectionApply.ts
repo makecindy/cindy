@@ -112,6 +112,7 @@ export type ApplySessionRuntimeSelection = (
   deferred: boolean;
   superseded: boolean;
   generation?: number;
+  persistedRoute?: true;
   effectiveProviderId?: string | null;
   effectiveModelId?: string;
   contextWindowConfirmationRequired?: number;
@@ -1556,8 +1557,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             commitControlStores();
           }
         }
+        let persistedRoute = result.persistedRoute === true;
         if (
-          result.persistedRoute !== true &&
+          !persistedRoute &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
             internalOptions.persistRenamedSessionModel === true ||
@@ -1591,6 +1593,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             assertRuntimeOwnerCurrent();
             assertSharedTaskCurrent.admit();
             await persistSessionFields(sessionId, patch);
+            persistedRoute = true;
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -1790,6 +1793,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          ...(internalOptions.source === 'fallback' && persistedRoute ? { persistedRoute: true as const } : {}),
           effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,

@@ -3,7 +3,7 @@ export interface DelegationCheckInput {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
 }
 export interface DelegationCheckResult {
-  active: boolean; ownerDeviceId?: string; expiresAt?: number; generation?: string;
+  active: boolean; ownerDeviceId?: string; expiresAt?: number; generation?: string; proofId?: string;
 }
 interface Scope { key: string; isCurrent(): boolean }
 
