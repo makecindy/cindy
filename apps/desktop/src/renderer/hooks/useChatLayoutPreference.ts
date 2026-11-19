@@ -106,5 +106,6 @@ function preview(value: number | null): void {
 export function useChatLayoutPreference() {
   const mode = useSyncExternalStore(subscribe, getMode);
   const width = useSyncExternalStore(subscribe, getWidth);
-  return { mode, width, setMode, setWidth, preview };
+  const savedWidth = useSyncExternalStore(subscribe, getSavedWidth);
+  return { mode, width, savedWidth, setMode, setWidth, preview };
 }
