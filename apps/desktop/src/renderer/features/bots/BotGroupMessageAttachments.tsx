@@ -81,7 +81,13 @@ export function BotGroupMessageAttachments({
   const gallery = rows
     .flatMap((row) => (row.kind === 'picture' ? [row.slot] : row.slots))
     .flatMap((slot) =>
-      slot.kind === 'image' ? [{ src: slot.url, galleryId: slot.attachment.id }] : [],
+      slot.kind === 'image'
+        ? [{
+            src: slot.url,
+            galleryId: slot.attachment.id,
+            name: slot.attachment.name || untitled,
+          }]
+        : [],
     );
   const collection: AttachmentCollectionItem[] = rows
     .flatMap((row) => (row.kind === 'picture' ? [row.slot] : row.slots))

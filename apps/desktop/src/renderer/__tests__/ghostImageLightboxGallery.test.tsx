@@ -87,6 +87,32 @@ describe('Ghost card ImageLightbox gallery positioning', () => {
     expect(screen.getByText('second.png')).toBeTruthy();
   });
 
+  // 测试价值：同一 URL 的多个画廊条目共用 <img>，浏览器不会再次 onLoad；
+  // 翻页后尺寸必须保留，否则标注入口和原始尺寸会消失。
+  // 最小失败输入 = 两个同 src 条目，首图加载后翻到第二个；旧实现会清掉尺寸。
+  it('keeps measured size when paging between entries with the same URL', () => {
+    const src = 'xdt-image://gallery/same.png';
+    render(
+      <ImageGalleryContext.Provider
+        value={[
+          { src, name: 'first.png' },
+          { src, name: 'second.png' },
+        ]}
+      >
+        <ImageLightbox src={src} enableGallery onClose={vi.fn()} />
+      </ImageGalleryContext.Provider>,
+    );
+
+    const image = document.querySelector('img')!;
+    Object.defineProperty(image, 'naturalWidth', { value: 800 });
+    Object.defineProperty(image, 'naturalHeight', { value: 600 });
+    fireEvent.load(image);
+    expect(screen.getByText('800 × 600')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+    expect(screen.getByText('800 × 600')).toBeTruthy();
+  });
+
   it('opens the exact duplicate image selected inside a plugin card iframe', () => {
     const repeated = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     render(
