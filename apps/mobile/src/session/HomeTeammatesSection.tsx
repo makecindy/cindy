@@ -41,6 +41,10 @@ import { useHomeRoster } from './HomeRosterContext';
 import { DisclosureItem } from './listDisclosureTransition';
 import { useTeammateCreateController } from './TeammateCreateController';
 import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } from './TeammateList';
+import { useBuddySets } from './useBuddySets';
+import { BuddySetGroups } from './BuddySetGroups';
+import { BuddySetSheet } from './BuddySetSheet';
+import type { BuddySetCandidate } from './buddySetCopy';
 import { cloudCompanionRoute } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
@@ -114,6 +118,15 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const showGroups = groups.supported || groups.items.length > 0;
   const search = query.trim();
   const entries = useTeammateEntries(items, showGroups ? groups.items : undefined, search);
+  // 「伙伴集」:纯本机、按账号的展示容器,只收伙伴私聊行。
+  const [buddySets, updateBuddySets] = useBuddySets(navigation.owner);
+  const [buddySetEdit, setBuddySetEdit] = useState<{ visible: boolean; buddySetId: string | null }>({ visible: false, buddySetId: null });
+  const buddySetCandidates = useMemo<BuddySetCandidate[]>(() => entries
+    .filter((entry): entry is TeammateListEntry & { kind: 'bot' } => entry.kind === 'bot')
+    .map((entry) => ({
+      id: `bot:${entry.row.key}`,
+      name: resolveRemoteText(entry.row.item.display.title, i18n.language),
+    })), [entries, i18n.language]);
   const openTeammate = (row: HostedRemoteCollectionItem) => {
     const actor = cloudActor(row);
     if (actor) { Keyboard.dismiss(); push(cloudCompanionRoute(row, actor.id, i18n.language)); }
@@ -151,6 +164,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const creator = useTeammateCreateController({ targets: createTargets, groupTargets: groupCreateTargets,
     preferredDeviceId: navigation.lastTeammate?.deviceId,
     onInvite: canInvite ? () => { Keyboard.dismiss(); openManualChatInvite(); } : undefined,
+    onNewBuddySet: () => setBuddySetEdit({ visible: true, buddySetId: null }),
     onCreated: (host, ref) => { void navigation.openCreatedTeammate(host, ref); },
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure only adds a header action,
@@ -220,8 +234,14 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         </ScrollView>
       </DisclosureItem>
       : <DisclosureItem exit>
-        {preview.map((entry, index) => renderRow(entry, !hasMore && index === preview.length - 1))}
-        {hasMore && showAll ? <DisclosureItem exit>{extra.map(entry => renderRow(entry, false))}</DisclosureItem> : null}
+        <BuddySetGroups
+          entries={showAll ? entries : preview}
+          buddySets={buddySets}
+          onChange={updateBuddySets}
+          onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
+          renderRow={(entry, last) => renderRow(entry, last && !hasMore)}
+          query={search}
+        />
         {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAll }}
           accessibilityLabel={showAll ? t('devices.companions.section.showLess') : t('devices.companions.section.showAllA11y', { count: entries.length })}
           onPress={() => runDisclosure(() => setShowAll(value => !value))} onPressIn={prepareDisclosure}
@@ -235,7 +255,11 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
       </DisclosureItem>}
     {showFooter ? <View style={styles.footer} /> : null}
   </DisclosureItem> : null;
-  return <>{body}{creator.sheets}</>;
+  return <>{body}{creator.sheets}
+    <BuddySetSheet visible={buddySetEdit.visible} buddySetId={buddySetEdit.buddySetId}
+      buddySets={buddySets} candidates={buddySetCandidates} onChange={updateBuddySets}
+      onClose={() => setBuddySetEdit({ visible: false, buddySetId: null })} />
+  </>;
 }
 
 /** Hidden content keeps its existing read/attention semantics without opening the section. */

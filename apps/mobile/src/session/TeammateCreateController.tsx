@@ -10,6 +10,7 @@ import { CompanionCreateSheet } from './CompanionProfileSheet';
 import { CompanionSettingsRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
 import { TEAMMATE_COLLECTION_ID } from './useTeammateRoster';
+import { mobileBuddySetCopy } from './buddySetCopy';
 
 type CreateKind = 'bot' | 'group';
 type Choice = { kind: CreateKind; host: RemoteResourceHostTarget };
@@ -21,6 +22,8 @@ type CreateOptions = {
   preferredDeviceId?: string;
   /** Available to a signed-in account without a connected computer. */
   onInvite?(): void;
+  /** 新建「伙伴集」:纯本机展示容器,不建群、不建任务。 */
+  onNewBuddySet?(): void;
   onCreated(host: RemoteResourceHostTarget, ref: RemoteResourceRef): void;
   onGroupCreated?(host: RemoteResourceHostTarget, groupId: string): void;
 };
@@ -33,7 +36,7 @@ type CreateOptions = {
  * switch by itself: the root-hosted home list (Android, wide screens) keeps its state across the
  * account-keyed route.
  */
-export function useTeammateCreateController({ targets, groupTargets = [], preferredDeviceId, onCreated, onGroupCreated, onInvite }: CreateOptions) {
+export function useTeammateCreateController({ targets, groupTargets = [], preferredDeviceId, onCreated, onGroupCreated, onInvite, onNewBuddySet }: CreateOptions) {
   const { t } = useTranslation();
   const { accountGeneration } = useAuth();
   const [account, setAccount] = useState(accountGeneration);
@@ -70,14 +73,16 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     image: kind === 'bot' ? 'person.crop.circle.badge.plus' : 'person.2',
     ...(hosts.length > 1 ? { subactions: hosts.map((host) => ({ id: `${kind}:${host.deviceId}`, title: host.deviceName })) } : {}),
   });
-  const withMenu = withGroups || !!onInvite;
+  const withMenu = withGroups || !!onInvite || !!onNewBuddySet;
   const menuActions: NativePullDownAction[] = withMenu
     ? [...(ordered.length ? [entry('bot', ordered)] : []), ...(withGroups ? [entry('group', orderedGroups)] : [])]
     : ordered.map((target) => ({ id: target.deviceId, title: target.deviceName }));
+  if (onNewBuddySet) menuActions.push({ id: 'buddy-set', title: mobileBuddySetCopy(t).new });
   if (onInvite) menuActions.push({ id: 'invitation-section', title: '', displayInline: true,
     subactions: [{ id: 'invite', title: t('groupChat.invitation.entry'), image: 'link' }] });
   const onMenu = (id: string) => {
     if (!mounted.current || currentAccount.current !== account) return;
+    if (id === 'buddy-set') { onNewBuddySet?.(); return; }
     if (id === 'invite') { onInvite?.(); return; }
     if (!withMenu) { start('bot', id); return; }
     const split = id.indexOf(':');
@@ -116,6 +121,8 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
       {fallbackChoices.map((choice) => <CompanionSettingsRow key={`${choice.kind}:${choice.host.deviceId}`} icon={null} label={choiceLabel(choice)}
         testID={`teammates.createChooser.${choice.kind}.${choice.host.deviceId}`}
         onPress={() => { pendingChoice.current = choice; setChoosing(false); }} />)}
+      {onNewBuddySet ? <CompanionSettingsRow icon={null} label={mobileBuddySetCopy(t).new} testID="teammates.createChooser.buddySet"
+        onPress={() => { setChoosing(false); if (mounted.current && currentAccount.current === account) onNewBuddySet(); }} /> : null}
       {onInvite ? <CompanionSettingsRow icon={null} label={t('groupChat.invitation.entry')} testID="teammates.invite"
         onPress={() => { if (mounted.current && currentAccount.current === account) { pendingInvite.current = true; setChoosing(false); } }} /> : null}
     </CompanionSheet>

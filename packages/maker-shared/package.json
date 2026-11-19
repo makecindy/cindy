@@ -19,6 +19,7 @@
     "./teammate-project": "./src/teammateProject.ts",
     "./classical-reply": "./src/classicalReply.ts",
     "./brand-identity": "./src/brandIdentity.ts",
+    "./buddy-sets": "./src/buddySets.ts",
     "./chat-quotes": "./src/chatQuotes.ts",
     "./chat-history": "./src/chatHistory.ts",
     "./chat-read-receipts": "./src/chatReadReceipts.ts",
