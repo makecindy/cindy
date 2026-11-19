@@ -27,7 +27,8 @@ vi.mock('../localDb/client/current.js', () => ({
 }));
 import { readProjectDirectories, setProjectDirectories } from '../projectDirectoryStore';
 import { configureProjectDirectoryProbe, validateProjectDirectories } from '../projectDirectoryValidation';
-import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime';
+import { applyProjectDirectoriesForTurn, createTaskWritableDirsUpdater } from '../projectDirectoryRuntime';
+import { applyRemoteDirectoryGrantUpdate } from '../maker-ipc/remoteDirectoryGrantUpdate.js';
 import {
   parseHostProjectAliasesSnapshot,
   resolveProjectDirectories,
@@ -130,6 +131,44 @@ it('applies the owning project to a worktree on each turn and preserves legacy t
   expect(observed).toEqual({ read: [reference], write: [] });
   expect(h.row.extraDirs).toBe(JSON.stringify([reference]));
 });
+// Unit regression for #11511: turn-only tests missed a picker update replacing the live project's roots.
+it('keeps the running project grant when adding or removing a task directory', async () => {
+  h.row!.extraDirs = '[]';
+  let live: string[] = [];
+  const session = {
+    id: 'task', capabilities, setExtraDirs: vi.fn(),
+    setWritableDirs: async (dirs: string[]) => { live = dirs; },
+  } as unknown as Session;
+  const persist = vi.fn(async (patch: { writableDirs?: string[] }) => {
+    h.row!.writableDirs = JSON.stringify(patch.writableDirs);
+  });
+  const update = (dirs: string[]) => applyRemoteDirectoryGrantUpdate('writableDirs', dirs, {
+    setWritableDirs: createTaskWritableDirsUpdater(session), setExtraDirs: vi.fn(),
+  }, {
+    validate: async (valid) => ({ valid, rejected: [] }),
+    readExtraDirs: async () => [],
+    readWritableDirs: async () => JSON.parse(String(h.row!.writableDirs)),
+    excludeConflicts: async (candidates) => [...candidates],
+    persist,
+    terminate: vi.fn(),
+  });
+  await setProjectDirectories(`local:${main}`, [{ path: output, access: 'write' }], () => {});
+  await applyProjectDirectoriesForTurn(session);
+  await update([reference]);
+  expect(live).toEqual([output]);
+  expect(h.row!.writableDirs).toBe(JSON.stringify([reference]));
+  await applyProjectDirectoriesForTurn(session);
+  expect(live).toEqual([reference, output]);
+  persist.mockRejectedValueOnce(new Error('save failed'));
+  await expect(update([])).rejects.toThrow('save failed');
+  expect(live).toEqual([reference, output]);
+  await update([]);
+  expect(live).toEqual([output]);
+  expect(h.row!.writableDirs).toBe('[]');
+  await update([reference]);
+  expect(live).toEqual([output]);
+});
+
 it('never promotes a pre-existing read-only task override through project defaults', async () => {
   const observed: string[][] = [];
   await setProjectDirectories(`local:${main}`, [{ path: reference, access: 'write' }], () => {});

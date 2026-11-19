@@ -1020,6 +1020,7 @@ import {
   isPersistedDirectoryGrantSubset,
 } from './remoteDirectoryGrantUpdate.js';
 import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerGrant.js';
+import { createTaskWritableDirsUpdater } from '../projectDirectoryRuntime.js';
 import {
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
@@ -4485,7 +4486,7 @@ export function applyDirectoryGrants(
         : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs), libraryRootForRuntime(dirs)),
       setWritableDirs: persistOnly
         ? async () => {}
-        : (dirs) => sess.setWritableDirs(dirs),
+        : createTaskWritableDirsUpdater(sess),
     }, {
       validate: async (requested) => {
         if (axis !== 'extraDirs') {
