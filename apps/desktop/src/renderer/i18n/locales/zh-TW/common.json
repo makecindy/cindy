@@ -16418,7 +16418,7 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "dirtyWorktreeWarning": "目前的任務有尚未提交的檔案變更。歸檔時預設會儲存這些變更，之後可在任務中還原。",
         "discardChanges": "捨棄未提交的變更",
         "discardWarning": "未提交的變更和新檔案將無法復原。",
         "discardAndArchive": "捨棄並歸檔",
@@ -19737,6 +19737,7 @@
         "empty": "當前沒有贈送記錄。",
         "incomplete": "贈送記錄較多，當前僅顯示最近的 {{count}} 筆。",
         "unnamed": "贈送餘額",
+        "rolloverName": "滾存額度",
         "giftCard": "禮品卡 · 來自 {{sender}}",
         "original": "原始金額",
         "used": "已用",
@@ -19974,6 +19975,8 @@
       "basicModels": "可用部分模型",
       "subscription": "訂閱方案",
       "rollover": "剩餘餘額可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩餘餘額最多滾存 {{amount}}，轉為贈送餘額\n1 個月內有效，不再繼續滾存\n優先於訂閱餘額和儲值餘額使用",
+      "rolloverMonthlySummary": "剩餘餘額最多滾存 {{amount}}，1 個月內有效",
       "nextPeriod": {
         "MONTH": "下個月",
         "YEAR": "下一年",

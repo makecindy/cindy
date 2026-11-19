@@ -13272,6 +13272,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const welcomeDispatchReceipts = createQueuedDispatchReceipts();
+  const toTaskFile = (attachment: import('../../shared/botGroupChat.js').BotGroupAttachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    originalName: attachment.name,
+    path: attachment.path ?? attachment.url ?? '',
+    ...(attachment.url ? { url: attachment.url } : {}),
+    ext: path.extname(attachment.name).toLowerCase(),
+    size: attachment.size,
+    category: attachment.category,
+    mimeType: attachment.mimeType,
+    ...(attachment.annotated ? { annotated: true } : {}),
+  });
   const dispatchBotSessionMessage = async (params: {
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
     targetSessionId: string;
@@ -13629,22 +13641,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         onQueued,
         assertDispatchCurrent,
         // Same attachment shape as a task message: images by their media address, files by path.
-        ...(attachments && attachments.length > 0
-          ? {
-            files: attachments.map((attachment) => ({
-              id: attachment.id,
-              name: attachment.name,
-              originalName: attachment.name,
-              path: attachment.path ?? attachment.url ?? '',
-              ...(attachment.url ? { url: attachment.url } : {}),
-              ext: path.extname(attachment.name).toLowerCase(),
-              size: attachment.size,
-              category: attachment.category,
-              mimeType: attachment.mimeType,
-              ...(attachment.annotated ? { annotated: true } : {}),
-            })),
-          }
-          : {}),
+        files: attachments?.map(toTaskFile),
         onAccepted,
       }),
     prepareAttachments: botGroupAttachments.prepare,
@@ -13791,7 +13788,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
       },
       // A message the owner wrote in the companion's room reaches its main task like any user input.
-      deliverToCanonical: async (botId, text, clientId) => {
+      deliverToCanonical: async (botId, text, clientId, attachments) => {
         // A room message drives the companion's main task like a same-account device: only where this
         // computer allows same-account device control (the room carries no authenticated device).
         if (!readDeviceLinkSettings().remoteControlEnabled) return { ok: false as const, errorCode: 'REMOTE_CONTROL_DISABLED' };
@@ -13799,6 +13796,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!ensured.ok) return { ok: false as const, errorCode: ensured.errorCode };
         // Content from the cloud room must not wake the task with more permission than the user chose.
         const result = await dispatchBotSessionMessage({ targetSessionId: ensured.sessionId, message: text, clientId,
+          files: attachments?.map(toTaskFile),
           resumeWithStoredPermissionMode: true });
         return result.ok ? { ok: true as const } : { ok: false as const, errorCode: result.errorCode };
       },

@@ -16418,7 +16418,7 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "dirtyWorktreeWarning": "当前任务有尚未提交的文件更改。归档时默认保存这些更改，以后可以在任务中恢复。",
         "discardChanges": "丢弃未提交的更改",
         "discardWarning": "未提交的更改和新文件将无法恢复。",
         "discardAndArchive": "丢弃并归档",
@@ -19737,6 +19737,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
@@ -19974,6 +19975,8 @@
       "basicModels": "可用部分模型",
       "subscription": "订阅套餐",
       "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余额和充值余额使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "下月",
         "YEAR": "下一年",

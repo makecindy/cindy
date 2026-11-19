@@ -16492,7 +16492,7 @@
       "confirmArchive": {
         "title": "Archive session",
         "description": "Archive this session? It will be removed from the list.",
-        "dirtyWorktreeWarning": "Uncommitted changes will be saved before archiving. You can restore them from the task.",
+        "dirtyWorktreeWarning": "This task has uncommitted file changes. Archiving saves them by default so you can restore them from the task later.",
         "discardChanges": "Discard uncommitted changes",
         "discardWarning": "Uncommitted changes and new files will be lost.",
         "discardAndArchive": "Discard and archive",
@@ -19814,6 +19814,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "rolloverName": "Rollover grant",
         "giftCard": "Gift card · from {{sender}}",
         "original": "Original",
         "used": "Used",
@@ -20051,6 +20052,8 @@
       "basicModels": "Access some models",
       "subscription": "Subscription plan",
       "rollover": "Keep up to {{amount}} in unused balance for {{period}}",
+      "rolloverMonthly": "Roll over up to {{amount}} in unused balance as promotional balance\nValid for 1 month, with no further rollover\nUsed before Plan Balance and Top-up Balance",
+      "rolloverMonthlySummary": "Roll over up to {{amount}} in unused balance, valid for 1 month",
       "nextPeriod": {
         "MONTH": "next month",
         "YEAR": "next year",

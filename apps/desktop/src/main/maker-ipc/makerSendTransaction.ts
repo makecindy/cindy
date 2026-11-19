@@ -61,6 +61,7 @@ import {
   turnClassicalStyleFromSendOpts,
   turnUiLanguageFromSendOpts,
 } from './uiLanguageErrorNote.js';
+import { prependPrivateChatContext, type PrivateChatContext } from './privateChatContext.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -499,12 +500,12 @@ export interface MakerSendTransactionDeps {
    * 伙伴私聊引用回复的 `[引用说明]`:按落库内容里的 `replyQuote` 从库里重读原消息;没有引用时为 null。
    * 逐条都要带(陈述的是「本条」引用了什么),不进 wireNoteMemory 去重。
    */
-  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<string | null>;
+  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<PrivateChatContext | null>;
   /**
    * 私聊话题的 `[话题说明]`(话题开在主对话的哪条消息上);不是私聊话题时为 null。
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
-  readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readBotThreadNote?(sessionId: string): Promise<PrivateChatContext | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -1581,7 +1582,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
         : null;
       const withReplyQuoteNote = replyQuoteNote
-        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)
+        ? await prependPrivateChatContext(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote, sessionId, deps.prepareSendUserMessage)
         : withGoalInactiveNote;
       const withSourceNote = messageSourceNote
         ? prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)
@@ -1625,7 +1626,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const repeatableNotes: RepeatableWireNotes = {
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
-        'bot-thread': botThreadNote,
+        // Use both text and image identity to detect edits to a topic root.
+        'bot-thread': botThreadNote ? JSON.stringify([botThreadNote.text, botThreadNote.imageUrls]) : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
       };
@@ -1646,8 +1648,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
       }
-      if (plannedNotes['bot-thread']) {
-        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
+      if (plannedNotes['bot-thread'] && botThreadNote) {
+        outgoing = await prependPrivateChatContext(outgoing as HandoffWireMessage, botThreadNote, sessionId, deps.prepareSendUserMessage);
       }
       // The note belongs to the message that closed the card. A native command (a slash input) keeps its
       // first characters, so it carries no note and the note is dropped rather than left for the next message.

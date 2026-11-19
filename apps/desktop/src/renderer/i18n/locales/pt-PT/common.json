@@ -16648,7 +16648,7 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Será removida da lista.",
-        "dirtyWorktreeWarning": "As alterações sem commit serão guardadas antes de arquivar. Pode restaurá-las a partir da tarefa.",
+        "dirtyWorktreeWarning": "Esta tarefa contém alterações em ficheiros que ainda não foram incluídas num commit. Por predefinição, são guardadas ao arquivar a tarefa e podem ser restauradas mais tarde na própria tarefa.",
         "discardChanges": "Descartar alterações sem commit",
         "discardWarning": "As alterações sem commit e os ficheiros novos serão perdidos.",
         "discardAndArchive": "Descartar e arquivar",
@@ -19999,6 +19999,7 @@
         "empty": "Não existem atribuições promocionais disponíveis.",
         "incomplete": "Existem muitos registos de atribuições. Apenas são apresentados os {{count}} mais recentes.",
         "unnamed": "Atribuição promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Cartão de oferta · de {{sender}}",
         "original": "Original",
         "used": "Utilizado",
@@ -20236,6 +20237,8 @@
       "basicModels": "Acesso a alguns modelos",
       "subscription": "Plano de subscrição",
       "rollover": "Acumule até {{amount}} de saldo não utilizado para {{period}}",
+      "rolloverMonthly": "Acumule até {{amount}} de saldo não utilizado como saldo promocional\nVálido por 1 mês, sem nova acumulação\nUtilizado antes do Saldo do plano e do Saldo de carregamentos",
+      "rolloverMonthlySummary": "Acumule até {{amount}} de saldo não utilizado, válido por 1 mês",
       "nextPeriod": {
         "MONTH": "o próximo mês",
         "YEAR": "o próximo ano",

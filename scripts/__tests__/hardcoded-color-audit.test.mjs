@@ -129,7 +129,8 @@ test('old approved hljs and asset values are narrow, not file bypasses; retired 
   assert.deepEqual(objectPathAt(anonymous, anonymous.indexOf('"#fff"')), []);
   const css = fs.readFileSync(path.join(root,renderer,'styles/globals.css'),'utf8');
   const approvedSelectors = inspect(renderer+'styles/globals.css',css).filter(f=>f.rule==='bare-color' && f.disposition==='allowed');
-  assert.deepEqual(approvedSelectors.map(f=>f.value),['#2573ec','#c9d1d9']);
+  // Composer Stop working glow palette (DESIGN §2, registered 2026-11-18), then the hljs pair.
+  assert.deepEqual(approvedSelectors.map(f=>f.value),['#32c850','#1eb9aa','#ff7828','#6446ff','#f032b4','#b428f0','#288cff','#ff3264','#ffffff','#000000','#2573ec','#c9d1d9']);
   for (const file of ['components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
     const source = fs.readFileSync(path.join(root, renderer + file), 'utf8');
     const hits = inspect(renderer + file, source).filter(f => f.rule === 'bare-color');

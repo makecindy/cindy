@@ -16648,7 +16648,7 @@
       "confirmArchive": {
         "title": "Archivar sesión",
         "description": "¿Archivar esta sesión? Se quitará de la lista.",
-        "dirtyWorktreeWarning": "Los cambios sin confirmar se guardarán antes de archivar. Podrás restaurarlos desde la tarea.",
+        "dirtyWorktreeWarning": "Esta tarea contiene cambios en archivos que aún no se han confirmado. Al archivar la tarea, estos cambios se guardan de forma predeterminada y podrás restaurarlos más adelante desde la tarea.",
         "discardChanges": "Descartar cambios sin confirmar",
         "discardWarning": "Los cambios sin confirmar y los archivos nuevos se perderán.",
         "discardAndArchive": "Descartar y archivar",
@@ -19999,6 +19999,7 @@
         "empty": "No hay asignaciones promocionales disponibles.",
         "incomplete": "Hay muchos registros de asignaciones. Solo se muestran los últimos {{count}}.",
         "unnamed": "Asignación promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Tarjeta de regalo · de {{sender}}",
         "original": "Importe original",
         "used": "Usado",
@@ -20236,6 +20237,8 @@
       "basicModels": "Accede a algunos modelos",
       "subscription": "Plan de suscripción",
       "rollover": "Conserva hasta {{amount}} de saldo sin usar durante {{period}}",
+      "rolloverMonthly": "Acumula hasta {{amount}} de saldo sin usar como saldo promocional\nVálido durante 1 mes, sin nueva acumulación\nSe utiliza antes del Saldo del plan y del Saldo de recargas",
+      "rolloverMonthlySummary": "Acumula hasta {{amount}} de saldo sin usar, válido durante 1 mes",
       "nextPeriod": {
         "MONTH": "el próximo mes",
         "YEAR": "el próximo año",
