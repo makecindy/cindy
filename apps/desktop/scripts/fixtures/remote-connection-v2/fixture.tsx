@@ -321,7 +321,7 @@ void mountPage({
   },
   render: () => (
     <AppFrame>
-      <div className="mx-auto w-full max-w-[920px] px-6 py-6">
+      <div className={`mx-auto w-full px-6 py-6 ${ctx.case === 'default' ? 'max-w-[1000px]' : 'max-w-[920px]'}`}>
         <RemoteControlSection />
       </div>
     </AppFrame>

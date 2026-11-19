@@ -129,13 +129,13 @@ const SETTLE_MAX_MS = 2_000;
 /** openId 里代表「这台电脑的卡」的值(设备 id 不会是它)。 */
 const HUB_CARD = '\u0000hub';
 
-function useMeasuredWidth(): [RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement | null>(null);
+function useMeasuredWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+  const ref = useRef<T | null>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
-    const read = () => setWidth(Math.round(el.getBoundingClientRect().width));
+    const read = () => setWidth(el.getBoundingClientRect().width);
     read();
     if (typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver(read);
@@ -198,7 +198,9 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
 
 const PILL_W = 116;
 const PILL_H = 16;
-const INLINE_PILL_MIN_W = 92;
+const PILL_TEXT = 'text-11 leading-none tabular-nums';
+const INLINE_PILL_PADDING = 'px-1.5';
+const INLINE_PILL_SAMPLE_RTT_MS = 9_999;
 const STACKED_PILL_MIN_W = 52;
 const PILL_COLUMN_GAP = 4;
 /** Keep at least 2px of clearance next to a computer tile. */
@@ -236,8 +238,9 @@ function LatencyPill({
     >
       <span
         className={cn(
-          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5 text-11 leading-none tabular-nums',
-          stacked ? 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px' : 'px-1.5',
+          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5',
+          PILL_TEXT,
+          stacked ? 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px' : INLINE_PILL_PADDING,
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
         style={{ maxWidth }}
@@ -324,7 +327,8 @@ export function RemoteConnectionTopology({
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
-  const [ref, measured] = useMeasuredWidth();
+  const [ref, measured] = useMeasuredWidth<HTMLDivElement>();
+  const [inlinePillRef, measuredInlinePillWidth] = useMeasuredWidth<HTMLSpanElement>();
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const hubButton = useRef<HTMLButtonElement>(null);
@@ -333,7 +337,7 @@ export function RemoteConnectionTopology({
     if (el) tiles.current.set(id, el);
     else tiles.current.delete(id);
   };
-  const width = measured || FALLBACK_WIDTH;
+  const width = Math.round(measured) || FALLBACK_WIDTH;
   const [settled, setSettled] = useState(false);
   const measuredOnce = measured > 0;
   useEffect(() => {
@@ -349,8 +353,11 @@ export function RemoteConnectionTopology({
   const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
   const hubPillRoom = labelReach - HUB_TEXT_W / 2;
   const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
-  // Both columns use the tighter side's room so a protocol or latency update cannot change the line count.
-  const stackPills = (relaySide === undefined ? hubPillRoom : relayPillRoom) < INLINE_PILL_MIN_W;
+  const narrowestPillRoom = relaySide === undefined ? hubPillRoom : relayPillRoom;
+  const inlinePillWidth = Math.ceil(measuredInlinePillWidth) || PILL_W;
+  // Use the same font and locale as the labels. A fixed sample keeps the layout stable as RTTs change.
+  const stackPills = Math.min(PILL_W, narrowestPillRoom + PILL_MAX_SHIFT) < inlinePillWidth;
+  const minPillWidth = stackPills ? STACKED_PILL_MIN_W : inlinePillWidth;
   const selfName = model.self?.name || t('settings.devices.thisDevice');
   const selfProtocol = selfProtocolKind(model, linkStatus);
   const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
@@ -397,7 +404,7 @@ export function RemoteConnectionTopology({
     if (!g) continue;
     // Keep the entire column outside the hub text and the relay caption on this side.
     const pillRoom = group.side === relaySide ? relayPillRoom : hubPillRoom;
-    const shift = Math.min(PILL_MAX_SHIFT, Math.max(0, STACKED_PILL_MIN_W - pillRoom));
+    const shift = Math.min(PILL_MAX_SHIFT, Math.max(0, minPillWidth - pillRoom));
     const { toRelay, rows } = groupLines(layout, group, (id) => (isPhone(id) ? PHONE_W / 2 : m.half));
     if (toRelay && g.relay) {
       const emphasis = emphasisFor(group.ids, model.relay.flow !== null);
@@ -620,6 +627,13 @@ export function RemoteConnectionTopology({
 
   return (
     <div ref={ref} className="relative w-full select-none" style={{ ...LIVE_STYLE, height: layout.h }}>
+      <span
+        ref={inlinePillRef}
+        className={cn('invisible absolute left-0 top-0 w-max whitespace-nowrap', PILL_TEXT, INLINE_PILL_PADDING)}
+        aria-hidden
+      >
+        {linkTransportLabel('webrtc', t)} · {formatRtt(INLINE_PILL_SAMPLE_RTT_MS, t)}
+      </span>
       <svg className="pointer-events-none absolute inset-0" width={layout.w} height={layout.h} aria-hidden>
         {lines}
       </svg>
