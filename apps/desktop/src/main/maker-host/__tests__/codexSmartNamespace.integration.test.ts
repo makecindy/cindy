@@ -240,3 +240,79 @@ describe.skipIf(!binary)('9183 original plaintext misclassification in real nati
     }
   }, 60_000);
 });
+
+
+// Local bridges own the HTTP response and bypass the forwarded response adapter.
+// Test their actual wire output; the native matrix above proves the classification
+// of the identical canonical function_call envelope at the downstream boundary.
+describe('9183 local bridge final delivery', () => {
+  it.each(['openai-chat', 'anthropic-messages'] as const)('marks the real %s bridge output', async wireProtocol => {
+    fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-marker-bridge-'));
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(fixture.root);
+    const failures: unknown[] = [];
+    const names = ['spawn_agent', 'send_message', 'followup_task'];
+    const server = createServer(async (req, res) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        expect(body.model).toBe('gpt-6-astra');
+        expect(req.headers.authorization ?? `Bearer ${req.headers['x-api-key']}`).toBe('Bearer synthetic-bridge-key');
+        expect(req.headers['chatgpt-account-id']).toBeUndefined();
+        const tools = names.map(name => {
+          const tool = body.tools?.find((tool: any) => (tool.function?.name ?? tool.name ?? '').endsWith(name));
+          expect(tool).toBeDefined();
+          return { id: `call-${name}`, name: tool.function?.name ?? tool.name, arguments: JSON.stringify({ message: `bridge-${name}` }) };
+        });
+        let events: unknown[];
+        if (wireProtocol === 'openai-chat') {
+          const chunk = (delta: unknown, finish_reason: string | null) => ({ id: 'bridge-chat', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta, finish_reason }] });
+          events = [chunk({ role: 'assistant', tool_calls: tools.map((tool, index) => ({ index, id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.arguments } })) }, null), chunk({}, 'tool_calls')];
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n');
+        } else {
+          events = [{ type: 'message_start', message: { id: 'bridge-anthropic', type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+            ...tools.flatMap((tool, index) => [
+              { type: 'content_block_start', index, content_block: { type: 'tool_use', id: tool.id, name: tool.name, input: {} } },
+              { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: tool.arguments } },
+              { type: 'content_block_stop', index },
+            ]),
+            { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 3 } }, { type: 'message_stop' }];
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map((event: any) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+        }
+      } catch (error) { failures.push(error); res.writeHead(500).end(); }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const catalog = await import('../active-catalog.js');
+    const routing = await import('../provider-route.js');
+    const sessions = await import('../session-provider-store.js');
+    const proxy = await import('../codex-proxy-host.desktop.js');
+    try {
+      catalog.setCustomProviders([buildUserProvider({ id: 'bridge-parent', name: 'Synthetic bridge', runtimes: { codex: { baseUrl: endpoint, wireProtocol, models: [{ id: 'gpt-6-astra', name: 'Synthetic', contextWindow: 200000 }] } } })]);
+      routing.setCustomProviderKeyReader(() => 'synthetic-bridge-key');
+      sessions.setSessionProvider('bridge-task', 'bridge-parent');
+      proxy.registerComposed('bridge-task', 'bridge-thread', 'Synthetic bridge instructions');
+      proxy.setCodexProxyAuthInjection('provider-oauth');
+      await proxy.ensureCodexProxyReady();
+      const response = await fetch(`${proxy.getCodexProxyEndpoint()}/responses`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer synthetic-placeholder', 'thread-id': 'bridge-thread' }, body: JSON.stringify({
+        model: 'gpt-6-astra', stream: true, input: [{ role: 'user', content: 'Synthetic collaboration' }], tools: [{ type: 'namespace', name: 'collaboration', tools: names.map(name => ({ type: 'function', name, parameters: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } })) }],
+      }) });
+      expect(response.ok).toBe(true);
+      const wire = await response.text();
+      expect(failures).toEqual([]);
+      const events = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      expect(events.some(event => event.type === 'response.completed')).toBe(true);
+      const calls = events.flatMap(event => event.item ? [event.item] : event.response?.output ?? []).filter(item => item.type === 'function_call');
+      expect(calls.length).toBeGreaterThanOrEqual(9);
+      for (const call of calls) expect(call).toMatchObject({ namespace: 'collaboration', name: expect.stringMatching(/^(spawn_agent|send_message|followup_task)$/), encrypted_function_args: [] });
+      const done = events.filter(event => event.type === 'response.output_item.done').map(event => event.item);
+      expect(done.map(item => JSON.parse(item.arguments).message).sort()).toEqual(names.map(name => `bridge-${name}`).sort());
+    } finally {
+      proxy.unregister('bridge-task'); sessions.clearSessionProvider('bridge-task');
+      await proxy.disposeCodexProxy();
+      routing.setCustomProviderKeyReader(() => null); catalog.setCustomProviders([]);
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+      homeSpy.mockRestore(); fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

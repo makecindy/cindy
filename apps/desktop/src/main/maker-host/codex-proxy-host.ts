@@ -92,6 +92,7 @@ import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-brid
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { createCodexCollaborationMarkerTransform } from './codex-collaboration-marker.js';
 import {
   getActiveCatalog,
@@ -3710,7 +3711,22 @@ async function createCodexProxyHandle(
       return path.kind !== 'not-custom-provider-route'
         && !(path.kind === 'route' && path.pathKind === 'responses');
     },
-    requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
+    requestGuard: ctx => {
+      const textOnly = codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase);
+      if (ctx.method !== 'POST' || !/\/responses\/?(?:\?.*)?$/.test(ctx.url)) return textOnly;
+      // This existing final-delivery boundary also sees Chat/Anthropic/Pi local
+      // handlers. Namespace restoration has finished before anything reaches it.
+      return {
+        transformBody: (body, route) => textOnly?.transformBody(body, route) ?? body,
+        response: headers => chainResponseTransforms(
+          textOnly?.response(headers),
+          createCodexCollaborationMarkerTransform({
+            contentType: String(headers['content-type'] ?? ''),
+            contentEncoding: String(headers['content-encoding'] ?? ''),
+          }),
+        ) ?? new PassThrough(),
+      };
+    },
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
     webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
       const body: unknown = JSON.parse(message.toString('utf8'));
@@ -3730,7 +3746,6 @@ async function createCodexProxyHandle(
       return chainResponseTransforms(
         createResponsesNullArrayRepairTransform(response),
         execAdapter.createResponseTransform(ctx.reqId, response),
-        createCodexCollaborationMarkerTransform(response),
       );
     },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
