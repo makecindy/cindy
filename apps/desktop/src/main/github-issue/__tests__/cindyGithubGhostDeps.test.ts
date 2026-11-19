@@ -48,6 +48,7 @@ vi.mock('../myIssuesSnapshotStore.js', () => ({ readMyIssuesSnapshot: () => null
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), debug: vi.fn(), child: () => ({}) }) }));
 
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { submitGithubIssueWithConfirm } from '../githubIssueSubmitService.js';
 import { getMyIssuesService } from '../myIssuesRuntime.js';
 import { buildGithubUserSubmitterDeps } from '../cindyGithubGhostDeps.js';
 import {
@@ -58,7 +59,7 @@ import {
 } from '../githubUserIssueSubmitter.js';
 
 const platformOnly = { platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY };
-const personal = { ...platformOnly, githubUser: { kind: 'github-user', login: 'synthetic-user' } };
+const personal = { ...platformOnly, githubUser: { kind: 'github-user', login: 'synthetic-user' } } as const;
 function installed(over: Partial<InstalledGhost> = {}): InstalledGhost {
   return {
     manifest: { id: 'cindy-github', network: { secrets: [{ key: 'github_pat', source: 'gh-cli' }] } },
@@ -207,13 +208,91 @@ describe('GitHub identity wiring', () => {
     expect(h.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it.each([true, false])('exact lookup falls back once without borrowing another instance (present=%s)', async (present) => {
+  it.each(['PAT', 'CLI'].flatMap(source =>
+    ['revision', 'directory', 'instance', 'unchanged'].map(change => [source, change] as const),
+  ))('binds the %s confirmation to its original install (%s)', async (source, change) => {
+    if (source === 'PAT') h.saved.add('_root__cindy-github');
+    const deps = buildGithubUserSubmitterDeps();
+    h.dispatch.mockImplementation(async (request) => request.args.name === 'create_issue'
+      ? { ok: true, result: { data: { number: 80, html_url: 'https://github.com/makecindy/cindy/issues/80' } } }
+      : { ok: true, result: { data: { login: 'synthetic-user' } } });
+    const result = await submitGithubIssueWithConfirm({
+      resolveSubmissionChoices: workdir => resolveGithubIssueSubmissionChoices(deps, workdir),
+      confirm: async (_session, draft, _env, choices) => {
+        expect(choices).toEqual(personal);
+        // A replacement can keep the same login; only a matching install may submit.
+        const over: Partial<InstalledGhost> = change === 'revision'
+          ? { approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } }
+          : change === 'directory' ? { dir: path.join('/other', 'cindy-github'), instanceKey: '_root__cindy-github' }
+          : change === 'instance' ? { dir: path.join('/virtual', 'cindy-github'), instanceKey: 'cindy-github' }
+          : {};
+        h.ghosts = [installed(over)];
+        if (source === 'PAT') h.saved.add(installedGhostStoragePart(h.ghosts[0]!));
+        return { confirmed: true, ...draft, submissionIdentity: choices.githubUser! };
+      },
+      postIssue: (identity, body) => postGithubIssueAsUser(deps,
+        identity as Extract<typeof identity, { kind: 'github-user' }>, body(), '/repo'),
+      getAppVersion: () => '0.0.0',
+      getOsInfo: () => ({ platform: 'darwin', arch: 'arm64', osVersion: 'synthetic' }),
+      getTurnModelId: async () => 'synthetic-model',
+      getRegion: () => 'cn',
+      getFallbackLocale: () => 'en',
+      getSubmitterName: () => undefined,
+    }, { sessionId: 'synthetic-session', agentKind: 'codex', workingDir: '/repo',
+      title: 'Synthetic', body: 'Synthetic', type: 'bug' });
+    expect(result).toMatchObject(change === 'unchanged' ? { ok: true, issueNumber: 80 }
+      : { ok: false, errorCode: 'AUTH_NOT_READY' });
+    expect(h.dispatch).toHaveBeenCalledTimes(change === 'unchanged' ? 3 : 1);
+  });
+
+  it('rechecks the pinned install between resolution and actual dispatch', async () => {
+    const deps = buildGithubUserSubmitterDeps();
+    await expect(resolveGithubIssueSubmissionChoices(deps, '/repo')).resolves.toEqual(personal);
+    h.dispatch.mockClear();
+    const pending = postGithubIssueAsUser(deps, personal.githubUser,
+      { title: 'Synthetic', description: 'Synthetic', type: 'bug', appVersion: '0.0.0' }, '/repo');
+    h.ghosts[0]!.approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+    await expect(pending).rejects.toMatchObject({ issueErrorCode: 'AUTH_NOT_READY' });
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('blocks replacement after the post-confirmation identity response before create', async () => {
+    const deps = buildGithubUserSubmitterDeps();
+    await resolveGithubIssueSubmissionChoices(deps, '/repo');
+    h.dispatch.mockImplementationOnce(async () => {
+      h.ghosts[0]!.approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+      return { ok: true, result: { data: { login: 'synthetic-user' } } };
+    });
+    await expect(postGithubIssueAsUser(deps, { kind: 'github-user', login: 'synthetic-user' },
+      { title: 'Synthetic', description: 'Synthetic', type: 'bug', appVersion: '0.0.0' }, '/repo'))
+      .rejects.toMatchObject({ issueErrorCode: 'AUTH_NOT_READY' });
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('a fresh submission and shared reads use the new install without rebinding an old confirmation', async () => {
+    const old = buildGithubUserSubmitterDeps();
+    await resolveGithubIssueSubmissionChoices(old, '/repo');
+    h.ghosts = [installed({ approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } })];
+    await expect(resolveGithubIssueSubmissionChoices(buildGithubUserSubmitterDeps(), '/repo')).resolves.toEqual(personal);
+    const shared = buildGithubUserSubmitterDeps({ pinInstallation: false });
+    await resolveGithubIssueSubmissionChoices(shared);
+    h.ghosts = [installed()];
+    await expect(resolveGithubIssueSubmissionChoices(shared)).resolves.toEqual(personal);
+    h.dispatch.mockClear();
+    h.ghosts = [installed({ approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } })];
+    await expect(postGithubIssueAsUser(old, { kind: 'github-user', login: 'synthetic-user' },
+      { title: 'Synthetic', description: 'Synthetic', type: 'bug', appVersion: '0.0.0' }, '/repo'))
+      .rejects.toMatchObject({ issueErrorCode: 'AUTH_NOT_READY' });
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('shared read exact lookup falls back once without borrowing another instance (present=%s)', async (present) => {
     h.preciseMissing = true;
     h.ghosts = present ? [installed()] : [installed({ namespace: 'acme',
       dir: path.join('/virtual', '_ns', 'acme', 'cindy-github') })];
     h.saved.add('_root__cindy-github');
     h.saved.add('_ns__acme__cindy-github');
-    const result = await callCindyGithubOperation(buildGithubUserSubmitterDeps(), 'get_current_user', {},
+    const result = await callCindyGithubOperation(buildGithubUserSubmitterDeps({ pinInstallation: false }), 'get_current_user', {},
       { instanceId: '_root__cindy-github' });
     expect(result.ok).toBe(present);
     expect(h.scans).toBe(1);

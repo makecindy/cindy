@@ -11,7 +11,7 @@
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { canUseGithubHostCredentials } from '../cindy-brain/GhostManager.js';
-import { type InstalledGhost } from '../../shared/ghost.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart, resolveInstalledGhost } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { createLogger } from '../logger.js';
@@ -35,7 +35,7 @@ const log = createLogger('github-issue/github-user');
  * 定好:搜索失败 → 静默降级为「这次没有增强」(见 myIssuesService 的可选增强口径)。
  */
 export function getSharedGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
-  if (!sharedDeps) sharedDeps = buildGithubUserSubmitterDeps();
+  if (!sharedDeps) sharedDeps = buildGithubUserSubmitterDeps({ pinInstallation: false });
   return sharedDeps;
 }
 
@@ -67,18 +67,35 @@ function githubInstance(workdir?: string | null, instanceId?: string): Installed
   return ghost;
 }
 
-export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
+/** Each submission owns its deps through confirmation; shared read-only queries opt out. */
+export function buildGithubUserSubmitterDeps(
+  { pinInstallation = true }: { pinInstallation?: boolean } = {},
+): GithubUserIssueSubmitterDeps {
+  let pinned: { key: string; dir: string; approval: string; workdir: string | null } | null = null;
+  const resolveInstanceId = (workdir?: string | null, instanceId?: string): string | null => {
+    if (pinned && (workdir ?? null) !== pinned.workdir) return null;
+    const ghost = githubInstance(workdir, instanceId ?? pinned?.key);
+    if (!ghost) return null;
+    const key = installedGhostStoragePart(ghost);
+    const approval = ghostInstallApprovalToken(ghost.approval);
+    if (pinned && (key !== pinned.key || ghost.dir !== pinned.dir || approval !== pinned.approval)) return null;
+    // Eligibility is local policy. Authentication belongs to the real request, not
+    // an extra short network probe. Capture primitives so in-place updates cannot rebind it.
+    if (!ghostSecretSaved(key, CINDY_GITHUB_SECRET_KEY) && !canUseGithubHostCredentials(ghost)) return null;
+    if (pinInstallation && !pinned) pinned = { key, dir: ghost.dir, approval, workdir: workdir ?? null };
+    return key;
+  };
   return {
-    resolveInstanceId: (workdir, instanceId) => {
-      const ghost = githubInstance(workdir, instanceId);
-      if (!ghost) return null;
-      const key = installedGhostStoragePart(ghost);
-      // Host eligibility is local policy, not a short network health check. The real
-      // identity/tool request validates authentication within its existing timeout.
-      return ghostSecretSaved(key, CINDY_GITHUB_SECRET_KEY) || canUseGithubHostCredentials(ghost)
-        ? key : null;
+    resolveInstanceId,
+    callGhostTool: (request) => {
+      // Recheck at dispatch too: the caller awaits resolution, even when it is synchronous.
+      if (pinInstallation && (!pinned || request.ghostId !== pinned.key ||
+          resolveInstanceId(pinned.workdir, pinned.key) !== pinned.key)) {
+        return Promise.resolve({ ok: false, errorCode: 'AUTH_NOT_READY',
+          message: 'The confirmed GitHub plugin installation changed; start a new confirmation.' });
+      }
+      return getGhostPipeDispatcher().callGhostTool(request);
     },
-    callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
     logger: log,
   };
 }
