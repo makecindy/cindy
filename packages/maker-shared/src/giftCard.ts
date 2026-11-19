@@ -207,9 +207,9 @@ function projectCard(value: unknown): GiftCard {
   }
   const destination = destinationOf(value);
   const purchased = destination === 'PURCHASED';
-  // 买来的卡永久有效、没有领取截止，两端都直接这样告诉用户：带了截止或有效天数的「买来的卡」
-  // 是自相矛盾的响应，拒绝，不能悄悄隐去条款。
-  if (purchased && (value.claimDeadline !== null || value.validityDays !== null)) invalid();
+  // 买来的卡永久有效、没有领取截止，两端都直接这样告诉用户：带了截止或有效天数、或状态是
+  // 「已过期」的「买来的卡」是自相矛盾的响应，拒绝，不能悄悄隐去条款或告诉用户永久卡过期了。
+  if (purchased && (status === 'EXPIRED' || value.claimDeadline !== null || value.validityDays !== null)) invalid();
   return {
     status: status as GiftCardStatus,
     amount: amount(value.amount),

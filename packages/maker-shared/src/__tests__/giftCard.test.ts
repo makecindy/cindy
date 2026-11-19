@@ -103,6 +103,17 @@ describe('gift card server responses', () => {
     if (creditExpiresAt === null) expect(() => projectGiftCardPreview({ card: purchased })).toThrow();
   });
 
+  // 买来的卡永久有效：预览或兑换结果里出现「已过期」同样自相矛盾，拒绝而不是告诉用户卡过期了。
+  it('rejects a purchased card reported as expired', () => {
+    const expired = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null, status: 'EXPIRED',
+    };
+    expect(() => projectGiftCardPreview({ card: expired })).toThrow();
+    expect(() => projectGiftCardRedemption({ card: expired, credit: { state: 'APPLIED', amount: '20', expiresAt: null } })).toThrow();
+    // 后台发的卡过了领取截止照常是「已过期」。
+    expect(projectGiftCardPreview({ card: { ...card, status: 'EXPIRED' } }).card.status).toBe('EXPIRED');
+  });
+
   // 用户买的卡进充值余额、永久有效：没有领取截止，也没有有效天数。
   it('accepts a purchased card without a claim deadline or validity days', () => {
     const purchased = {
