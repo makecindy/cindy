@@ -148,7 +148,8 @@ const BYPASS_ROWS = [
   ['169.254/16 is 169.0.0.254/16 (url_canon_ip.h)', ['169.254/16'], 'https://169.0.3.4/', true],
   ['169.254/16 does not cover 169.1.x.x', ['169.254/16'], 'https://169.1.0.1/', false],
   ['a path is no rule: dropped', ['example.com/path'], 'https://example.com/', false],
-  ['one item is not split at commas', ['a.example.com, b.example.com'], 'https://a.example.com/', false],
+  ['a hostname rule is split at semicolons when Chromium copies it', ['a.example.com; b.example.com'], 'https://b.example.com/', true],
+  ['an invalid port drops the item before Chromium copies it', ['a.example.com, b.example.com:bad'], 'https://a.example.com/', false],
   ['the macOS default list', ['*.local', '169.254/16'], 'https://printer.local/', true],
   ['<-loopback> removes the implicit rules', ['<-loopback>'], 'https://localhost/', false],
   ['a later rule overrides an earlier one', ['localhost', '<-loopback>'], 'https://localhost/', false],
@@ -182,6 +183,30 @@ test('exceptions and the implicit rules bypass the proxy as in Chromium', async 
   for (const [name, upstream, bypassed] of IMPLICIT_ROWS) {
     await t.test(`implicit: ${name}`, async () => assert.equal(await resolveUnder(scutil(HTTPS), upstream), bypassed ? null : VIA_HTTPS));
   }
+});
+
+// Entry/result: the Host outbound resolver reads the captured scutil dictionary and selects DIRECT.
+// Rule: #11536 macOS proxy comparison, exceptions row for a.example.com; Chromium splits the
+// serialized rule when copying the proxy config. Gap: the old comma case expected a proxy.
+// Minimal input: one ExceptionsList entry containing both names. Tier: unit with injected
+// scutil output and the production resolver; no system settings or network requests.
+// Measured: 0.43 s for this file (node:test, Node 22.22.3).
+test('macOS proxy bypass matches both names in the captured CI exception', async () => {
+  const output = scutil({
+    ExceptionsList: ['*.local', '169.254/16', 'example.com:8443', '10.0.0.0/8', 'ex?mple.com',
+      'https://www.example.com', 'a.example.com, b.example.com', 'fd00::/8'],
+    FTPPassive: 1,
+    ...HTTP,
+    ...HTTPS,
+    ProxyAutoConfigEnable: 0,
+    ProxyAutoDiscoveryEnable: 0,
+    SOCKSEnable: 0,
+  });
+
+  assert.equal(await resolveUnder(output, 'https://a.example.com/'), null);
+  assert.equal(snapshotOf('https://a.example.com/').kind, 'direct');
+  assert.equal(await resolveUnder(output, 'https://b.example.com/'), null);
+  assert.equal(await resolveUnder(output, 'https://intranet.corp/'), VIA_HTTPS);
 });
 
 test('without the Chromium proxy helper, PAC is unresolved, direct, with a warn; auto-discovery alone uses the manual settings', async () => {

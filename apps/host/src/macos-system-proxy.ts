@@ -483,7 +483,19 @@ function parseScutilProxyOutput(text: string): MacSystemProxySettings {
       // Chromium skips an item that is not a string.
       if (typeof item !== 'string') continue;
       const rule = parseBypassRule(item);
-      if (rule) settings.bypass.push(rule);
+      if (!rule) continue;
+      if (rule.kind !== 'hostname' || !/[,;]/.test(item)) {
+        settings.bypass.push(rule);
+        continue;
+      }
+      // The macOS reader adds the whole item as one rule. Copying the config then serializes
+      // and reparses its rules on commas and semicolons (ProxyHostMatchingRules::operator=).
+      const scheme = rule.scheme ? `${rule.scheme}://` : '';
+      const port = rule.port === -1 ? '' : `:${rule.port}`;
+      for (const entry of `${scheme}${rule.pattern}${port}`.split(/[,;]/)) {
+        const copiedRule = parseBypassRule(entry);
+        if (copiedRule) settings.bypass.push(copiedRule);
+      }
     }
   }
   // `PrependRuleToBypassSimpleHostnames`: `<local>` goes first, so every listed rule overrides it.
