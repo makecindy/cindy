@@ -144,6 +144,8 @@ export function setAccountUsageNow(now: () => number): void {
 
 interface CacheRecord {
   snapshot?: ProviderAccountUsageSnapshot;
+  /** A panel read can precede the failed turn, even inside the refresh cooldown. */
+  checkedAfterGoLimit?: boolean;
   expiresAt: number;
   lastAttemptAt: number;
   lastError?: ProviderAccountUsageError;
@@ -160,7 +162,7 @@ export function invalidateKimiAccountUsage(): void {
   kimiIdentities.clear();
   for (const key of cache.keys()) if (key.includes(':kimi-coding-quota-v1:')) cache.delete(key);
 }
-const kimiInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
+const quotaInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
 
 class AccountUsageRequestError extends Error {
   constructor(
@@ -450,6 +452,7 @@ async function fetchAccountJson<T>(
 /** 查询入口：unsupported / unavailable / ready 三态。网络失败时回落过期快照（stale）。 */
 export async function readProviderAccountUsage(
   request: ProviderAccountUsageRequest,
+  reason?: 'after-limit',
 ): Promise<ProviderAccountUsageResult> {
   const ownerStamp = ownerStampReader();
   const provider = providerReader(request.providerId);
@@ -468,12 +471,14 @@ export async function readProviderAccountUsage(
     if (!ownerCurrent() || epoch !== kimiMutationEpoch) return { status: 'unavailable', error: 'updating' };
   }
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
+  const afterGoLimit = reason === 'after-limit' && resolution?.integrationId === 'opencode-go-quota-v1';
+  const shareRead = kimi || afterGoLimit;
   const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
   if (kimi && kimiIdentities.get(scope)?.identity !== identity) {
     kimiIdentities.set(scope, { identity, revision: ++kimiRevision });
   }
   const generation = kimiIdentities.get(scope);
-  const current = () => !kimi || (ownerCurrent() && kimiIdentities.get(scope) === generation
+  const current = () => !shareRead || (ownerCurrent() && (!kimi || kimiIdentities.get(scope) === generation)
     && JSON.stringify(resolveProviderAccountUsage(request.providerId, request.agent)) === JSON.stringify(resolution));
   if (!resolution) {
     // 没认领到官方端点，或 key 读不到。区分「本来就没有接口」与「有接口但 key 缺失」。
@@ -482,14 +487,15 @@ export async function readProviderAccountUsage(
     }
     return { status: 'unsupported' };
   }
-  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, kimi ? String(generation?.revision) : '');
+  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, kimi ? String(generation?.revision) : '', afterGoLimit);
   const flightKey = `${scope}:${identity}:${generation?.revision}`;
-  let pending = kimi ? kimiInFlight.get(flightKey) : undefined;
+  let pending = shareRead ? quotaInFlight.get(flightKey) : undefined;
   if (!pending) {
     pending = run();
-    if (kimi) {
-      kimiInFlight.set(flightKey, pending);
-      void pending.finally(() => { if (kimiInFlight.get(flightKey) === pending) kimiInFlight.delete(flightKey); });
+    if (shareRead) {
+      quotaInFlight.set(flightKey, pending);
+      const clear = () => { if (quotaInFlight.get(flightKey) === pending) quotaInFlight.delete(flightKey); };
+      void pending.then(clear, clear);
     }
   }
   const result = await pending;
@@ -503,6 +509,7 @@ async function readResolvedAccountUsage(
   ownerStamp: ReturnType<OwnerStampReader>,
   current: () => boolean,
   revision: string,
+  afterGoLimit: boolean,
 ): Promise<ProviderAccountUsageResult> {
   // 缓存键含凭证指纹：同一供应商下换 key（不同账户）后旧账户快照绝不复用。
   const keyFingerprint = createHash('sha256').update(resolution.key).digest('hex').slice(0, 12);
@@ -514,9 +521,11 @@ async function readResolvedAccountUsage(
   if (structuredQuota && record?.lastError && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS) {
     return record.snapshot ? { status: 'ready', snapshot: record.snapshot, stale: true, error: record.lastError, agent: resolution.agent } : { status: 'unavailable', error: record.lastError };
   }
-  const manualRefreshBlocked =
-    request.forceRefresh === true
+  const refresh = request.forceRefresh === true || afterGoLimit;
+  const refreshBlocked =
+    refresh
     && record !== undefined
+    && (!afterGoLimit || record.checkedAfterGoLimit === true)
     && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS;
   // 限流窗口内不发起请求：有旧快照就回 stale，否则报 throttled（Retry-After 生效）。
   if (record?.retryAt && now < record.retryAt) {
@@ -532,11 +541,11 @@ async function readResolvedAccountUsage(
     }
     return { status: 'unavailable', error: 'throttled', retryAt: record.retryAt };
   }
-  if (manualRefreshBlocked && record.snapshot && record.expiresAt > now) {
+  if (refreshBlocked && record.snapshot && record.expiresAt > now) {
     return { status: 'ready', snapshot: record.snapshot, stale: false, agent: resolution.agent };
   }
   if (
-    !request.forceRefresh
+    !refresh
     && record?.snapshot
     && record.expiresAt > now
     && record.lastError === undefined
@@ -555,6 +564,7 @@ async function readResolvedAccountUsage(
     if (!current()) return { status: 'unavailable', error: 'updating' };
     cache.set(cacheKey, {
       snapshot,
+      checkedAfterGoLimit: afterGoLimit,
       expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota'
         ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
         : snapshot.kind === 'opencode-go-quota'
@@ -611,7 +621,7 @@ async function readResolvedAccountUsage(
     if (
       err instanceof AccountUsageRequestError
       && err.code === 'rate-limited'
-      && request.forceRefresh
+      && refresh
     ) {
       return { status: 'unavailable', error: 'throttled', retryAt: err.retryAt };
     }
@@ -627,7 +637,7 @@ async function readResolvedAccountUsage(
 export function resetProviderAccountUsageForTest(): void {
   cache.clear();
   kimiIdentities.clear();
-  kimiInFlight.clear();
+  quotaInFlight.clear();
   oauthReader = () => null;
   prepareOAuth = async () => {};
   providerReader = () => undefined;
@@ -649,12 +659,15 @@ export async function readKimiCodingAccountUsage(request: ProviderAccountUsageRe
 }
 
 /** Only the fixed OpenCode Go integration is exposed to linked same-account computers. */
-export async function readOpenCodeGoAccountUsage(request: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult> {
+export async function readOpenCodeGoAccountUsage(
+  request: ProviderAccountUsageRequest,
+  reason?: 'after-limit',
+): Promise<ProviderAccountUsageResult> {
   const provider = providerReader(request.providerId);
   const agents = request.agent ? [request.agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
   const agent = agents.find(candidate => isOpenCodeGoProvider(provider, candidate));
   if (!agent) return { status: 'unsupported' };
   // Pin the generic reader to the official Go route so a mixed provider cannot
   // select another integration or lend it the wrong runtime credential.
-  return readProviderAccountUsage({ ...request, agent });
+  return readProviderAccountUsage({ ...request, agent }, reason);
 }
