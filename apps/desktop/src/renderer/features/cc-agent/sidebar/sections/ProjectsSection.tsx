@@ -994,9 +994,10 @@ export function ProjectsSection({
     dialogueDeviceTarget?: DialogueDeviceTarget | null,
   ): ReactNode => {
     if (entry.kind === 'session' || entry.kind === 'automation-group') {
-      return (
+      const key = entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`;
+      const rows = (
         <SessionEntryRows
-          key={entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`}
+          key={key}
           entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}
@@ -1022,6 +1023,8 @@ export function ProjectsSection({
           showFirstDivider={false}
         />
       );
+      // Inside the manual project sorter these tasks still own their whole-row native drag.
+      return customProjectOrder ? <div key={key} data-no-drag>{rows}</div> : rows;
     }
     if (entry.kind === 'automations-group') {
       const groupKey = `${AUTOMATIONS_GROUP_KEY}:${dialogueGroupKey}`;

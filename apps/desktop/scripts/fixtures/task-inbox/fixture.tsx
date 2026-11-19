@@ -109,6 +109,10 @@ function IntroSpecimen() {
   );
 }
 
+const looseDrag = ctx.case === 'loose-drag-list' || ctx.case === 'loose-drag-text';
+const manualOrder = ctx.case === 'dialogue-order' || looseDrag;
+if (looseDrag) localStorage.setItem('sidebar.mainListMode', ctx.case === 'loose-drag-list' ? 'list' : 'text');
+
 function StructureSpecimen() {
   const filter = useSidebarFilter(hidden, snapshot);
   const task = {
@@ -116,11 +120,10 @@ function StructureSpecimen() {
     workingDir: '/workspace/Cindy',
     workspaceKind: 'project' as const,
   };
-  const manual = ctx.case === 'dialogue-order';
   const report: Session = { ...task, id: 'report', title: '每日自动巡检', source: 'scheduler' };
   const teammate: Session = { ...task, id: 'teammate', title: '伙伴的例行整理', source: 'bot',
     companion: { id: 'demo', role: 'routine', taskProjectDir: task.workingDir } };
-  const source = manual ? [task, sessions[2]] : [task, report, teammate];
+  const source = manualOrder ? [task, sessions[2]] : [task, report, teammate];
   const allProjects = groupSessions(source).projects;
   const projects = groupSessions(filterSidebarTasks(source, filter, new Map())).projects;
   const [projectCollapsed, setProjectCollapsed] = useState(true);
@@ -133,11 +136,11 @@ function StructureSpecimen() {
       <ProjectsSection
         unclassified={[]}
         projects={projects}
-        dialogues={manual ? [sessions[1]] : []}
+        dialogues={manualOrder ? [sessions[1]] : []}
         inboxSessions={filterSidebarTasks([task, ...sessions.slice(1), report], filter, new Map())}
         allKnownProjects={allProjects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
-        filter={{ ...filter, groupBy: 'project', groupDevice: !manual, groupDialogue: true, projectOrder: manual ? 'custom' : filter.projectOrder }}
+        filter={{ ...filter, groupBy: 'project', groupDevice: !manualOrder, groupDialogue: !looseDrag, projectOrder: manualOrder ? 'custom' : filter.projectOrder }}
         collapsed={new Set(projectCollapsed ? projects.map((p) => p.projectKey) : [])}
         isAllCollapsed={projectCollapsed}
         priorityContext={priorityContext}
@@ -219,7 +222,7 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'intro' ? <IntroSpecimen /> : (ctx.case === 'structure' || ctx.case === 'dialogue-order') ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro' ? <IntroSpecimen /> : (ctx.case === 'structure' || manualOrder) ? <StructureSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });

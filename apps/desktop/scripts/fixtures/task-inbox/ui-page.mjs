@@ -11,6 +11,8 @@ export default {
     },
   },
   cases: {
+    'loose-drag-list': { about: 'Drag an ungrouped task from the whole list row in manual project order' },
+    'loose-drag-text': { about: 'Drag an ungrouped task from the whole text row in manual project order' },
     'dialogue-order': { about: 'Drag the dialogue group between projects, collapse it, and verify its position' },
     structure: {
       about: 'Switch modes and filter automation tasks from the inbox menu',
@@ -30,6 +32,22 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('loose-drag-')) {
+      const row = page.locator('[data-sortable-id] [data-session-id="waiting"]');
+      await row.waitFor();
+      const drag = await row.evaluate(node => {
+        const transfer = new DataTransfer();
+        node.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        node.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: transfer }));
+        return {
+          draggable: node.draggable,
+          id: transfer.getData('application/x-cindy-session-id'),
+          hasLink: Boolean(transfer.getData('application/x-cindy-session-link')),
+        };
+      });
+      assert.deepEqual(drag, { draggable: true, id: 'waiting', hasLink: true });
+      return;
+    }
     if (ui.case === 'dialogue-order') {
       const header = page.locator('[data-dialogue-sort-handle]');
       await header.waitFor();
