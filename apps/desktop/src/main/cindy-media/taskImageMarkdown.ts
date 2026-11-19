@@ -79,10 +79,12 @@ export function localTaskImagePath(url: string): string | null {
   // A model sometimes copies the xdt-file example and substitutes xdt-image.
   // Only this unambiguous, hostless shape is recoverable; the old protocol stays strict.
   if (value.startsWith('xdt-image:///') || value.startsWith('xdt-file:///')) {
+    value = value.slice(value.indexOf('://') + 3);
     try {
-      value = decodeURIComponent(value.slice(value.indexOf('://') + 3));
+      value = decodeURIComponent(value);
     } catch {
-      return null;
+      // Model-written paths can contain a literal '%' (e.g. shot (100%).png).
+      // Keep the original payload on malformed escapes, like the renderer bridge.
     }
     if (/^\/[A-Za-z]:[\\/]/.test(value)) value = value.slice(1);
   }

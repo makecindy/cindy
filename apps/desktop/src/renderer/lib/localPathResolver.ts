@@ -839,6 +839,11 @@ export function normalizeMarkdownImageSrc(
   if (!allowPrivilegedLinks) {
     return /^https?:\/\//i.test(src) ? src : undefined;
   }
+  // Legacy hostless image URLs describe a local file, not a session cache entry.
+  // Reuse the local-file bridge only after the privileged-link check (#8951).
+  if (src.startsWith('xdt-image:///')) {
+    return normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
+  }
   if (
     src.startsWith('data:') ||
     src.startsWith('http://') ||

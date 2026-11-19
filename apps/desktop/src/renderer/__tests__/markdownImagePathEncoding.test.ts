@@ -11,6 +11,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeMarkdownImageSrc } from '@/lib/localPathResolver';
+import remarkBareSpaceLocalImages from '../components/chat/remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
 } from '../components/chat/remarkPreserveRawLocalDestinations';
@@ -30,7 +31,7 @@ function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | un
           return null;
         },
       },
-      remarkPlugins: [remarkPreserveRawLocalDestinations],
+      remarkPlugins: [remarkBareSpaceLocalImages, remarkPreserveRawLocalDestinations],
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),
@@ -72,6 +73,8 @@ describe('Markdown local image path encoding', () => {
       'xdt-file://local/?path=%2Ftmp%2Falready-routed.png',
       'https://example.com/image%20name.png',
       'data:image/png;base64,AAAA',
+      'xdt-image://session-id/image%20name.png',
+      'xdt-image://generated/image.png',
     ]) {
       expect(normalizeMarkdownImageSrc(url, '/repo', true)).toBe(url);
     }
@@ -80,6 +83,27 @@ describe('Markdown local image path encoding', () => {
   it('normalizes legacy path-shaped xdt-file image URLs for the custom protocol', () => {
     const path = 'D:/Users/test/My Pictures/image.png';
     expect(normalizeMarkdownImageSrc(`xdt-file:///${path}`, '/repo', true)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  // #8951: exercise Markdown serialization as well as the URL bridge. These
+  // URI paths have stable '/' separators on every host (unit tier).
+  it.each([
+    ['xdt-image:///C:/My Pictures/shot (100%).png', 'C:/My Pictures/shot (100%).png'],
+    ['xdt-image:///tmp/My Pictures/shot (100%).png', '/tmp/My Pictures/shot (100%).png'],
+    ['xdt-image:///C:/My%20Pictures/shot%20(100%25).png', 'C:/My Pictures/shot (100%).png'],
+    ['xdt-image:///tmp/report%2520final.png', '/tmp/report%20final.png'],
+    ['xdt-file:///tmp/My%20Pictures/100%.png', '/tmp/My%20Pictures/100%.png'],
+  ])('loads the original hostless Markdown destination: %s', (url, path) => {
+    expect(normalizedImageSrc(`![hostless](<${url}>)`)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  it('loads the reported bare-space hostless image without angle brackets', () => {
+    const path = 'C:/My Pictures/shot (100%).png';
+    expect(normalizedImageSrc(`![hostless](xdt-image:///${path})`)).toBe(
       `xdt-file://local/?path=${encodeURIComponent(path)}`,
     );
   });
@@ -130,6 +154,7 @@ describe('Markdown local image path encoding', () => {
       'relative/private.png',
       'file:///tmp/private.png',
       'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+      'xdt-image:///tmp/private.png',
     ]) {
       expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
     }

@@ -536,6 +536,30 @@ describe('task image delivery', () => {
     expect(hook.text).toContain(example);
   });
 
+  // #8951: existing hostless coverage used an encoded URL without a literal %.
+  // Read/import the same native file through chat and IM, not a mock importer
+  // (unit tier; existing in-memory DB and per-test temporary directory).
+  it.each(['xdt-image', 'xdt-file'])('delivers a raw-percent hostless %s image through chat and IM', async (scheme) => {
+    const source = path.join(work, 'shot (100%).png');
+    await fs.writeFile(source, PNG);
+    const url = pathToFileURL(source).href.replace(/^file:/, `${scheme}:`).replace(/%20/g, ' ').replace(/%25/g, '%');
+    const text = `![hostless](<${url}>)`;
+    const personal = await materializeLocalMarkdownImages({ text, workingDir: work, sessionId: 's' });
+    expect(personal.absPaths).toHaveLength(1);
+    expect(personal.text).toBe('hostless');
+    const [saved] = await restoreTaskImageRows(client, [insert(text)]);
+    expect(JSON.parse(saved.content)).toContain('cindy-media://');
+    await fs.rm(source);
+    const hook = await collectOutboundAttachments(JSON.parse(saved.content), [], {
+      resolveImageUrl: resolveSafe,
+      log: { warn: vi.fn() },
+    });
+    expect(hook.skipped).toBe(0);
+    expect(hook.attachments).toHaveLength(1);
+    expect(await fs.readFile(personal.absPaths[0])).toEqual(PNG);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
   it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
     // 2026-10-26 Slack: previews saved outside the workdir showed on desktop but never reached the channel.
     const outside = path.join(state.root, 'elsewhere');

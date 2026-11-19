@@ -47,7 +47,9 @@ const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
   return (tree) => {
     visit(tree, ['image', 'link'], (node) => {
       const typed = node as Image | Link;
-      if (!isLocalDestination(typed.url)) return;
+      const hostlessImage = node.type === 'image' &&
+        (typed.url.startsWith('xdt-image:///') || typed.url.startsWith('xdt-file:///'));
+      if (!hostlessImage && !isLocalDestination(typed.url)) return;
 
       const prop = node.type === 'image' ? RAW_LOCAL_IMAGE_SRC_PROP : RAW_LOCAL_LINK_HREF_PROP;
       typed.data = {
