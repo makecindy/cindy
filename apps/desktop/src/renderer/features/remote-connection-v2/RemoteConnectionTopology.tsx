@@ -102,6 +102,7 @@ export interface RemoteConnectionTopologyProps {
   standby?: boolean;
   /** 点折叠的离线行:展开 / 收起离线设备(折叠与否由 model 决定)。 */
   onToggleOffline: () => void;
+  onDelete?: (node: TopologyNode, restoreFocus: () => HTMLElement | null) => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   /** 深链要打开哪台设备的卡片;设备还没画出来(离线折叠)时等它出现 */
   focusDeviceId?: string | null;
@@ -289,6 +290,7 @@ export function RemoteConnectionTopology({
   issue = null,
   standby = false,
   onToggleOffline,
+  onDelete,
   onRemoteDesktop,
   focusDeviceId = null,
   focusRequestKey = null,
@@ -301,9 +303,9 @@ export function RemoteConnectionTopology({
   const [ref, measured] = useMeasuredWidth();
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  // 深链打开卡片前要滚到的图块(看得见的那一层)。
-  const tiles = useRef(new Map<string, HTMLElement>());
-  const tileRef = (id: string) => (el: HTMLElement | null) => {
+  const hubButton = useRef<HTMLButtonElement>(null);
+  const tiles = useRef(new Map<string, HTMLButtonElement>());
+  const tileRef = (id: string) => (el: HTMLButtonElement | null) => {
     if (el) tiles.current.set(id, el);
     else tiles.current.delete(id);
   };
@@ -319,7 +321,7 @@ export function RemoteConnectionTopology({
   const animate = !reduced && settled;
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
-  const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
+  const selfName = model.self?.name || t('settings.devices.thisDevice');
   const selfProtocol = selfProtocolKind(model, linkStatus);
   const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
   const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
@@ -522,6 +524,7 @@ export function RemoteConnectionTopology({
             {/* 外层按钮只管位置与点击(定位用 transform),里层是看得见的图块 */}
             <button
               type="button"
+              ref={tileRef(node.id)}
               // design: intrinsic-geometry — 手机图块是竖着的窄条,外层点击区与看得见的那层(.rcv2-tile[data-form=phone])同一外形
               className={cn('rcv2-hit', phone ? 'rounded-[7px]' : 'rounded-lg')}
               style={placed(p.x, p.y, phone ? PHONE_W : TILE, phone ? PHONE_H : TILE, animate)}
@@ -531,7 +534,6 @@ export function RemoteConnectionTopology({
               onPointerLeave={() => setHoverId((cur) => (cur === node.id ? null : cur))}
             >
               <span
-                ref={tileRef(node.id)}
                 className="rcv2-tile relative flex h-full w-full items-center justify-center rounded-lg border"
                 data-form={phone ? 'phone' : undefined}
                 data-dim={node.status === 'offline' ? 'true' : undefined}
@@ -555,6 +557,10 @@ export function RemoteConnectionTopology({
               node={node}
               relayName={model.relay.name}
               onRemoteDesktop={onRemoteDesktop}
+              onDelete={onDelete && (() => {
+                setOpenId(null);
+                onDelete(node, () => tiles.current.get(node.id) ?? hubButton.current);
+              })}
               switchEntry={switchEntry}
               onSwitch={onSwitch}
             />
@@ -597,6 +603,7 @@ export function RemoteConnectionTopology({
           <button
             type="button"
             className="rcv2-hub flex items-center justify-center rounded-full border"
+            ref={hubButton}
             style={placed(hub.x, hub.y, HUB, HUB, animate)}
             aria-label={selfDescription}
           >

@@ -13,7 +13,7 @@ import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
-import { Check } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -270,12 +270,14 @@ function useSwitchArea(
 export function DeviceNodePopover({
   node,
   relayName,
+  onDelete,
   onRemoteDesktop,
   switchEntry = null,
   onSwitch,
 }: {
   node: TopologyNode;
   relayName: string;
+  onDelete?: () => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
@@ -308,6 +310,7 @@ export function DeviceNodePopover({
       : node.status !== 'offline' && node.busy
         ? 'text-[var(--warning-accent)]'
         : undefined;
+  const canDelete = node.status === 'offline' && !running && !!onDelete;
   const canRemoteDesktop =
     node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
   return (
@@ -348,8 +351,14 @@ export function DeviceNodePopover({
       {switchArea.body ? (
         <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">{switchArea.body}</div>
       ) : null}
-      {canRemoteDesktop || switchArea.action ? (
+      {canDelete || canRemoteDesktop || switchArea.action ? (
         <div className="flex justify-end gap-2">
+          {canDelete ? (
+            <Button tone="danger-surface" size="sm" compact onClick={onDelete}>
+              <Trash2 size={14} aria-hidden />
+              {t('settings.devices.delete')}
+            </Button>
+          ) : null}
           {canRemoteDesktop ? (
             <Button variant={switchArea.action ? 'secondary' : 'primary'} size="sm" compact onClick={() => onRemoteDesktop(node)}>
               {t('remoteDesktop.title')}
@@ -389,7 +398,7 @@ export function HubNodePopover({
   return (
     <div className="flex flex-col gap-3">
       <Heading
-        name={model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer')}
+        name={model.self?.name || t('settings.devices.thisDevice')}
         sub={platformLabel(model.self?.platform ?? null)}
         platform={model.self?.platform ?? null}
         isMobile={false}

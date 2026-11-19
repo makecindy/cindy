@@ -14,6 +14,7 @@ export default {
     },
   },
   cases: {
+    'rename-self': { about: 'Renaming this computer updates its topology label and openable card, while its reported hostname stays the same', storage: V2_ON },
     'app-nodes': { about: 'Friend, unknown App and offline Friend keep their App label and platform icon; no Cindy remote actions or control-off warning', storage: V2_ON },
     'app-nodes-list': { about: 'My devices labels other Apps without outbound computer actions; legacy Cindy stays unchanged' },
     default: {
@@ -51,6 +52,22 @@ export default {
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'rename-self') {
+      const self = page.locator('[data-device-id="self"]');
+      await self.getByText('Office desktop', { exact: true }).waitFor({ timeout: 3000 });
+      await self.getByRole('button', { name: await ui.t('settings.devices.rename') }).click();
+      await self.getByRole('textbox').fill('XD-PC');
+      await self.getByRole('textbox').press('Enter');
+      await self.getByText('XD-PC', { exact: true }).waitFor();
+      const protocol = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+      const hub = page.getByRole('button', { name: `XD-PC · ${protocol}`, exact: true });
+      await hub.waitFor({ timeout: 3000 });
+      assert.equal(await page.getByText('XD-PC', { exact: true }).count(), 2);
+      await ui.capture('renamed');
+      await hub.click();
+      await page.getByRole('dialog').getByText('XD-PC', { exact: true }).waitFor();
+      return;
+    }
     if (ui.case === 'app-nodes' || ui.case === 'app-nodes-list') {
       const friend = `${await ui.t('settings.devices.apps.cindyFriend')} · Friend Mac`;
       if (ui.case === 'app-nodes-list') {
@@ -287,6 +304,32 @@ export default {
       await page.getByRole('dialog').waitFor();
       await ui.capture('recent');
       await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: await ui.t('settings.remoteControl.v2.offlineShow') }).last().click();
+      const offlineDevice = page.getByRole('button', { name: /^Old laptop/ });
+      await offlineDevice.click();
+      const remove = page.getByRole('dialog').getByRole('button', { name: await ui.t('settings.devices.delete'), exact: true });
+      assert.equal(await remove.count(), 1, 'offline device card offers deletion');
+      await ui.capture('offline-device');
+      await remove.focus();
+      await page.keyboard.down('Enter');
+      await page.getByText(await ui.t('settings.devices.deleteTitle', { name: 'Old laptop' }), { exact: true }).waitFor();
+      const cancel = page.getByRole('alertdialog').getByRole('button', { name: await ui.t('commonUi.confirmDialog.cancel') });
+      await cancel.and(page.locator(':focus')).waitFor();
+      // A held Enter must not confirm deletion with the next repeated keydown.
+      await page.keyboard.down('Enter');
+      await page.keyboard.up('Enter');
+      await offlineDevice.and(page.locator(':focus')).waitFor();
+      await offlineDevice.press('Enter');
+      await remove.click();
+      await cancel.waitFor();
+      await page.keyboard.press('Escape');
+      await offlineDevice.and(page.locator(':focus')).waitFor();
+      await offlineDevice.click();
+      await remove.click();
+      await page.getByRole('button', { name: await ui.t('settings.devices.delete'), exact: true }).click();
+      await offlineDevice.waitFor({ state: 'detached' });
+      await page.getByRole('button', { name: /^Spare PC/ }).waitFor();
+      await hub.and(page.locator(':focus')).waitFor();
     }
   },
 };
