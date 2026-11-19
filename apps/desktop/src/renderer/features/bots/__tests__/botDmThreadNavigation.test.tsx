@@ -35,6 +35,8 @@ vi.mock('react-router-dom', async importOriginal => {
   };
 });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+import { aroundClientId } from '@/lib/messageService';
+import { createIpcError } from '../../../../shared/ipc-errors';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
   getSnapshot: (id: string) => h.snapshots.get(id),
@@ -531,4 +533,23 @@ it.each(['native', 'document'])('recovers a failed source read on %s visibility 
   expect(screen.queryByText('recovered.txt')).toBeNull();
   await act(async () => { visible(false); visible(true); });
   expect(h.around).toHaveBeenCalledTimes(3);
+});
+
+// Real messageService unwraps Electron errors to ApiError; do not substitute [] for NOT_FOUND.
+it.each(['NOT_FOUND', 'INTERNAL'])('classifies real messageService %s before deciding visibility recovery', async code => {
+  h.snapshots.set('chat', { messages: [] });
+  const ipc = vi.fn().mockRejectedValue(new Error("Error invoking remote method 'local-db:messages:around-client-id': Error: "
+    + createIpcError(code as 'NOT_FOUND' | 'INTERNAL', 'synthetic read result').message));
+  Object.assign(window.electronAPI.localDb, { messages: { aroundClientId: ipc } });
+  h.around.mockImplementation(aroundClientId);
+  await act(async () => { render(<Host />); });
+  expect(ipc).toHaveBeenCalledTimes(1);
+  await act(async () => { h.hiddenListeners.forEach(fn => fn(true)); });
+  await act(async () => { h.hiddenListeners.forEach(fn => fn(false)); });
+  expect(ipc).toHaveBeenCalledTimes(code === 'NOT_FOUND' ? 1 : 2);
+  const previous = ipc.mock.calls.length;
+  ipc.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'restored root' }]);
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  expect(ipc).toHaveBeenCalledTimes(previous + 1);
+  expect(screen.getByText('restored root')).toBeTruthy();
 });

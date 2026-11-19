@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
+import { extractIpcError } from '@/utils/ipcError';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { parseUserContent } from '@/lib/imageRef';
@@ -74,7 +75,12 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
       readState = 'scheduled';
       void refresh(async () => {
         if (!canRead()) { readState = 'idle'; return; }
-        const rows = await aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 });
+        const rows = await aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).catch(error => {
+          // The exact-anchor IPC reports deleted/rewound roots as NOT_FOUND, not [].
+          // Normalize absence at the read boundary; only real failures remain retryable.
+          if (extractIpcError(error)?.code === 'NOT_FOUND') return [];
+          throw error;
+        });
         if (cancelled || !isDataOwnerGenerationCurrent(owner)
           || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
         readState = 'settled'; // An empty successful result is genuinely unavailable.
