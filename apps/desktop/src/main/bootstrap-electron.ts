@@ -3054,8 +3054,8 @@ setCodexImageAuthBinding({
         if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
       },
       async onAuthFailure(failure) {
-        if (lease) lease.observeFailure(failure, undefined, 'run');
-        else await invalidateChatgptBridgeAuth(failure, providerId);
+        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, undefined, 'run');
+        await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
       },
       release() { lease?.release(); },
     };
