@@ -134,6 +134,38 @@ describe('auth login-flow reset', () => {
     expect(confirmBody).toContain("type: 'discovery-loaded'");
     expect(confirmBody).not.toContain('soleAutoStartSsoMethod');
     expect(confirmBody).not.toContain("type: 'start-browser'");
+
+    const cancelStart = source.indexOf("if (action.type === 'cancel-sso-realm') {");
+    const cancel = source.slice(cancelStart, source.indexOf('if (!providerConfig)', cancelStart));
+    expect(cancel).toContain('pendingAuthRealm = null;');
+    expect(cancel).toContain('discoveredMethods = [];');
+    expect(cancel).toContain("type: 'providers-loaded'");
+    expect(cancel).toContain('providers: confirmation.providers');
+    expect(cancel).not.toContain('activateClientEndpointRealm');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：discover-sso-org 可使用单区有效命中；邮箱与登录后提示仍严格查询。
+  // - Bug／规则依据：418 回归的修复范围只限显式企业入口，凭证与区域边界不得随共享函数扩散。
+  // - 现有覆盖缺口：SDK 行为测试覆盖合并策略，不能验证 Electron main 选择哪种策略。
+  // - 最小失败输入：共享 lookup 默认放宽会改变邮箱登录；显式入口未传选项仍拒绝国内成功+国际418。
+  // - tier：guard；入口绑定 Electron main 私有状态，用静态调用契约核对选项传递，行为由 SDK 单测覆盖。
+  // - 实测耗时：单文件 1.38 秒。
+  it('opts only the explicit organization entry into partial realm discovery', () => {
+    const orgStart = source.indexOf("if (action.type === 'discover-sso-org') {");
+    const org = source.slice(orgStart, source.indexOf("if (action.type === 'request-code')", orgStart));
+    expect(org).toContain('{ allowPartialSuccess: true }');
+    expect(source.match(/allowPartialSuccess: true/g)).toHaveLength(1);
+    const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
+    const lookup = source.slice(lookupStart, source.indexOf('export async function getLoginState(', lookupStart));
+    expect(lookup).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(lookup).toContain('}, options);');
+    const wrapperStart = source.indexOf('async function discoverOrganizationRealm(');
+    const wrapper = source.slice(wrapperStart, lookupStart);
+    expect(wrapper).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(wrapper).toContain('lookupOrganizationRealm(org, expectedLoginFlowEpoch, options)');
+    expect(source).toContain('discoverOrganizationRealm(domain, actionLoginFlowEpoch)');
+    expect(source).toContain('lookupOrganizationRealm(domain, expectedLoginFlowEpoch)');
   });
 
   it('pins personal login to the build realm and clears stale realm before organization discovery', () => {
