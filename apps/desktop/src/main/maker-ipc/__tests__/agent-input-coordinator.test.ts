@@ -9,6 +9,7 @@ import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
+import { telegramQuestionOrigin, stampTelegramQuestionAnswer, TELEGRAM_QUESTION_ORIGIN, hasTelegramQuestionRoute } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -1106,8 +1107,22 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
   });
 
-  it('uses only the delivery grant after a control retry has already been accepted', async () => {
+  // Unit / shared Pi retry: distinguish an idle task from an admitted recovery.
+  it('does not enqueue or dispatch a Pi control retry without recoverable input', async () => {
+    const h = createHarness(), sid = 'pi-control-retry-noop';
+    h.setAgentKind('pi');
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toEqual({ ok: true, result: { executionPaused: false, queuePaused: false } });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('uses only the delivery grant after a Pi control retry has already been accepted', async () => {
     const h = createHarness(), sid = 'retry-admitted-then-plan';
+    h.setAgentKind('pi');
     h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
     h.setHasAssistantProgressAfter(async () => false); h.setRunning(true);
@@ -5472,6 +5487,24 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+  });
+
+  // Unit regression: host retry gets a new input id but must still reply to the question's channel.
+  it.each([false, true])('retains Telegram delivery on retry (progress=%s)', async (progress) => {
+    const h = createHarness();
+    const sid = 'telegram-question-retry';
+    h.setHasAssistantProgressAfter(async () => progress);
+    const item = makeItem('question-reply:answered:q1', 'answer');
+    stampTelegramQuestionAnswer(item, telegramQuestionOrigin(() => {}));
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(hasTelegramQuestionRoute(h.sendToAgent.mock.calls[1][3][TELEGRAM_QUESTION_ORIGIN])).toBe(true);
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {

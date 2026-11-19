@@ -1,3 +1,5 @@
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { setSessionRouteLockImplementation, withSessionRouteLock } from '../../localDb/sessionRouteLock';
 /**
  * dispatcher 单测: 注入假 runner / bindings / store, 覆盖协议语义的全部分支 ——
  * 幂等回放、别名白名单、binding 复用(同 key 同 session)、接管(sessionId 路径
@@ -236,6 +238,7 @@ function makeDispatcher(overrides?: {
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
+  restoreArchivedSession?: HookDispatcherDeps['restoreArchivedSession'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
@@ -260,6 +263,7 @@ function makeDispatcher(overrides?: {
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     archiveSessionRow: overrides?.archiveSessionRow,
+    restoreArchivedSession: overrides?.restoreArchivedSession,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
@@ -274,7 +278,7 @@ function makeDispatcher(overrides?: {
 
 // 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
 beforeEach(() => setMainLocale('zh-CN'));
-afterEach(() => setMainLocale('en'));
+afterEach(() => { setMainLocale('en'); setSessionRouteLockImplementation(null); });
 
 describe('任务失败原因进主日志(issue #5912)', () => {
   it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
@@ -638,45 +642,16 @@ describe('isPathWithin', () => {
 });
 
 describe('buildHookSessionTitle', () => {
-  it('短消息原样进标题, 换行/连续空白压平成单空格', () => {
-    expect(buildHookSessionTitle('slack', '修一下登录页', 'C1:1.1')).toBe('[Slack] 修一下登录页');
-    expect(buildHookSessionTitle('slack', ' 修一下\n登录页  的样式 ', 'C1:1.1')).toBe(
-      '[Slack] 修一下 登录页 的样式',
-    );
+  it('uses the same channel, readable subject and optional context for every lane', () => {
+    expect(buildHookSessionTitle('Slack', ' 修一下\n登录页  的样式 ', 'Acme')).toBe('Slack · 修一下 登录页 的样式 · Acme');
+    expect(buildHookSessionTitle('Slack', '检查登录页')).toBe('Slack · 检查登录页');
+    expect(buildHookSessionTitle('Telegram', '继续发布', 'Release')).toBe('Telegram · 继续发布 · Release');
   });
 
-  it('超长消息截断到 24 字加省略号', () => {
-    const long = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十';
-    expect(buildHookSessionTitle('slack', long, 'C1:1.1')).toBe(`[Slack] ${long.slice(0, 24)}…`);
-  });
-
-  it('空消息(纯图片派发)回退渠道内标识', () => {
-    expect(buildHookSessionTitle('slack', '   \n ', 'C1:1.1')).toBe('[Slack] C1:1.1');
-  });
-
-  it('DM 会话(bareKey 带 dm: 前缀)标题前缀标 ·DM', () => {
-    expect(buildHookSessionTitle('slack', '帮我看看这个报错', 'dm:U1:g0')).toBe(
-      '[Slack·DM] 帮我看看这个报错',
-    );
-    // 空消息回退 bareKey 时 DM 标同样生效
-    expect(buildHookSessionTitle('slack', '', 'dm:U1:g0')).toBe('[Slack·DM] dm:U1:g0');
-  });
-
-  it('(multi-team)teamName 非空时并入方括号首段; 空/空白不加', () => {
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', 'acme')).toBe(
-      '[acme·Slack] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'dm:U1:g0', 'acme')).toBe(
-      '[acme·Slack·DM] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', null)).toBe('[Slack] 修登录页');
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', '  ')).toBe('[Slack] 修登录页');
-  });
-
-  it('Telegram group/topic 名称进入来源标题', () => {
-    expect(
-      buildHookSessionTitle('telegram', '继续发布', 'topic:bot:-1:77:user:g1', 'Release topic'),
-    ).toBe('[Release topic·Telegram] 继续发布');
+  it('keeps readable context with an empty subject or a long message containing emoji', () => {
+    expect(buildHookSessionTitle('Slack', '', 'Acme')).toBe('Slack · Acme');
+    expect(buildHookSessionTitle('X', '  ')).toBe('X');
+    expect(buildHookSessionTitle('Slack', '🐧'.repeat(80), 'Acme')).toBe('Slack · ' + '🐧'.repeat(25) + ' · Acme');
   });
 });
 
@@ -976,7 +951,7 @@ describe('dispatcher 核心语义', () => {
       prompt: '干活',
       // 标题带 provider 名(externalKey 前缀), 不用 desktop 侧连接名;
       // 后半段用首条消息摘要(可读), 不再用"频道 ID:时间戳"
-      title: '[Team-slack] 干活',
+      title: 'Team-slack · 干活',
     });
 
     fr.finish({ finalText: '搞定了' });
@@ -1053,12 +1028,12 @@ describe('dispatcher 核心语义', () => {
     );
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 你来解释下这个问题' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X · 你来解释下这个问题' });
     // prompt 本身照旧整份交给 agent —— 上下文不能因为标题的取舍被砍掉
     expect(fr.calls[0]?.prompt).toContain('<thread_context>');
   });
 
-  it('source.userText 缺失或为空时回退 prompt(老 server / 纯 @ 无正文)', async () => {
+  it('纯 @ 没有正文时只显示渠道', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -1066,7 +1041,7 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', dispatch({ source: { im: 'x', userText: '   ' } }), c.send);
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 干活' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X' });
   });
 
   it('同 key 第二次 dispatch 复用同一 session(铁律)', async () => {
@@ -1588,7 +1563,79 @@ describe('dispatcher 核心语义', () => {
     fr2.finish();
   });
 
-  it('绑定的会话已归档/删除 -> 静默重建, 不向渠道追加说明', async () => {
+  it.each([null, 'previous'])('Done 后同一绑定接回原任务（指定任务 %s）', async (sessionId) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous } });
+    const { d } = makeDispatcher({
+      runner: fr.runner, bindings,
+      restoreArchivedSession: async () => { previous.usable = true; },
+    });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.sessionId).toBe('previous');
+    expect(fr.calls[0]).toMatchObject({ sessionId: 'previous', isNew: false });
+    fr.finish();
+    await tick();
+  });
+
+  it.each([
+    { sessionId: 'other-task', workingDir: WS_DIR },
+    { sessionId: null, workingDir: path.resolve('/outside-the-project') },
+  ])('未绑定或已移出项目的归档任务保持归档 ($sessionId)', async ({ sessionId, workingDir }) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const archived = { workingDir, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous: archived, 'other-task': archived } });
+    const restoreArchivedSession = vi.fn(async () => { archived.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  // Unit regression: Done owns the existing route lock while cleanup removes the directory.
+  // The next Telegram message must bind a fresh task, without reactivating the removed directory.
+  it('Done 回收与新消息同时到达时，在恢复锁内重新检查目录', async () => {
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    const bindings = memoryBindings();
+    const message = telegramDispatch();
+    bindings.set('conn-1', message.externalKey, 'archiving');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { archiving: previous } });
+    const restoreArchivedSession = vi.fn(async () => { previous.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    let finishCleanup!: () => void;
+    let cleanupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { cleanupStarted = resolve; });
+    const cleanup = withSessionRouteLock('archiving', async () => {
+      cleanupStarted();
+      await new Promise<void>((resolve) => { finishCleanup = resolve; });
+      previous.resumableArchive = false;
+    });
+    await started;
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    finishCleanup();
+    await cleanup;
+    await tick(30);
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(c.last('task.ack')!.payload.sessionId).not.toBe('archiving');
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  it('绑定的会话已删除 -> 静默重建, 不向渠道追加说明', async () => {
     const bindings = memoryBindings();
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });

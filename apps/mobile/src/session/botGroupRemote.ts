@@ -421,6 +421,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    independentReplies: record.independentReplies === true,
     canStopAll: false, supportsOwnedStop: record.supportsOwnedStop === true,
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,

@@ -4511,6 +4511,29 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// A gateway can count more input tokens than Pi, even with its native margin.
+function reserveLargeCompletionHeadroom(payload, model, ctx) {
+  if (model?.api !== 'openai-completions' || !payload
+      || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens' : 'max_completion_tokens';
+  const requested = payload[field];
+  if (!Number.isSafeInteger(requested) || requested <= 65_536 || requested >= model.maxTokens
+      || !Number.isSafeInteger(model.maxTokens) || !Number.isSafeInteger(model.contextWindow)
+      || model.contextWindow <= 0) return undefined;
+
+  // Use an independent estimate. Subtracting the requested ceiling from the
+  // window mistakes a caller-selected ceiling for a measurement of the input.
+  const usage = ctx?.getContextUsage?.();
+  if (usage?.contextWindow !== model.contextWindow || !Number.isSafeInteger(usage.tokens)
+      || usage.tokens <= 0) return undefined;
+  // Pi 1.5.2 already reserves 15% on large inputs. Raise only the fixed
+  // minimum for tokenizer skew seen on moderate inputs in #9252.
+  const margin = Math.max(16_384, Math.ceil(usage.tokens * 0.15));
+  const ceiling = Math.max(16_384, model.contextWindow - usage.tokens - margin);
+  if (requested <= ceiling) return undefined;
+  return { ...payload, [field]: ceiling };
+}
+
 // Chat gateways can carry Gemini thought signatures inside tool IDs, then route
 // the same history to a backend with a 64-character limit. Change only the wire
 // projection: Gemini still needs those signatures, and Responses has its own
@@ -4787,8 +4810,9 @@ export default async function cindyBridge(piApi: any) {
   const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
-  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : (() => {
+  // Pi action APIs are unavailable while loading extensions. Reuse the launch
+  // file snapshot for bash configuration and the legacy inspection fallback.
+  const initialNativeSettings = (() => {
       try {
         return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
       } catch (error) {
@@ -4847,6 +4871,7 @@ export default async function cindyBridge(piApi: any) {
     const model = runtimeRequest?.model ?? ctx.model;
     const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
     let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    next = reserveLargeCompletionHeadroom(next, model, ctx) ?? next;
     if (modelRequestControlActive) {
       const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
         model: model.id, request: next });
@@ -4968,6 +4993,11 @@ export default async function cindyBridge(piApi: any) {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
     exposeSessionEnvironment: false,
+    // Keep valid user values byte-for-byte, as the host settings passthrough does.
+    shellPath: typeof initialNativeSettings?.shellPath === 'string' && initialNativeSettings.shellPath.trim()
+      ? initialNativeSettings.shellPath : undefined,
+    commandPrefix: typeof initialNativeSettings?.shellCommandPrefix === 'string' && initialNativeSettings.shellCommandPrefix.trim()
+      ? initialNativeSettings.shellCommandPrefix : undefined,
     spawnHook: ({ command, cwd, env }) => ({
       command,
       cwd,

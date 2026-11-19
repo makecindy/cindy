@@ -1,12 +1,13 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
-import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
+import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { getClaudeSessionBackgroundActivity } from './maker-host/claude-session-background-activity';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
@@ -18,6 +19,7 @@ import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { WindowsQuotaPanel } from './quota-overview/windowsPanel.js';
 import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
@@ -672,6 +674,7 @@ import {
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
+import * as usageReporting from './product-token-usage/reporting.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -701,8 +704,11 @@ import {
   handleDeviceLinkSystemResume,
   handleDeviceLinkSystemSuspend,
   getControllerName,
+  remoteBackgroundInvoke,
   revokeController,
 } from './device-link';
+import { findReceivedShare, getReceivedShares } from './device-link/providerShareGuest.js';
+import { configureSharedImageAccess } from './cindy-media/sharedImageCatalog.js';
 import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js';
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
@@ -711,7 +717,7 @@ import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './devic
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
-import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
+import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -744,7 +750,7 @@ import {
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
-import { registerGitContextIpc, disposeGitContext } from './git-context';
+import { registerGitContextIpc, disposeGitContext, refreshSchedulePr } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerProjectOrderIpc } from './projectOrderStore';
 import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainViewHidden } from './sidebarSettingsStore';
@@ -973,7 +979,7 @@ import {
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
 } from './maker-host/claude-native-cli.desktop.js';
-import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge } from './maker-host/cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
@@ -987,6 +993,7 @@ import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
   getChatgptBridgeAuth,
+  getChatgptBridgeAuthForDispatch,
   invalidateChatgptBridgeAuth,
 } from './maker-host/anthropic-responses-bridge-host.js';
 import {
@@ -999,9 +1006,7 @@ import {
   resetSessionRuntimeFallbackSettings,
   writeSessionRuntimeFallbackEnabled,
 } from './maker-host/session-runtime-fallback-store.js';
-import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
-import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
-import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
+import { clearOwnerScopedSessionRuntimeSelection } from './maker-ipc/sessionRuntimeControl.js';
 import {
   resolveOwnerScopedSecretStorageKey,
   getProviderSecretStore,
@@ -1487,7 +1492,11 @@ function installHostClientMode(): boolean {
       }
     },
     onPluginPush: (channel, payload) => {
-      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+      // Pushes the windows take as they come from the local main process; the recent projects push is the
+      // one updateSessionInDb sends after a move (sessions.ts broadcastRecentWorkdirsChanged).
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify',
+        'ghosts:user-message-blocked', 'ghosts:user-message-rewritten', 'ghosts:hook-fused',
+        'local-db:recent-workdirs:changed'].includes(channel)) {
         for (const win of BrowserWindow.getAllWindows())
           if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
         return;
@@ -1709,6 +1718,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     await restoreUsageLimitWaits();
     if (getGoalTeardownGeneration() !== goalGenBefore) return;
     const scheduler = await startScheduler({
+      refreshSchedulePr,
       maker,
       getDb: () => getDbClient().drizzle,
       getMainWindow: () => mainWindowRef,
@@ -3032,6 +3042,26 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  async acquireRemoteAuth(providerId, modelId) {
+    const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote: true, capability: 'image.generate' });
+    let proof: (() => boolean) | undefined;
+    return {
+      async getAuth() {
+        const auth = await getChatgptBridgeAuthForDispatch(providerId, lease?.account);
+        proof = auth.canDispatch;
+        return auth;
+      },
+      assertDispatchable() {
+        lease?.assertDispatchable();
+        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+      },
+      async onAuthFailure(failure) {
+        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
+        await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
+      },
+      release() { lease?.release(); },
+    };
+  },
   hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
@@ -3069,9 +3099,7 @@ setAppSessionCommitBoundaryHook(() => {
   remoteDesktopViewerWindows.reset();
   // 弹出的页签窗口带着旧 owner 的任务指派与 renderer 本地页签缓存:同步销毁,不让新 owner 看到旧内容。
   sidebarTabWindowsController.destroyAllWindows();
-  clearAllSessionProviders();
-  clearAllSessionRuntimeAxes();
-  clearAllSessionRuntimeControlStates();
+  clearOwnerScopedSessionRuntimeSelection();
 });
 const ownerBackgroundLog = createLogger('owner-background');
 const builtinPostCommitStep = new StableOwnerPostCommitStep({
@@ -3099,6 +3127,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  scheduleNativeHistoryBackupCleanup();
   if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -3695,6 +3724,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+const personalLoadFailures = new WeakMap<BrowserWindow, number>();
 let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
@@ -3819,6 +3849,7 @@ const authCredentialRecovery = createAuthCredentialRecovery({
 });
 
 let windowsTray: Tray | null = null;
+let windowsQuotaPanel: WindowsQuotaPanel | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
@@ -3905,6 +3936,8 @@ function quitFromDesktopTray(): void {
 }
 
 function destroyWindowsTray(): void {
+  windowsQuotaPanel?.dispose();
+  windowsQuotaPanel = null;
   windowsTray?.destroy();
   windowsTray = null;
   windowsTrayMenu = null;
@@ -3943,8 +3976,22 @@ function ensureWindowsTray(): boolean {
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
-    tray.on('click', () => focusMainWindow());
-    tray.on('right-click', () => openWindowsTrayMenu());
+    const quotaTray = tray;
+    tray.on('mouse-enter', (_event, position) => windowsQuotaPanel?.hover(quotaTray.getBounds(), position));
+    tray.on('mouse-leave', () => windowsQuotaPanel?.cancelPendingHover());
+    windowsQuotaPanel = new WindowsQuotaPanel(() => mainWindowRef, () => {
+      const win = mainWindowRef;
+      if (win && !win.isDestroyed()) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
+    });
+    // 卡片只由悬停触发；左键单击保持原有语义，直接回到主窗口。
+    tray.on('click', () => {
+      windowsQuotaPanel?.dismiss();
+      focusMainWindow();
+    });
+    tray.on('right-click', () => {
+      windowsQuotaPanel?.dismiss();
+      openWindowsTrayMenu();
+    });
     windowsTray = tray;
     windowsTrayMenu = null;
     return true;
@@ -3959,6 +4006,8 @@ function ensureWindowsTray(): boolean {
     windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
+    windowsQuotaPanel?.dispose();
+    windowsQuotaPanel = null;
     windowsTray = null;
     windowsTrayMenu = null;
     return false;
@@ -4683,6 +4732,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    windowsQuotaPanel?.destroyWindow();
     remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     sidebarTabWindowsController.destroyAllWindows();
@@ -4833,6 +4883,7 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      windowsQuotaPanel?.prewarm();
       remoteDesktopViewerWindows.setLocale(
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
@@ -4968,6 +5019,11 @@ const createWindow = () => {
     }
   });
   let devLoadRetries = 0;
+  if (personalMonitorEnvironment) {
+    mainWindow.webContents.on('did-start-navigation', (event) => {
+      if (event.isMainFrame && !event.isSameDocument) personalLoadFailures.delete(mainWindow);
+    });
+  }
   mainWindow.webContents.on(
     'did-fail-load',
     (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -4984,6 +5040,8 @@ const createWindow = () => {
         setTimeout(() => {
           if (!mainWindow.isDestroyed()) void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
         }, delayMs);
+      } else if (personalMonitorEnvironment) {
+        personalLoadFailures.set(mainWindow, errorCode);
       }
     },
   );
@@ -6028,7 +6086,7 @@ const registerIpcHandlers = () => {
   // 退出时结束进行中的登录子进程(CLI 的本机回调监听没有超时),并关闭 CLI 的代理桥。
   app.once('will-quit', () => {
     cancelClaudeCliLogin();
-    void closeClaudeCliProxyBridge();
+    void closeCliProxyBridge();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
     // 没有使用许可时结论恒为 false,不必拉起 CLI(状态栏等常驻读取对所有用户都会调用)。
@@ -7140,6 +7198,8 @@ const registerIpcHandlers = () => {
       // Packaged apps and ordinary dev launches retain their existing lifecycle.
       if (process.platform === 'darwin' && !app.isPackaged && personalMonitorEnvironment) {
         let personalReady = false;
+        const interactive = createPersonalRendererProbe(() => mainWindowRef, personalMonitorEnvironment.assetDigest
+          ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`) : undefined);
         const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
         const tick = createPersonalBuildMonitor({
           directory: personalMonitorEnvironment.directory,
@@ -7147,6 +7207,9 @@ const registerIpcHandlers = () => {
           pid: process.pid, now: Date.now,
           ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
             && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          assetDigest: personalMonitorEnvironment.assetDigest,
+          interactive,
+          interfaceFailure: () => mainWindowRef ? personalLoadFailures.get(mainWindowRef) : undefined,
           remoteReady: () => getDeviceLinkStatus() === 'online',
           idle: () => powerMonitor.getSystemIdleTime() >= 120,
           busy: () => hasUpdateRelaunchBusyActivity({
@@ -10712,7 +10775,13 @@ app.on('ready', async () => {
   // tapdbClient 一挂载就 invoke analytics:settings-get 来决定是否初始化 SDK,
   // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
   // 的用户会一直不上报,直到手动去设置里拨一下开关。
-  initAnalyticsSettingsService();
+  initAnalyticsSettingsService({
+    enabled: usageReporting.tokenReportingEnabled,
+    set: usageReporting.setTokenReporting,
+    interrupt: usageReporting.interruptTokenReporting,
+    revokeAll: usageReporting.revokeAllTokenReporting,
+    report: usageReporting.reportTokenUsage,
+  });
   // 日志上报:同样必须在 createWindow 之前注册 —— 设置页一挂载就 invoke
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
@@ -10773,6 +10842,13 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
+  configureSharedImageAccess({
+    getReceivedShares, findReceivedShare, invoke: remoteBackgroundInvoke,
+    captureOwner: () => {
+      const owner = activeOwnerScopeKey();
+      return () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
+    },
+  });
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
@@ -10928,7 +11004,14 @@ onQuit('usage-limit-waits-flush', flushUsageLimitWaits, 'async');
 onQuit(
   'reap-claude-children',
   () => {
-    reapClaudeOrphansSync();
+    // Fence product events first, but keep transports alive until the process
+    // tree sweep has captured Windows descendants (#9323). Turn markers were
+    // frozen above, so cancellation cannot erase interrupted-task recovery.
+    try {
+      getMakerIfReady()?.prepareForAppQuit();
+    } finally {
+      reapClaudeOrphansSync();
+    }
   },
   'sync',
 );

@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
@@ -27,6 +28,7 @@ import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
   railItemKey,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
@@ -51,7 +53,10 @@ export function UnifiedModelRail({
   providerUsage = null,
   providerGroupUsage,
   remoteSources,
+  pluginEngineTabs,
 }: {
+  /** 插件引擎格的名字与图标，按 providerId 对应 `plugin-engine` 格。 */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -154,6 +159,9 @@ export function UnifiedModelRail({
                   ? t('newChat.modelSelector.unified.railAll')
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
+                  : item.kind === 'plugin-engine'
+                    ? (pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.name
+                      ?? t('newChat.pluginEngines.genericName'))
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -202,12 +210,21 @@ export function UnifiedModelRail({
                 <LayoutGrid size={16} />
               ) : item.kind === 'model-groups' ? (
                 <Waypoints size={16} />
+              ) : item.kind === 'plugin-engine' ? (
+                // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
+                <PluginEngineIcon
+                  size={16}
+                  iconDataUrl={pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.iconDataUrl}
+                  className=""
+                />
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
-                <RemoteSourceMark>
-                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
-                </RemoteSourceMark>
+                !item.providerId && isProviderShareAgentDeviceId(item.deviceId) ? <Share2 size={16} /> : (
+                  <RemoteSourceMark>
+                    <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                  </RemoteSourceMark>
+                )
               ) : null}
             </RailButton>
           </div>

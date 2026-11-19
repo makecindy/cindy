@@ -205,6 +205,18 @@ function peekOversizedEnvelope(line: string): OversizedEnvelope {
   return envelope;
 }
 
+/** A correlated native error response, distinct from an unconfirmed transport failure. */
+export class AppServerResponseError extends Error {
+  readonly code: number;
+  readonly data: unknown;
+
+  constructor(method: string, error: JsonRpcErrorObject) {
+    super(`codex app-server ${method} error ${error.code}: ${error.message}`);
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
+
 export class AppServerRequestTimeoutError extends Error {
   constructor(
     public readonly method: string,
@@ -803,10 +815,7 @@ export class AppServerClient {
     if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
       this.notifyAuthInvalidated(error, pending.method, pending.credentialGeneration);
-      const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);
-      // 把 code/data 挂上, 上层想区分 OVERLOADED 等可以判 (err as any).code。
-      Object.assign(err, { code: error.code, data: error.data });
-      pending.reject(err);
+      pending.reject(new AppServerResponseError(pending.method, error));
       return;
     }
     pending.resolve(result);

@@ -20,6 +20,7 @@ import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@ci
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -288,12 +289,16 @@ export function decideProviderGroupFailure(
   if (signals.sdkError === 'max_output_tokens') return { action: 'stay', why: 'context' };
   if (signals.toolLoop) return { action: 'stay', why: 'tool-loop' };
   if (USER_DECISION_TEXT.test(message)) return { action: 'stay', why: 'user' };
+  if (message.includes(SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE)) return { action: 'stay', why: 'policy' };
   if (TOOL_FAILURE_TEXT.test(message)) return { action: 'stay', why: 'local' };
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;
   if (codexStay) return { action: 'stay', why: codexStay };
 
   // ── 那台账号的问题：换，并记进组的状态 ──
+  // Explicit upstream account denial is not a broken connection. Preserve the
+  // existing authorized account fallback instead of retrying that source.
+  if (reason === 'account_access_denied') return switchTo('auth', null);
   // 过载先于用量上限判(529 / serverOverloaded 也会被用量判定认作限流)：过载只短冷却，用量上限按重置时刻冷却。
   if (classifyTurnOverload(signals)) return switchTo('overload', null);
   if (isBillingDepletionError(signals) || classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);

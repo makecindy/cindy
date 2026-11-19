@@ -261,7 +261,8 @@ export function useBrowserWebview(
       refreshNav();
     };
     const onDidNavigateInPage = (e: Electron.DidNavigateInPageEvent) => {
-      setObservedUrl(e.url);
+      // Tab state and comment screenshots belong to the top-level document.
+      if (e.isMainFrame) setObservedUrl(e.url);
       refreshNav();
     };
     const onStartLoading = () => {

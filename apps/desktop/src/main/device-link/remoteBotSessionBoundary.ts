@@ -1,3 +1,4 @@
+import { PROJECT_ARCHIVE_CHANNEL } from '../../shared/projectArchive.js';
 import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
@@ -10,6 +11,7 @@ export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'backgr
 
 /** 列表类 channel:插件后台隐藏任务不出现在这些结果里(与本机任务列表同口径)。 */
 const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
+  PROJECT_ARCHIVE_CHANNEL,
   'local-db:sessions:list',
   'maker:list-active',
 ]);
@@ -265,7 +267,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     };
   }
   if (!lookup || ![
-      'local-db:task-tags:execute',
+      PROJECT_ARCHIVE_CHANNEL, 'local-db:task-tags:execute',
       'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
   if (channel === 'local-db:task-tags:execute') {
     const row = record(value);

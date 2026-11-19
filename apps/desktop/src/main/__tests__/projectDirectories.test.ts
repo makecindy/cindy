@@ -27,7 +27,8 @@ vi.mock('../localDb/client/current.js', () => ({
 }));
 import { readProjectDirectories, setProjectDirectories } from '../projectDirectoryStore';
 import { configureProjectDirectoryProbe, validateProjectDirectories } from '../projectDirectoryValidation';
-import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime';
+import { applyProjectDirectoriesForTurn, createTaskWritableDirsUpdater } from '../projectDirectoryRuntime';
+import { applyRemoteDirectoryGrantUpdate } from '../maker-ipc/remoteDirectoryGrantUpdate.js';
 import {
   parseHostProjectAliasesSnapshot,
   resolveProjectDirectories,
@@ -130,6 +131,44 @@ it('applies the owning project to a worktree on each turn and preserves legacy t
   expect(observed).toEqual({ read: [reference], write: [] });
   expect(h.row.extraDirs).toBe(JSON.stringify([reference]));
 });
+// Unit regression for #11511: turn-only tests missed a picker update replacing the live project's roots.
+it('keeps the running project grant when adding or removing a task directory', async () => {
+  h.row!.extraDirs = '[]';
+  let live: string[] = [];
+  const session = {
+    id: 'task', capabilities, setExtraDirs: vi.fn(),
+    setWritableDirs: async (dirs: string[]) => { live = dirs; },
+  } as unknown as Session;
+  const persist = vi.fn(async (patch: { writableDirs?: string[] }) => {
+    h.row!.writableDirs = JSON.stringify(patch.writableDirs);
+  });
+  const update = (dirs: string[]) => applyRemoteDirectoryGrantUpdate('writableDirs', dirs, {
+    setWritableDirs: createTaskWritableDirsUpdater(session), setExtraDirs: vi.fn(),
+  }, {
+    validate: async (valid) => ({ valid, rejected: [] }),
+    readExtraDirs: async () => [],
+    readWritableDirs: async () => JSON.parse(String(h.row!.writableDirs)),
+    excludeConflicts: async (candidates) => [...candidates],
+    persist,
+    terminate: vi.fn(),
+  });
+  await setProjectDirectories(`local:${main}`, [{ path: output, access: 'write' }], () => {});
+  await applyProjectDirectoriesForTurn(session);
+  await update([reference]);
+  expect(live).toEqual([output]);
+  expect(h.row!.writableDirs).toBe(JSON.stringify([reference]));
+  await applyProjectDirectoriesForTurn(session);
+  expect(live).toEqual([reference, output]);
+  persist.mockRejectedValueOnce(new Error('save failed'));
+  await expect(update([])).rejects.toThrow('save failed');
+  expect(live).toEqual([reference, output]);
+  await update([]);
+  expect(live).toEqual([output]);
+  expect(h.row!.writableDirs).toBe('[]');
+  await update([reference]);
+  expect(live).toEqual([output]);
+});
+
 it('never promotes a pre-existing read-only task override through project defaults', async () => {
   const observed: string[][] = [];
   await setProjectDirectories(`local:${main}`, [{ path: reference, access: 'write' }], () => {});
@@ -142,6 +181,40 @@ it('never promotes a pre-existing read-only task override through project defaul
     },
   } as unknown as Session);
   expect(observed).toEqual([[]]);
+});
+// Unit regression for #11511: disjoint grants do not exercise source retention after tree overlap.
+it.each(['task parent', 'project parent'] as const)('preserves independently granted roots when adding and removing a %s', async (order) => {
+  const child = path.join(output, 'shared');
+  await mkdir(child, { recursive: true });
+  const [taskDir, projectDir] = order === 'task parent' ? [output, child] : [child, output];
+  await setProjectDirectories(`local:${main}`, [{ path: projectDir, access: 'write' }], () => {});
+  let live: string[] = [];
+  const session = {
+    id: 'task', capabilities, setExtraDirs: vi.fn(),
+    setWritableDirs: async (dirs: string[]) => { live = dirs; },
+  } as unknown as Session;
+  await applyProjectDirectoriesForTurn(session);
+  expect(live).toEqual([projectDir]);
+  await createTaskWritableDirsUpdater(session)([taskDir]);
+  expect(live).toEqual([projectDir]);
+  h.row!.writableDirs = JSON.stringify([taskDir]);
+  await applyProjectDirectoriesForTurn(session);
+  const before = [...live];
+  expect(before).toEqual(order === 'task parent' ? [taskDir, projectDir] : [projectDir]);
+  const edit = createTaskWritableDirsUpdater(session);
+  await edit([]);
+  expect(live).toEqual([projectDir]);
+  await edit([taskDir]); // Roll back the same edit.
+  expect(live).toEqual(before);
+  const readOnlySibling = path.join(output, 'read-only');
+  await mkdir(readOnlySibling, { recursive: true });
+  h.row!.extraDirs = JSON.stringify([readOnlySibling]);
+  await applyProjectDirectoriesForTurn(session);
+  expect(live).toEqual([child]); // The read-only sibling blocks the parent regardless of who granted it.
+  h.row!.extraDirs = '[]';
+  await setProjectDirectories(`local:${main}`, [], () => {});
+  await applyProjectDirectoriesForTurn(session);
+  expect(live).toEqual([taskDir]);
 });
 it('old hosts remain compatible while malformed directory payloads cannot become write grants', () => {
   expect(

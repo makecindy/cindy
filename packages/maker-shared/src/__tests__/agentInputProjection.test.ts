@@ -109,6 +109,15 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(projectHref);
   });
 
+  it('preserves the host identity separately from the native path in remote project references', () => {
+    const href = 'cindy://project/device%3Astudio%3AC%3A%2Fwork%2Fcindy';
+    const projected = projectAgentFacingText({ text: href, agentReferences: [
+      rangeFor(href, href, { kind: 'project' as const, href, name: 'Cindy', workingDir: '/stale' }),
+    ] });
+    expect(projected).toContain('Project key: "device:studio:C:/work/cindy"');
+    expect(projected).toContain('Working directory: "C:/work/cindy"');
+  });
+
   // 测试价值：生产入口 projectAgentFacingText 必须隔离非正文元数据中的引用块 marker。
   // Bug：解码后的换行和 [/Referenced ...] 可提前闭合块；现有用例未覆盖这三类引用。
   // 最小失败输入：message/session/project 深链元数据携带换行与闭合 marker；默认 unit tier。

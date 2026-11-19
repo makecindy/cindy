@@ -81,9 +81,10 @@ const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortE
  *  litellm "Invalid model name"、通用 "model_not_found"。 */
 const MODEL_NOT_FOUND_RE =
   /model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model/i;
-/** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
+/** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。
+ * Google 的 Unknown name 仅在明确 JSON payload 拒收且给出字段名时匹配（#9470）；兼容 JSON 转义引号。 */
 const WIRE_RE =
-  /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
+  /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)|\binvalid json payload received\.\s+unknown name\s+\\?"[^"\\\r\n]+\\?"/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
 const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
 
@@ -150,7 +151,12 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
     return { code: 'ENDPOINT_NOT_FOUND', retryable: false, detail };
   }
   if (status === 400 || status === 422) {
-    if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
+    // Google reports rejected field names in a list. A field called `model`
+    // must not let the broad model regex consume the next field's "Unknown".
+    const modelErrorBody = /\binvalid json payload received\.\s+unknown name\s+\\?"[^"\\\r\n]+\\?"/i.test(body)
+      ? body.replace(/\bunknown name\s+\\?"[^"\\\r\n]+\\?"/gi, '')
+      : body;
+    if (MODEL_NOT_FOUND_RE.test(modelErrorBody)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     if (isContextOverflowErrorMessage(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (matchesDeterministicUsageExhaustionText(body)) {
       return { code: 'QUOTA_EXCEEDED', retryable: false, detail };

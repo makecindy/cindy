@@ -11,6 +11,7 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
@@ -908,6 +909,9 @@ export function reconcileSessionRefsForText(
         // Invalid parameter: treat it as absent.
       }
     }
+    // The Agent reads a guest task link with get_shared_task_progress under the
+    // active caller's authority. Do not request an account-history snapshot on paste.
+    if (!messageClientId && isSharedTaskPeer(linkDeviceId)) continue;
     const key = `${sessionId}\u0000${messageClientId ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);

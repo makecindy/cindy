@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tx } from '../worker/opHandlers/tx.js';
@@ -9,6 +10,7 @@ describe('Pi request usage transaction', () => {
   let db: Database.Database;
   beforeEach(() => {
     db = new Database(':memory:');
+    db.exec(readFileSync(new URL('../../../../drizzle/0154_daily_token_attribution.sql', import.meta.url), 'utf8'));
     db.exec(`
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
         recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));
@@ -28,7 +30,7 @@ describe('Pi request usage transaction', () => {
   afterEach(() => db.close());
   const receipt = (overrides: Partial<PiUsageWrite> = {}): PiUsageWrite => ({
     sessionId: 'task', settlementId: 'turn-1', receiptId: 'pi:1', recordedAt: 1,
-    day: '2026-11-05', model: 'model-a', currency: 'USD', inputTokens: 100, outputTokens: 20,
+    day: '2026-11-05', model: 'model-a', attribution: { provider: 'xd', billingSource: 'cindy-ai' }, currency: 'USD', inputTokens: 100, outputTokens: 20,
     cacheReadTokens: 30, cacheCreateTokens: 4, amount: null, approximate: false, actualCost: false, ...overrides,
   });
   const write = (...rows: PiUsageWrite[]) => tx(db, { name: 'usage.recordPiUsage', args: rows });
@@ -44,6 +46,10 @@ describe('Pi request usage transaction', () => {
     db = new Database(checkpoint);
     write(receipt(), priced); // New consumer after reconnect uses only durable receipts.
     expect(total()).toEqual({ tokens: 154, cost: 0.2 });
+    expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
+      day: '1970-01-01', provider: 'xd', billing_source: 'cindy-ai', model: 'model-a',
+      input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 4,
+    }]);
     expect(db.prepare('SELECT input_tokens, cost_amount FROM daily_model_usage').get())
       .toEqual({ input_tokens: 100, cost_amount: 0.2 });
   });

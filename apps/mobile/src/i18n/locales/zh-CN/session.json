@@ -77,6 +77,9 @@
     "back": "返回"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+    "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+    "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
     "text": "此前有自动运行失败。",
     "precheck": "自动检查暂时受阻。",
     "rateLimited": "自动检查暂时受阻：请求限流。",
@@ -574,6 +577,7 @@
       "taskCost": "本任务费用",
       "actualCost": "实际费用",
       "estimatedValue": "估算价值",
+      "tokenUnit": "token",
       "totalTokens": "累计 Token",
       "seeDetails": "查看拆分",
       "valueUnavailable": "部分任务价值暂未获取",
@@ -730,6 +734,7 @@
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
     "REMOTE_AGENT_RESUME_UNAVAILABLE": "这台电脑无法恢复任务原来的运行状态。请选择其他电脑或供应商的模型，通过上下文交接继续；原消息会保留。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+    "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢复之前的对话。消息已保留。请选择其他引擎继续，或新建任务。",
     "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
@@ -866,7 +871,7 @@
   },
   "providerGroupRebalance": {
     "title": "换到 {{label}} 继续？",
-    "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
+    "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去时会带上这段对话的上下文，较早的内容可能会压缩，原记录仍保留。",
     "quota": "还剩 {{left}}%",
     "quotaReset": "还剩 {{left}}%，{{reset}}后重置",
     "confirm": "换过去",

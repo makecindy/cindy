@@ -1,3 +1,4 @@
+import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useEffect } from 'react';
 
 /**
@@ -6,8 +7,10 @@ import { useEffect } from 'react';
  * Called by the route's ownership gate, never by URL-only navigation.
  */
 export function useBotPluginFocusedSession(sessionId: string | null) {
+  const focused = useSplitPaneFocus();
   useEffect(() => {
+    if (!focused) return;
     window.electronAPI?.ghosts?.noteSessionFocused?.(sessionId);
     return () => window.electronAPI?.ghosts?.noteSessionFocused?.(null);
-  }, [sessionId]);
+  }, [focused, sessionId]);
 }

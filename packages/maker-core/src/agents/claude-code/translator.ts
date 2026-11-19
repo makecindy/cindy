@@ -2271,6 +2271,8 @@ function handleResult(
   // Snap to this turn's streamed main-thread usage: the result aggregate can be
   // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
   liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
+  // Display only: lets the finished message show the chart the turn ran with.
+  const generationTrace = liveGeneration.reliable ? liveGeneration.tokenSpeed.trace() : undefined;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2580,6 +2582,7 @@ function handleResult(
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,
+    ...(generationTrace ? { generationTrace } : {}),
   };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
     ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }

@@ -498,6 +498,10 @@ export function buildUserProvider(
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
       (rt.requestPath ?? "") === (presetRuntime.requestPath ?? "");
+    if (followsPreset && preset && rt.models.every(model => !model.route?.baseUrl ||
+        withoutTrailingSlashes(model.route.baseUrl) === withoutTrailingSlashes(resolvedBaseUrl))) {
+      routing[agent]!.usagePresetId = preset.id;
+    }
     // A bound single-API cloud connection keeps its language for new deployment IDs too.
     // This lends only the endpoint protocol, never another model's window or capabilities.
     const presetApis = new Set<ProviderRuntimeModelConfig['api']>(followsPreset ? presetRuntime.models.map(model => model.api ?? model.piApi) : []);

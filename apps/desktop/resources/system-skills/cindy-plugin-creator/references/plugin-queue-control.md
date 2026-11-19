@@ -55,15 +55,19 @@ const result = await cindy.host.call('cindy_helper', 'control_session', {
   与只暂停自动化、请求优雅停止不同。任务空队列时也生效，后来入队的消息仍保留。
   暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。
 - `resume`：解除该执行暂停，发布暂停期间暂存的交互回答并恢复原队列；不是新发一条“继续”消息。
-- `retry`：调用原错误恢复事务，按已有失败阶段重试；不会凭正文创建第二份消息，也不会解除执行暂停锁。
-- `compact`：Claude Code 复用原 `/compact` 队列，不接受 `instructions`；Codex/Pi 复用原生手动压缩，
-  可选 `instructions` 传压缩说明。忙碌、原生历史不可用、远程执行恢复或引擎不支持时，保留原生产入口的错误。
+- `retry`：复用任务界面的错误恢复事务。有可恢复的错误才重试，无错误时只返回当前暂停状态。此动作沿用已有执行暂停锁。
+  Pi 正处于自动重试时，由原生运行处理。自动重试开关和取消等待使用 Pi 原生的 `set_auto_retry`
+  和 `abort_retry`，这两个命令未通过 `control_session` 开放。
+- `compact`：Claude Code 复用原 `/compact` 队列。Codex 使用原生手动压缩，Pi 使用原生 `compact`。
+  仅 Pi 支持非空 `instructions`。忙碌、原生历史不可用或能力不支持时沿用既有失败语义。
 
 暂停和恢复结果含 `executionPaused`、`queuePaused`。压缩结果含 `status:'requested'`，
 Codex/Pi 另保留原生提供的 `tokensBefore`、`estimatedTokensAfter`、`noop`；不返回队列正文或附件信息。
-Claude 可能仍在排队，不能把请求已接受写成已完成压缩。
+Claude 可能仍在排队。Pi 的 `noop:true` 表示内容不足，未执行压缩。Pi 完成压缩时可返回原生估算值，
+也支持不提供计数的原生扩展。
 送达未知时队列保持暂停，不会自动重放。显式调用 `resume` / `retry` 与原任务中点击继续／重试共用事务；调用前应先核实实际投递状态。
-压缩未被原事务受理时返回 `COMPACT_FAILED` 和原错误，不返回队列内容。
+压缩未被原事务受理时返回 `COMPACT_FAILED`。Pi 的原生压缩失败也返回该错误码。
+Pi 在原生 RPC 排队结束后复核派发授权，授权撤销即停止发送。
 
 只支持执行插件电脑上的本机任务，不支持 `deviceId::sessionId` 控制另一台电脑的队列。
 旧 Host 未注册 `control_session` 或未提供对应服务时明确提示不支持；先查工具目录，不读写宿主数据库替代。

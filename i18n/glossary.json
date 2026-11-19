@@ -3579,7 +3579,6 @@
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
         "desktop:newChat.atMention.typeToSearchFiles",
-        "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",
         "desktop:settings.about.debugLogDescription",
@@ -4020,6 +4019,25 @@
         "zh-Hans-x-lzh": "已处理"
       },
       "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
+    },
+    {
+      "id": "task-snooze-indefinite",
+      "status": "proposed",
+      "en": "Indefinitely",
+      "translations": {
+        "zh-CN": "无限期",
+        "zh-TW": "無限期",
+        "ja": "無期限",
+        "ko": "무기한",
+        "fr": "Indéfiniment",
+        "es": "Indefinidamente",
+        "de": "Unbefristet",
+        "pt-PT": "Indefinidamente",
+        "pt-BR": "Indefinidamente",
+        "zh-Hant-x-lzh": "無期",
+        "zh-Hans-x-lzh": "无期"
+      },
+      "note": "稍后处理的无限期选项。没有到期时间，手动取回或新输入（含自动化触发）提前唤回。"
     },
     {
       "id": "task-snoozed",

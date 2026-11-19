@@ -27,6 +27,12 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'rename-self') {
+    return { devices: [
+      device({ deviceId: 'self', isSelf: true, name: 'self', selfName: 'Office desktop', platform: 'win32' }),
+      device({ deviceId: 'peer', name: 'MacBook Air' }),
+    ], links: [link('peer', 'direct', 6)], relayRttMs: 18 };
+  }
   if (name === 'app-nodes' || name === 'app-nodes-list') {
     return { devices: [SELF,
       device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
@@ -36,6 +42,13 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
   }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
+  if (name === 'narrow-relay') {
+    return {
+      devices: [SELF, device({ deviceId: 'relay-peer', name: 'Relay PC', platform: 'win32' })],
+      links: [link('relay-peer', 'relay', 24)],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
     const devices: Device[] = [SELF];
@@ -154,7 +167,15 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
   };
 }
 
-const data = scenario(ctx.case);
+const scene = ctx.case === 'narrow-fleet' ? 'fleet' : ctx.case;
+const data = scenario(scene);
+if (ctx.case === 'narrow-fleet') {
+  data.links = data.links.map((link) => {
+    if (link.deviceId === 'dir0') return { ...link, encrypted: false };
+    if (link.deviceId === 'rel6') return { ...link, encrypted: undefined };
+    return link;
+  });
+}
 const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
   { deviceId: 'mini', path: 'direct', rttMs: 1 },
   { deviceId: 'pixel', path: 'connecting', rttMs: null },
@@ -242,6 +263,8 @@ void mountPage({
         links: data.links,
         agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
+        relayTransport: selfEncrypted && scene !== 'fleet' ? 'udp' : 'websocket',
         relayRttMs: data.relayRttMs,
       }),
       onPeerLinksChanged: subscription('peerLinks'),
@@ -252,8 +275,15 @@ void mountPage({
       onControlledState: subscription('controlled'),
       onControlTargetChanged: subscription('controlTarget'),
       setEnabled: forbid('deviceLink.setEnabled'),
-      renameDevice: forbid('deviceLink.renameDevice'),
-      deleteDevice: forbid('deviceLink.deleteDevice'),
+      renameDevice: ctx.case === 'rename-self' ? async (deviceId: string, name: string) => {
+        data.devices = data.devices.map((d) => d.deviceId === deviceId ? { ...d, name } : d);
+        return { deviceId, name };
+      } : forbid('deviceLink.renameDevice'),
+      deleteDevice: async (deviceId: string) => {
+        const index = data.devices.findIndex((d) => d.deviceId === deviceId && !d.online && !d.isSelf);
+        if (index >= 0) data.devices.splice(index, 1);
+        return { deviceId, deleted: index >= 0 };
+      },
     },
     selfHostedRelay: {
       command: async (command: SelfHostedRelayCommand) => ({
@@ -287,8 +317,6 @@ void mountPage({
     },
     openRemoteDesktop: forbid('openRemoteDesktop'),
     maker: {
-      getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'model-access-on' }),
-      setOwnComputerModelUse: async ({ enabled }: { enabled: boolean }) => ({ ok: true, enabled }),
     },
   },
   render: () => (
