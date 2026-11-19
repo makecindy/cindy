@@ -40,6 +40,7 @@ import {
   bindModelGroupSession,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
   readModelGroupSessionBinding,
+  readModelGroupBindingForDispatch,
 } from '../sessionBindings.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
@@ -90,6 +91,18 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  it.each(['high', undefined])('keeps the route effort only when the fallback supports it: %s', async effort => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), effort: 'high' }] },
+      facts: FACTS.map(fact => ({ ...fact, effort })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, recordUnavailable: vi.fn(),
+    });
+    expect(offer?.providerId).toBe('acct-a');
+    expect(offer?.effort).toBe(effort);
+  });
+
   it('replays an image turn on the next vision candidate when the route has an image exception', async () => {
     const d = deps({
       config: { routes: [{ ...route('order'), exceptions: [{ when: { type: 'image' }, use: 'vision' }] }] },
@@ -208,6 +221,20 @@ describe('model group session bindings', () => {
     expect(readModelGroupSessionBinding('s1')).toBeNull();
     bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);
     expect(readModelGroupSessionBinding('s1')).toMatchObject({ pickedKey: CURRENT });
+  });
+
+  it('loads a cold backup for dispatch, caches misses, and publishes writes only to the matching owner', async () => {
+    const entry = { selection: { type: 'route' as const, id: 'r1' }, pickedKey: CURRENT, at: 1 };
+    fs.writeFileSync(paths.file + '.bak', JSON.stringify({ bindings: { task: entry } }));
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    fs.unlinkSync(paths.file + '.bak');
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
+    bindModelGroupSession('other', entry.selection, CURRENT, 2);
+    expect(await readModelGroupBindingForDispatch('other')).toMatchObject({ at: 2 });
+    paths.owner = 'owner-2';
+    paths.file = path.join(dir, 'other-owner.json');
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
   });
 
   it('neither reads nor writes before an account is signed in', () => {

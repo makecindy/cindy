@@ -53,7 +53,7 @@ export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
   recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
-): Promise<ModelGroupSwitchOffer | null> {
+): Promise<(ModelGroupSwitchOffer & { effort?: string }) | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
   const row = await deps.readSession(sessionId);
@@ -106,6 +106,7 @@ export async function computeModelGroupSwitchOffer(
     model: candidate.model,
     modelName: entry.modelName,
     sourceName: entry.sourceName,
+    ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),
     crossEngine: candidate.agentKind !== current.agentKind,
   };
 }

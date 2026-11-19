@@ -9,13 +9,8 @@ import {
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
-
-// A model's rate window can be exhausted while other models on this connection still work.
-function isProviderBalanceError(message: string): boolean {
-  return /insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(message);
-}
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -198,8 +193,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   requireRouteChange,
                   isCurrent,
                   ...(modelGroupInput ? [{
-                    accountUnavailable: signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
-                      isProviderBalanceError(signals.message ?? ''),
+                    accountUnavailable: isModelGroupConnectionOutOfCredit(signals),
                     hasImages: item.files?.some(file => file.category === 'image') === true,
                   }] as const : []),
                 );

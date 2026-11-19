@@ -1405,7 +1405,7 @@ import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
-import { bindModelGroupSession, readModelGroupSessionBinding } from '../model-groups/sessionBindings.js';
+import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -17603,10 +17603,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({ getDesktopProviderService, log });
 
-  function activeModelGroupBinding(sessionId: string, row: {
+  async function activeModelGroupBinding(sessionId: string, row: {
     agentKind?: string | null; model?: string | null; providerId?: string | null;
   }) {
-    const binding = readModelGroupSessionBinding(sessionId);
+    const binding = await readModelGroupBindingForDispatch(sessionId);
     if (!binding || !row.providerId || !row.model ||
         (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
     if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
@@ -17621,7 +17621,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
     readModelGroupFallbackCandidate: async (sessionId, current, visited, recovery, generation) => {
       const row = await getSessionRowSnapshot(sessionId);
-      const binding = row && activeModelGroupBinding(sessionId, row);
+      const binding = row && await activeModelGroupBinding(sessionId, row);
       if (!binding || !current.providerId || current.agentDeviceId) return null;
       const excluded = new Set(visited.map(key => key.replace(/^claude-code\u0000/, 'cc\u0000')));
 
@@ -17634,7 +17634,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
       return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
-        providerId: offer.providerId, agentDeviceId: null, effort: null, fastMode: false },
+        providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: false },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
             agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
@@ -18876,7 +18876,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
         const groupFallback = origin?.kind !== 'scheduler' && !ownsQuotaRoute() && botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!activeModelGroupBinding(sessionId, botInput) && !isSessionSharedTaskActive(sessionId);
+          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {

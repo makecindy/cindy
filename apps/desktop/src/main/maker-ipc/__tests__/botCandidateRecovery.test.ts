@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
+import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
@@ -348,4 +348,12 @@ describe('Bot candidate recovery', () => {
   ] as const)('resumes a required route change after %s (same route retryable: %s) = %s', (outcome, retryable, expected) => {
     expect(canResumeAfterRuntimeFallback(true, { session: null, outcome }, retryable)).toBe(expected);
   });
+});
+
+// Unit: both providers use HTTP 429, but only an explicit quota code rules out the whole connection.
+it.each([
+  ['{"error":{"code":"insufficient_quota"}}', true],
+  ['{"error":{"code":"rate_limit_exceeded"}}', false],
+])('classifies the connection scope of 429 %s', (message, expected) => {
+  expect(isModelGroupConnectionOutOfCredit({ errorStatus: 429, message })).toBe(expected);
 });
