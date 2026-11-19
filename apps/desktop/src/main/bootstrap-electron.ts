@@ -2139,10 +2139,10 @@ let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
   closeMainDb: (userId) => {
-    if (localDbGetCurrentUserId() === userId) localDbCloseDb({ skipOptimize: true });
+    localDbCloseDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: userId });
   },
-  quarantineMainDb: (userId) => {
-    if (localDbGetCurrentUserId() === userId) localDbMarkRuntimeDbCorrupt();
+  quarantineMainDb: (userId, error) => {
+    localDbMarkRuntimeDbCorrupt(userId, error);
   },
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,

@@ -179,7 +179,7 @@ describe('lifecycle DbClient manager', () => {
     });
     await manager.ensure('owner-a', { onCorruption: report });
     callbacks[0]();
-    expect(quarantine).toHaveBeenCalledWith('owner-a');
+    expect(quarantine).toHaveBeenCalledWith('owner-a', expect.objectContaining({ code: 'SQLITE_CORRUPT' }));
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ code: 'SQLITE_CORRUPT' }));
     const currentGenerationReport = vi.fn();
     await manager.ensure('owner-a', { onCorruption: currentGenerationReport });

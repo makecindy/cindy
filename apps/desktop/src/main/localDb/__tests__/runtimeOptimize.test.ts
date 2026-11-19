@@ -10,7 +10,7 @@ vi.mock('../../userDataPath.js', () => ({ userDataPath: () => fixture.root }));
 vi.mock('../../host-client-mode.js', () => ({ isHostClientMode: () => false }));
 vi.mock('../../cindy-make/versionRuntimeIdentity.js', () => ({ isCindyPersonalRuntime: () => false }));
 vi.mock('../hostUi.js', () => ({ localDbHostUi: () => ({ isPackaged: () => true }) }));
-vi.mock('../betterSqliteFactory', () => ({ createBetterSqliteDatabase: (file: string) => new Database(file) }));
+vi.mock('../betterSqliteFactory', () => ({ createBetterSqliteDatabase: vi.fn((file: string) => new Database(file)) }));
 vi.mock('../registerCjkSeg', () => ({ ensureCjkFtsTempTriggersInstalled: () => undefined }));
 vi.mock('../migrate', () => ({ getDrizzleDir: () => fixture.root, prepareBackupDiskSpace: vi.fn(), pruneMigrationBackupsToBudget: vi.fn(), runMigrations: vi.fn() }));
 vi.mock('../backup', () => ({ tryRestoreWithFallback: vi.fn(), backupDb: vi.fn(), restrictLegacyBackupPermissions: vi.fn() }));
@@ -25,16 +25,20 @@ vi.mock('../managedDialogueWorkspaceRepair', () => ({ repairManagedDialogueWorks
 vi.mock('../sqliteVecLoader', () => ({ loadSqliteVec: () => ({ loaded: true }), resetSqliteVecState: vi.fn() }));
 vi.mock('../migrationRunner', () => ({ checkMigrationCompatibility: vi.fn(), prepareMigrationRuntimeManifest: vi.fn(), readSchemaVersion: vi.fn() }));
 vi.mock('../schemaMigrationLease', () => ({
-  acquireSchemaStartupLease: async () => ({ acquired: true, kind: 'writer', lease: { release: vi.fn() } }),
+  acquireSchemaStartupLease: vi.fn(async () => ({ acquired: true, kind: 'writer', lease: { release: vi.fn() } })),
   SchemaMigrationReaderLeaseLifecycle: class { release() {} closeConnection() {} },
 }));
-vi.mock('../schemaStartupPolicy', () => ({ runSchemaStartupPolicy: async () => ({ ready: true }) }));
+vi.mock('../schemaStartupPolicy', () => ({ runSchemaStartupPolicy: vi.fn(async () => ({ ready: true, compatibility: null })) }));
 vi.mock('../dbSlimmingWorkerClient', () => ({ deferReleaseUntilDbSlimmingWorkerTermination: () => false }));
 vi.mock('../modelDefaultsProfile', () => ({ ownerDatabasePath: (root: string, user: string) => path.join(root, `${user}.db`), prepareModelDefaultsProfile: vi.fn() }));
 vi.mock('../../devStartupStatus', () => ({ recordDesktopDevLocalDbStartupResult: vi.fn() }));
 import * as runtime from '../index';
 import { createLifecycleDbClientManager } from '../client/lifecycleDbClient';
-import type { DbClient } from '../client/DbClient';
+import { createBetterSqliteDatabase } from '../betterSqliteFactory';
+import { runSchemaStartupPolicy } from '../schemaStartupPolicy';
+import { cleanupStaleOrcaLeadIndex } from '../orcaStaleIndexCleanup';
+import { acquireSchemaStartupLease } from '../schemaMigrationLease';
+import type { CreateDbClientOptions, DbClient } from '../client/DbClient';
 
 // #11401 / standard unit: actual index.ensureReady/native pragma/timer/close.
 // Client-facade tests miss main's maintenance SQL. A quarantine signal must
@@ -65,43 +69,85 @@ describe('main native connection quarantine', () => {
     expect(pragma).toHaveBeenCalledTimes(corrupt ? 0 : 2);
     expect(db.open).toBe(false);
   });
-  // A readiness request can pass its preflight before a worker's corrupt
-  // response arrives, then open main later. The lifecycle's final admission
-  // must quarantine that real new handle too, not just the earlier callback.
-  it('quarantines a main handle opened after an already admitted readiness request observes worker corruption', async () => {
+  // The original late-handle test spied only after startup SQL had run. Observe
+  // the actual native factory before the passive open, including lease waits.
+  it('blocks passive startup SQL after worker corruption with no main handle', async () => {
     const owner = 'synthetic-owner';
     await runtime.ensureReady(owner);
     let failure: Error | null = null;
+    let onCorruption: CreateDbClientOptions['onCorruption'];
     const client = {
       query: vi.fn(async () => []), dispose: vi.fn(async () => undefined),
       get corruptionError() { return failure; },
     } as unknown as DbClient;
-    const ports = {
+    const manager = createLifecycleDbClientManager({
       getCurrentDbPath: runtime.getCurrentDbPath,
-      closeMainDb: () => runtime.closeDb({ skipOptimize: true }),
-      quarantineMainDb: (id: string) => { if (runtime.getCurrentUserId() === id) runtime.markRuntimeDbCorrupt(); },
-      createWorkerClient: async () => client, createInprocClient: async () => client,
+      closeMainDb: (userId) => runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: userId }),
+      quarantineMainDb: (userId, error) => runtime.markRuntimeDbCorrupt(userId, error),
+      createWorkerClient: async (options) => { onCorruption = options.onCorruption; return client; },
+      createInprocClient: async () => client,
       setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(),
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    };
-    const manager = createLifecycleDbClientManager(ports);
+    });
     try {
       await manager.ensure(owner, {});
-      runtime.closeDb(); // Healthy worker takeover had released main.
+      runtime.closeDb({ preserveSchemaMigrationLease: true });
+      await manager.prepareForEnsure(owner); // Already admitted before corruption.
       failure = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
-      // An already-admitted initialization opens main after the corrupt reply;
-      // the earlier callback had no native singleton to mark at that instant.
-      await runtime.ensureReady(owner);
-      const db = runtime.getRawDb();
-      const pragma = vi.spyOn(db, 'pragma');
-      await expect(manager.ensure(owner, {})).rejects.toBe(failure);
-      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
-      runtime.closeDb();
-      expect(pragma).not.toHaveBeenCalled();
-      expect(db.open).toBe(false);
+      onCorruption!(failure);
+      vi.mocked(createBetterSqliteDatabase).mockClear();
+      await expect(runtime.ensureReady(owner)).rejects.toBe(failure);
+      expect(createBetterSqliteDatabase).not.toHaveBeenCalled();
+      // Closing/switching a healthy different owner must not forget this file.
+      await expect(runtime.ensureReady('healthy-owner')).resolves.toEqual({ ready: true });
+      const healthyDb = runtime.getRawDb();
+      await manager.dispose('owner-switch');
+      await expect(runtime.ensureReady(owner)).rejects.toBe(failure);
+      await manager.prepareForEnsure(owner, true);
+      expect(healthyDb.open).toBe(true); // Recovery must not close another owner.
+      await expect(runtime.ensureReady(owner)).resolves.toEqual({ ready: true });
+      expect(runtime.getRawDb().open).toBe(true);
     } finally {
       await manager.dispose('test-end');
     }
+  });
+
+  it('rejects a pending lease admission before native open when corruption arrives', async () => {
+    const owner = 'synthetic-owner';
+    let releaseLease!: (value: Awaited<ReturnType<typeof acquireSchemaStartupLease>>) => void;
+    const released = vi.fn();
+    vi.mocked(acquireSchemaStartupLease).mockImplementationOnce(() => new Promise(resolve => { releaseLease = resolve; }));
+    vi.mocked(createBetterSqliteDatabase).mockClear();
+    const pending = runtime.ensureReady(owner);
+    const failure = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    runtime.markRuntimeDbCorrupt(owner, failure);
+    const rejected = expect(pending).rejects.toBe(failure);
+    releaseLease({ acquired: true, kind: 'writer', newlyAcquired: true, lease: { kind: 'writer', release: released } });
+    await rejected;
+    expect(createBetterSqliteDatabase).not.toHaveBeenCalled();
+    expect(released).toHaveBeenCalledOnce();
+    runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: owner });
+  });
+  it('stops remaining startup SQL if corruption arrives during an awaited schema phase', async () => {
+    const owner = 'synthetic-owner';
+    const failure = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    let db!: Database.Database;
+    let pragma!: ReturnType<typeof vi.spyOn>;
+    vi.mocked(cleanupStaleOrcaLeadIndex).mockClear();
+    vi.mocked(runSchemaStartupPolicy).mockImplementationOnce(async options => {
+      db = runtime.getRawDb();
+      runtime.markRuntimeDbCorrupt(owner, failure);
+      pragma = vi.spyOn(db, 'pragma');
+      // Same port invoked by the real policy after its awaited migration/drift.
+      options.cleanupSchemaDdl();
+      return { ready: true, compatibility: null };
+    });
+    await expect(runtime.ensureReady(owner)).rejects.toBe(failure);
+    expect(cleanupStaleOrcaLeadIndex).not.toHaveBeenCalled();
+    expect(pragma).not.toHaveBeenCalled();
+    expect(db.open).toBe(false);
+    await expect(runtime.ensureReady(owner)).rejects.toBe(failure);
+    runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: owner });
   });
 
 });

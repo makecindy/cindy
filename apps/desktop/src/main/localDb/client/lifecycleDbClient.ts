@@ -25,7 +25,7 @@ export interface LifecycleDbClientManagerDeps {
   /** Close the main-owned native singleton without further SQL. */
   closeMainDb(userId: string): void;
   /** Stop maintenance on a matching main handle, including late readiness opens. */
-  quarantineMainDb(userId: string): void;
+  quarantineMainDb(userId: string, error: Error): void;
   createWorkerClient(opts: CreateDbClientOptions): Promise<DbClient>;
   createInprocClient(options?: Pick<CreateDbClientOptions, 'onCorruption'>): Promise<DbClient>;
   setCurrentDbClient(client: DbClient, userId: string): void;
@@ -76,8 +76,12 @@ export function createLifecycleDbClientManager(
 
   async function prepareForEnsure(userId: string, recoverCorruption = false, isCurrent = () => true): Promise<void> {
     const client = lifecycleDbClient;
-    if (!client?.corruptionError || lifecycleDbClientUserId !== userId) return;
-    deps.quarantineMainDb(userId);
+    if (!client?.corruptionError || lifecycleDbClientUserId !== userId) {
+      // Switching away disposed the old client, but main retains its file latch.
+      if (recoverCorruption && isCurrent()) deps.closeMainDb(userId);
+      return;
+    }
+    deps.quarantineMainDb(userId, client.corruptionError);
     if (!recoverCorruption) throw client.corruptionError;
     // Keep the latch/current identity until both owned connections are closed.
     // A failed close must not let a later passive ensure create a new boundary.
@@ -126,7 +130,7 @@ export function createLifecycleDbClientManager(
         dbPath,
         onCorruption: (error) => {
           if (lifecycleDbClient === workerClient && lifecycleDbClientUserId === userId) {
-            deps.quarantineMainDb(userId);
+            deps.quarantineMainDb(userId, error);
             notifyCurrentCorruption?.(error);
           }
         },
@@ -162,7 +166,7 @@ export function createLifecycleDbClientManager(
         // Smoke can detect corruption before the client becomes current, when
         // its initial callback was fenced. Quarantine main maintenance too.
         if (workerClient.corruptionError) {
-          deps.quarantineMainDb(userId);
+          deps.quarantineMainDb(userId, workerClient.corruptionError);
           try { notifyCurrentCorruption?.(workerClient.corruptionError); } catch { /* Keep the original failure. */ }
         }
         throw err;
@@ -192,7 +196,7 @@ export function createLifecycleDbClientManager(
     try {
       const fallbackClient = await deps.createInprocClient({ onCorruption: (error) => {
         if (lifecycleDbClient === fallbackClient && lifecycleDbClientUserId === userId) {
-          deps.quarantineMainDb(userId);
+          deps.quarantineMainDb(userId, error);
           notifyCurrentCorruption?.(error);
         }
       } });
