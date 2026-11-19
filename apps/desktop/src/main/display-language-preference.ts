@@ -4,6 +4,7 @@ import { isLocalePreference, type LocalePreference } from '../shared/locale';
 import { createLogger } from './logger';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file';
 import { isTrustedAppRendererEvent } from './security/trustedAppRenderer';
+import { throwIpcError } from './utils/ipcValidate';
 
 const log = createLogger('display-language');
 const store = createOverrideSettingsFile<{ language: LocalePreference | null }>({
@@ -31,7 +32,7 @@ export function registerDisplayLanguagePreference(): void {
     // Preserve the order of requests from this process even when the file lock is busy.
     const result = pending.then(() => applyPreference(operation, value)).catch(() => {
       log.warn('Could not persist the display language preference');
-      throw new Error('Could not persist the display language preference');
+      throwIpcError('INTERNAL', 'Could not persist the display language preference');
     });
     pending = result.catch(() => undefined);
     return result;

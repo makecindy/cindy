@@ -5,6 +5,7 @@ import { app, ipcMain } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { registerDisplayLanguagePreference } from '../display-language-preference';
+import { extractIpcError } from '../../shared/ipcError';
 import type { LocalePreference } from '../../shared/locale';
 
 vi.mock('electron', () => ({
@@ -50,7 +51,6 @@ it('refuses untrusted and malformed choices while keeping the saved preference',
   expect(await request('restore', null)).toBe('ja');
 });
 
-
 // Setup may have no browser cache even though an explicit choice reached disk.
 // A racing import must keep that preference, and rapid user selections stay ordered.
 it('imports only into an unset profile and serializes later choices in request order', async () => {
@@ -60,4 +60,21 @@ it('imports only into an unset profile and serializes later choices in request o
   const importIntoConfiguredProfile = request('import', 'en');
   expect(await Promise.all([first, second, importIntoConfiguredProfile])).toEqual(['zh-CN', 'system', null]);
   expect(await request('restore', null)).toBe('system');
+});
+
+
+// A damaged profile must surface a portable IPC error and keep the original file.
+it('returns a sanitized IPC error when the preference file cannot be updated', async () => {
+  const file = path.join(profile, 'display-language.json');
+  const damaged = 'unreadable preference';
+  fs.writeFileSync(file, damaged);
+  const result = request('set', 'zh-CN');
+
+  await expect(result).rejects.toMatchObject({ message: '[INTERNAL] Could not persist the display language preference' });
+  await result.catch(error => {
+    // Electron serializes the message across IPC and drops custom Error fields.
+    const transported = new Error(`Error invoking remote method 'app-locale:preference': Error: ${error.message}`);
+    expect(extractIpcError(transported)?.code).toBe('INTERNAL');
+  });
+  expect(fs.readFileSync(file, 'utf8')).toBe(damaged);
 });
