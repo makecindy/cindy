@@ -4511,29 +4511,27 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
-// Pi clamps a large output allowance using an estimated prompt size and a fixed
-// 4096-token reserve. On long requests, the upstream tokenizer can count more
-// prompt tokens than Pi estimated. Add headroom only when Pi has already
-// clamped a large output allowance; small response ceilings stay untouched.
-function reserveLargeCompletionHeadroom(payload, model) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
-  if (model?.api !== 'openai-completions') return undefined;
-  const contextWindow = model.contextWindow;
-  const modelMaxTokens = model.maxTokens;
-  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens'
-    : Number.isSafeInteger(payload.max_completion_tokens) ? 'max_completion_tokens' : undefined;
-  const requested = field ? payload[field] : undefined;
-  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0
-      || !Number.isSafeInteger(modelMaxTokens) || modelMaxTokens <= 0
-      || !Number.isSafeInteger(requested) || requested <= 65_536
-      || requested >= modelMaxTokens) return undefined;
-  // Recover Pi's estimated prompt from its context clamp. If another extension
-  // changed the request, leave that request alone instead of inferring a budget.
-  const estimatedPrompt = contextWindow - requested - 4096;
-  if (estimatedPrompt < 0) return undefined;
-  const reserve = Math.max(16_384, Math.ceil(estimatedPrompt * 0.1));
-  // Keep enough response space for a useful answer even close to compaction.
-  return { ...payload, [field]: Math.max(16_384, requested - reserve) };
+// A gateway can count more input tokens than Pi, even with its native margin.
+function reserveLargeCompletionHeadroom(payload, model, ctx) {
+  if (model?.api !== 'openai-completions' || !payload
+      || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens' : 'max_completion_tokens';
+  const requested = payload[field];
+  if (!Number.isSafeInteger(requested) || requested <= 65_536 || requested >= model.maxTokens
+      || !Number.isSafeInteger(model.maxTokens) || !Number.isSafeInteger(model.contextWindow)
+      || model.contextWindow <= 0) return undefined;
+
+  // Use an independent estimate. Subtracting the requested ceiling from the
+  // window mistakes a caller-selected ceiling for a measurement of the input.
+  const usage = ctx?.getContextUsage?.();
+  if (usage?.contextWindow !== model.contextWindow || !Number.isSafeInteger(usage.tokens)
+      || usage.tokens <= 0) return undefined;
+  // Pi 1.5.2 already reserves 15% on large inputs. Raise only the fixed
+  // minimum for tokenizer skew seen on moderate inputs in #9252.
+  const margin = Math.max(16_384, Math.ceil(usage.tokens * 0.15));
+  const ceiling = Math.max(16_384, model.contextWindow - usage.tokens - margin);
+  if (requested <= ceiling) return undefined;
+  return { ...payload, [field]: ceiling };
 }
 
 // Chat gateways can carry Gemini thought signatures inside tool IDs, then route
@@ -4873,7 +4871,7 @@ export default async function cindyBridge(piApi: any) {
     const model = runtimeRequest?.model ?? ctx.model;
     const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
     let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
-    next = reserveLargeCompletionHeadroom(next, model) ?? next;
+    next = reserveLargeCompletionHeadroom(next, model, ctx) ?? next;
     if (modelRequestControlActive) {
       const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
         model: model.id, request: next });
