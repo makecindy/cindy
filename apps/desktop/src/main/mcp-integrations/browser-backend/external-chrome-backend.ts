@@ -264,8 +264,12 @@ export class ExternalChromeBackend implements BrowserBackend {
   async dispose(): Promise<void> {
     this.linkHandoff?.dispose();
     return this.enqueue(async () => {
-      if (!this.used) return;
       try {
+        // A previous Cindy instance may have left its managed browser alive.
+        // Probe without dispatch: even status can boot the runtime service in
+        // a browser-less session. Any survivor still goes through stopBrowser's
+        // existing profile/port ownership checks before adopted-process cleanup.
+        if (!this.used && await this.confirmBrowserGone()) return;
         const stopped = await this.stopBrowser({ action: 'stop' });
         if (!stopped.ok) {
           this.logger.warn('managed browser stop during dispose failed', {
@@ -412,11 +416,8 @@ export class ExternalChromeBackend implements BrowserBackend {
       if (state === 'running') {
         this.route = this.runtimeRoute;
         this.runtimeOwnsNextLaunch = false;
-        // An action can launch Chrome and then fail without a numeric status,
-        // which is what `used` is normally set from. Establishing a running
-        // browser here IS the proof that we own one, so record it or dispose()
-        // takes its `if (!this.used) return` path and leaves a headed Chrome
-        // alive after Cindy quits.
+        // An action can launch Chrome and then fail without a numeric status.
+        // Record the live browser so dispose sends stop without a cold probe.
         this.used = true;
       }
     }

@@ -1648,11 +1648,63 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     expect(created[0].runtime.call.mock.calls.map(([req]) => req.action)).toEqual(['start', 'stop', 'status']);
   });
 
-  it('swallows dispose errors and skips a runtime that was never used', async () => {
+  // #8992: dispose must reclaim an inherited browser before any runtime call.
+  // Existing stop coverage first used the backend, hiding the cold-instance gap.
+  // Unit tier: model the lost launcher ownership; observe whether the inherited
+  // browser survives, including a busy browser whose readiness says stopped.
+  it.each([true, false])('disposes an unused inherited browser (CDP ready=%s)', async (ready) => {
+    let alive = true;
+    const call = vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => ({
+      ok: true,
+      action: req.action,
+      status: 200,
+      data: req.action === 'status' ? { running: ready && alive } : { stopped: false },
+    }));
+    const closeAdoptedBrowser = vi.fn(async () => {
+      alive = false;
+      return true;
+    });
+    const backend = new ExternalChromeBackend({ call }, fakeLogger(), {
+      cdpHttpUrl: 'http://127.0.0.1:19999',
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      isBrowserGone: async () => !alive,
+      closeAdoptedBrowser,
+    });
+
+    await backend.dispose();
+
+    expect(alive).toBe(false);
+    expect(closeAdoptedBrowser).toHaveBeenCalledWith(
+      'http://127.0.0.1:19999', '/managed/browser/Cindy/user-data',
+    );
+    expect(call.mock.calls.some(([req]) => req.action === 'start')).toBe(false);
+  });
+
+  it('leaves an unused inherited browser alive when its ownership cannot be verified', async () => {
+    const logger = fakeLogger();
+    const closeAdoptedBrowser = vi.fn(async () => false);
+    const terminateManagedPortOwner = vi.fn(async () => false);
+    const backend = new ExternalChromeBackend(fakeRuntime(true), logger, {
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      isBrowserGone: async () => false,
+      closeAdoptedBrowser,
+      terminateManagedPortOwner,
+    });
+
+    await expect(backend.dispose()).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith('managed browser stop during dispose failed',
+      expect.objectContaining({ errorCode: 'BROWSER_RUNTIME_ACTION_FAILED' }));
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows dispose errors and skips a verifiably absent unused browser without dispatch', async () => {
     const unused = fakeRuntime();
-    const unusedBackend = new ExternalChromeBackend(unused, fakeLogger());
+    const isBrowserGone = vi.fn(async () => true);
+    const unusedBackend = new ExternalChromeBackend(unused, fakeLogger(), { isBrowserGone });
     await expect(unusedBackend.dispose()).resolves.toBeUndefined();
     expect(unused.call).not.toHaveBeenCalled();
+    expect(isBrowserGone).toHaveBeenCalledTimes(1);
 
     const call = vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
       if (req.action === 'status') return { ok: true, action: req.action, status: 200, data: { running: true } };
