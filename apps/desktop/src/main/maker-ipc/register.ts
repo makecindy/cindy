@@ -7388,7 +7388,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         type: 'question',
         message: t('settings.providers.import.local.confirmDestination'),
         detail: url.pathname === '/' ? url.origin : `${url.origin}\n\n${url.href}`,
-        buttons: [t('common.cancel'), t('settings.providers.import.local.useSavedCredential')],
+        buttons: [t('commonUi.confirmDialog.cancel'), t('settings.providers.import.local.useSavedCredential')],
         cancelId: 0,
         defaultId: 0,
         noLink: true,
