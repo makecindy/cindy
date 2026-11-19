@@ -18,7 +18,9 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-import { createChromiumProxyHelper, FIRST_BACKOFF_MS } from '../src/chromium-proxy.ts';
+import {
+  chromiumProxyWorkerStdio, createChromiumProxyHelper, createChromiumProxyWorkerTransport, FIRST_BACKOFF_MS,
+} from '../src/chromium-proxy.ts';
 
 if (process.platform !== 'darwin' && process.platform !== 'win32') {
   console.log('The Chromium proxy helper runs on macOS and Windows only; nothing to check here.');
@@ -42,23 +44,60 @@ const pacServer = createServer((_request, response) => setTimeout(() => {
   response.writeHead(200, { 'content-type': 'application/x-ns-proxy-autoconfig' });
   response.end(PAC);
 }, 400));
-await new Promise(resolve => pacServer.listen(0, '127.0.0.1', resolve));
-const testConfig = JSON.stringify({ mode: 'pac_script', pacScript: `http://127.0.0.1:${pacServer.address().port}/proxy.pac` });
+let testConfig;
 
 /** The production launcher's spawn, with the test configuration and switches added. */
 const testSpawn = (binary, args, options) => spawn(binary, [...args, ...TEST_ARGS],
   { ...options, env: { ...options.env, CINDY_PROXY_WORKER_TEST_CONFIG: testConfig } });
 
-const checks = [];
 async function check(name, run) {
   const started = Date.now();
+  console.log(`START ${name}`);
   try {
     await run();
-    checks.push(`ok   ${name} (${Date.now() - started} ms)`);
+    console.log(`ok   ${name} (${Date.now() - started} ms)`);
   } catch (error) {
-    checks.push(`FAIL ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`FAIL ${name}: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }
+}
+
+const childRunning = child => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+
+function trackChild(child) {
+  const exited = new Promise(resolve => {
+    child.once('exit', resolve);
+    child.on('error', resolve);
+  });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  return { child, exited, closed };
+}
+
+async function within(promise, timeoutMs, message) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function stopTestChild({ child, closed }) {
+  if (childRunning(child)) child.kill('SIGKILL');
+  try {
+    await within(closed, 3000, `child ${child.pid} did not close`);
+  } finally {
+    if (child.connected) child.disconnect();
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref();
+  }
+}
+
+async function closeTestHelper(helper, children) {
+  try { await helper.close(); }
+  finally { await Promise.all(children.map(stopTestChild)); }
 }
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -82,18 +121,17 @@ async function checkStartupRound(run) {
   const logFile = path.join(diagnostics, `${name}.chromium.log`);
   const started = performance.now();
   const child = spawn(electron, [script, ...TEST_ARGS, '--enable-logging=file', `--log-file=${logFile}`],
-    { stdio: ['pipe', 'pipe', STDERR_MODE], env });
+    { stdio: chromiumProxyWorkerStdio(process.platform, STDERR_MODE), env });
+  const transport = createChromiumProxyWorkerTransport(child, process.platform);
   let exit = null;
   let closed = false;
   let streamError = null;
   let forcedStop = false;
   const stderr = [];
-  const running = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
   child.once('exit', (code, signal) => { exit = { code, signal, elapsedMs: Math.round(performance.now() - started) }; });
   child.once('close', () => { closed = true; });
   const onError = error => { streamError ??= error; };
   child.on('error', onError);
-  child.stdin.on('error', onError);
   const errors = createInterface({ input: child.stderr });
   errors.on('error', onError);
   errors.on('line', line => {
@@ -104,33 +142,33 @@ async function checkStartupRound(run) {
   const answers = [];
   let readyAt = null;
   let id = 0;
-  const replies = createInterface({ input: child.stdout });
-  replies.on('error', onError);
-  replies.on('line', (line) => {
-    // Electron's stdout can also contain lines outside the worker protocol.
+  transport.listen((line) => {
+    // The stream transport's stdout may also contain non-protocol lines.
     let value;
     try { value = JSON.parse(line); } catch { return; }
     if (!value || typeof value !== 'object') return;
     if (value.ready === true && value.pid === child.pid) readyAt = answers.length;
     else if (Number.isSafeInteger(value.id) && value.id > 0 && value.id <= id) answers.push(value);
-  });
+  }, onError);
   const ask = setInterval(() => {
-    if (!running() || streamError || !child.stdin.writable || child.stdin.destroyed) return;
-    child.stdin.write(`${JSON.stringify({ id: ++id, method: 'resolve', url: 'https://api.example.test/v1' })}\n`);
+    if (!childRunning(child) || streamError || !transport.canWrite()) return;
+    transport.write(JSON.stringify({ id: ++id, method: 'resolve', url: 'https://api.example.test/v1' }),
+      error => { if (error) onError(error); });
   }, 20);
   try {
     await waitForRound(() => exit || closed || streamError ||
       (readyAt !== null && answers.slice(readyAt).some(a => a.result)), 15_000);
   } finally {
     clearInterval(ask);
-    if (child.stdin.writable && !child.stdin.destroyed) child.stdin.end();
+    if (transport.canWrite()) transport.close();
     if (!await waitForRound(() => closed, 1500)) {
       forcedStop = true;
-      if (running()) child.kill('SIGKILL');
+      if (childRunning(child)) child.kill('SIGKILL');
       if (!await waitForRound(() => closed, 1500)) {
-        child.stdin.destroy();
-        child.stdout.destroy();
+        child.stdin?.destroy();
+        child.stdout?.destroy();
         child.stderr.destroy();
+        transport.unref();
         child.unref();
       }
     }
@@ -151,7 +189,7 @@ async function checkStartupRound(run) {
     assert.ok(!answers.some(a => typeof a.result === 'string' && /DIRECT/.test(a.result)), `run ${run}: never DIRECT`);
     assert.ok(answers.some(a => a.result === 'PROXY 127.0.0.1:9'), `run ${run}: the PAC result`);
     if (streamError) throw streamError;
-    if (forcedStop) throw new Error('helper did not close after stdin ended');
+    if (forcedStop) throw new Error('helper did not close after its transport closed');
   } catch (error) {
     const logTail = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trimEnd().split(/\r?\n/).slice(-TAIL_LINES).join('\n') : '';
     console.error(`Chromium proxy helper run ${run} failed (stderr=${STDERR_MODE}): ${error.message}\n` +
@@ -161,6 +199,12 @@ async function checkStartupRound(run) {
 }
 
 try {
+  await new Promise((resolve, reject) => {
+    pacServer.once('error', reject);
+    pacServer.listen(0, '127.0.0.1', resolve);
+  });
+  testConfig = JSON.stringify({ mode: 'pac_script', pacScript: `http://127.0.0.1:${pacServer.address().port}/proxy.pac` });
+
   // The Electron the Host release copies (scripts/build.mjs) is this one: cookie encryption must be off, so that the
   // helper's Chromium never sets up Safe Storage (a keychain item on macOS).
   await check('the Electron the Host ships has cookie encryption off', async () => {
@@ -183,19 +227,25 @@ try {
   await check('the Host side answers through Chromium and the PAC script, per host', async () => {
     const home = path.join(root, 'host-side');
     fs.mkdirSync(home);
+    const children = [];
     const helper = createChromiumProxyHelper({ profileDir: home,
-      spawnImpl: (binary, args, options) => testSpawn(binary, args, { ...options, env: {
-        ...options.env, HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home,
-      } }),
+      spawnImpl: (binary, args, options) => {
+        const child = testSpawn(binary, args, { ...options, env: {
+          ...options.env, HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home,
+        } });
+        children.push(trackChild(child));
+        return child;
+      },
     });
-    await helper.warmUp();
-    assert.equal(await helper.resolveProxy('https://api.example.test/v1'), 'PROXY 127.0.0.1:9');
-    assert.equal(await helper.resolveProxy('https://wiki.intranet.test/'), 'DIRECT');
-    assert.equal(helper.state(), 'ready');
-    // In memory: no cookie store or partition on disk under the helper's own directory.
-    const files = fs.readdirSync(path.join(root, 'host-side', 'proxy-helper'), { recursive: true }).map(String);
-    assert.ok(!files.some(file => /(^|[\\/])Cookies$/.test(file) || file.includes('cindy-proxy-helper')), files.join(', '));
-    await helper.close();
+    try {
+      await helper.warmUp();
+      assert.equal(await helper.resolveProxy('https://api.example.test/v1'), 'PROXY 127.0.0.1:9');
+      assert.equal(await helper.resolveProxy('https://wiki.intranet.test/'), 'DIRECT');
+      assert.equal(helper.state(), 'ready');
+      // In memory: no cookie store or partition on disk under the helper's own directory.
+      const files = fs.readdirSync(path.join(root, 'host-side', 'proxy-helper'), { recursive: true }).map(String);
+      assert.ok(!files.some(file => /(^|[\\/])Cookies$/.test(file) || file.includes('cindy-proxy-helper')), files.join(', '));
+    } finally { await closeTestHelper(helper, children); }
     assert.equal(helper.state(), 'stopped');
     assert.deepEqual(fs.readdirSync(home), ['proxy-helper'], 'no caches, logs or saved state elsewhere in HOME');
   });
@@ -203,23 +253,31 @@ try {
   await check('a crashed helper: no answer meanwhile, started again after the backoff', async () => {
     const children = [];
     const helper = createChromiumProxyHelper({ profileDir: path.join(root, 'crash'),
-      spawnImpl: (...args) => { const child = testSpawn(...args); children.push(child); return child; } });
-    for (const until = Date.now() + 15_000; Date.now() < until; await delay(100)) {
-      if (await helper.resolveProxy('https://api.example.test/').catch(() => null)) break;
-    }
-    children[0].kill('SIGKILL');
-    await new Promise(resolve => children[0].once('exit', resolve));
-    await delay(50);
-    assert.equal(helper.state(), 'backoff');
-    await assert.rejects(helper.resolveProxy('https://api.example.test/'), /restarting/);
-    await delay(FIRST_BACKOFF_MS + 100);
-    let answer;
-    for (const until = Date.now() + 15_000; Date.now() < until && !answer; await delay(100)) {
-      answer = await helper.resolveProxy('https://api.example.test/').catch(() => undefined);
-    }
-    assert.equal(answer, 'PROXY 127.0.0.1:9');
-    assert.equal(children.length, 2);
-    await helper.close();
+      spawnImpl: (...args) => {
+        const child = testSpawn(...args);
+        children.push(trackChild(child));
+        return child;
+      } });
+    try {
+      for (const until = Date.now() + 15_000; Date.now() < until; await delay(100)) {
+        if (await helper.resolveProxy('https://api.example.test/').catch(() => null)) break;
+      }
+      const first = children[0];
+      if (!first || !childRunning(first.child) || !first.child.kill('SIGKILL')) {
+        throw new Error('the first helper exited before the crash step');
+      }
+      await within(first.exited, 3000, 'the crashed helper did not exit');
+      await delay(50);
+      assert.equal(helper.state(), 'backoff');
+      await assert.rejects(helper.resolveProxy('https://api.example.test/'), /restarting/);
+      await delay(FIRST_BACKOFF_MS + 100);
+      let answer;
+      for (const until = Date.now() + 15_000; Date.now() < until && !answer; await delay(100)) {
+        answer = await helper.resolveProxy('https://api.example.test/').catch(() => undefined);
+      }
+      assert.equal(answer, 'PROXY 127.0.0.1:9');
+      assert.equal(children.length, 2);
+    } finally { await closeTestHelper(helper, children); }
   });
 
   await check('the helper does not outlive a Host that is killed', async () => {
@@ -231,25 +289,38 @@ try {
       const helper = createChromiumProxyHelper({ profileDir: ${JSON.stringify(path.join(root, 'orphan'))},
         spawnImpl: (binary, args, options) => { const c = spawn(binary, [...args, ${TEST_ARGS.map(a => JSON.stringify(a)).join(', ')}],
           { ...options, env: { ...options.env, CINDY_PROXY_WORKER_TEST_CONFIG: ${JSON.stringify(testConfig)} } }); pid = c.pid; return c; } });
-      for (let i = 0; i < 150; i++) { if (await helper.resolveProxy('https://api.example.test/').catch(() => null)) break; await new Promise(r => setTimeout(r, 100)); }
+      let answer;
+      for (const until = Date.now() + 15_000; Date.now() < until && !answer; ) {
+        answer = await helper.resolveProxy('https://api.example.test/').catch(() => null);
+        if (!answer) await new Promise(r => setTimeout(r, 100));
+      }
+      if (!answer) { await helper.close(); throw new Error('helper did not answer before the parent-death test'); }
       console.log(JSON.stringify({ pid }));
       setInterval(() => {}, 1000);
     `);
     const parent = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', parentScript],
       { cwd: hostDir, stdio: ['ignore', 'pipe', 'inherit'] });
-    const line = await new Promise((resolve, reject) => {
-      createInterface({ input: parent.stdout }).once('line', resolve);
-      parent.once('exit', () => reject(new Error('the parent exited early')));
-    });
-    const { pid } = JSON.parse(line);
-    assert.ok(isAlive(pid), 'the helper runs');
-    parent.kill('SIGKILL');
-    assert.ok(await gone(pid, 10_000), 'the helper quit after its Host was killed');
+    const trackedParent = trackChild(parent);
+    try {
+      const output = createInterface({ input: parent.stdout });
+      const line = await within(new Promise((resolve, reject) => {
+        output.once('line', resolve);
+        output.once('error', reject);
+        trackedParent.exited.then(() => reject(new Error('the parent exited early')));
+      }), 25_000, 'the parent did not report a helper pid');
+      const { pid } = JSON.parse(line);
+      assert.ok(isAlive(pid), 'the helper runs');
+      parent.kill('SIGKILL');
+      assert.ok(await gone(pid, 10_000), 'the helper quit after its Host was killed');
+    } finally { await stopTestChild(trackedParent); }
   });
 } finally {
-  pacServer.close();
+  if (pacServer.listening) {
+    const closed = new Promise(resolve => pacServer.close(resolve));
+    pacServer.closeAllConnections();
+    await closed;
+  }
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-console.log(checks.join('\n'));
 console.log(process.exitCode ? 'Chromium proxy helper acceptance FAILED' : 'Chromium proxy helper acceptance passed');
