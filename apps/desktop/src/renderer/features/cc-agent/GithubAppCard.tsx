@@ -103,8 +103,8 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
         <p className="my-2">{t('ccAgent.gitContext.pr.setup.connection.cliDescription')}</p>
         {alternative}
       </details>}
-      {pluginSettings && state?.login && !awaitingBrowser && !failed &&
-        <GithubInstallationSummary key={state.login + ':' + authorizationVersion} disabled={disabled}
+      {pluginSettings && state?.login && !awaitingBrowser &&
+        <GithubInstallationSummary key={state.login + ':' + authorizationVersion} disabled={disabled || failed}
           connect={state.userAuthorization && !alreadyOffersConnection
             ? () => void act(() => window.electronAPI.gitContext.connectGithubApp(), true) : undefined} />}
       {(failed || state?.available !== false) &&

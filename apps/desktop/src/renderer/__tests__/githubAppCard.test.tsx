@@ -131,3 +131,25 @@ it('loads installation access only on the plugin settings page and on return fro
   await act(async () => { fireEvent(window, new Event('focus')); });
   expect(githubAppAccess).toHaveBeenCalledTimes(2);
 });
+
+// Unit/jsdom: the production settings card must preserve installation details
+// and avoid a new installation request after a transient event-status failure.
+// The existing focus test only covers successful refreshes.
+it('preserves installation access across a failed focus refresh and recovery', async () => {
+  const githubAppAccess = vi.fn(async () => ({ status: 'ready', installations: [] }));
+  const githubAppStatus = vi.fn(async () => ({ available: true, login: 'person', repositories: [] }));
+  window.electronAPI = { gitContext: { githubAppAccess, githubAppStatus } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard pluginSettings />);
+  const accessDetails = 'ccAgent.gitContext.pr.setup.access.empty';
+  await screen.findByText(accessDetails);
+
+  githubAppStatus.mockRejectedValueOnce(new Error('network'));
+  fireEvent(window, new Event('focus'));
+  await screen.findByRole('alert');
+  expect(screen.getByText(accessDetails)).toBeTruthy();
+
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText(accessDetails)).toBeTruthy();
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+});
