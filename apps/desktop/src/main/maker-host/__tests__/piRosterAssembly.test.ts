@@ -214,6 +214,22 @@ describe('buildPiAgent roster prompt assembly', () => {
     }
   });
 
+  it('respects the host casing rules for the proxy and bypass list passed to Pi', async () => {
+    for (const key of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv('Https_Proxy', 'https://explicit.example:443');
+    vi.stubEnv('No_Proxy', 'intranet.example');
+    const isWindows = process.platform === 'win32';
+    const handle = await buildPiAgent({ logger })!.startSession({ sessionId: 'proxy-casing', workingDir, model: 'm' });
+    try {
+      expect(state.env.HTTPS_PROXY).toBe(isWindows ? 'https://explicit.example:443' : 'http://127.0.0.1:9876');
+      expect(state.env.NO_PROXY?.split(',').includes('intranet.example')).toBe(isWindows);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each(['default', 'override', 'tilde'])('forwards roster and %s user context through real PiAgent startup', async (source) => {
     if (source !== 'override') {
       const defaultHome = path.join(root, '.pi', 'agent');
