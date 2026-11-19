@@ -412,6 +412,10 @@ describe('ProvidersSection — 双栏管理', () => {
     return provider;
   }
   const current = ['keep-1', 'keep-2', 'keep-3'].map(id => ({ id, name: id }));
+  // Main owns the removal against the latest saved config; the mock answers with what it removed.
+  const answerRemoval = (removed: { agent: 'codex' | 'pi'; modelId: string }[], gone: string[]) =>
+    vi.mocked(updateCustomProvider).mockImplementation(async (_config, _keys, options) =>
+      options?.removeWithdrawnModels ? { ok: true, withdrawnRemoved: removed, withdrawnGoneIds: gone } : { ok: true });
   it.each([
     ['incomplete catalog', { ok: true, models: current, complete: false }],
     ['catalog without completeness', { ok: true, models: current }],
@@ -454,10 +458,12 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(within(dialog).getByText('Old A')).toBeTruthy();
     expect(within(dialog).queryByText('Manual')).toBeNull();
     expect((boxes[1] as HTMLInputElement).checked).toBe(true);
+    answerRemoval([{ agent: 'codex', modelId: 'old-a' }], ['old-a']);
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' })); });
     await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(updateCustomProvider).mock.lastCall![0].runtimes.codex!.models.map(m => m.id))
-      .toEqual(['keep-1', 'keep-2', 'keep-3', 'manual', 'wizard-typed']);
+    expect(vi.mocked(updateCustomProvider).mock.lastCall![2]).toMatchObject({
+      source: 'manual-settings', removeWithdrawnModels: [{ agent: 'codex', modelId: 'old-a' }],
+    });
     expect(resetModelVisibilities).toHaveBeenCalledWith(provider.id, [{ agent: 'codex', modelId: 'old-a' }]);
     expect(disable).toHaveBeenCalledWith({ kind: 'model', providerId: provider.id, modelIds: ['old-a'], disabled: false });
     expect(toast.success).toHaveBeenLastCalledWith('settings.providers.models.withdrawn.removed');
@@ -482,13 +488,37 @@ describe('ProvidersSection — 双栏管理', () => {
     await waitFor(() => expect(toast.info).toHaveBeenCalledOnce());
     await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
     const dialog = await screen.findByRole('alertdialog');
+    answerRemoval([{ agent: 'codex', modelId: 'old-a' }], []);
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' })); });
     await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(2));
-    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
-    expect(saved.runtimes.codex!.models.map(m => m.id)).not.toContain('old-a');
-    expect(saved.runtimes.pi!.models.map(m => m.id)).toContain('old-a');
+    expect(vi.mocked(updateCustomProvider).mock.lastCall![2]?.removeWithdrawnModels)
+      .toEqual([{ agent: 'codex', modelId: 'old-a' }]);
     expect(resetModelVisibilities).toHaveBeenCalledWith(provider.id, [{ agent: 'codex', modelId: 'old-a' }]);
     expect(disable).not.toHaveBeenCalled();
+  });
+
+  // PR #11550 review: the disable IPC accepts at most 512 IDs, and a stale review
+  // (Main removed nothing) must not report success.
+  it.each([
+    ['batches provider-wide cleanup', 600, 2],
+    ['reports a stale review', 0, 0],
+  ] as const)('%s after Main applies the removal', async (_name, gone, batches) => {
+    selectWithdrawnProvider();
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: current, complete: true }));
+    const disable = vi.fn<typeof window.electronAPI.maker.setModelDisable>(async () => ({ ok: true as const }));
+    window.electronAPI.maker.setModelDisable = disable;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    await waitFor(() => expect(toast.info).toHaveBeenCalledOnce());
+    await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
+    const dialog = await screen.findByRole('alertdialog');
+    const ids = Array.from({ length: gone }, (_, index) => `m-${index}`);
+    answerRemoval(ids.map(modelId => ({ agent: 'codex' as const, modelId })), ids);
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' })); });
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(disable).toHaveBeenCalledTimes(batches));
+    expect(disable.mock.calls.every(([input]) => input.kind === 'model' && input.modelIds.length <= 512)).toBe(true);
+    if (gone === 0) expect(toast.info).toHaveBeenLastCalledWith('settings.providers.models.withdrawn.stale');
   });
 
   it('leaves a suspicious withdrawal unselected so nothing is removed by default', async () => {

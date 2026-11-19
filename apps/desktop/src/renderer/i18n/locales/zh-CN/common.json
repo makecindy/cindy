@@ -4092,6 +4092,7 @@
           "cancel": "暂不移除",
           "removed": "已移除 {{count}} 个模型",
           "cleanupIncomplete": "已移除 {{count}} 个模型，但部分显示或停用设置未能清除",
+          "stale": "连接设置已变化，没有可移除的模型。请重新刷新后再查看",
           "removeFailed": "未能移除模型"
         },
         "disableModel": "停用此模型",

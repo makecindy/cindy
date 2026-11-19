@@ -777,6 +777,34 @@ function invalidateEditedProviderMetadata(
 }
 
 /**
+ * Apply user-confirmed withdrawals (#11298) to the latest saved connection. Only rows
+ * that are still marked `listedUpstream`, have no per-model route and no manual name
+ * are removed; anything changed since the review (re-listed elsewhere, new endpoint or
+ * key cleared the marker, edited into a manual route) is kept.
+ */
+export function removeConfirmedWithdrawnModels(
+  latest: CustomProviderConfig,
+  targets: readonly { agent: AgentKind; modelId: string }[],
+): { config: CustomProviderConfig; removed: { agent: AgentKind; modelId: string }[]; goneIds: string[] } {
+  const config = structuredClone(latest);
+  const removed: { agent: AgentKind; modelId: string }[] = [];
+  for (const agent of VALID_AGENTS) {
+    const runtime = config.runtimes[agent];
+    if (!runtime) continue;
+    const ids = new Set(targets.filter((target) => target.agent === agent).map((target) => target.modelId));
+    if (!ids.size) continue;
+    runtime.models = runtime.models.filter((model) => {
+      if (!ids.has(model.id) || model.listedUpstream !== true || model.route || model.nameExplicit) return true;
+      removed.push({ agent, modelId: model.id });
+      return false;
+    });
+  }
+  const remaining = new Set(Object.values(config.runtimes).flatMap((runtime) => runtime?.models.map((model) => model.id) ?? []));
+  const goneIds = [...new Set(removed.map(({ modelId }) => modelId))].filter((id) => !remaining.has(id));
+  return { config, removed, goneIds };
+}
+
+/**
  * 把授权后自动发现的模型 additions-only 合并进自定义供应商配置的指定 runtime（纯函数）。
  * 已有 id first-wins（用户手填 / 上次发现的条目不被覆盖）；无新增返回 null（调用方免写库）。
  * 持久化发现结果是自定义 OAuth 供应商「重启后模型仍在」的保证——内存 augment 会随进程消失。

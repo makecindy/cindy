@@ -4188,6 +4188,7 @@
           "cancel": "Manter modelos",
           "removed": "Modelos removidos: {{count}}",
           "cleanupIncomplete": "Modelos removidos: {{count}}. Não foi possível limpar algumas configurações de exibição ou desativação",
+          "stale": "A conexão mudou e não há modelos para remover. Atualize de novo para revisar",
           "removeFailed": "Não foi possível remover os modelos"
         },
         "disableModel": "Desativar este modelo",

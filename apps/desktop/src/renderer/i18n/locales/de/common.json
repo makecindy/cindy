@@ -4134,6 +4134,7 @@
           "cancel": "Modelle behalten",
           "removed": "Modelle entfernt: {{count}}",
           "cleanupIncomplete": "Modelle entfernt: {{count}}. Einige Anzeige- oder Deaktivierungseinstellungen konnten nicht gelöscht werden",
+          "stale": "Die Verbindung hat sich geändert, es gibt nichts zu entfernen. Aktualisiere erneut, um zu prüfen",
           "removeFailed": "Modelle konnten nicht entfernt werden"
         },
         "disableModel": "Dieses Modell deaktivieren",

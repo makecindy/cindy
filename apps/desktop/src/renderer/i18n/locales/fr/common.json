@@ -4188,6 +4188,7 @@
           "cancel": "Conserver les modèles",
           "removed": "Modèles retirés : {{count}}",
           "cleanupIncomplete": "Modèles retirés : {{count}}. Certains réglages d'affichage ou de désactivation n'ont pas pu être effacés",
+          "stale": "La connexion a changé : aucun modèle à retirer. Actualisez de nouveau pour vérifier",
           "removeFailed": "Impossible de retirer les modèles"
         },
         "disableModel": "Désactiver ce modèle",

@@ -4134,6 +4134,7 @@
           "cancel": "Keep models",
           "removed": "Models removed: {{count}}",
           "cleanupIncomplete": "Models removed: {{count}}. Some visibility or disable settings could not be cleared",
+          "stale": "The connection changed, so there is nothing to remove. Refresh again to review",
           "removeFailed": "Could not remove models"
         },
         "disableModel": "Disable This Model",

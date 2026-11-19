@@ -1840,6 +1840,31 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await marked()).toEqual([]);
   });
 
+  // PR #11550 review P1: a confirmed review must be applied to the latest saved
+  // connection, never to the page snapshot: models added since are kept, and rows that
+  // lost the marker (another window changed the key/endpoint) are not removed.
+  it('applies confirmed withdrawals to the latest saved connection only', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ readCustomProviderKeyForMutation: vi.fn(() => 'key') }));
+    const row = (id: string, listed = true) => ({ id, name: id, discoveredMetadata: {}, ...(listed ? { listedUpstream: true as const } : {}) });
+    const base = (models: ReturnType<typeof row>[]): CustomProviderConfig => ({ id: 'withdraw-gw', name: 'Gateway',
+      runtimes: { codex: { baseUrl: 'https://gw.example.test/v1', models } } });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, base([row('gone', false)]), { codex: 'key' });
+    // Latest saved: 'gone' and 'old' are marked, 'fresh' was just added, 'kept' lost its marker.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, base([row('gone'), row('old'), row('fresh'), row('kept', false)]));
+    const stalePage = base([row('gone'), row('old'), row('kept')]);
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'gone' }, { agent: 'codex', modelId: 'kept' }],
+    });
+    expect(result).toEqual({ ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'gone' }], withdrawnGoneIds: ['gone'] });
+    expect((await getCustomProvider('withdraw-gw'))?.runtimes.codex?.models.map(model => model.id))
+      .toEqual(['old', 'fresh', 'kept']);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, { codex: 'other' }, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'old' }],
+    })).rejects.toThrow(/INVALID_PARAMS/);
+  });
+
   it('hard-cuts config and credential changes, but skips display-only edits', async () => {
     mountDb();
     const harness = new IpcHarness();

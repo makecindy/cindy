@@ -84,6 +84,7 @@ import {
   deleteCustomProvider,
   getCustomProvider,
   listCustomProviders,
+  removeConfirmedWithdrawnModels,
   updateCustomProvider,
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
@@ -223,7 +224,7 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
@@ -237,11 +238,21 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
   if (append !== undefined && append !== true) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
   if (append && (source || policy || refreshAgents)) return null;
+  const withdrawn = (input as Record<string, unknown>).removeWithdrawnModels;
+  if (withdrawn !== undefined && (!Array.isArray(withdrawn) || withdrawn.length === 0 || withdrawn.length > 8192
+    || withdrawn.some(target => !target || typeof target !== 'object' || Array.isArray(target)
+      || Object.keys(target).some(key => key !== 'agent' && key !== 'modelId')
+      || !VALID_AGENTS.includes((target as { agent?: unknown }).agent as AgentKind)
+      || typeof (target as { modelId?: unknown }).modelId !== 'string'
+      || !(target as { modelId: string }).modelId || (target as { modelId: string }).modelId.length > 512))) return null;
+  if (withdrawn && (append || refreshAgents)) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
+    ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
+      .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
   };
 }
 
@@ -2496,13 +2507,24 @@ export function registerProviderHandlers(
       let generation: symbol | null = null;
       let codexHostPrepared = false;
       let speechReferenceAdded = false;
+      let withdrawnResult: { removed: { agent: AgentKind; modelId: string }[]; goneIds: string[] } | null = null;
       try {
         // per-provider 队列等待结束后才读取该 owner 的 DB / secrets。
         assertProviderMutationOwner(ownerAtIngress);
         const previous = await getCustomProvider(config.id);
         assertProviderMutationOwner(ownerAtIngress);
         if (!previous) throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
-        if (options.appendSpeechModelsOnly) {
+        if (options.removeWithdrawnModels) {
+          // #11298: never apply a review to a stale renderer snapshot; the latest saved
+          // connection decides which confirmed rows are still withdrawal candidates.
+          if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'withdrawal removal cannot change credentials');
+          const result = removeConfirmedWithdrawnModels(previous, options.removeWithdrawnModels);
+          config = result.config;
+          withdrawnResult = { removed: result.removed, goneIds: result.goneIds };
+          const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
+          if (!validation.ok) throwIpcError(validation.code, validation.message);
+          separated = splitCustomProviderHeaders(config);
+        } else if (options.appendSpeechModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
           try { config = appendSpeechModels(previous, config, deps.listPresets()); }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
@@ -2638,7 +2660,8 @@ export function registerProviderHandlers(
           codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
-        return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}) };
+        return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}),
+          ...(withdrawnResult ? { withdrawnRemoved: withdrawnResult.removed, withdrawnGoneIds: withdrawnResult.goneIds } : {}) };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
         if (generation !== null) finishOAuthMutation(config.id, generation);

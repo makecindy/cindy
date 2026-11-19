@@ -223,33 +223,6 @@ export function findWithdrawnCustomProviderModels(
 }
 
 /**
- * Drop confirmed models only from the runtimes whose catalog stopped listing them;
- * runtimes can use different endpoints, so one runtime's withdrawal is not another's.
- * `goneIds` are models no runtime keeps any more (safe to clear provider-wide choices).
- */
-export function removeCustomProviderModels(
-  config: CustomProviderConfig,
-  targets: readonly { agent: AgentKind; modelId: string }[],
-): { config: CustomProviderConfig; removed: { agent: AgentKind; modelId: string }[]; goneIds: string[] } {
-  const removed: { agent: AgentKind; modelId: string }[] = [];
-  const runtimes = { ...config.runtimes };
-  for (const agent of Object.keys(runtimes) as AgentKind[]) {
-    const runtime = runtimes[agent];
-    if (!runtime) continue;
-    const ids = new Set(targets.filter((target) => target.agent === agent).map((target) => target.modelId));
-    const kept = runtime.models.filter((model) => {
-      if (!ids.has(model.id)) return true;
-      removed.push({ agent, modelId: model.id });
-      return false;
-    });
-    if (kept.length !== runtime.models.length) runtimes[agent] = { ...runtime, models: kept };
-  }
-  const remaining = new Set(Object.values(runtimes).flatMap((runtime) => runtime?.models.map((model) => model.id) ?? []));
-  const goneIds = [...new Set(removed.map(({ modelId }) => modelId))].filter((id) => !remaining.has(id));
-  return { config: { ...config, runtimes }, removed, goneIds };
-}
-
-/**
  * 读取该自定义供应商**某 runtime** 本机已存的明文密钥（用户自己的 key）；无密钥返回 null，
  * IPC 读取失败则向调用方抛出，避免把“无法读取”误当成“没有密钥”。
  * 用于编辑态回填(「能看」)与已保存探测。明文仅在 renderer 本地用于回显 / 核对,不外发。

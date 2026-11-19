@@ -81,7 +81,6 @@ import {
   findWithdrawnCustomProviderModels,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
-  removeCustomProviderModels,
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { resetModelVisibilities } from '@/state/modelVisibilityPrefs';
@@ -3353,35 +3352,47 @@ export function ProvidersSection() {
       setRemovingWithdrawn(true);
       try {
         const chosen = new Set(modelIds);
-        const { config, removed, goneIds } = removeCustomProviderModels(
-          providerViewToCustomProviderConfig(provider),
-          review.models.filter((model) => chosen.has(model.id))
-            .flatMap((model) => model.agents.map((agent) => ({ agent, modelId: model.id }))),
-        );
+        const targets = review.models.filter((model) => chosen.has(model.id))
+          .flatMap((model) => model.agents.map((agent) => ({ agent, modelId: model.id })));
+        // Main applies the review to the latest saved connection (PR #11550 review): a
+        // page snapshot taken before this refresh's refetch, or edits from another window,
+        // must not be overwritten, and rows no longer marked are kept.
+        let removed: { agent: AgentKind; modelId: string }[] = [];
+        let goneIds: string[] = [];
+        const saved = await confirmProviderChange(async (options) => {
+          const result = await updateCustomProvider(providerViewToCustomProviderConfig(provider), {},
+            { ...options, removeWithdrawnModels: targets });
+          if (result.ok) {
+            removed = result.withdrawnRemoved ?? [];
+            goneIds = result.withdrawnGoneIds ?? [];
+          }
+          return result;
+        });
+        if (!saved) return;
+        setWithdrawnReview(null);
+        refetch();
         if (removed.length === 0) {
-          setWithdrawnReview(null);
+          toast.info(t('settings.providers.models.withdrawn.stale'));
           return;
         }
-        const saved = await confirmProviderChange((options) => updateCustomProvider(config, {}, options));
-        if (!saved) return;
         const removedIds = [...new Set(removed.map(({ modelId }) => modelId))];
         // Visibility is per runtime; the disable choice is provider-wide, so only clear
-        // it for models no runtime still offers.
+        // it for models no runtime still offers. The disable IPC accepts 512 IDs per call.
+        const disableBatches: string[][] = [];
+        for (let index = 0; index < goneIds.length; index += 512) disableBatches.push(goneIds.slice(index, index + 512));
         const cleanup = await Promise.allSettled([
           resetModelVisibilities(provider.id, removed),
-          ...(goneIds.length ? [window.electronAPI.maker.setModelDisable({
-            kind: 'model', providerId: provider.id, modelIds: goneIds, disabled: false,
-          })] : []),
+          ...disableBatches.map((modelIds) => window.electronAPI.maker.setModelDisable({
+            kind: 'model', providerId: provider.id, modelIds, disabled: false,
+          })),
         ]);
         const cleanupIncomplete = cleanup.some((result) => result.status === 'rejected' || result.value === false);
-        setWithdrawnReview(null);
         if (cleanupIncomplete) {
           withdrawnLog.warn('withdrawn model settings cleanup incomplete', { count: removedIds.length });
           toast.warning(t('settings.providers.models.withdrawn.cleanupIncomplete', { count: removedIds.length }));
         } else {
           toast.success(t('settings.providers.models.withdrawn.removed', { count: removedIds.length }));
         }
-        refetch();
       } catch (error) {
         withdrawnLog.warn('withdrawn model removal failed', { error: error instanceof Error ? error.name : 'unknown' });
         toast.error(t('settings.providers.models.withdrawn.removeFailed'));
