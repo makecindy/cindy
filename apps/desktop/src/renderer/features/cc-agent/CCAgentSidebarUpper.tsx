@@ -1946,9 +1946,8 @@ function ExpandedView({
   }, [allGroups.pinned]);
 
   const visiblePinnedProjects = useMemo(() => {
-    // 同上:**筛选不作用于置顶区**——项目 / Agent 维度都不过滤置顶项目及其会话
-    // (设计文档 §3.3 定稿;2026-08-12 用户重申)。仍然尊重「从侧栏移除项目」,
-    // 那不是筛选而是用户对该项目的显式隐藏。
+    // 保留置顶项目入口。收件箱目录含所有状态，只在生成项目子行时按状态收窄，
+    // 让其余任务仍能进入对应的收件箱分区。普通列表的数据源已按状态筛选。
     return allProjectGroups.projects.flatMap((project) => {
       if (
         projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)
@@ -1965,15 +1964,20 @@ function ExpandedView({
           project,
           // Individually pinned conversations stay as their own siblings in the
           // Pinned section; the project container only shows the remainder.
-          displaySessions: project.sessions.filter((session) => session.pinnedAt == null),
+          displaySessions: project.sessions.filter((session) =>
+            session.pinnedAt == null &&
+            (taskListMode !== 'inbox' || matchesSidebarSessionStatus(session, filter.status, 'all')),
+          ),
         },
       ];
     });
   }, [
     allProjectGroups.projects,
+    filter.status,
     hiddenProjectComparisonKeys,
     localPlatform,
     pinnedProjectComparisonKeys,
+    taskListMode,
   ]);
 
   const visiblePinnedEntries = useMemo<PinnedSidebarEntry[]>(() => {
