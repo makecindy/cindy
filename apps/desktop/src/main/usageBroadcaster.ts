@@ -196,8 +196,9 @@ export async function recordModelTurnUsage(
   delta: DailyModelUsageDelta & {
     /** 产生本轮用量的任务;给出时同时计入 daily_session_usage(「最耗 token 的任务」)。 */
     sessionId?: string;
+    recordedAt?: number;
   },
-  ts: number = Date.now(),
+  ts: number = delta.recordedAt ?? Date.now(),
 ): Promise<void> {
   const { sessionId, ...modelDelta } = delta;
   try {

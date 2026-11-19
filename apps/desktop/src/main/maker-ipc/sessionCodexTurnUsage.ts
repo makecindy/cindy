@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
+import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -56,20 +56,28 @@ export function recordSessionCodexTurnUsage(
   // codex/index.ts 在 turn.completed 时把 SDK usage 翻成 camelCase 塞进 done.data.usage, 这里直接转给 broadcaster。
   // Codex SDK 不报 cost, 所以走 token 量(codex chip 显示 "本 session N token"), 跟 Claude 的 $ chip 是两条管道。
   if (event.type === 'done' && event.source === 'codex') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    const recordedAt = Date.now();
+    const capturedContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'codex');
     deps.turnUsageContextBySession.delete(session.id);
     // 本会话显式选定的供应商('xd' / 'openai' / null=默认)。退役全局 authMode 后,
     // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
-    const sessionProvider = turnContext.providerId;
-    // Remote done events carry token facts, not the executing host's billing route.
-    // Neither local auth nor a same-named local catalog entry establishes that route.
     const isRemoteCodexSession = Boolean(session.remoteHostId || session.agentDeviceId);
+    const usage = (event.data as { usage?: { execution?: {
+      providerId?: string | null; credentialMode?: string | null; model?: string;
+    } } } | undefined)?.usage;
+    const execution = !isRemoteCodexSession ? usage?.execution : undefined;
+    const turnContext = execution && (typeof execution.providerId === 'string' || execution.providerId === null)
+      && execution.providerId !== capturedContext.providerId
+      ? captureTurnUsageContext(session.id, execution.providerId, 'codex') : capturedContext;
+    const sessionProvider = turnContext.providerId;
     const isCustomProviderRoute = !isRemoteCodexSession && turnContext.isUserProviderRoute;
-    const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
+    const codexAuthInjection = execution
+      ? execution.credentialMode === 'gateway-key' ? 'env-key'
+        : execution.credentialMode === 'oauth-bearer' ? 'oauth-bearer' : null
+      : isRemoteCodexSession ? null : getCodexProxyAuthInjection();
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
     deps.turnModelPromiseBySession.delete(session.id);
-    const usage = (event.data as { usage?: unknown } | undefined)?.usage;
     if (usage) recordCodexTurnUsage(usage);
     // 按模型记账: codex done.data.usage 是 **per-turn 增量语义** (maker-core
     // codexDoneUsage 契约: promptTokens=本 turn 未命中输入, completionTokens=完整输出
@@ -108,7 +116,7 @@ export function recordSessionCodexTurnUsage(
         let pricingModel = 'unknown';
         let turnModel = 'unknown';
         try {
-          turnModel = await modelPromise;
+          turnModel = execution?.model || await modelPromise.catch(() => 'unknown');
           // 只剥上下文后缀，保留 provider/SKU 前缀；`codex/gpt-*` 与裸
           // `gpt-*` 是不同售价和折扣，不能互相回落。
           pricingModel = normalizeModelIdForPricing(turnModel);
@@ -157,16 +165,32 @@ export function recordSessionCodexTurnUsage(
           : isSubscriptionValue
             ? codexSubscriptionUsageModelKey(pricingModel)
             : codexApiUsageModelKey(pricingModel);
-        await recordModelTurnUsage({
-          sessionId: session.id,
-          agentKind: 'codex',
-          model: modelUsageKey,
+        const billing = turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown');
+        if (isSubscriptionValue && !billing.providerId) billing.providerId = isCodexXaiProviderRoute ? 'xai' : 'openai';
+        const turnUsageDetails = buildTurnUsageDetails({
+          ...billing,
+          perModelTokens: execution && codexSegmentsReliable
+            ? codexUsageSegments.map(segment => ({ ...billing, ...segment, model: segment.model ?? turnModel }))
+            : [{ ...billing, model: turnModel, inputTokens: promptTokens, outputTokens: completionTokens, cacheReadTokens: cachedTokens, cacheCreateTokens: cacheCreationTokens }],
+          inputTokens: promptTokens,
+          outputTokens: completionTokens,
+          cacheReadTokens: cachedTokens,
+          cacheCreateTokens: cacheCreationTokens,
+          model: turnModel,
+          durationMs: u.durationMs,
+          turnDurationMs: u.turnDurationMs,
+        });
+        const tokenRows = turnUsageDetails?.perModelTokens ?? [];
+        await Promise.all(tokenRows.map(row => recordModelTurnUsage({
+          sessionId: session.id, agentKind: 'codex',
+          model: isRemoteCodexSession ? normalizeModelIdForPricing(row.model)
+            : isSubscriptionValue ? codexSubscriptionUsageModelKey(normalizeModelIdForPricing(row.model))
+              : codexApiUsageModelKey(normalizeModelIdForPricing(row.model)),
+          recordedAt, attribution: isRemoteCodexSession ? undefined : tokenAttribution(row, turnContext),
           money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
-          inputTokensDelta: promptTokens,
-          outputTokensDelta: completionTokens,
-          cacheReadTokensDelta: cachedTokens,
-          cacheCreateTokensDelta: cacheCreationTokens,
-        }).finally(() => rebroadcastCodexTodayUsage());
+          inputTokensDelta: row.inputTokens, outputTokensDelta: row.outputTokens,
+          cacheReadTokensDelta: row.cacheReadTokens, cacheCreateTokensDelta: row.cacheCreateTokens,
+        }))).finally(() => rebroadcastCodexTodayUsage());
 
         // Codex SDK 不报 $, 用价格表折算。普通模型 + oauth(订阅)显示为 token 价值;api 模式和 codex/
         // 折扣模型走 gateway API, 显示为 API cost。远端 Codex 由远端 daemon
@@ -177,16 +201,6 @@ export function recordSessionCodexTurnUsage(
         // stale 快返并后台刷新,
         // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
         // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
-        const turnUsageDetails = buildTurnUsageDetails({
-          ...turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown'),
-          inputTokens: promptTokens,
-          outputTokens: completionTokens,
-          cacheReadTokens: cachedTokens,
-          cacheCreateTokens: cacheCreationTokens,
-          model: turnModel,
-          durationMs: u.durationMs,
-          turnDurationMs: u.turnDurationMs,
-        });
         const recordCodexUsageOnly = async () => {
           if (!turnAssistantPersistId) return;
           await recordTurnUsageOnMessage({

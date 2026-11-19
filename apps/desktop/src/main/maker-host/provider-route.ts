@@ -1283,16 +1283,15 @@ export function rewriteImplicitModelIdForRoute(
  * codex 路由用：env-key 注入态默认全量走网关、per-session 无意义（内置三家保持该旧行为），
  * 但这两类供应商必须按各自 baseUrl + key 路由，故放行 per-session 解析。
  */
-export function isUserProviderSession(sessionId: string): boolean {
-  return getUserProviderIdForSession(sessionId) !== null;
+export function isUserProviderSession(sessionId: string, providerId = getSessionProvider(sessionId)): boolean {
+  return getUserProviderIdForSession(sessionId, providerId) !== null;
 }
 
 /**
  * 该会话显式选定的自定义路由供应商 id；其他供应商 / 未选 → null。
  * 上游错误观察器（provider-upstream-error-observer）用它把 4xx/5xx 归属到具体自定义供应商。
  */
-export function getUserProviderIdForSession(sessionId: string): string | null {
-  const providerId = getSessionProvider(sessionId);
+export function getUserProviderIdForSession(sessionId: string, providerId = getSessionProvider(sessionId)): string | null {
   if (!providerId) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   return isCustomRoutedProvider(provider) ? providerId : null;

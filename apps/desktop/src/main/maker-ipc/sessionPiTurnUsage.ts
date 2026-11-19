@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
+import { piModelBilling, captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -65,7 +65,7 @@ export function recordSessionPiTurnUsage(
   const raw = (event.data as { usage?: unknown } | undefined)?.usage;
   const identified = event.source === 'pi' && isPiReceiptPayload(raw);
   if (identified) {
-    const context = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    const context = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi');
     recordPiUsageReceipts(session, raw, context);
     if (event.type === 'account_usage') return;
     if (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) return;
@@ -81,7 +81,7 @@ export function recordSessionPiTurnUsage(
   //   xd / 默认网关            → 实际 gateway cost。
   // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
   if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi');
     const sessionProvider = turnContext.providerId;
     // New Pi payloads carry the tariff on every request segment. Keep the
     // turn-start snapshot only as a compatibility fallback for older or
@@ -96,6 +96,7 @@ export function recordSessionPiTurnUsage(
     deps.turnModelPromiseBySession.delete(session.id);
     const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
     if (rawUsage && typeof rawUsage === 'object') {
+      const recordedAt = Date.now();
       const tokens = piUsageToTokens(
         rawUsage as {
           inputTokens?: number;
@@ -207,8 +208,16 @@ export function recordSessionPiTurnUsage(
           typeof (rawUsage as { turnDurationMs?: unknown }).turnDurationMs === 'number'
             ? (rawUsage as { turnDurationMs: number }).turnDurationMs
             : undefined;
+        const billing = turnBillingSource(turnContext, billingRoute);
+        if (billing.billingSource === 'subscription' && !billing.providerId && effectiveProvider) billing.providerId = effectiveProvider;
+        const attributionFor = (model: string) => session.remoteHostId || session.agentDeviceId ? undefined
+          : tokenAttribution(piModelBilling(turnContext, model).billing, turnContext);
+        const perModelTokens = piSegmentsReliable
+          ? [...groupedSegments].map(([model, group]) => ({ model, ...group.tokens, ...piModelBilling(turnContext, model).billing }))
+          : undefined;
         const usageOnlyDetails = buildTurnUsageDetails({
-          ...turnBillingSource(turnContext, billingRoute),
+          ...billing,
+          perModelTokens,
           ...tokens,
           model: groupedSegments.size === 1 ? [...groupedSegments.keys()][0] : undefined,
           models: [...groupedSegments.keys()],
@@ -283,6 +292,7 @@ export function recordSessionPiTurnUsage(
               recordModelTurnUsage({
                 sessionId: session.id,
                 agentKind: 'pi',
+                attribution: attributionFor(model), recordedAt,
                 model: modelUsageKey,
                 // daily_model_usage has no money-kind column. Subscription
                 // rows recover value-estimate from their suffix; other
@@ -303,7 +313,8 @@ export function recordSessionPiTurnUsage(
             estimatedMonies.length > 0 ? addRegionalMoney(estimatedMonies) : null;
           const messageMoney = actualMoney ?? estimatedMoney;
           const turnUsageDetails = buildTurnUsageDetails({
-            ...turnBillingSource(turnContext, billingRoute),
+            ...billing,
+            perModelTokens,
             ...tokens,
             model: groupedSegments.size === 1 ? [...groupedSegments.keys()][0] : undefined,
             models: [...groupedSegments.keys()],
@@ -341,6 +352,7 @@ export function recordSessionPiTurnUsage(
               recordModelTurnUsage({
                 sessionId: session.id,
                 agentKind: 'pi',
+                attribution: attributionFor(model), recordedAt,
                 model: isSubscriptionValue ? piSubscriptionUsageModelKey(model) : model,
                 money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
                 inputTokensDelta: group.tokens.inputTokens,

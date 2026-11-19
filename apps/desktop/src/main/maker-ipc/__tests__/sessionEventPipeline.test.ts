@@ -2592,6 +2592,22 @@ describe('usage through the production event pipeline', () => {
     },
   );
 
+  // Unit regression: another task's Gateway spawn must not take a native subscription turn.
+  it('settles the executing Codex route and model when the global proxy points elsewhere', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: { ...usage('codex'), execution: {
+      providerId: 'openai', credentialMode: 'oauth-bearer', model: 'test-model',
+    } } }, { source: 'codex' }));
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'test-model#billing=subscription', inputTokensDelta: 100,
+      attribution: { provider: 'openai', billingSource: 'subscription' },
+    }));
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
   it.each([
     ['codex', 'anthropic', 'claude'],
     ['codex', 'claude-account', 'claude'],
