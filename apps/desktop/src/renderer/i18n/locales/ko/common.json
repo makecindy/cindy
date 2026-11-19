@@ -19746,7 +19746,8 @@
         "validity": "유효 기간",
         "validityValue_other": "받은 후 {{count}}일",
         "claimBy": "받기 기한",
-        "destination": "추가 위치"
+        "destination": "추가 위치",
+        "validityPermanent": "기한 없음"
       },
       "doneTitle": "{{amount}} 추가됨",
       "doneDescription": "프로모션 잔액에 추가되었습니다. {{date}}까지 유효합니다.",
@@ -19762,10 +19763,13 @@
         "alreadyClaimed": "이미 다른 사람이 받은 기프트 카드입니다.",
         "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
         "voided": "이 기프트 카드는 무효화되었습니다.",
+        "voidedPurchased": "이 기프트 카드는 지금 받을 수 없습니다.",
         "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
         "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요.",
         "personalRequired": "기프트 카드는 개인 계정으로만 받을 수 있습니다."
-      }
+      },
+      "doneDescriptionPurchased": "충전 잔액에 추가했어요. 기한이 없습니다.",
+      "pendingDescriptionPurchased": "{{amount}}을(를) 추가하는 중입니다. 곧 충전 잔액에 표시되며 다시 받을 필요는 없습니다."
     },
     "usage": {
       "title": "잔액 사용량",
@@ -19811,7 +19815,8 @@
         "noPayment": "결제 불필요",
         "page": "{{page}}페이지",
         "previous": "이전 페이지",
-        "next": "다음 페이지"
+        "next": "다음 페이지",
+        "giftCard_other": "기프트 카드 × {{count}}"
       },
       "count": "{{count}}건",
       "orderId": "NO. {{id}}",
@@ -20040,6 +20045,115 @@
         "MONTH": "매월 {{amount}} 포함",
         "YEAR": "매년 {{amount}} 포함",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "기프트 카드 구매",
+      "title": "기프트 카드 구매",
+      "subtitle": "친구에게 선물하거나 직접 사용할 수 있어요. 사용하면 충전 잔액에 추가되며 기한이 없습니다.",
+      "previewLabel": "받는 사람이 보게 될 카드",
+      "sameCards_other": "총 {{count}}장 · 디자인, 금액, 메시지가 같고 카드마다 코드가 따로 있어요",
+      "fields": {
+        "face": "디자인",
+        "amount": "금액",
+        "quantity": "수량",
+        "sender": "보내는 사람",
+        "senderHint": "“{{sender}} 님이 보냄”으로 표시됩니다",
+        "senderPlaceholder": "이름",
+        "message": "메시지(선택)",
+        "messagePlaceholder": "받는 분께 한마디",
+        "tooLong": "최대 {{max}}자까지 입력할 수 있습니다",
+        "paymentMethod": "결제 수단"
+      },
+      "decrease": "한 장 줄이기",
+      "increase": "한 장 늘리기",
+      "quantityHint": "{{hours}}시간 동안 최대 {{limit}}장 · 지금 {{remaining}}장 더 살 수 있어요",
+      "quantityLimitReached": "{{hours}}시간 동안 살 수 있는 {{limit}}장을 모두 샀어요. 잠시 후 다시 시도하세요",
+      "orderAmountCap": "주문 1건당 최대 {{amount}}",
+      "totalDetail_other": "{{count}}장 × {{amount}}",
+      "pay": "결제하기",
+      "refundNote": "기프트 카드는 현금으로 바꿀 수 없습니다. 받았거나 사용한 카드는 환불되지 않습니다. 받지 않은 카드를 환불하려면 지원팀에 문의하세요.",
+      "cancel": "취소",
+      "loadFailed": "구매 한도를 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
+      "checkoutSubtitle_other": "기프트 카드 {{amount}} × {{count}} · 결제가 완료되면 바로 발급됩니다",
+      "faces": {
+        "cindy": "Cindy · 브랜드 레드",
+        "cat": "검은 고양이 · 밤",
+        "bell": "종 · 축제",
+        "leap": "도약 · 아이보리"
+      },
+      "errors": {
+        "limitReached": "기프트 카드 구매 한도에 도달했습니다. 잠시 후 다시 시도하세요.",
+        "amountTooLarge": "이 주문은 1회 결제 한도를 넘습니다. 수량을 줄여 다시 시도하세요."
+      },
+      "done": {
+        "title_other": "기프트 카드 {{count}}장이 준비됐어요",
+        "pendingTitle": "기프트 카드 결제 완료",
+        "loading": "이 주문의 기프트 카드를 가져오는 중…",
+        "description": "받기 링크를 친구에게 보내면 열자마자 받을 수 있어요. 한 장은 직접 사용해도 됩니다.",
+        "missing": "결제가 완료됐어요. 기프트 카드는 곧 ‘구매한 기프트 카드’에 표시됩니다.",
+        "cardTitle": "{{index}}번째 카드 · {{amount}}",
+        "cardMeta": "끝자리 {{tail}} · {{status}}",
+        "linkHint": "받기 링크가 곧 카드입니다. 먼저 연 사람이 받게 되니 선물할 사람에게만 보내세요.",
+        "viewAll": "구매한 기프트 카드 보기",
+        "finish": "완료"
+      },
+      "list": {
+        "title": "구매한 기프트 카드",
+        "description": "받기 링크를 친구에게 보내면 열자마자 받을 수 있어요. 아직 선물하지 않은 카드는 기한이 없고 직접 사용할 수도 있어요. 사용하면 충전 잔액에 추가됩니다.",
+        "count_other": "{{count}}장",
+        "loadMore": "더 불러오기",
+        "loadFailed": "기프트 카드를 불러오지 못했습니다",
+        "retry": "다시 불러오기",
+        "status": {
+          "unclaimed": "받지 않음",
+          "claimedBy": "{{name}} 님이 받음",
+          "claimed": "받음",
+          "redeemedByYou": "직접 사용함",
+          "refunded": "환불됨",
+          "onHold": "처리 중, 지금은 사용할 수 없음"
+        },
+        "meta": {
+          "purchased": "{{date}} 구매 · 끝자리 {{tail}}",
+          "claimed": "{{date}} 받음 · 끝자리 {{tail}}",
+          "redeemed": "{{date}} 사용 · 끝자리 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "받기 링크 복사",
+        "copied": "복사됨",
+        "more": "더 보기",
+        "copyCode": "코드 복사",
+        "redeemSelf": "직접 사용",
+        "sendEmail": "이메일로 보내기"
+      },
+      "toasts": {
+        "linkCopied": "받기 링크를 복사했습니다",
+        "codeCopied": "코드를 복사했습니다",
+        "copyFailed": "복사하지 못했습니다. 다시 시도하세요",
+        "unavailable": "이미 받았거나 환불된 카드입니다",
+        "revealFailed": "코드를 가져오지 못했습니다. 잠시 후 다시 시도하세요",
+        "emailQueued": "{{email}}(으)로 보내는 중"
+      },
+      "email": {
+        "title": "이메일로 보내기",
+        "description": "이 카드의 받기 링크를 상대방 이메일로 보냅니다. 메일에는 보내는 사람 이름과 메시지가 함께 들어갑니다.",
+        "previewLabel": "상대방이 받는 내용",
+        "previewWithMessage": "“{{message}}” · 받기 링크와 코드 포함",
+        "previewLinkOnly": "받기 링크와 코드",
+        "recipient": "받는 사람 이메일",
+        "placeholder": "name@example.com",
+        "hint": "어떤 이메일로든 보낼 수 있습니다. 받기 링크는 먼저 연 사람이 받습니다.",
+        "cooldown": "{{seconds}}초 후에 다시 보낼 수 있습니다",
+        "invalid": "이메일 형식이 올바르지 않습니다",
+        "failed": "보내지 못했습니다. 잠시 후 다시 시도하세요.",
+        "send": "보내기",
+        "status": {
+          "sending": "{{email}}(으)로 보내는 중",
+          "sent": "{{email}}(으)로 보냄",
+          "failed": "{{email}}(으)로 보내지 못함",
+          "failedRetry": "{{email}}(으)로 보내지 못했습니다. 다시 보낼 수 있습니다"
+        }
       }
     }
   },
