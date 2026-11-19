@@ -17,7 +17,14 @@ vi.mock('../api', () => ({ billingApi: api }));
 
 import type { BillingGiftCardPurchasePolicy } from '../../../../shared/billing';
 import { GiftCardPurchaseDialog } from '../GiftCardPurchaseDialog';
-import { giftCardOffersOf, type GiftCardOfferEntry } from '../giftCardPurchase';
+import {
+  customGiftCardRange,
+  giftCardOffersOf,
+  giftCardOrderTotal,
+  maxGiftCardQuantity,
+  parseCustomGiftCardAmount,
+  type GiftCardOfferEntry,
+} from '../giftCardPurchase';
 
 const offer = (amount: string): GiftCardOfferEntry => ({
   kind: 'fixed',
@@ -106,6 +113,25 @@ describe('giftCardOffersOf', () => {
       ['fixed', 'gift_card_100'],
       ['custom', 'gift_card_custom'],
     ]);
+  });
+});
+
+// 服务端金额可能带多位小数（如 100.000000000）：与两位小数的写法是同一个金额，不能因此禁用方案、
+// 漏掉范围或总额上限；去掉末尾 0 后仍超过两位小数的才不是合法面额。
+describe('gift card amounts written at a longer scale', () => {
+  it('reads them as the same amount when limiting quantity, range and total', () => {
+    expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000.000000000' }, '200.000000000')).toBe(5);
+    expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000.000000000' }, '300.000000000')).toBe(3);
+    expect(giftCardOrderTotal('100.500000000', 3)).toBe('301.50');
+    const range = customGiftCardRange(
+      { minAmount: '50.000000000', maxAmount: '500.000000000' },
+      { minFaceValue: '100.000000000', maxFaceValue: '1000.000000000' },
+    );
+    expect(range).toEqual({ min: '100.000000000', max: '500.000000000' });
+    expect(parseCustomGiftCardAmount('99', range)).toEqual({ issue: 'range' });
+    expect(parseCustomGiftCardAmount('250.50', range)).toEqual({ amount: '250.5' });
+    expect(parseCustomGiftCardAmount('250.505', range)).toEqual({ issue: 'format' });
+    expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000' }, '100.001')).toBe(0);
   });
 });
 

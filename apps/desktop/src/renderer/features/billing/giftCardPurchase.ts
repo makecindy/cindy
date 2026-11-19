@@ -96,11 +96,16 @@ export function parseCustomGiftCardAmount(
   return { amount: fraction ? `${whole}.${fraction}` : String(whole) };
 }
 
-/** 十进制金额转成分（两位小数以内）；礼品卡面额最多两位小数。 */
+/**
+ * 十进制金额转成分。服务端的金额可能带多位小数（计费投影接受最多 9 位，如 100.000000000），
+ * 先去掉小数末尾的 0 再看；去掉后仍超过两位小数的不是合法面额（礼品卡面额最多两位小数）。
+ */
 function cents(amount: string): number | null {
-  const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(amount);
+  const match = /^(\d{1,12})(?:\.(\d{1,9}))?$/.exec(amount);
   if (!match) return null;
-  return Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  const fraction = (match[2] ?? '').replace(/0+$/, '');
+  if (fraction.length > 2) return null;
+  return Number(match[1]) * 100 + Number(fraction.padEnd(2, '0'));
 }
 
 /**
