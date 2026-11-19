@@ -974,14 +974,14 @@ function translatePiEventInternal(
       if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
-      const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
+      const observed = message.usage && ctx.resolveUsagePriceVariant?.({
         inputTokens: (message.usage.input ?? 0) + (message.usage.cacheRead ?? 0) + (message.usage.cacheWrite ?? 0),
         outputTokens: message.usage.output ?? 0,
         cacheReadTokens: message.usage.cacheRead ?? 0,
       });
       const priceVariant =
-        executionPriceVariant ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
-      applyUsage(ctx, message.usage, message.model, priceVariant);
+        (typeof observed === 'object' ? observed.priceVariant : observed) ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
+      applyUsage(ctx, message.usage, message.model || (typeof observed === 'object' ? observed.model : undefined), priceVariant);
       publishUsageReceipts(queue, ctx);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);

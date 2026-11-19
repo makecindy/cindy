@@ -443,6 +443,7 @@
       "filterEmptyCopy": "Ajustez ou réinitialisez les filtres dans les paramètres d'affichage.",
       "filterTeammatesHeading": "Amis",
       "filterAnySource": "Toutes les sources",
+      "filterHideAutomations": "Masquer les tâches automatisées",
       "filterHideAllTeammates": "Tout masquer",
       "filterSelectedTeammates": "{{count}} sélectionné(s)",
       "inbox": {

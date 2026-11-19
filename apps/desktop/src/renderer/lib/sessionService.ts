@@ -22,6 +22,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { makerApiFor } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { SessionReference } from '../../shared/sessionReference';
+import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 
 /**
  * status 过滤器：对应 Sidebar Filter 的 Active/Archived/All 三选。
@@ -107,7 +108,11 @@ export async function create(body?: {
   fastMode?: boolean | 'ultrafast';
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  /**
+   * 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)：main 只在 providerId 为
+   * `acp-plugin:<插件>:<引擎>`、且不带 remoteHostId / agentDeviceId 时接受。
+   */
+  agentKind?: 'cc' | 'codex' | 'pi' | typeof PLUGIN_ENGINE_AGENT_KIND;
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];

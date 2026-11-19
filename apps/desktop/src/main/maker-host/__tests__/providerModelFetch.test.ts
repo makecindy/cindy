@@ -214,7 +214,7 @@ describe('import discovery limits', () => {
       expect(init?.redirect).toBe('error');
       return fakeResponse(200, JSON.stringify({ name: 'magpie' }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([
@@ -249,7 +249,7 @@ describe('import discovery limits', () => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-test');
       return fakeResponse(200, JSON.stringify({ object: 'list', data: [] }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([{}, { data: [{}] }, { data: [null] }, { data: [{ id: '' }] }, { models: [] },

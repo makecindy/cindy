@@ -801,6 +801,36 @@ describe('Scheduler', () => {
   });
 
 
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
+  // update. A plugin engine only runs as a new task each run on the automation host; the minimal
+  // failing inputs are a bound/persistent/worktree/remote/script plugin schedule being saved, or an
+  // old peer rewriting only agentKind back to a built-in Harness (a silent engine switch).
+  it('saves a plugin engine only as a local new-task-each-run automation', async () => {
+    const engine = { agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+      model: 'deepseek-v4' } as const;
+    const saved = await h.scheduler.create({ ...baseInput, ...engine });
+    expect(saved).toMatchObject(engine);
+    for (const extra of [
+      { targetSessionId: 'task-1' },
+      { persistentSession: true },
+      { useWorktree: true, workspaceKind: 'project' as const, workingDir: '/repo' },
+      { agentDeviceId: 'studio-mac' },
+      { providerId: 'anthropic' },
+      { modelAgentKind: 'claude-code' as const },
+      { executionMode: 'script' as const, scriptConfig: { command: 'echo hi', capabilities: [] } },
+    ]) {
+      await expect(h.scheduler.create({ ...baseInput, ...engine, ...extra })).rejects.toThrow();
+    }
+    // A half switch is refused (changing agentKind alone also drops the saved model).
+    await expect(h.scheduler.update(saved.id, { agentKind: 'claude-code' })).rejects.toThrow();
+    await expect(h.scheduler.update(saved.id, { agentKind: 'claude-code', model: 'deepseek-v4' })).rejects.toThrow(/plugin engine/);
+    // A complete switch back to a built-in Harness is an ordinary edit.
+    const builtin = await h.scheduler.update(saved.id, {
+      agentKind: 'claude-code', modelAgentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic',
+    });
+    expect(builtin).toMatchObject({ agentKind: 'claude-code', modelAgentKind: 'claude-code' });
+  });
+
   it('persists an explicit Harness with its model and clears it when following the target', async () => {
     const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
     expect(saved.modelAgentKind).toBe('pi');

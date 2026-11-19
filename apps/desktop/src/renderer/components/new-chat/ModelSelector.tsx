@@ -81,6 +81,17 @@ import {
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import {
+  matchPluginEngineRows,
+  PluginEngineSessionPanel,
+  PluginEnginesSection,
+  type PluginEnginePendingSelection,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
+} from './PluginEnginesSection';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineModelName, resolvePluginEngineEffort } from '@/lib/pluginEngineSelection';
+import type { PluginEngineEffort, PluginEngineView } from '../../../shared/pluginEngines';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -96,6 +107,7 @@ import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
+import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
@@ -762,6 +774,16 @@ export interface ModelSelectorBaseProps {
   pluginModels?: PluginModelsPickerProps;
   /** 语义同 ModelSelectorContentProps.modelGroups。 */
   modelGroups?: ModelGroupsPickerProps;
+  /** 语义同 ModelSelectorContentProps.pluginEngines。选中某个引擎时 trigger 显示该引擎与模型。 */
+  pluginEngines?: PluginEnginesPickerProps;
+  /**
+   * 运行在插件引擎上的已建任务(sessions.agent_kind = 'acp')。传入时 trigger 显示引擎名与模型。
+   * 同时传 pluginEngines(本机普通任务，能换引擎)时面板与内置任务一样列出内置模型与插件引擎；
+   * 只传本项时面板只列该引擎的模型。
+   */
+  pluginEngineSession?: PluginEngineSessionPickerProps;
+  /** 已建任务下一条消息要切到的插件引擎：trigger 显示「下条：引擎 · 模型」。 */
+  pluginEnginePending?: PluginEnginePendingSelection;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -986,6 +1008,11 @@ export type ModelSelectorContentProps = ModelSelectorContentBaseProps & ModelSel
 export interface ModelSelectorContentBaseProps {
   /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
   pluginModels?: PluginModelsPickerProps;
+  /**
+   * 插件提供的执行引擎(「插件引擎」分组,docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿
+   * 在至少有一个引擎时传；不传时面板与没装插件时逐像素一致。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
   /** 新任务的模型组(用户建的模式与路线)；只有草稿传。 */
   modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
@@ -1250,6 +1277,13 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   const { accountTier } = useModelAccessStatus();
+  // 面板打开时请插件引擎刷新模型列表，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
+  const hasPluginEngines = (props.pluginEngines?.engines.length ?? 0) > 0;
+  const readCatalogue = props.pluginEngines?.readCatalogue
+    ?? (hasPluginEngines ? requestPluginEnginesRefresh : undefined);
+  useEffect(() => {
+    readCatalogue?.();
+  }, [readCatalogue]);
   return (
     <ModelSelectorContentView
       {...props}
@@ -1266,6 +1300,7 @@ const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
 function ModelSelectorContentView({
   pluginModels,
   modelGroups,
+  pluginEngines,
   providersOverride,
   providersOverrideState,
   taskSourceProvider,
@@ -3739,8 +3774,9 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || modelGroups ? {
+            {...(pluginModels || modelGroups || pluginEngines ? {
               // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
+              // 插件引擎是独立的一组(不混进供应商目录)，排在它们之后、内置模型之前。
               pinnedTop: (
                 <>
                   {pluginModels && <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />}
@@ -3748,15 +3784,40 @@ function ModelSelectorContentView({
                     <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
                       variant={query.trim() ? 'search' : 'all'} />
                   )}
+                  {pluginEngines && (
+                    <PluginEnginesSection picker={pluginEngines} query={query} onPicked={() => onDismiss?.()} />
+                  )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
-                || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0),
+                || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0)
+                || (!!pluginEngines && matchPluginEngineRows(
+                  pluginEngines.engines,
+                  query,
+                  (engine) => (pluginEngines.active?.providerId === engine.providerId ? pluginEngines.active.modelId : null),
+                  t('newChat.pluginEngines.defaultModel').toLowerCase(),
+                ) > 0),
             } : {})}
             {...(modelGroups && modelGroupRows.length > 0 ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
+            } : {})}
+            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
+              // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
+              // 「全部」最上方照旧列出全部引擎。
+              pluginEngineTabs: pluginEngines.engines.map((engine) => ({
+                providerId: engine.providerId,
+                name: engine.name,
+                ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+              })),
+              renderPluginEngine: (providerId: string) => (
+                <PluginEnginesSection
+                  picker={{ ...pluginEngines, engines: pluginEngines.engines.filter((engine) => engine.providerId === providerId) }}
+                  query=""
+                  onPicked={() => onDismiss?.()}
+                />
+              ),
             } : {})}
             {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
@@ -3796,8 +3857,9 @@ function ModelSelectorContentView({
             panelWidthFluid={fluidWidth}
             readableRows={readableRows}
             // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
-            selected={pluginModels?.active || modelGroups?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !modelGroups?.active ? selectedFavoriteUid : null}
+            selected={pluginModels?.active || modelGroups?.active || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !modelGroups?.active && !pluginEngines?.active
+              ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
             }
@@ -4307,6 +4369,9 @@ export function ModelSelector({
   onOpenRequestConsumed,
   pluginModels,
   modelGroups,
+  pluginEngines,
+  pluginEngineSession,
+  pluginEnginePending,
   providersOverride,
   providersOverrideState,
   taskSourceProvider,
@@ -4373,6 +4438,8 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const sshCodexRefresh = sshCodex?.refresh;
+  // 只列该插件引擎模型的面板(任务不能换引擎时)；能换引擎时与内置任务同一个面板。
+  const pluginEngineSessionActive = !!pluginEngineSession && !pluginEngines;
   const [keepOpenForAgentSwitch, setKeepOpenForAgentSwitch] = useState(false);
   const composerResizeGenerationRef = useRef(0);
   useProviderShareQuotaViewing(open || keepOpenForAgentSwitch);
@@ -4424,7 +4491,8 @@ export function ModelSelector({
       openRef.current = nextOpen;
       if (nextOpen && !wasOpen && providersOverrideState) {
         providersOverrideState.refresh();
-      } else if (nextOpen && !wasOpen && !deviceId && !providersOverride) {
+      } else if (nextOpen && !wasOpen && !deviceId && !providersOverride && !pluginEngineSessionActive) {
+        // 插件引擎任务的面板只列该引擎的模型，不读供应商目录，也就不触发目录发现。
         // SSH:远端 Codex 清单按需读取(首次打开才读),其余引擎照常刷新本机目录。
         sshCodexRefresh?.();
         discovery.begin(() =>
@@ -4437,7 +4505,8 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh,
+      pluginEngineSessionActive],
   );
 
   const consumedOpenRequest = useRef(0);
@@ -4821,13 +4890,71 @@ export function ModelSelector({
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
-  const triggerTitle = activePluginModel
+  // 插件引擎(草稿里选中的引擎，或运行在插件引擎上的任务)：trigger 写「引擎名 · 模型」，
+  // 不画任何内置 Harness 的名字或标志(docs/plans/acp-plugin-bridge.md)。已建任务待切到插件引擎时
+  // 与内置引擎的意图一样写成「下条：引擎 · 模型」，前面带等待标记。
+  const triggerEngine: {
+    name: string;
+    engine: PluginEngineView | null;
+    modelId: string;
+    effort: PluginEngineEffort | null;
+    pending?: boolean;
+  } | null = pluginEnginePending
+    ? {
+        name: pluginEnginePending.engineName,
+        engine: pluginEnginePending.engine,
+        modelId: pluginEnginePending.modelId,
+        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort),
+        pending: true,
+      }
+    : pluginEngineSession
+    ? {
+        name: pluginEngineSession.engineName,
+        engine: pluginEngineSession.engine,
+        modelId: pluginEngineSession.modelId,
+        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort),
+      }
+    : (() => {
+        const active = pluginEngines?.active;
+        const engine = active ? pluginEngines?.engines.find((item) => item.providerId === active.providerId) : undefined;
+        return active && engine
+          ? { name: engine.name, engine, modelId: active.modelId, effort: resolvePluginEngineEffort(engine, active.modelId, active.effort) }
+          : null;
+      })();
+  // The engine's level reads like a built-in task's: compact name after the model, full name in the title.
+  const triggerEngineEffortLabel = triggerEngine?.effort
+    ? modelCompactEffortLabel(resolvedTranslationLanguage(i18n), t, null, triggerEngine.effort)
+    : null;
+  const triggerEngineModelLabel = triggerEngine
+    ? pluginEngineModelName(triggerEngine.engine, triggerEngine.modelId)
+      ?? (!triggerEngine.modelId || triggerEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+        ? t('newChat.pluginEngines.defaultModel')
+        // 引擎已不在或还没报告这个模型：不把内部 id 当名字显示。
+        : t('newChat.modelSelector.trigger.unresolved'))
+    : null;
+  const triggerTitle = triggerEngine
+    ? [
+        triggerEngine.pending
+          ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
+          : triggerEngine.name,
+        triggerEngineModelLabel,
+        triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null,
+      ].filter(Boolean).join(' · ')
+    : activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
     : activeModelGroupRow
       ? [activeModelGroupRow.name, activeModelGroupRow.hint].filter(Boolean).join(' · ')
       : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const accessibleLabel = activePluginModel || activeModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
+  const accessibleLabel = triggerEngine
+    ? triggerEngine.pending
+      ? t('newChat.modelSelector.trigger.pendingAria', {
+          agent: triggerEngine.name,
+          model: [triggerEngineModelLabel, triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null]
+            .filter(Boolean).join(' · '),
+        })
+      : t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
+    : activePluginModel || activeModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
@@ -4957,10 +5084,79 @@ export function ModelSelector({
       )}
       aria-label={ariaLabel}
     >
-      {agentIdentity?.state === 'pending' && (
+      {(triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
-      {activePluginModel ? (
+      {triggerEngine ? (
+        <>
+          <span data-plugin-engine-trigger className="flex shrink-0 items-center" aria-hidden="true">
+            <PluginEngineIcon
+              size={isCreateAgentVariant ? 12 : 14}
+              iconDataUrl={triggerEngine.engine?.iconDataUrl}
+              className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+            />
+          </span>
+          {/* 引擎名与内置任务的「Agent · 模型」前缀同一位置与颜色；窄工具条只留模型名，
+              完整「引擎 · 模型」仍在 title / aria-label 里。 */}
+          {!isCompactToolbar && (
+            <>
+              <span
+                className={cn(
+                  'min-w-0 max-w-[50%] truncate font-normal text-[var(--model-trigger-meta)]',
+                  isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
+                )}
+              >
+                {triggerEngine.pending
+                  ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
+                  : triggerEngine.name}
+              </span>
+              <span
+                className={cn(
+                  'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+                  isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
+                )}
+                aria-hidden="true"
+              >
+                ·
+              </span>
+            </>
+          )}
+          <span
+            ref={pillLabelRef}
+            className={cn(
+              'min-w-0 truncate font-normal',
+              isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
+              isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
+            )}
+          >
+            {triggerEngineModelLabel}
+          </span>
+          {triggerEngineEffortLabel && (
+            <>
+              <span
+                className={cn(
+                  'shrink-0 font-normal',
+                  isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--model-trigger-meta)]',
+                  isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
+                )}
+                aria-hidden="true"
+              >
+                ·
+              </span>
+              <span
+                data-plugin-engine-trigger-effort
+                className={cn(
+                  'shrink-0 whitespace-nowrap font-normal',
+                  isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
+                  isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
+                )}
+              >
+                {triggerEngineEffortLabel}
+              </span>
+            </>
+          )}
+        </>
+      ) : activePluginModel ? (
         <>
           <PluginModelIcon model={activePluginModel} size={14} />
           <span ref={pillLabelRef} className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
@@ -5204,7 +5400,13 @@ export function ModelSelector({
     </button>
   );
 
-  const content = (
+  const content = pluginEngineSession && pluginEngineSessionActive ? (
+    <PluginEngineSessionPanel
+      picker={pluginEngineSession}
+      disabled={switching || disabled}
+      onPicked={() => setOpenWithoutAutoRefresh(false)}
+    />
+  ) : (
     <>
       {showSourceDisconnected && onReconnectSource && !deviceId && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] px-3 py-2" role="status">
@@ -5256,6 +5458,7 @@ export function ModelSelector({
       onUnifiedSelect={onUnifiedSelect}
       {...(pluginModels ? { pluginModels } : {})}
       {...(modelGroups ? { modelGroups } : {})}
+      {...(pluginEngines ? { pluginEngines } : {})}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}

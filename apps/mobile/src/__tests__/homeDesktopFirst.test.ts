@@ -482,7 +482,10 @@ describe('mobile home desktop-first surface', () => {
     expect(desktopVendorIconSource).toContain('<CodexMark size={size} />');
     expect(desktopVendorIconSource).toContain('<ClaudeMark size={size} />');
     expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi'");
-    expect(desktopVendorIconSource).toContain('vendor: VendorIconKind;');
+    // The desktop prop also accepts plugin engines ('acp', docs/plans/acp-plugin-bridge.md); the built-in
+    // marks above are unchanged.
+    expect(desktopVendorIconSource).toContain("export type EngineIconKind = VendorIconKind | 'acp'");
+    expect(desktopVendorIconSource).toContain('vendor: EngineIconKind;');
     expect(desktopVendorIconSource).toContain('session-status-breathing');
     expect(vendorIconSource).not.toContain('XD_SYMBOL_PATHS');
     expect(vendorIconSource).not.toContain('XD_INC_MARK_ASPECT_RATIO');

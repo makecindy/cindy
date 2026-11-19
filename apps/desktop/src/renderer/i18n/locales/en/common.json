@@ -2802,6 +2802,8 @@
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
       "analyticsLabel": "Usage statistics",
       "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "productTokenUsage": "Share model token totals",
+      "productTokenUsageHint": "Share new token counts for this account on this device. Your region combines counts by source and model before sending them to TapDB.",
       "analyticsEnabledToast": "Usage statistics enabled",
       "analyticsDisabledToast": "Usage statistics disabled",
       "analyticsSaveFailed": "Failed to save usage statistics settings",
@@ -4117,6 +4119,25 @@
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
         "refreshReconnect": "Model list couldn’t be refreshed. Reconnect this provider, then try again.",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
+        "withdrawn": {
+          "refreshFound": "No longer offered upstream: {{count}}",
+          "refreshAdded": "New models: {{added}}. No longer offered upstream: {{count}}",
+          "refreshSuspicious": "Not returned this time: {{count}}. The upstream list may be incomplete",
+          "refreshAddedSuspicious": "New models: {{added}}. Not returned this time: {{count}}. The upstream list may be incomplete",
+          "review": "Review models",
+          "heading": "Models no longer offered upstream",
+          "intro": "When {{provider}} was refreshed, the upstream service did not return these models. Select the ones to remove. Engines that still list them are not affected.",
+          "suspicious": "An unusually large number of models are missing. The upstream service may have returned an incomplete list. Refresh again later to confirm, or select only models you know were withdrawn.",
+          "selectAll": "Select all",
+          "selected": "Selected {{count}} of {{total}}",
+          "consequence": "Removed models no longer appear in model selection, and places that use them will show them as unavailable. If the upstream service offers them again, refresh to add them back.",
+          "confirm": "Remove models ({{count}})",
+          "cancel": "Keep models",
+          "removed": "Models removed: {{count}}",
+          "cleanupIncomplete": "Models removed: {{count}}. Some visibility or disable settings could not be cleared",
+          "stale": "The connection changed, so there is nothing to remove. Refresh again to review",
+          "removeFailed": "Could not remove models"
+        },
         "disableModel": "Disable This Model",
         "paymentRequired": "Paid",
         "paymentUnlock": "Pay to unlock",
@@ -7949,6 +7970,7 @@
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
           "invalidPackage": "This plugin package is invalid and cannot be installed. Contact the publisher.",
+          "downloadAuthorizationExpired": "The plugin download authorization expired. Check the system date and time before starting a new installation attempt.",
           "downloadTimeout": "The plugin download timed out. Try again later.",
           "downloadFailed": "The plugin download failed. Check your connection and try again.",
           "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release.",
@@ -8265,6 +8287,8 @@
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentModelPreferences": "Read and edit your model favorites, and read your recently used models",
         "agentModelPreferencesDetail": "Can read the model favorites and recently used models on this computer, including effort and Fast settings, and add, change or remove favorites. Changes also appear in Cindy’s model picker. Models chosen in the plugin are not added to recently used. Models on your other computers or shared with you are not included, and no credentials are shared.",
+        "harnesses": "Provides task engines: {{names}}",
+        "harnessesDetail": "In your tasks, it can read and write the working directory, run commands and use the same Cindy tools as the built-in Pi.",
         "agentErrand": "Create tasks, perform work, and read results",
         "agentErrandDetail": "Created tasks appear in Cindy’s task list, where you can view progress and continue the conversation.",
         "agentSchedule": "Can ask you to create an automation",
@@ -14202,6 +14226,32 @@
             "label": "Full access",
             "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Ask each time",
+            "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
+          },
+          "default": {
+            "label": "Default",
+            "description": "Works the agent’s default way; you confirm its permission requests."
+          },
+          "acceptEdits": {
+            "label": "Accept edits",
+            "description": "The agent edits files directly; you confirm its other permission requests."
+          },
+          "auto": {
+            "label": "Auto",
+            "description": "The agent decides what needs confirmation; you confirm the requests it makes."
+          },
+          "plan": {
+            "label": "Plan only",
+            "description": "The agent only analyzes and plans; it does not edit files."
+          },
+          "bypassPermissions": {
+            "label": "Allow all",
+            "description": "Every permission the Agent asks for is granted automatically."
+          }
         }
       }
     },
@@ -14669,6 +14719,16 @@
       "nowDefault": "Now the default",
       "switchToSteer": "Steer by default",
       "switchToQueue": "Queue by default"
+    },
+    "pluginEngines": {
+      "group": "Plugin engines",
+      "genericName": "Plugin engine",
+      "defaultModel": "Default model",
+      "defaultModelHint": "Uses the engine’s own default",
+      "unavailable": "Unavailable",
+      "engineMissing": "The plugin that provides this engine is turned off or uninstalled.",
+      "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send.",
+      "modelChangeFailed": "Could not switch the model"
     }
   },
   "onboarding": {
@@ -15854,6 +15914,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "The plugin engine could not restore the previous conversation. Your messages are kept. Choose another engine or start a new task.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
@@ -16440,6 +16501,7 @@
       },
       "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
@@ -17355,6 +17417,7 @@
       "promote": {
         "menu": "Promote to project automation",
         "noWorkingDir": "Can’t promote an automation without a working directory",
+        "pluginEngine": "Plugin engines only run on this computer, so this automation can’t become a project automation",
         "success": "Promoted to project automation"
       },
       "editProject": {
@@ -17631,6 +17694,7 @@
         "selectThread": "Select a target session",
         "selectProject": "Select a project directory",
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
+        "pluginEngineUnavailable": "The selected plugin engine isn’t available right now. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
         "preRunPluginRequired": "Choose a plugin for the pre-run check",

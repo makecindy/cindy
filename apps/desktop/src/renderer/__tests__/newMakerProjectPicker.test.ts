@@ -1470,7 +1470,8 @@ describe('Shared create project picker', () => {
   // 会被静默丢掉、或撞上对端同名的无关目录 —— chip 显示的并不是真实授予的上下文。
   it('hides the reference-directory picker on remote drafts', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
+      // 选着插件引擎时同样不给入口：引擎只拿到任务工作目录。
+      'onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}',
     );
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
@@ -1505,17 +1506,18 @@ describe('Shared create project picker', () => {
   // the executing side explicitly supports the setter.
   it('hides remote add while preserving capability-gated writable grant revocation', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+      'isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine\n                        ? undefined\n                        : handleWritableDirsChange',
     );
     expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(
       'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
     );
+    // 插件引擎任务只拿到任务工作目录，不给可写目录入口。
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirsChange : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirRemove : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
