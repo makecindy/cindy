@@ -62,7 +62,7 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
     if (message) return;
     let cancelled = false;
     setLoaded(null);
-    let started = false;
+    let readState: 'idle' | 'scheduled' | 'settled' = 'idle';
     let windowHidden = isWindowHidden();
     // Invalidate display immediately, but let the coordinator finish the active
     // read before the latest epoch. Recheck visibility/lifecycle at actual start.
@@ -70,13 +70,14 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
       && isDataOwnerGenerationCurrent(owner)
       && makerChatStore.getMessageHistoryEpoch(rootSessionId) === historyEpoch;
     const load = () => {
-      if (started || !canRead()) return;
-      started = true;
+      if (readState !== 'idle' || !canRead()) return;
+      readState = 'scheduled';
       void refresh(async () => {
-        if (!canRead()) { started = false; return; }
+        if (!canRead()) { readState = 'idle'; return; }
         const rows = await aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 });
         if (cancelled || !isDataOwnerGenerationCurrent(owner)
           || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
+        readState = 'settled'; // An empty successful result is genuinely unavailable.
         const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
         if (row && (row.role === 'user' || row.role === 'assistant')) {
           const parsed = row.role === 'user' ? parseUserContent(row.content) : {
@@ -86,7 +87,11 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
           setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
             content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner, historyEpoch });
         }
-      }).catch(() => { /* Keep the existing unavailable-root presentation; never substitute another message. */ });
+      }).catch(() => {
+        // Failure is not a synchronized empty result. No automatic retry: the next
+        // visibility event may schedule once, through the same lifecycle guards.
+        readState = 'idle';
+      });
     };
     document.addEventListener('visibilitychange', load);
     const offHidden = window.electronAPI?.onWindowHiddenChange?.(hidden => {

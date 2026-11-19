@@ -497,3 +497,38 @@ it('does not make a new owner wait for the previous owner pending source read', 
   expect(screen.queryByText('old owner source')).toBeNull();
   expect(screen.getByText('new owner source')).toBeTruthy();
 });
+
+// §8.4: failure is unsynchronized; only the next visibility event retries it.
+it.each(['native', 'document'])('recovers a failed source read on %s visibility without retrying a valid empty result', async signal => {
+  h.snapshots.set('chat', { messages: [] });
+  h.around.mockRejectedValueOnce(new Error('temporary IPC failure'));
+  await act(async () => { render(<Host />); });
+  expect(h.around).toHaveBeenCalledTimes(1);
+  const visible = (value: boolean) => {
+    if (signal === 'native') h.hiddenListeners.forEach(fn => fn(!value));
+    else {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: value ? 'visible' : 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+  };
+  await act(async () => { visible(false); });
+  expect(h.around).toHaveBeenCalledTimes(1);
+  let finish!: (rows: unknown[]) => void;
+  h.around.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await act(async () => { visible(true); visible(true); });
+  expect(h.around).toHaveBeenCalledTimes(2);
+  await act(async () => { visible(false); visible(true); });
+  expect(h.around).toHaveBeenCalledTimes(2); // Still pending: no duplicate retry.
+  await act(async () => { finish([{ sessionId: 'chat', clientId: 'old', role: 'user',
+    content: { text: 'recovered source', files: [{ name: 'recovered.txt', path: '/fixture/recovered.txt' }] } }]); });
+  expect(screen.getByText('recovered source')).toBeTruthy();
+  expect(screen.getByText('recovered.txt')).toBeTruthy();
+  await act(async () => { visible(false); visible(true); });
+  expect(h.around).toHaveBeenCalledTimes(2); // Successful reads stay settled.
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  expect(h.around).toHaveBeenCalledTimes(3); // Default empty result: genuinely unavailable.
+  expect(screen.queryByText('recovered source')).toBeNull();
+  expect(screen.queryByText('recovered.txt')).toBeNull();
+  await act(async () => { visible(false); visible(true); });
+  expect(h.around).toHaveBeenCalledTimes(3);
+});
