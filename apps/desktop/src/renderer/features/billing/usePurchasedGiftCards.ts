@@ -9,6 +9,7 @@ import type {
   BillingPurchasedGiftCardCode,
   BillingSendGiftCardEmailResult,
 } from '../../../shared/billing';
+import { giftCardCodeFromInput } from '../../../shared/giftCard';
 import { billingApi } from './api';
 
 const PAGE_SIZE = 20;
@@ -63,6 +64,9 @@ export function usePurchasedGiftCards() {
   const mountedRef = useRef(true);
   // 每张卡来自哪一页：那一页请求用的游标，第一页为 null。刷新发信状态时只重读这些页。
   const pageOfCardRef = useRef(new Map<string, string | null>());
+  // 列表从别的途径拿到更新的数据（重读、加载更多、发信成功）时加一：在那之前发出的发信状态刷新
+  // 晚到时作废，不能用旧快照盖掉新状态（比如把刚兑换的卡改回未领取、重新放出操作）。
+  const freshnessRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -77,6 +81,7 @@ export function usePurchasedGiftCards() {
     // 卸载后不再发起读取（迟到的取码、发信结果可能在离开页面后才回来）。
     if (!mountedRef.current) return null;
     const generation = ++generationRef.current;
+    freshnessRef.current += 1;
     setState((current) => ({ ...current, loading: true, error: false }));
     try {
       const page = await billingApi.listPurchasedGiftCards(PAGE_SIZE);
@@ -104,6 +109,7 @@ export function usePurchasedGiftCards() {
     const cursor = state.nextCursor;
     if (!cursor || state.loading) return;
     const generation = ++generationRef.current;
+    freshnessRef.current += 1;
     setState((current) => ({ ...current, loading: true, error: false }));
     try {
       const page = await billingApi.listPurchasedGiftCards(PAGE_SIZE, cursor);
@@ -185,6 +191,15 @@ export function usePurchasedGiftCards() {
     codesRef.current.delete(cardId);
   }, []);
 
+  /** 按兑换码清掉缓存（兑换弹窗只知道码，不知道是哪张卡；手动粘贴兑换的也算）。 */
+  const forgetCode = useCallback((code: string) => {
+    const redeemed = giftCardCodeFromInput(code);
+    if (!redeemed) return;
+    for (const [cardId, cached] of codesRef.current) {
+      if (giftCardCodeFromInput(cached.code) === redeemed) codesRef.current.delete(cardId);
+    }
+  }, []);
+
   /** 用服务端返回的最新卡片替换列表里同一张卡（不在列表里的忽略）。 */
   const mergeCards = useCallback((updated: BillingPurchasedGiftCard[]) => {
     const byId = new Map(updated.map((card) => [card.cardId, card]));
@@ -203,6 +218,7 @@ export function usePurchasedGiftCards() {
       if (!mountedRef.current) return result;
       if (result.ok) {
         emailRoundsRef.current = 0;
+        freshnessRef.current += 1;
         mergeCards([result.card]);
       } else if (result.reason === 'NOT_AVAILABLE') {
         void reload();
@@ -224,6 +240,7 @@ export function usePurchasedGiftCards() {
       if (refreshingRef.current || !mountedRef.current) return;
       refreshingRef.current = true;
       emailRoundsRef.current += 1;
+      const freshness = freshnessRef.current;
       // 只重读发送中的卡所在的那几页并合并最新状态，不重置用户已经加载的后续分页。
       const cursors = [...new Set(
         state.cards
@@ -236,7 +253,8 @@ export function usePurchasedGiftCards() {
         return pages;
       })()
         .then((pages) => {
-          if (mountedRef.current) mergeCards(pages.flatMap((page) => page.cards));
+          // 期间列表已从别的途径更新：这份快照可能更旧，丢掉，下一轮再读。
+          if (mountedRef.current && freshness === freshnessRef.current) mergeCards(pages.flatMap((page) => page.cards));
         })
         .catch(() => {
           // 状态刷新失败不打扰用户；下次进入计费页或手动刷新时再读。
@@ -249,7 +267,7 @@ export function usePurchasedGiftCards() {
     return () => window.clearTimeout(timer);
   }, [inFlight, mergeCards, refreshTick, state.cards, state.loading, visible]);
 
-  return { state, reload, loadMore, reveal, copy, forget, sendEmail };
+  return { state, reload, loadMore, reveal, copy, forget, forgetCode, sendEmail };
 }
 
 export type PurchasedGiftCards = ReturnType<typeof usePurchasedGiftCards>;

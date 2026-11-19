@@ -35,8 +35,11 @@ interface GiftCardRedeemDialogProps {
   /** 从唤起链接带入的兑换码：打开后直接查询，跳过手动输入。 */
   initialCode?: string | null;
   onClose: () => void;
-  /** 领取成功后调用，供计费页刷新余额。 */
-  onRedeemed: () => void;
+  /**
+   * 领取成功后调用，带上领取的兑换码（规范写法）：计费页据此刷新余额，并清掉「我买的礼品卡」里
+   * 这张卡缓存的码（已兑换的码不能再被复制出去）。
+   */
+  onRedeemed: (code: string) => void;
 }
 
 function cardFailure(card: BillingGiftCard): BillingGiftCardFailure | null {
@@ -134,7 +137,7 @@ export function GiftCardRedeemDialog({
         return;
       }
       setStep({ kind: 'done', card: result.card, credit: result.credit });
-      onRedeemed();
+      onRedeemed(code);
     } catch {
       // 结果未知：留在确认步骤。领取是幂等的，再点一次不会重复入账。
       if (request === requestRef.current) {

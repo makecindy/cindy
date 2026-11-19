@@ -79,7 +79,8 @@ describe('GiftCardRedeemDialog', () => {
 
     await screen.findByText(/^billing\.giftCard\.doneTitle/);
     expect(api.redeemGiftCard).toHaveBeenCalledWith(CODE);
-    expect(onRedeemed).toHaveBeenCalledOnce();
+    // 带上领取的码（规范写法），计费页据此清掉「我买的礼品卡」里缓存的这张卡的码。
+    expect(onRedeemed).toHaveBeenCalledExactlyOnceWith(CODE);
     expect(onClose).not.toHaveBeenCalled();
     click('billing.giftCard.done');
     expect(onClose).toHaveBeenCalledOnce();

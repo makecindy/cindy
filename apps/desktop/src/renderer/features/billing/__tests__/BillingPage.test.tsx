@@ -1435,6 +1435,64 @@ describe('BillingPage remote catalog rendering', () => {
       }
     });
 
+    // 评审发现（PR #11412）：自己兑换了买来的卡之后，缓存的码不能再被复制出去（重读列表失败时这张卡
+    // 仍显示为未领取）。兑换弹窗只知道码：按码清掉缓存，手动粘贴兑换的也算。
+    it('forgets a cached code once that code is redeemed, however it was typed', async () => {
+      const reveal = vi.fn(async () => ({ code: 'C012-3456-789A-BCDE', claimUrl: null }));
+      window.electronAPI.billing.revealPurchasedGiftCard = reveal;
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+      await act(async () => {
+        await result.current.reload();
+      });
+      await act(async () => {
+        await result.current.reveal(card());
+        await result.current.reveal(card());
+      });
+      expect(reveal).toHaveBeenCalledTimes(1);
+      act(() => result.current.forgetCode('c0123456789abcde'));
+      await act(async () => {
+        await result.current.reveal(card());
+      });
+      expect(reveal).toHaveBeenCalledTimes(2);
+      unmount();
+    });
+
+    // 评审发现（PR #11412）：重读之前发出的发信状态刷新晚到时，不能用旧快照把刚兑换的卡改回未领取、
+    // 重新放出操作。
+    it('drops an email-status refresh that started before a newer reload', async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = card({ email: delivery('PENDING') });
+        let resolveStale: (value: unknown) => void = () => undefined;
+        const list = vi.fn()
+          .mockResolvedValueOnce(page([pending]))
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+          .mockResolvedValueOnce(page([{ ...pending, status: 'REDEEMED_BY_YOU', email: delivery('SENT') }]));
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list).toHaveBeenCalledTimes(2);
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          resolveStale(page([pending]));
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.state.cards.map((item) => [item.status, item.email?.status]))
+          .toEqual([['REDEEMED_BY_YOU', 'SENT']]);
+        unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     // 评审发现（PR #11412）：发送中的卡分散在很多已加载的分页时，每轮按页并发重读会随页数无上限地
     // 放大请求。每轮最多重读几页、逐页串行。
     it('re-reads at most a few pages per round, one request at a time', async () => {

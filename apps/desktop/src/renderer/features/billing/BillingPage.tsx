@@ -1425,9 +1425,11 @@ export function BillingSettingsSection({
         open={giftCardDialog.open}
         initialCode={giftCardDialog.code}
         onClose={() => setGiftCardDialog({ open: false, code: null })}
-        onRedeemed={() => {
+        onRedeemed={(code) => {
           void loadBalance();
-          // 兑换的可能是自己买的卡：列表里这张卡的状态随之变化。
+          // 兑换的可能是自己买的卡：先清掉缓存的这张卡的码（重读列表失败时也不能再复制出已兑换的码），
+          // 再重读列表让这张卡的状态随之变化。
+          giftCards.forgetCode(code);
           void giftCards.reload();
           // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
           // AIGateway access group，模型选择器当场解锁付费模型。
