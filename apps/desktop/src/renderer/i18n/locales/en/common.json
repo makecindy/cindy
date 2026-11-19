@@ -21523,14 +21523,14 @@
     },
     "taskInbox": {
       "title": "Meet the Inbox",
-      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",
+      "lead": "When you’re juggling several tasks, the inbox groups them by status. Look in Pending for new results and tasks that need a reply.",
       "pending": {
         "title": "Pending",
         "body": "Tasks show up here when they finish with a result or are waiting for your answer."
       },
       "done": {
         "title": "Done",
-        "body": "Handled it? Click Done once and it moves to Processed. It comes back by itself if there’s news."
+        "body": "Make a habit of clearing your inbox. Click Done when you’ve handled a task."
       },
       "snooze": {
         "title": "Snoozed",

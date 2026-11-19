@@ -21729,14 +21729,14 @@
     },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
-      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "lead": "Si llevas varias tareas a la vez, la bandeja de entrada las agrupa por estado. En Pendientes verás los nuevos resultados y lo que espera tu respuesta.",
       "pending": {
         "title": "Pendientes",
         "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
       },
       "done": {
         "title": "Hecho",
-        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+        "body": "Acostúmbrate a vaciar la bandeja de entrada. Pulsa Hecho cuando hayas atendido una tarea."
       },
       "snooze": {
         "title": "Pospuestas",
