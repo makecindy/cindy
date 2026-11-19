@@ -28,6 +28,14 @@ const setting = (key: string, domain: string, title: string, summary: string, se
   ({ key, domain, title, summary, section, aliases, server: 'cindy_helper', tools: ['get_app_settings', 'update_app_settings', ...(reset ? ['reset_app_settings'] : [])] });
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
+const nativeSearchPhrases: Record<string, readonly string[] | undefined> = {
+  'native.send_to_session': [
+    '发消息给另一个任务会话', '发消息给另一个任务', '发消息给另一个会话',
+    '给另一个任务发消息', '给已有任务发消息', '向另一个任务发送消息', '向另一个会话发送消息',
+    '任务发消息', '会话发消息', '跨任务发送', '跨会话发送',
+    '给伙伴发消息', 'send to session', 'message another task', 'send a message to another task', 'send a message to another session',
+  ],
+};
 export const CONTROL_CATALOG: readonly Control[] = [
   helper('models.provider-sharing', 'models', '供应商分享成员', '查询自己分享的成员、暂停恢复与成员模型范围；默认本机，可指定同账号已授权电脑。', ['list_provider_share_members', 'set_provider_share_member_status', 'get_provider_share_model_access', 'set_provider_share_model_access'], ['供应商分享成员', '供应商组', '分享', '成员', '暂停分享', 'provider', 'sharing']),
   helper('models.subscription-usage', 'models', '订阅用量', '只读查询执行电脑上各 Claude/Codex 账号的套餐、额度窗口与更新时间；插件需声明用量读取权限。', ['get_subscription_usage'], ['usage', 'quota', '用量', '额度', '配额', '订阅', '账号', 'Claude', 'Codex']),
@@ -136,7 +144,7 @@ export function createControlReader(deps: Deps) {
     // New registered helper operations stay searchable without adding another
     // prompt paragraph or waiting for a hand-written product topic.
     const represented = new Set(CONTROL_CATALOG.filter(item => item.server === 'cindy_helper').flatMap(item => item.tools ?? []));
-    const nativeDomains: Record<string, string> = { settings: 'application', bots: 'teammates', control: 'tasks', history: 'tasks', skills: 'tools-and-extensions', app_update: 'application' };
+    const nativeDomains: Record<string, string> = { settings: 'application', bots: 'teammates', control: 'tasks', history: 'tasks', handoff: 'tasks', skills: 'tools-and-extensions', app_update: 'application' };
     const allowed = await deps.allowedNames();
     const native = deps.registry.list().filter(tool => !represented.has(tool.name) && allowed.has(tool.name))
       .map(tool => helper(`native.${tool.name}`, nativeDomains[tool.category] ?? 'application', tool.name,
@@ -169,13 +177,19 @@ export function createControlReader(deps: Deps) {
     if (!query.category && !query.toolQuery && !query.cursor) return { ok: true, domains: domains.map(([id, title, summary]) => ({ id, title, summary })),
       next: 'call_tool({name:"get_capabilities",args:{scope:"control",category:<id>}})', coverage: '包含独立界面；每项详情说明实际接通情况，不代表全量设置均已开放。' };
     const term = query.toolQuery?.toLowerCase().trim();
+    const actionPhrase = term
+      ?.replace(/^(?:请(?:\s*帮我)?[\s,，]*|please[\s,，]+)/u, '')
+      .replace(/[\s.!?。！？．…]+$/u, '') ?? '';
     const score = (item: Control) => {
       if (!term) return 1;
       if (item.key === term) return 100;
       // Agents often search with the exact tool name a prompt gave them.
       if (item.tools?.includes(term)) return 90;
+      // Match the whole action after trimming only polite prefixes and end punctuation.
+      const matchesPhrase = nativeSearchPhrases[item.key]?.includes(actionPhrase);
       const words = [item.key, item.title, ...item.aliases].map(word => word.toLowerCase());
-      return (item.summary.toLowerCase().includes(term) ? 1 : 0) + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
+      return (matchesPhrase ? 20 : 0) + (item.summary.toLowerCase().includes(term) ? 1 : 0)
+        + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
     };
     const matching = catalog.filter(item => !query.category || item.domain === query.category)
       .map(item => ({ item, score: score(item) })).filter(row => row.score > 0)

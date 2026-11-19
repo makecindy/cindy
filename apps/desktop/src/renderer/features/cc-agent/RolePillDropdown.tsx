@@ -9,8 +9,10 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
  */
 
 import {
+  createContext,
   useState,
   useRef,
+  useContext,
   useEffect,
   useLayoutEffect,
   useCallback,
@@ -28,10 +30,17 @@ import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import { isLocalOrcaWorkerTask, localOrcaWorkerSessionIds, useOrcaWorkerTaskAttentionKinds } from './lib/orcaWorkerTaskAttention';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { usePluginEngineIdentity, useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import type { WorkerInfo } from './hooks/useWorkers';
 import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { shouldShowWorkerLabel } from './workerLabel';
 import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
+
+/**
+ * 插件引擎 Worker 跑在 Lead 所在电脑：Device Link 控制端从那台电脑的引擎目录取图标，
+ * 不拿本机同名插件的图标。undefined = Lead 在本机。
+ */
+const WorkerEngineDeviceContext = createContext<string | undefined>(undefined);
 
 /** 本机错误只跟任务提醒；无法读取本机提醒的 Worker 才用运行态 error。 */
 export function resolveWorkerListAttention(
@@ -162,12 +171,15 @@ function WorkerModelLine({
 //     (点=有新结果可看); 只有 error 不该用点
 function WorkerAvatar({
   agent,
+  providerId,
   status,
   attentionKind,
   selected = false,
   remote = false,
 }: {
   agent: WorkerInfo['agent'];
+  /** 仅插件引擎 Worker：画该引擎插件自己的图标。 */
+  providerId?: string;
   status: WorkerInfo['status'];
   attentionKind?: AttentionKind;
   selected?: boolean;
@@ -175,7 +187,12 @@ function WorkerAvatar({
   remote?: boolean;
 }) {
   const { t } = useTranslation();
-  const vendor = agentKindToVendor(agent);
+  // 只有插件引擎 Worker 才读引擎列表；内置 Worker 不订阅。
+  const pluginEngineIcon = usePluginEngineIdentity(
+    agent === 'acp' ? providerId : undefined,
+    useContext(WorkerEngineDeviceContext),
+  ).iconDataUrl;
+  const vendor = agent === 'acp' ? 'acp' : agentKindToVendor(agent);
   const isError = attentionKind === 'error';
   const dotTone =
     !isError && (attentionKind === 'awaiting' || attentionKind === 'done')
@@ -194,6 +211,7 @@ function WorkerAvatar({
         // 右上角正显示未读点时由未读点占位，波纹暂不画(与侧栏任务图标同规则)。
         remote={remote && !dotTone}
         className={isError ? 'text-[var(--error-flat)]' : selectedIdleClassName}
+        {...(pluginEngineIcon ? { iconDataUrl: pluginEngineIcon } : {})}
       />
       {dotTone && (
         <span
@@ -348,6 +366,7 @@ function WorkerSummary({
       <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
+          providerId={worker.providerId}
           status={worker.status}
           attentionKind={attentionKind}
           selected={selected}
@@ -414,6 +433,8 @@ export interface WorkerListToolbarProps extends RolePillDropdownProps {
   trailingActions?: ReactNode;
   /** 硬上限时 + 按钮跳转协同设置的逃生口；分离侧栏窗口无法导航到设置路由，传 undefined 表示不接线。 */
   onOpenSettings?: () => void;
+  /** Device Link 控制端：Lead 所在电脑。插件引擎 Worker 的图标从那台电脑的引擎目录取。 */
+  pluginEngineDeviceId?: string;
 }
 
 // 菜单经 absolute 定位且未走 portal 渲染，会被最近的 overflow 非 visible 祖先裁剪。
@@ -714,6 +735,7 @@ function WorkerLayoutMenu({
                         <div className="flex items-center gap-2 text-13 leading-snug">
                           <WorkerAvatar
                             agent={w.agent}
+                            providerId={w.providerId}
                             status={w.status}
                             attentionKind={attentionKind}
                             remote={Boolean(w.agentDeviceId)}
@@ -1123,7 +1145,23 @@ function WorkerTabsList({
   );
 }
 
-export function WorkerListToolbar({
+export function WorkerListToolbar({ pluginEngineDeviceId, ...props }: WorkerListToolbarProps) {
+  // 有插件引擎 Worker、还没读过 Lead 所在电脑的引擎目录时读一次(同一台电脑共用结果)；
+  // 内置 Worker 或本机 Lead 不读。
+  const { engines: remoteEngines, read: readRemoteEngines } = useRemotePluginEngines(
+    pluginEngineDeviceId && props.workers.some((item) => item.agent === 'acp') ? pluginEngineDeviceId : undefined,
+  );
+  useEffect(() => {
+    if (remoteEngines === null) readRemoteEngines();
+  }, [remoteEngines, readRemoteEngines]);
+  return (
+    <WorkerEngineDeviceContext.Provider value={pluginEngineDeviceId}>
+      <WorkerListToolbarContent {...props} />
+    </WorkerEngineDeviceContext.Provider>
+  );
+}
+
+function WorkerListToolbarContent({
   leadSessionId,
   worker,
   workers,
@@ -1390,6 +1428,7 @@ export function RolePillDropdown({
       >
         <WorkerAvatar
           agent={worker.agent}
+          providerId={worker.providerId}
           status={worker.status}
           attentionKind={avatarAttention}
           remote={Boolean(worker.agentDeviceId)}
@@ -1472,6 +1511,7 @@ export function RolePillDropdown({
                     <div className="flex items-center gap-2 text-13 leading-snug">
                       <WorkerAvatar
                         agent={w.agent}
+                        providerId={w.providerId}
                         status={w.status}
                         attentionKind={attentionKind}
                         remote={Boolean(w.agentDeviceId)}
