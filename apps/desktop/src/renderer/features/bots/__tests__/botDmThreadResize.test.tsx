@@ -30,7 +30,8 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
 }));
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({ state: null }),
+  useLocation: () => ({ key: 'resize', state: null }),
+  useNavigationType: () => 'REPLACE',
   useSearchParams: () => [h.params, vi.fn()],
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({

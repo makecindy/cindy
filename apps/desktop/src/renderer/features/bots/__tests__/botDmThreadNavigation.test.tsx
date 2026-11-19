@@ -8,11 +8,12 @@
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useSyncExternalStore, type ReactNode } from 'react';
+import { MemoryRouter, useNavigate, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   ensure: vi.fn(), reload: vi.fn(), send: vi.fn(), around: vi.fn(),
-  location: { state: null as unknown }, pendingState: null as unknown,
+  realRouter: false, navigationType: 'REPLACE', location: { key: 'initial', state: null as unknown }, pendingState: null as unknown,
   params: new URLSearchParams(), pending: null as URLSearchParams | null,
   listeners: new Set<() => void>(), profiles: [] as unknown[],
   hiddenListeners: new Set<(hidden: boolean) => void>(),
@@ -22,10 +23,17 @@ const h = vi.hoisted(() => ({
 const setParams = (update: (p: URLSearchParams) => URLSearchParams, options?: { state?: unknown }) => {
   h.pending = update(h.params); h.pendingState = options?.state ?? null;
 };
-vi.mock('react-router-dom', () => ({ useLocation: () => h.location, useSearchParams: () => [
-  useSyncExternalStore((fn) => { h.listeners.add(fn); return () => { h.listeners.delete(fn); }; }, () => h.params),
-  setParams,
-] }));
+vi.mock('react-router-dom', async importOriginal => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual,
+    useLocation: () => h.realRouter ? actual.useLocation() : h.location,
+    useNavigationType: () => h.realRouter ? actual.useNavigationType() : h.navigationType,
+    useSearchParams: () => h.realRouter ? actual.useSearchParams() : [
+      useSyncExternalStore((fn) => { h.listeners.add(fn); return () => { h.listeners.delete(fn); }; }, () => h.params),
+      setParams,
+    ],
+  };
+});
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
@@ -62,12 +70,13 @@ function Host() {
 }
 function commitUrl(params = h.pending, state = params === h.pending ? h.pendingState : null) {
   if (!params) throw new Error('No pending navigation');
-  act(() => { h.location = { state }; h.params = params; h.pending = null; h.listeners.forEach(fn => fn()); });
+  act(() => { h.location = { key: crypto.randomUUID(), state }; h.params = params; h.pending = null; h.listeners.forEach(fn => fn()); });
 }
 async function click(id: string) { await act(async () => { fireEvent.click(screen.getByText('open ' + id)); }); }
 beforeEach(() => {
   setDataOwnerGeneration('test-owner');
-  h.location = { state: null }; h.pendingState = null;
+  h.realRouter = false; h.navigationType = 'REPLACE';
+  h.location = { key: 'initial', state: null }; h.pendingState = null;
   h.hiddenListeners.clear();
   document.documentElement.removeAttribute('data-app-hidden');
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
@@ -364,4 +373,65 @@ it('does not start a hidden deferred read after its data owner changes or panel 
   expect(h.around).not.toHaveBeenCalled();
   view.unmount();
   expect(h.hiddenListeners.size).toBe(0);
+});
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return <><output data-testid="url">{location.search}</output>
+    <button onClick={() => navigate('/chat')}>main notification</button>
+    <button onClick={() => navigate(-1)}>back</button>
+    <button onClick={() => navigate(1)}>forward</button></>;
+}
+
+// Real MemoryRouter preserves history state/keys and POP vs REPLACE semantics.
+// Minimum regression: A -> push main chat -> B -> back to A, same mounted Host.
+it('restores source and send target across real history back/forward, including the main chat', async () => {
+  h.realRouter = true;
+  await act(async () => { render(<MemoryRouter initialEntries={['/chat']}><HistoryControls /><Host /></MemoryRouter>); });
+  await click('old');
+  await act(async () => { fireEvent.click(screen.getByText('main notification')); });
+  await click('new');
+  const check = (root: string) => {
+    expect(screen.getByTestId('url').textContent).toBe('?thread=' + root + '-topic');
+    expect(screen.getByText(root + ' source')).toBeTruthy();
+    expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe(root + '-topic');
+    fireEvent.click(screen.getByText('send'));
+    expect(h.send).toHaveBeenLastCalledWith(root + '-topic');
+  };
+  await act(async () => { fireEvent.click(screen.getByText('back')); });
+  check('old');
+  await act(async () => { fireEvent.click(screen.getByText('forward')); });
+  check('new');
+  await act(async () => { fireEvent.click(screen.getByText('main notification')); });
+  expect(screen.getByTestId('url').textContent).toBe('');
+  expect(screen.queryByTestId('session')).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByText('back')); });
+  check('new');
+  await act(async () => { fireEvent.click(screen.getByText('forward')); });
+  expect(screen.queryByTestId('session')).toBeNull();
+});
+
+it.each(['resolve', 'reject'])('history navigation invalidates a pending topic that later %ss', async outcome => {
+  h.realRouter = true;
+  await act(async () => { render(<MemoryRouter initialEntries={['/chat?thread=old-topic']}><HistoryControls /><Host /></MemoryRouter>); });
+  await act(async () => { fireEvent.click(screen.getByText('main notification')); });
+  let finish!: (value: unknown) => void;
+  let fail!: (reason: Error) => void;
+  h.ensure.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  await click('new');
+  await act(async () => { fireEvent.click(screen.getByText('back')); });
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('old-topic');
+  await act(async () => {
+    if (outcome === 'resolve') finish({ ok: true, sessionId: 'new-topic', created: true });
+    else fail(new Error('late failure'));
+  });
+  expect(screen.getByTestId('url').textContent).toBe('?thread=old-topic');
+  expect(screen.getByText('old source')).toBeTruthy();
+  fireEvent.click(screen.getByText('send'));
+  expect(h.send).toHaveBeenLastCalledWith('old-topic');
+  expect(screen.queryByRole('alert')).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByText('forward')); });
+  expect(screen.getByTestId('url').textContent).toBe('');
+  expect(screen.queryByTestId('session')).toBeNull();
 });
