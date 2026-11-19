@@ -75,7 +75,7 @@ function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): 
 
 function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean {
   return snapshot?.providers.some(provider =>
-    (provider.id === 'openai' || provider.id === 'anthropic') && !provider.connected
+    (provider.id === 'openai' || provider.id === 'anthropic')
     && !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true) ?? false;
 }
 

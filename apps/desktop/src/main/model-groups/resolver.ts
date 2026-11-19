@@ -4,6 +4,7 @@
  * 在另一台电脑或分享来的来源按它自己那个位置的目录判断(与插件卡片里的远程模型同一判断)，
  * 读位置与远程目录有时限，读不到就算这个来源不可用；路线里没有这种来源时不读。
  */
+import { randomUUID } from 'node:crypto';
 import { isByokProviderId, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 
 import { claudeModelFamily, scopedWindowBelongsToFamily } from '@cindy/maker-shared/subscription-usage';
@@ -55,6 +56,7 @@ export interface ModelGroupResolverDeps {
   remoteWaitMs?: number;
   /** 账号范围：换账号后不沿用上一个账号的轮流位置。 */
   scope(): string;
+  recordDecision?(selection: ModelGroupResolveRequest['selection'], result: ModelGroupResolveResult): void;
   now(): number;
   /**
    * 「最省钱」用的报价目录，与模型选择器显示价格同一来源：Cindy AI(xd)取网关报价，其余取参考价
@@ -129,6 +131,30 @@ function scopedWindowApplies(scopedTo: string, modelId: string, modelName: strin
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
   const lastPicked = new Map<string, string>();
+  const pending = new Map<string, { scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string }>();
+
+  function prepare(request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string): ModelGroupResolveResult {
+    if (request.dryRun || scope !== deps.scope()) return result;
+    // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
+    for (const [id, item] of pending) {
+      if (item.scope !== scope || deps.now() - item.at > 60 * 60_000) pending.delete(id);
+    }
+    while (pending.size >= 128) pending.delete(pending.keys().next().value!);
+    const decisionId = randomUUID();
+    pending.set(decisionId, { scope, at: deps.now(), selection: { ...request.selection }, result, routeId });
+    return { ...result, decisionId };
+  }
+
+  function commit(decisionId: string): boolean {
+    const item = pending.get(decisionId);
+    pending.delete(decisionId);
+    if (!item || item.scope !== deps.scope() || deps.now() - item.at > 60 * 60_000) return false;
+    deps.recordDecision?.(item.selection, item.result);
+    if (item.result.outcome === 'routed' && item.routeId) {
+      lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
+    }
+    return true;
+  }
 
   /**
    * 路线里不在本机的来源要用的位置名单与各位置目录：同时开始读，各自有时限，读不到为 null。
@@ -162,7 +188,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     };
   }
 
-  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<{ facts: ModelGroupCandidateFacts[]; catalogs: Catalog[] }> {
+  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
@@ -174,15 +200,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
-    const catalogs: Catalog[] = [];
-    const facts = await Promise.all(route.candidates.map(async (candidate, index) => {
+    return Promise.all(route.candidates.map(async (candidate) => {
       const agent = agentOf(candidate.agentKind);
       const { agentDeviceId } = candidate;
       const remoteViews = agentDeviceId ? (await remote?.views.get(agentDeviceId)) ?? null : null;
       const catalog: Catalog = agentDeviceId
         ? { views: remoteViews ?? [], agents: GHOST_REMOTE_AGENT_MODELS }
         : { views, agents };
-      catalogs[index] = catalog;
       const view = catalog.views.find((item) => item.id === candidate.providerId);
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
@@ -202,6 +226,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents);
       return {
         available,
+        ...(available && route.effort && isPluginModelPickerRouteAvailable(
+          { ...exact, effort: route.effort }, catalog.views, catalog.agents,
+        ) ? { effort: route.effort } : {}),
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
@@ -212,20 +239,27 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         acceptsImage: !!model && modelImageInputDefault({ ...model, imageInputDefault: undefined }, model.id) === true,
       };
     }));
-    return { facts, catalogs };
   }
 
   async function resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult> {
     const scope = deps.scope();
     const now = deps.now();
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
-    if (target.outcome === 'missing') return { outcome: 'missing', groupName: target.groupName, trace: [] };
-    const { groupName, route, via } = target;
-    // 改走了另一条路线时，用那条路线自己的推理强度。
-    const { effort } = route;
+    if (target.outcome === 'missing') return prepare(request, scope, { outcome: 'missing', groupName: target.groupName, trace: [] });
+    const { groupName, via } = target;
+    // 限定运行位置时(进行中的任务)，别的位置上的来源按停用处理：不选它们，也不为它们去读别处的目录。
+    const location = request.location;
+    const route = location
+      ? {
+          ...target.route,
+          candidates: target.route.candidates.map((candidate) => ((candidate.agentDeviceId ?? null) === location.agentDeviceId
+            ? candidate
+            : { ...candidate, off: true })),
+        }
+      : target.route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const views = await deps.views();
-    const { facts, catalogs } = await inspect(route, views);
+    const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
     });
@@ -234,31 +268,29 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       ...(picked.image ? [{ type: picked.image === 'applied' ? 'image' as const : 'imageFallback' as const }] : []),
     ];
     if (scope !== deps.scope()) return { outcome: 'unavailable', groupName, trace: [] };
-    if (picked.index === null) return { outcome: 'unavailable', groupName, trace: picked.trace };
+    if (picked.index === null) return prepare(request, scope, { outcome: 'unavailable', groupName, trace: picked.trace });
     const candidate = route.candidates[picked.index];
     const entry = picked.trace[picked.index];
-    if (!request.dryRun) lastPicked.set(`${scope}\u0000${route.id}`, modelGroupCandidateKey(candidate));
     const chosen = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
     // 推理强度按选中来源所在位置的目录看支不支持。
-    const catalog = catalogs[picked.index];
-    const keepEffort = !!effort && isPluginModelPickerRouteAvailable({ ...chosen, effort, fastMode: false }, catalog.views, catalog.agents);
-    return {
+    const effort = facts[picked.index].effort;
+    return prepare(request, scope, {
       outcome: 'routed', groupName,
       route: {
         ...chosen,
         ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
-        ...(keepEffort ? { effort } : {}),
+        ...(effort ? { effort } : {}),
       },
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
       ...(exceptions.length > 0 ? { exceptions } : {}),
-    };
+    }, route.id);
   }
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置。 */
   async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
-    return (await inspect(route, await deps.views())).facts;
+    return inspect(route, await deps.views());
   }
 
-  return { resolve, candidateFacts };
+  return { resolve, commit, candidateFacts };
 }

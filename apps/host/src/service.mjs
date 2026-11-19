@@ -64,6 +64,19 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/list') {
         return { status: 200, body: await deps.listSessions(body) };
     }
+    if (url.pathname === '/api/project-info/auto-icon') return { status: 200, body: await deps.resolveAutomaticProjectIcon(body) };
+    if (url.pathname === '/api/project-info/image') return { status: 200, body: await deps.readProjectIconImage(body) };
+    if (url.pathname === '/api/project-info/get') return { status: 200, body: await deps.readProjectInfo() };
+    if (pathname === '/api/project-info/desktop-set') {
+      if (!context.caller?.startsWith('local-api:') || typeof body?.requestId !== 'string' || !body.requestId)
+        return { status: 403, body: { error: 'desktop_project_request_required' } };
+      return { status: 200, body: await deps.updateProjectInfo(body.input, { desktopRequest: body.requestId }) };
+    }
+    if (pathname === '/api/project-info/set') {
+      // Older Desktop proxies forward page input with the local bearer. They can edit
+      // existing metadata, but cannot introduce a new filesystem or credential grant.
+      return { status: 200, body: await deps.updateProjectInfo(body, { legacyDesktop: context.caller?.startsWith('local-api:') }) };
+    }
     if (url.pathname === '/api/project-aliases/list') {
         return { status: 200, body: await deps.listProjectAliases() };
     }
@@ -156,12 +169,6 @@ export function createHostService(deps) {
           || (body.expectedInstalledApproval !== undefined && typeof body.expectedInstalledApproval !== 'string'))
             return { status: 400, body: { error: 'invalid_plugin_enable_request' } };
         return { status: 200, body: await deps.setPluginEnabled(body.id, body.enabled, body.expectedInstalledApproval) };
-    }
-    if (url.pathname === '/api/ghosts/request-task-approval') {
-        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
-        if (typeof body.id !== 'string' || !body.id || typeof body.capability !== 'string')
-            return { status: 400, body: { error: 'invalid_plugin_approval_request' } };
-        return { status: 200, body: await deps.requestPluginTaskApproval(body.id, body.capability) };
     }
     if (url.pathname === '/api/ghosts/confirm/resolve' || url.pathname === '/api/ghosts/install-consent/resolve') {
         if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };

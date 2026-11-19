@@ -11,7 +11,7 @@ import { RemoteExecutor, type ExecutorConfirmation, type RemoteExecutorOptions }
 import { EXECUTOR_APPROVAL_TTL_MS, ExecutorGate, executorGateModeFor, type ExecutorAction } from '../gate';
 import type { PdfTextExtractor } from '../files';
 import type { GitCredentialHistory } from '../gitCredentials';
-import { findWindowsGitBash, truncateOutput } from '../shell';
+import { findWindowsGitBash, runOnce, truncateOutput } from '../shell';
 import type { GuardedFetch } from '../webFetch';
 import { ExecutorWorkspace } from '../workspace';
 
@@ -447,6 +447,48 @@ describe.runIf(posix)('Claude Code style Bash', () => {
 });
 
 describe('raw operations for Pi', () => {
+  // #11497: existing shell tests use Git Bash/POSIX and miss cmd's disabled cwd search.
+  // Unit smoke through production exec.run/Bash: real Windows cmd must execute the
+  // wrapper with NoDefaultCurrentDirectoryInExePath set, preserving cwd and status.
+  it.runIf(process.platform === 'win32')('runs cmd wrappers when current-directory executable search is disabled', async () => {
+    const exists = fs.existsSync.bind(fs);
+    const probe = vi.spyOn(fs, 'existsSync').mockImplementation((file) =>
+      /[/\\]bash\.exe$/i.test(String(file)) ? false : exists(file));
+    vi.stubEnv('NoDefaultCurrentDirectoryInExePath', '1');
+    const spaced = path.join(project, 'with spaces');
+    fs.mkdirSync(spaced);
+    fs.writeFileSync(path.join(spaced, 'marker.txt'), 'target-cwd');
+    const { executor } = makeExecutor('normal', { aliases: [{ from: '/agent/project', to: project }] });
+    try {
+      const hello = await executor.handle('exec.run', { command: 'echo hello', cwd: '/agent/project/with spaces' }) as { output: string; exitCode: number };
+      expect(Buffer.from(hello.output, 'base64').toString().trim()).toBe('hello');
+      expect(hello.exitCode).toBe(0);
+      const failed = await executor.handle('exec.run', {
+        command: 'type marker.txt\r\necho %NoDefaultCurrentDirectoryInExePath%\r\nexit /b 7', cwd: '/agent/project/with spaces',
+      }) as { output: string; exitCode: number };
+      expect(Buffer.from(failed.output, 'base64').toString().trim()).toBe('target-cwd1');
+      expect(failed.exitCode).toBe(7);
+      const foreground = await executor.callTool('Bash', { command: 'echo foreground' });
+      expect(foreground.isError).toBeFalsy();
+      expect(text(foreground)).toBe('foreground');
+      const started = await executor.callTool('Bash', { command: 'echo background\r\nexit /b 7', run_in_background: true });
+      expect(started.isError).toBeFalsy();
+      const id = /ID: (bash_[0-9a-f]+)/.exec(text(started))?.[1];
+      expect(id).toBeTruthy();
+      let output = '';
+      await vi.waitFor(async () => {
+        const result = await executor.callTool('BashOutput', { bash_id: id });
+        output += text(result);
+        expect(text(result)).toContain('<status>completed</status>');
+        expect(text(result)).toContain('<exit_code>7</exit_code>');
+      });
+      expect(output).toContain('background');
+    } finally {
+      await executor.close();
+      probe.mockRestore();
+    }
+  });
+
   it('reads, writes, lists, stats and detects image types', async () => {
     const { executor } = makeExecutor();
     await executor.handle('fs.mkdir', { path: 'src' });
@@ -479,6 +521,21 @@ describe('raw operations for Pi', () => {
     expect(await executor.handle('pi.grep', { params: { pattern: 'zzz' } })).toEqual({ text: 'No matches found' });
   });
 
+  // CI #10327: cancellation during asynchronous script preparation was lost.
+  // Unit, actual runOnce: abort at the write boundary without sleeping or spawning a sleeper.
+  it('does not launch a command cancelled while its script is being written', async () => {
+    const controller = new AbortController();
+    const writeFile = fs.promises.writeFile.bind(fs.promises);
+    const write = vi.spyOn(fs.promises, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      controller.abort();
+    });
+    try {
+      expect(await runOnce('echo should-not-run', { cwd: project, signal: controller.signal }))
+        .toMatchObject({ aborted: true, output: Buffer.alloc(0), exitCode: null });
+    } finally { write.mockRestore(); }
+  });
+
   it.runIf(posix)('runs commands once with timeout and abort semantics', async () => {
     const { executor } = makeExecutor();
     const ok = (await executor.handle('exec.run', { command: 'echo hi; pwd', cwd: project })) as { output: string; exitCode: number };
@@ -488,8 +545,13 @@ describe('raw operations for Pi', () => {
     expect(timedOut.timedOut).toBe(true);
     const controller = new AbortController();
     const pending = executor.handle('exec.run', { command: 'sleep 20' }, controller.signal);
-    setTimeout(() => controller.abort(), 100);
+    controller.abort();
     expect(await pending).toMatchObject({ aborted: true });
+    // Also cancel a running child, using its output as the readiness signal.
+    const running = new AbortController();
+    expect(await runOnce('echo ready; exec sleep 20', {
+      cwd: project, signal: running.signal, onData: () => running.abort(),
+    })).toMatchObject({ aborted: true });
   });
 
   it('refuses everything after the task has ended', async () => {

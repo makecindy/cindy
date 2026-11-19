@@ -1,17 +1,20 @@
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/input';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { BotProfileSourceField } from './BotProfileSourceField';
+import { BOT_PROFILE_SOURCE_MAX_LENGTH } from '../../../shared/botProfileSources';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { BotPortraitPicker } from './BotPortraitPicker';
 import { botSettingsIcons } from './botSettingsIcons';
 import {
   ArrowLeft,
   Bot,
   Camera,
-  Check,
   ChevronRight,
   FolderOpen,
 } from 'lucide-react';
@@ -31,6 +34,7 @@ import {
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
+  useBotProfilesLoadState,
   getEffectiveBotModelChain,
   subscribeBotGlobalModel,
   type BotCapabilities,
@@ -65,6 +69,7 @@ import {
   type BotSettingsPayload,
 } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
+import { BotSettingsSaveStatus } from './BotSettingsSaveStatus';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
 import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
@@ -107,6 +112,7 @@ export function BotSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useBotTranslation();
+  const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
   // The computer these pages read from and write to: this one, or the teammate's own computer.
   const target = useBotSettingsTarget();
@@ -182,6 +188,7 @@ export function BotSettings({
   const botIdentityRef = useRef(bot.id);
   const reconciledBotRef = useRef(bot);
   const savingProfileRef = useRef(false);
+  const saveOwner = useRef(getDataOwnerGeneration()).current;
   const savedSettingsRef = useRef(
     normalizeBotSettingsPayload(
       {
@@ -199,18 +206,23 @@ export function BotSettings({
   );
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload, modelSelection = false) => {
+      // A detached trailing save still belongs to the account that opened this
+      // page. Never let a late completion dispatch it into the next account.
+      if (!isDataOwnerIdCurrent(saveOwner)) throw new Error('Settings owner changed');
+      const operationOwner = getDataOwnerGeneration();
       savingProfileRef.current = true;
       try {
         await target.profile.update(bot.id, {
           ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
           ...(modelSelection ? { acceptModelSelection: true } : {}),
         });
+        if (!isDataOwnerGenerationCurrent(operationOwner)) throw new Error('Settings owner changed');
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
       }
     },
-    [bot.id, target],
+    [bot.id, target, saveOwner],
   );
 
   const autosave = useBotSettingsAutosave({
@@ -232,14 +244,37 @@ export function BotSettings({
     commit: commitProfile,
   });
 
+  const sourceTooLong = (identitySource.trim().length > BOT_PROFILE_SOURCE_MAX_LENGTH
+      && identitySource.trim() !== savedSettingsRef.current.identitySource)
+    || (userContextSource.trim().length > BOT_PROFILE_SOURCE_MAX_LENGTH
+      && userContextSource.trim() !== savedSettingsRef.current.userContextSource);
   const canLeave = useCallback(async () => {
     if (avatarInFlight.current) return false;
     await autosave.flush();
-    if (autosave.isDirty()) return false;
+    if (autosave.isDirty()) {
+      if (!sourceTooLong) return false;
+      const discard = await confirm({
+        title: t('bots.memory.unsavedTitle'),
+        description: t('bots.remoteSettings.leaveDescription'),
+        confirmText: t('bots.memory.discard'),
+        cancelText: t('bots.memory.continueEditing'),
+      });
+      if (!discard) return false;
+      const saved = savedSettingsRef.current;
+      autosave.discard();
+      setName(saved.name);
+      setDescription(saved.description);
+      setIdentitySource(saved.identitySource);
+      setUserContextSource(saved.userContextSource);
+      setAvatar(saved.avatar);
+      setAvatarColor(saved.avatarColor);
+      setSelectedSkills(saved.skills);
+      setCapabilities(saved.capabilities);
+    }
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await capabilityLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty]);
+  }, [autosave.flush, autosave.isDirty, autosave.discard, sourceTooLong, confirm, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;
@@ -466,32 +501,7 @@ export function BotSettings({
             <p className="text-11 text-[var(--text-danger)]" role="alert">
               {t('bots.guided.duplicateName')}
             </p>
-          ) : autosave.status === 'saving' ? (
-            <span
-              role="status"
-              className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Spinner size={12} /> {t('bots.autosave.saving')}
-            </span>
-          ) : autosave.status === 'saved' ? (
-            <span
-              role="status"
-              className="inline-flex animate-fade-in items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Check size={12} /> {t('bots.autosave.saved')}
-            </span>
-          ) : autosave.status === 'error' ? (
-            <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
-              <button
-                type="button"
-                onClick={() => void autosave.retry()}
-                className="font-medium text-[var(--text-primary)]"
-              >
-                {t('bots.autosave.retry')}
-              </button>
-            </p>
-          ) : null}
+          ) : <BotSettingsSaveStatus autosave={autosave} modelPage={page === 'model'} sourceTooLong={sourceTooLong} />}
         </div>
         {page === 'home' ? (
           <>
@@ -592,7 +602,8 @@ export function BotSettings({
           ) : null}
         </div>
         <div hidden={page !== 'personality'} className="pt-3">
-          <Textarea
+          <BotProfileSourceField
+            label={t('bots.profile.personality')}
             aria-label={t('bots.profile.personality')}
             readOnly={!!invitationPending}
             value={identitySource}
@@ -603,7 +614,7 @@ export function BotSettings({
             onBlur={() => void autosave.flush()}
             {...autosave.composition}
             rows={6}
-            className="min-h-40 resize-none p-3 leading-6 [field-sizing:content]"
+            className="min-h-40 max-h-96 resize-none overflow-y-auto p-3 leading-6 [field-sizing:content]"
           />
         </div>
         <section
@@ -782,6 +793,7 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
@@ -1028,6 +1040,12 @@ export function BotsHomeView() {
     needsProviderConnection,
     modelUnavailable,
   ]);
+
+  // Only an unknown roster needs full-page recovery; a refresh must not discard
+  // an already-open creation draft. Reading the roster also precedes onboarding.
+  if (!profilesLoaded && !selectedBot && !entryTarget && profileLoadState === 'error') {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
+  }
 
   if (needsProviderConnection && !settingsOpen) {
     return (

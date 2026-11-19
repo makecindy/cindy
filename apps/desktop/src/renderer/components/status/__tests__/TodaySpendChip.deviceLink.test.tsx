@@ -24,12 +24,17 @@ import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
   name?: string;
+} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source'>> & {
   auth?: { native: string };
 };
 
 const mocks = vi.hoisted(() => ({
+  codexAuthInjection: null as string | null,
   localProviders: [] as TestProvider[],
   deviceProviders: [] as TestProvider[],
+  localProvidersLoading: false,
+  deviceProvidersLoading: false,
+  deviceProvidersError: null as string | null,
   remoteProviderIds: [] as Array<string | undefined>,
   localClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   localClaudeReadEnabled: [] as boolean[],
@@ -42,6 +47,9 @@ const mocks = vi.hoisted(() => ({
   remoteRouteDeviceIds: [] as Array<string | null>,
   remoteCodexPayload: null as Record<string, unknown> | null,
   remoteCodexDeviceIds: [] as Array<string | null>,
+  remoteCodexLive: [] as boolean[],
+  remoteCodexPoll: [] as (boolean | undefined)[],
+  remoteCodexRefresh: vi.fn(),
   remoteClaudeQuota: null as Record<string, unknown> | null,
   remoteXaiSnapshot: null as Record<string, unknown> | null,
   openCodeUsageProviderIds: [] as Array<string | undefined>,
@@ -91,8 +99,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: mocks.localProviders }) }));
-vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: mocks.deviceProviders }) }));
+vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({
+  providers: mocks.localProviders.map(provider => ({ agents: [], routing: {}, models: {}, connected: false, ...provider })),
+  loading: mocks.localProvidersLoading, error: null,
+}) }));
+vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({
+  providers: mocks.deviceProviders.map(provider => ({ agents: [], routing: {}, models: {}, connected: false, ...provider })),
+  loading: mocks.deviceProvidersLoading, error: mocks.deviceProvidersError,
+}) }));
 
 vi.mock('@/hooks/useApiKey', () => ({
   useApiKey: () => ({ hasSavedKey: false, isReconciling: false }),
@@ -164,7 +178,11 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
     selectRemoteCodexAccountUsage: actual.selectRemoteCodexAccountUsage,
     requestRemoteCodexAccountRefresh: vi.fn(),
     requestRemoteXaiSubscriptionRefresh: vi.fn(),
-    useRemoteCodexAccountUsage: (deviceId: string | null) => {
+    requestRemoteCodexLiveRefresh: mocks.remoteCodexRefresh,
+    useRemoteCodexRefreshState: () => ({ failed: false, refreshing: false }),
+    useRemoteCodexAccountUsage: (deviceId: string | null, _provider?: string, options?: { live?: boolean; poll?: boolean }) => {
+      mocks.remoteCodexLive.push(options?.live === true);
+      mocks.remoteCodexPoll.push(options?.poll);
       mocks.remoteCodexDeviceIds.push(deviceId);
       return deviceId ? mocks.remoteCodexPayload : null;
     },
@@ -176,7 +194,7 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
   };
 });
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
-  useCodexRuntimeRoute: () => ({ authInjection: null }),
+  useCodexRuntimeRoute: () => ({ authInjection: mocks.codexAuthInjection }),
 }));
 vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: (enabled: boolean) => {
@@ -196,7 +214,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 
 import { TodaySpendChip } from '../TodaySpendChip';
-import { SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
+import { sessionSubscriptionPoolProvider, SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
 
 function renderRemoteChip(providerId: string | null) {
   return render(
@@ -212,8 +230,12 @@ function renderRemoteChip(providerId: string | null) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mocks.codexAuthInjection = null;
   mocks.localProviders = [];
   mocks.deviceProviders = [];
+  mocks.localProvidersLoading = false;
+  mocks.deviceProvidersLoading = false;
+  mocks.deviceProvidersError = null;
   mocks.remoteProviderIds = [];
   mocks.localClaudeSnapshot = null;
   mocks.localClaudeReadEnabled = [];
@@ -225,6 +247,9 @@ beforeEach(() => {
   mocks.remoteRouteDeviceIds = [];
   mocks.remoteCodexPayload = null;
   mocks.remoteCodexDeviceIds = [];
+  mocks.remoteCodexLive = [];
+  mocks.remoteCodexPoll = [];
+  mocks.remoteCodexRefresh.mockClear();
   mocks.remoteClaudeQuota = null;
   mocks.remoteXaiSnapshot = null;
   mocks.openCodeUsageProviderIds = [];
@@ -447,6 +472,9 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(mocks.localCodexLimitsEnabled.every(enabled => !enabled)).toBe(true);
     fireEvent.mouseEnter(screen.getByRole('button'));
     act(() => vi.advanceTimersByTime(300));
+    expect(mocks.remoteCodexLive).toContain(true);
+    expect(mocks.remoteCodexPoll.every(value => value === false)).toBe(true);
+    expect(mocks.remoteCodexRefresh).toHaveBeenCalledWith('device-abc', 'openai');
     expect(screen.getByText('remote@example.com')).toBeTruthy();
     expect(screen.queryByText('local@example.com')).toBeNull();
   });
@@ -703,6 +731,133 @@ describe('existing UI with remote account data', () => {
 // computer), not the account the task is pinned to. Existing chip cases have one account per
 // provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
 describe('TodaySpendChip on a subscription account pool', () => {
+  // #10111 (unit): old null-route tasks already have a real second-account binding.
+  // Existing cases always name the provider, bypassing both null-route gates.
+  it.each(['oauth-bearer', null, 'env-key', 'provider-oauth'])(
+    'shows the bound second account independently of the default host (%s)', async injection => {
+    mocks.codexAuthInjection = injection;
+    const sessionAccount = vi.fn().mockResolvedValue({
+      providerId: 'openai', state: 'bound', account: {
+        isDefault: false, number: 2, identity: 'second@example.test', paused: false, status: 'ready',
+        usage: { codex: { credits: null, buckets: { codex: {
+          updatedAt: Date.now(), primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null },
+          secondary: null,
+        } } } },
+      },
+    });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal,
+      subscriptionAccounts: { sessionAccount, onChanged: () => () => {} },
+    } });
+    const { container } = render(
+      <SessionSubscriptionAccountProvider
+        providerId={sessionSubscriptionPoolProvider('codex', null, null, undefined, true, { modelId: 'gpt-6.1-sol', providers: [], catalogReady: true })}
+        routeProviderId={null} deviceId={null} sessionId="legacy-null-10111" nativeSessionId="native-10111">
+        <TodaySpendChip vendorKey="codex" providerId={null} modelId="gpt-6.1-sol" sessionId="legacy-null-10111" />
+      </SessionSubscriptionAccountProvider>,
+    );
+    await act(async () => {});
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(sessionAccount).toHaveBeenCalledExactlyOnceWith({
+      action: 'session', providerId: 'openai', sessionId: 'legacy-null-10111', nativeSessionId: 'native-10111',
+    });
+    fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByTestId('quota-hover-card').textContent).toContain('second@example.test');
+  });
+
+  it.each([
+    { name: 'explicit gateway', providerId: 'xd', injection: 'env-key', model: 'gpt-6.1-sol', remoteHostId: undefined },
+    { name: 'provider OAuth source', providerId: 'custom-oauth', injection: 'provider-oauth', model: 'gpt-6.1-sol', remoteHostId: undefined },
+    { name: 'gateway model', providerId: null, injection: 'oauth-bearer', model: 'codex/gpt-5.5', remoteHostId: undefined },
+    { name: 'custom', providerId: 'custom', injection: 'oauth-bearer', model: 'gpt-6.1-sol', remoteHostId: undefined },
+    { name: 'SSH', providerId: null, injection: 'oauth-bearer', model: 'gpt-6.1-sol', remoteHostId: 'ssh' },
+  ])('does not expose the probed account to $name', async ({ providerId, injection, model, remoteHostId }) => {
+    mocks.codexAuthInjection = injection;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal,
+      subscriptionAccounts: { sessionAccount: async () => ({
+        providerId: 'openai', state: 'bound', account: {
+          isDefault: false, number: 2, identity: 'private@example.test', paused: false, status: 'ready',
+          usage: { codex: { credits: null, buckets: { codex: {
+            primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null }, secondary: null,
+          } } } },
+        },
+      }), onChanged: () => () => {} },
+    } });
+    const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={null}
+      deviceId={null} sessionId={'negative-' + injection + model} nativeSessionId="native-negative">
+      <TodaySpendChip vendorKey="codex" providerId={providerId} modelId={model} remoteHostId={remoteHostId} />
+    </SessionSubscriptionAccountProvider>);
+    await act(async () => {});
+    expect(container.textContent).not.toContain('70%');
+    expect(container.textContent).not.toContain('private@example.test');
+  });
+
+  it.each(['legacy', 'unassigned', 'unavailable'] as const)(
+    'does not classify an unknown null-route binding as OAuth (%s)', async state => {
+      mocks.codexAuthInjection = 'env-key';
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+        openExternal: mocks.openExternal,
+        subscriptionAccounts: { sessionAccount: async () => ({ providerId: 'openai', state }),
+          onChanged: () => () => {} },
+      } });
+      const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={null}
+        deviceId={null} sessionId={'unknown-' + state} nativeSessionId="native-unknown">
+        <TodaySpendChip vendorKey="codex" providerId={null} modelId="gpt-6.1-sol" />
+      </SessionSubscriptionAccountProvider>);
+      await act(async () => {});
+      expect(container.textContent).not.toContain('5h');
+      expect(mocks.localCodexReadKinds.some(kind => kind === 'codex')).toBe(false);
+    });
+
+  // #11192 review (unit): a stale OpenAI binding cannot override the same
+  // connected effective-source choice used by the executor. The controller's
+  // catalog must not decide a task running on another computer.
+  it.each([
+    { name: 'local custom', source: 'custom', deviceId: null, loading: false, error: null, shows: false },
+    { name: 'local gateway', source: 'xd', deviceId: null, loading: false, error: null, shows: false },
+    { name: 'remote custom', source: 'custom', deviceId: 'peer', loading: false, error: null, shows: false },
+    { name: 'remote OpenAI', source: 'openai', deviceId: 'peer', loading: false, error: null, shows: true },
+    { name: 'loading local catalog', source: 'openai', deviceId: null, loading: true, error: null, shows: false },
+    { name: 'loading remote catalog', source: 'openai', deviceId: 'peer', loading: true, error: null, shows: false },
+    { name: 'failed remote catalog', source: 'openai', deviceId: 'peer', loading: false, error: 'offline', shows: false },
+  ])('review10111: preserves the effective source for $name', async ({ source, deviceId, loading, error, shows }) => {
+    const provider = (id: string): TestProvider => ({ id, source: id === 'openai' || id === 'xd' ? 'builtin' : 'user',
+      connected: true, agents: ['codex'], routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null }] },
+    });
+    mocks.localProviders = [provider(deviceId ? (source === 'openai' ? 'custom' : 'openai') : source)];
+    mocks.deviceProviders = [provider(source)];
+    mocks.localProvidersLoading = !deviceId && loading;
+    mocks.deviceProvidersLoading = !!deviceId && loading;
+    mocks.deviceProvidersError = error;
+    const reply = { providerId: 'openai', state: 'bound', account: {
+      isDefault: false, number: 2, identity: 'bound@example.test', paused: false, status: 'ready',
+      usage: { codex: { credits: null, buckets: { codex: {
+        primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null }, secondary: null,
+      } } } },
+    } };
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal, deviceLink: { invoke: async () => reply, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      subscriptionAccounts: { sessionAccount: async () => reply, onChanged: () => () => {} },
+    } });
+    const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={null}
+      deviceId={deviceId} sessionId={'source-' + source + deviceId + loading + error} nativeSessionId="source-native">
+      <TodaySpendChip vendorKey="codex" providerId={null} modelId="custom-model[1m]"
+        usageAccount={deviceId ? { kind: 'device', deviceId } : { kind: 'task' }} />
+    </SessionSubscriptionAccountProvider>);
+    await act(async () => {});
+    expect(container.textContent?.includes('5h 剩余 70%')).toBe(shows);
+    if (shows) {
+      fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.getByTestId('quota-hover-card').textContent).toContain('bound@example.test');
+    } else {
+      expect(container.textContent).not.toContain('bound@example.test');
+    }
+  });
+
   // PR #9918 review (unit): a ChatGPT bridge consumes the pinned account's
   // model bucket. A depleted generic bucket must not replace that model's 70%.
   it.each([true, false])('uses the bridge model native bucket (generic bucket present: %s)', async (generic) => {
@@ -817,6 +972,15 @@ describe('TodaySpendChip on a subscription account pool', () => {
     expect(container.textContent).not.toContain('10%');
     expect(invoke).toHaveBeenCalledWith('mac-mini', channel,
       [claude ? providerId : 'codex', claude ? false : providerId, { subscriptionSessionId: 'sdk-on-mac' }]);
+    // 2026-11 field logs: the refused task-account query was re-sent every refresh (~1500 times in
+    // two days). Once refused as unknown, later refreshes go straight to the native-session read.
+    const accountQueries = () => invoke.mock.calls.filter(([, requested]) => requested === 'maker:subscription-accounts').length;
+    const legacyReads = () => invoke.mock.calls.filter(([, requested]) => requested === channel).length;
+    const queriesBefore = accountQueries(), readsBefore = legacyReads();
+    expect(queriesBefore).toBeLessThanOrEqual(1);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(accountQueries()).toBe(queriesBefore);
+    expect(legacyReads()).toBeGreaterThan(readsBefore);
     // The default account's name is not shown for an account it could not name.
     fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
     act(() => vi.advanceTimersByTime(300));

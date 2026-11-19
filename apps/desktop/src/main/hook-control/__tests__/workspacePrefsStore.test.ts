@@ -21,6 +21,7 @@ import {
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
   markWorkspacePrefMirrored,
+  moveWorkspacePrefsToRenamed,
   reconcileWorkspacePrefsForMirror,
   replaceChannelWorkspacePrefs,
   resolveWorkspacePrefOverrides,
@@ -28,6 +29,7 @@ import {
 } from '../workspacePrefsStore';
 import {
   getWorkspaceProviderSource,
+  moveWorkspaceProviderSourcesToRenamed,
   setWorkspaceProviderSource,
 } from '../workspaceProviderSourceStore';
 
@@ -599,7 +601,7 @@ describe('workspacePrefsStore', () => {
         permissionMode: null,
       },
       {
-        workspace: 'bad alias!',
+        workspace: '/not/a/name',
         model: 'nope',
         effort: null,
         agentKind: null,
@@ -609,6 +611,85 @@ describe('workspacePrefsStore', () => {
     ]);
     expect(listWorkspacePrefs('slack').map((e) => e.workspace)).toEqual(['chat']);
     expect(getWorkspacePref('x', null, 'chat').model).toBe('x-keep');
+  });
+
+  // 规则: 项目改名(侧栏改名 / 升级前手填的别名)不能丢掉这个项目的 IM 偏好 —— 权限档也在
+  // 其中, 丢了就按默认档执行。生产入口 moveWorkspacePrefsToRenamed(每次项目整理与服务端
+  // 快照落地后各调一次)。最小失败输入: 旧名称下有一行实值, 改名为新名称。
+  it('项目改名: 偏好挪到新名称并等待镜像, 旧名称收成清空墓碑, 重复执行不再变化', () => {
+    setWorkspacePref('feishu', null, 'xdmaker', { model: 'm1', permissionMode: 'default' });
+    setWorkspacePref('slack', 'T1', 'xdmaker', { model: 'm2' });
+    setWorkspacePref('telegram', null, 'other', { model: 'keep' });
+
+    const touched = moveWorkspacePrefsToRenamed([{ from: 'xdmaker', to: '主仓库' }]);
+    expect([...touched].sort()).toEqual(['feishu', 'slack']);
+    expect(getWorkspacePref('feishu', null, '主仓库')).toMatchObject({
+      model: 'm1',
+      permissionMode: 'default',
+    });
+    expect(getWorkspacePref('slack', 'T1', '主仓库')).toMatchObject({ model: 'm2', teamId: 'T1' });
+    expect(getWorkspacePref('feishu', null, 'xdmaker')).toMatchObject({ model: null, permissionMode: null });
+    expect(getWorkspacePref('telegram', null, 'other').model).toBe('keep');
+    // 新行整行镜像出去, 旧行以全空镜像(服务端随之删除)。
+    const mirror = reconcileWorkspacePrefsForMirror('feishu', []).map((row) => row.prefs);
+    expect(mirror).toContainEqual(expect.objectContaining({ workspace: '主仓库', model: 'm1' }));
+    expect(mirror).toContainEqual(expect.objectContaining({ workspace: 'xdmaker', model: null }));
+
+    expect(moveWorkspacePrefsToRenamed([{ from: 'xdmaker', to: '主仓库' }])).toEqual([]);
+  });
+
+  // PR #10291 review: 离线时 app -> main 再改回 app, app 下留着上一次改名的清空墓碑, 被当成
+  // 「已有设置」后既不抄 main 的值、又把 main 清空, 模型与权限档全丢。
+  it('项目离线改名又改回原名: 偏好回到原名下, 不被残留的清空墓碑挡住', () => {
+    setWorkspacePref('feishu', null, 'app', { model: 'm1', permissionMode: 'default' });
+    moveWorkspacePrefsToRenamed([{ from: 'app', to: 'main' }]);
+    expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
+
+    moveWorkspacePrefsToRenamed([{ from: 'main', to: 'app' }]);
+    expect(getWorkspacePref('feishu', null, 'app')).toMatchObject({
+      model: 'm1',
+      permissionMode: 'default',
+    });
+    expect(getWorkspacePref('feishu', null, 'main').model).toBeNull();
+  });
+
+  // PR #10291 review(第二轮): 把新名称下所有全空行都当成改名墓碑, 会把用户主动清空的设置
+  // 用旧名称下的值(例如随服务端快照回来的旧行)盖回去。
+  it('项目改名: 用户在新名称下主动清空的设置不被旧名称的值盖回去', () => {
+    setWorkspacePref('feishu', null, 'main', { model: 'tmp' });
+    setWorkspacePref('feishu', null, 'main', { model: null });
+    setWorkspacePref('feishu', null, 'app', { model: 'old', permissionMode: 'default' });
+
+    moveWorkspacePrefsToRenamed([{ from: 'app', to: 'main' }]);
+    expect(getWorkspacePref('feishu', null, 'main')).toMatchObject({
+      model: null,
+      permissionMode: null,
+    });
+    expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
+  });
+
+  // PR #10291 review(第十轮): 表满(256 行)时改名要写「新行 + 墓碑」, 超限抛错后偏好留在旧名称下。
+  it('偏好表已满时项目改名仍能把偏好挪过去', () => {
+    for (let index = 0; index < 256; index += 1) {
+      setWorkspacePref('feishu', null, `p${index}`, { model: 'm' });
+    }
+    expect(moveWorkspacePrefsToRenamed([{ from: 'p0', to: 'renamed' }])).toEqual(['feishu']);
+    expect(getWorkspacePref('feishu', null, 'renamed').model).toBe('m');
+  });
+
+  it('项目改名: 新名称下已有偏好时不覆盖; 来源偏好一并挪过去', () => {
+    setWorkspacePref('feishu', null, 'xdmaker', { model: 'old' });
+    setWorkspacePref('feishu', null, '主仓库', { model: 'new' });
+    setWorkspaceProviderSource('feishu', null, 'xdmaker', 'provider-1');
+
+    moveWorkspacePrefsToRenamed([{ from: 'xdmaker', to: '主仓库' }]);
+    expect(getWorkspacePref('feishu', null, '主仓库').model).toBe('new');
+    expect(getWorkspacePref('feishu', null, 'xdmaker').model).toBeNull();
+
+    expect(moveWorkspaceProviderSourcesToRenamed([{ from: 'xdmaker', to: '主仓库' }])).not.toBeNull();
+    expect(getWorkspaceProviderSource('feishu', null, '主仓库')).toBe('provider-1');
+    expect(getWorkspaceProviderSource('feishu', null, 'xdmaker')).toBeNull();
+    expect(moveWorkspaceProviderSourcesToRenamed([{ from: 'xdmaker', to: '主仓库' }])).toBeNull();
   });
 
   it('损坏文件宽容为空表', () => {

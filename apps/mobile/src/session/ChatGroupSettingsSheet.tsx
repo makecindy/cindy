@@ -88,7 +88,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   const manager = (membership.manager || hostDecides) && !dissolved;
   const canLeave = membership.canLeave && !dissolved;
   const soleOwner = me?.role === 'owner' && group.members.length === 1;
-  const ownBots = group.members.filter(member => member.actorKind === 'bot' && member.isOwned === true && !!member.actorId);
+  const ownBots = group.members.filter(member => member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true && !!member.actorId);
   // Group-wide writes need an owner/admin you control, a connection, and a path that carries them.
   const writable = manager && online && !archived && (!direct || management.editable);
   // Your own identity and teammates' grants go to the chat service as yourself.
@@ -141,6 +141,22 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   }
   const lifecycle = (action: 'dissolve' | 'leave' | 'hide') => void confirmed(t(`groupChat.lifecycle.${action}`), t(`groupChat.lifecycle.${action}Note`),
     t(`groupChat.lifecycle.${action}`), () => act(action, action === 'dissolve' ? { expectedRevision: group.revision } : undefined));
+  const removing = useRef<string | null>(null);
+  async function removeMember(member: BotGroupMemberView) {
+    const captured = live.current;
+    if (removing.current === captured || busyRef.current) return;
+    removing.current = captured;
+    try {
+      const mine = member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true;
+      const active = group.round?.speakers.some(speaker => speaker.botId === member.botId);
+      const message = mine ? k('removeOwnHint', { name: member.name, group: group.name })
+        + (active ? `\n\n${k('removeOwnActiveHint')}` : '') : k('removeHint');
+      if (!await showConfirm({ title: k('removeTitle', { name: member.name }), message, cancelLabel: t('devices.common.cancel'),
+        confirmLabel: mine ? k(active ? 'stopAndRemove' : 'removeOwn') : t('groupChat.settings.remove'), destructive: true }) || live.current !== captured) return;
+      if (await run(() => management ? management.act('remove-member', { actorId: member.actorId })
+        : act('remove-member', throughComputer({ actorId: member.actorId })), 'groupChat.lifecycle.failed') && mine) home();
+    } finally { if (removing.current === captured) removing.current = null; }
+  }
   const home = () => setPage({ kind: 'home' });
   const openEdit = () => {
     const base = { name: group.name, topic: group.topic ?? '', description: group.description ?? '' };
@@ -152,7 +168,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   const avatar = (identity: BotGroupIdentity, size = BOT_GROUP_ROW_AVATAR_SIZE) =>
     <BotGroupAvatar deviceId={host.deviceId} identity={identity} size={size} online={online} />;
 
-  // 邀请朋友: a join link from the owner or admin you control, in a system dialog with 复制.
+  // 邀请朋友: a join link from an eligible joined actor, in a system dialog with 复制.
   async function inviteFriends() {
     if (!management) return;
     let invite: { link: string; expiresAt: string | null; reusable?: boolean } | null = null;
@@ -177,7 +193,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   if (page.kind === 'manage') {
     title = k('manage');
     content = <ManagePage k={k} group={group} owner={owner} writable={writable} online={online} busy={busy} direct={direct}
-      identityOf={identityOf} settings={settings} lifecycle={lifecycle} rename={direct ? undefined : openEdit}
+      settings={settings} lifecycle={lifecycle} rename={direct ? undefined : openEdit}
       archive={archive => void confirmed(k(archive ? 'archive' : 'unarchive'), k(archive ? 'archiveHint' : 'unarchiveHint'), k(archive ? 'archive' : 'unarchive'),
         () => management ? management.act('archive', { archived: archive }) : act('delete', throughComputer({})))} />;
   } else if (page.kind === 'edit') {
@@ -220,6 +236,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           cancelLabel: t('devices.common.cancel'), confirmLabel: k('confirm'), destructive: true }) || live.current !== captured)) return;
         await settings('bot-access', { actorId: companion.actorId, access, expectedRevision: companion.accessRevision });
       })()}
+      remove={(direct ? selfWritable : online && !archived && !dissolved && group.supportsOwnBotRemoval === true) ? () => void removeMember(companion) : undefined} busy={busy}
       openCapabilities={hosted ? () => { onClose(); void navigation.openTeammate(hosted, { settings: 'capabilities' }); } : undefined} />;
   } else if (page.kind === 'inviteBots') {
     title = k('inviteBotsItem');
@@ -266,13 +283,12 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
         options={[{ value: 'settings', label: k('tabSettings'), testID: 'botGroup.settings.tab.settings' },
           { value: 'members', label: `${t('groupChat.settings.members')} ${count}`, testID: 'botGroup.settings.tab.members' }]} />
       {tab === 'members'
-        ? <MembersTab k={k} group={group} owner={owner} manager={writable} direct={direct} busy={busy} identityOf={identityOf} avatar={avatar}
+        ? <MembersTab k={k} group={group} owner={owner} manager={writable} direct={direct} busy={busy} ownRemoval={direct ? selfWritable : online && !archived && !dissolved && group.supportsOwnBotRemoval === true} identityOf={identityOf} avatar={avatar}
           access={actorId => setPage({ kind: 'companion', actorId })}
           role={member => void settings('set-member-role', { actorId: member.actorId, role: member.role === 'admin' ? 'member' : 'admin' })}
           transfer={member => void confirmed(k('transferTitle', { name: member.name }), k('transferHint'), k('transfer'),
             () => management!.act('transfer', { actorId: member.actorId }))}
-          remove={member => void confirmed(k('removeTitle', { name: member.name }), k('removeHint'), t('groupChat.settings.remove'),
-            () => management ? management.act('remove-member', { actorId: member.actorId }) : act('remove-member', throughComputer({ actorId: member.actorId })))} />
+          remove={member => void removeMember(member)} />
         : <>
           {dissolved ? <Notice>{t('groupChat.lifecycle.dissolved')}</Notice> : null}
           {archived && !dissolved ? <Notice>{k('archived')}</Notice> : null}
@@ -290,7 +306,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
             title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
-          {direct && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
+          {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
             {ownBots.map(member => <ActionInfoRow key={member.actorId} lead={avatar(identityOf(member))} label={member.name}
               value={k(member.status === 'paused' ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])} accessibilityLabel={member.name}
               onPress={() => setPage({ kind: 'companion', actorId: member.actorId! })} testID={`botGroup.settings.teammate.${member.botId}`} />)}
@@ -350,8 +366,8 @@ function About({ k, group, canEdit, canFill, onEdit }: { k: Translate; group: Bo
   </View>;
 }
 
-function MembersTab({ k, group, owner, manager, direct, busy, identityOf, avatar, access, role, transfer, remove }: {
-  k: Translate; group: BotGroupRemoteChatData; owner: boolean; manager: boolean; direct: boolean; busy: boolean;
+function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identityOf, avatar, access, role, transfer, remove }: {
+  k: Translate; group: BotGroupRemoteChatData; owner: boolean; manager: boolean; direct: boolean; busy: boolean; ownRemoval: boolean;
   identityOf(member: BotGroupMemberView): BotGroupIdentity; avatar(identity: BotGroupIdentity): ReactNode;
   access(actorId: string): void; role(member: BotGroupMemberView): void; transfer(member: BotGroupMemberView): void; remove(member: BotGroupMemberView): void;
 }) {
@@ -367,15 +383,15 @@ function MembersTab({ k, group, owner, manager, direct, busy, identityOf, avatar
     {shown.length ? <View style={styles.card} testID="botGroup.settings.members">
       {shown.map((member, index) => {
         const bot = member.actorKind === 'bot';
-        const mine = bot && member.isOwned === true && !!member.actorId;
+        const mine = bot && member.isOwned === true && member.assistant !== true && !!member.actorId;
         // Owners manage everyone but themselves; admins everyone but the owner. Ownership goes to a person.
-        const manageable = manager && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
+        const manageable = manager && member.assistant !== true && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
         const transferable = direct && owner && manager && !!member.actorId && member.actorKind === 'human' && member.role !== 'owner';
         const options = [
-          ...(mine && direct ? [{ id: 'access', title: k('accessMenu') }] : []),
+          ...(mine && (direct || group.supportsOwnBotRemoval === true) ? [{ id: 'access', title: k('accessMenu') }] : []),
           ...(manageable && direct ? [{ id: 'role', title: t(member.role === 'admin' ? 'groupChat.settings.removeAdmin' : 'groupChat.settings.makeAdmin') }] : []),
           ...(transferable ? [{ id: 'transfer', title: k('transfer') }] : []),
-          ...(manageable && (direct || group.supportsMemberRemoval) ? [{ id: 'remove', title: t('groupChat.settings.remove'), destructive: true }] : []),
+          ...((manageable && (direct || group.supportsMemberRemoval) || mine && ownRemoval) ? [{ id: 'remove', title: t('groupChat.settings.remove'), destructive: true }] : []),
         ];
         const paused = !isActiveBotGroupMember(member);
         const meta = bot ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}` : t(`groupChat.settings.roles.${member.role ?? 'member'}`);
@@ -405,9 +421,8 @@ function MembersTab({ k, group, owner, manager, direct, busy, identityOf, avatar
   </>;
 }
 
-function ManagePage({ k, group, owner, writable, online, busy, direct, identityOf, settings, lifecycle, archive, rename }: {
+function ManagePage({ k, group, owner, writable, online, busy, direct, settings, lifecycle, archive, rename }: {
   k: Translate; group: BotGroupRemoteChatData; owner: boolean; writable: boolean; online: boolean; busy: boolean; direct: boolean;
-  identityOf(member: BotGroupMemberView): BotGroupIdentity;
   settings(actionId: GroupSettingsActionId, input: Record<string, unknown>): Promise<boolean>;
   lifecycle(action: 'dissolve'): void; archive(archive: boolean): void;
   /** Through a computer the group name is the one 群资料 field the phone can change. */
@@ -422,8 +437,6 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
       {open => <ActionInfoRow label={label} value={options.find(option => option.id === value)?.title ?? ''} accessibilityLabel={label}
         disabled={!writable || busy} onPress={open} testID={`${testID}.row`} />}
     </BotGroupMenu>;
-  // Early groups do not tag kinds; every member there is a teammate.
-  const companions = group.members.filter(member => (!member.actorKind || member.actorKind === 'bot') && isActiveBotGroupMember(member));
   if (group.archived) return <>
     <Notice>{k('archived')}</Notice>
     {/* Archived groups are read-only here; only 取消归档 remains, which a computer cannot carry. */}
@@ -446,17 +459,20 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"
         onValueChange={allowMentionAllBots => { void settings('update', { allowMentionAllBots }); }} />
     </SettingsGroup> : null}
+    {group.supportsMemberInvites ? <SettingsGroup footer={t('groupChat.settings.allowMemberInvitesHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.allowMemberInvites')} value={group.allowMemberInvites === true}
+        disabled={!writable || busy} switchTestID="botGroup.settings.allowMemberInvites"
+        onValueChange={allowMemberInvites => { void settings('update', { allowMemberInvites }); }} />
+    </SettingsGroup> : null}
     {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
     {group.singleSpeaker ? null : <SettingsGroup footer={t(group.speakingMode === 'sequential' ? 'groupChat.settings.speakingModeSequentialNote' : 'groupChat.settings.speakingModeAutoNote')}>
       {choice(t('groupChat.settings.speakingMode'), group.speakingMode, [
         { id: 'auto', title: t('groupChat.settings.speakingModeAuto') }, { id: 'sequential', title: t('groupChat.settings.speakingModeSequential') },
       ], 'speakingMode', 'botGroup.settings.speakingMode')}
     </SettingsGroup>}
-    {companions.length ? <SettingsGroup title={k('work')} footer={`${k('organizerHint')}${k('projectDirOnComputer')}`}>
-      {choice(t('groupChat.organizer'), group.organizerBotId ?? '', companions.map(member => ({ id: member.botId, title: identityOf(member).name || member.name })),
-        'organizerBotId', 'botGroup.settings.organizer')}
-      {group.projectDirName !== undefined && !direct ? <ActionInfoRow chevron={false} label={t('groupChat.settings.projectDir')}
-        value={group.projectDirName ?? k('ownFolder')} accessibilityLabel={t('groupChat.settings.projectDir')} testID="botGroup.settings.projectDir" /> : null}
+    {group.projectDirName !== undefined && !direct ? <SettingsGroup footer={k('projectDirOnComputer')}>
+      <ActionInfoRow chevron={false} label={t('groupChat.settings.projectDir')}
+        value={group.projectDirName ?? k('ownFolder')} accessibilityLabel={t('groupChat.settings.projectDir')} testID="botGroup.settings.projectDir" />
     </SettingsGroup> : null}
     <SettingsGroup footer={k('archiveRowHint')}>
       <ActionInfoRow chevron={false} label={k('archive')} accessibilityLabel={k('archive')} disabled={!writable || busy} onPress={() => archive(true)} testID="botGroup.settings.archive" />
@@ -515,9 +531,9 @@ function ProfilePage({ k, me, identity, avatar, nickname, onNickname, editable, 
   </>;
 }
 
-function CompanionPage({ k, member, identity, avatar, editable, choose, openCapabilities }: {
+function CompanionPage({ k, member, identity, avatar, editable, choose, openCapabilities, remove, busy }: {
   k: Translate; member: BotGroupMemberView; identity: BotGroupIdentity; avatar(identity: BotGroupIdentity): ReactNode;
-  editable: boolean; choose(access: Access): void; openCapabilities?(): void;
+  editable: boolean; choose(access: Access): void; openCapabilities?(): void; remove?(): void; busy: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -539,6 +555,10 @@ function CompanionPage({ k, member, identity, avatar, editable, choose, openCapa
         {access === current ? <Check size={iconSize.lg} color={colors.textPrimary} /> : null}
       </Pressable>)}
     </SettingsGroup>
+    {remove ? <SettingsGroup footer={k('removeOwnScope')}>
+      <ActionInfoRow chevron={false} destructive label={k('removeOwn')} accessibilityLabel={k('removeOwn')}
+        disabled={busy} onPress={remove} testID="botGroup.settings.removeOwn" />
+    </SettingsGroup> : null}
     {openCapabilities ? <SettingsGroup footer={k('capabilityScope', { name: member.name })}>
       <ActionInfoRow label={k('capabilitiesRow', { name: member.name })} accessibilityLabel={k('capabilitiesRow', { name: member.name })}
         onPress={openCapabilities} testID="botGroup.settings.capabilities" />

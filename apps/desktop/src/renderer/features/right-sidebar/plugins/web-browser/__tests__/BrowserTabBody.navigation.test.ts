@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createElement, type ReactElement } from 'react';
 import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -214,6 +214,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       true,
+      0,
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
@@ -231,6 +232,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       false,
+      0,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'mock.dropdown.close' }));
@@ -240,6 +242,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       true,
+      0,
     );
   });
 
@@ -832,5 +835,110 @@ describe('BrowserTabBody navigation', () => {
     render(renderBrowserTab('file:///remote/repo/index.html', vi.fn(), true, {}, deviceLinkDeviceId));
 
     expect(vi.mocked(useLocalHtmlAutoReload).mock.lastCall?.[0].enabled).toBe(false);
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：渲染 BrowserTabBody；页面看不见时 guest 输出静音，重新可见时恢复。
+ * - Bug／规则依据：#9308，最小化 Cindy 或切到别的任务后，内置浏览器的声音继续播放。
+ * - 现有覆盖缺口：本文件只覆盖导航与宿主挂载，此前没有任何生产代码调用 setAudioMuted。
+ * - 最小失败输入：可见页签 rerender 成 active=false，或窗口广播 hidden=true。
+ * - tier：unit（jsdom，WebView 用内存 fake）。
+ */
+describe('BrowserTabBody hidden audio', () => {
+  type FakeWebview = WebviewTag & { muted: boolean; attached: boolean };
+  let emitWindowHidden: (hidden: boolean) => void;
+
+  function makeFakeWebview(initial: Partial<{ muted: boolean; attached: boolean }> = {}) {
+    const target = new EventTarget() as unknown as FakeWebview;
+    target.muted = initial.muted ?? false;
+    target.attached = initial.attached ?? true;
+    target.isAudioMuted = () => {
+      if (!target.attached) throw new Error('The WebView must be attached to the DOM');
+      return target.muted;
+    };
+    target.setAudioMuted = (muted: boolean) => {
+      if (!target.attached) throw new Error('The WebView must be attached to the DOM');
+      target.muted = muted;
+    };
+    return target;
+  }
+
+  beforeEach(() => {
+    emitWindowHidden = () => undefined;
+    nativePopupHook.mockReturnValue({
+      ...makeBrowserState({ wrapper: null, webview: null, url: 'about:blank' }),
+      closed: false,
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        onRsbBrowserFocusUrlBar: vi.fn(() => vi.fn()),
+        onRsbBrowserCommand: vi.fn(() => vi.fn()),
+        onWindowHiddenChange: vi.fn((cb: (hidden: boolean) => void) => {
+          emitWindowHidden = cb;
+          return vi.fn();
+        }),
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    browserState = makeBrowserState();
+  });
+
+  it('mutes a page when its tab is no longer shown and restores it without reloading', () => {
+    const webview = makeFakeWebview();
+    browserState = makeBrowserState({ webview });
+    const view = render(renderBrowserTab('https://www.taptap.cn/'));
+    expect(webview.muted).toBe(false);
+
+    // 切到别的页签或别的任务：Shell 把 active 置为 false。
+    view.rerender(renderBrowserTab('https://www.taptap.cn/', vi.fn(), false));
+    expect(webview.muted).toBe(true);
+
+    view.rerender(renderBrowserTab('https://www.taptap.cn/'));
+    expect(webview.muted).toBe(false);
+    expect(browserState.reload).not.toHaveBeenCalled();
+    expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('mutes the visible page while the window is minimized', () => {
+    const webview = makeFakeWebview();
+    browserState = makeBrowserState({ webview });
+    render(renderBrowserTab('https://www.taptap.cn/'));
+
+    act(() => emitWindowHidden(true));
+    expect(webview.muted).toBe(true);
+
+    act(() => emitWindowHidden(false));
+    expect(webview.muted).toBe(false);
+  });
+
+  it('keeps a page that was already muted muted after it is shown again', () => {
+    const webview = makeFakeWebview({ muted: true });
+    browserState = makeBrowserState({ webview });
+    const view = render(renderBrowserTab('https://www.taptap.cn/', vi.fn(), false));
+    expect(webview.muted).toBe(true);
+
+    view.rerender(renderBrowserTab('https://www.taptap.cn/'));
+    expect(webview.muted).toBe(true);
+  });
+
+  it('mutes a hidden page once its guest finishes attaching', () => {
+    const webview = makeFakeWebview({ attached: false });
+    browserState = makeBrowserState({ webview });
+    render(renderBrowserTab('https://www.taptap.cn/', vi.fn(), false));
+    expect(webview.muted).toBe(false);
+
+    webview.attached = true;
+    act(() => {
+      webview.dispatchEvent(new Event('dom-ready'));
+    });
+    expect(webview.muted).toBe(true);
   });
 });

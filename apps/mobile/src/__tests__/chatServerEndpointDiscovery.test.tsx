@@ -89,6 +89,32 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+// Unit regression from native acceptance: the HTTP adapter read a running topic execution,
+// but the real chat hook projected it away before whole-group settings could confirm its stop.
+it('keeps another topic execution in the real group hook for group-wide settings', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts.global })));
+  const startup = await import('@/config/clientEndpointStartup');
+  await startup.runStartupEndpointResolve();
+  const rootId = '00000000-0000-4000-8000-000000000003';
+  const sourceId = '00000000-0000-4000-8000-000000000004';
+  const botId = '00000000-0000-4000-8000-000000000005';
+  const executionId = '00000000-0000-4000-8000-000000000006';
+  const request = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    options.assertCurrent();
+    if (path.endsWith('/snapshot')) return { room, cursor: '2', members: [], messages: [
+      { id: sourceId, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' },
+        createdAt: '2026-10-09', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: 'Request' }] },
+    ] };
+    if (path.endsWith('/executions')) return [{ id: executionId, bot_id: botId, requester_id: self,
+      source_message_id: sourceId, epoch: 1, status: 'running' }];
+    return request(path, options);
+  });
+  hooks = await import('@/chat/useChatServer'); await render();
+  expect(group.state.kind).toBe('ready');
+  expect(group.state.group.round.speakers).toMatchObject([{ botId, executionId, threadRootId: rootId }]);
+});
+
 it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the phone owner identity', async region => {
   vi.stubEnv('EXPO_PUBLIC_CINDY_AUTH_REGION', region);
   vi.stubEnv('EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL', bases[region]);

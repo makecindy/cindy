@@ -2,7 +2,7 @@ import { ID_PATTERN, KEY_PATTERN, type GrantKind } from '@cindy/agent-net-protoc
 import { decodeUtf8, fromBase64Url, toBase64Url, utf8 } from './portableBytes.js';
 
 export interface AgentNetSharingInvitation {
-  v: 2;
+  v: 2 | 3;
   kind: GrantKind;
   invitation: string;
   networkId: string;
@@ -25,7 +25,7 @@ function valid(value: unknown): value is AgentNetSharingInvitation {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const r = value as AgentNetSharingInvitation;
   const id = (v: unknown): v is string => typeof v === 'string' && ID_PATTERN.test(v);
-  return Object.keys(r).length === 8 && r.v === 2 && (r.kind === 'shared-task' || r.kind === 'provider-share')
+  return Object.keys(r).length === 8 && (r.v === 2 || r.v === 3 && typeof r.networkId === 'string' && r.networkId.startsWith('private:')) && (r.kind === 'shared-task' || r.kind === 'provider-share')
     && typeof r.invitation === 'string' && /^[A-Za-z0-9_-]{43}$/.test(r.invitation) && id(r.networkId) && id(r.resourceId)
     && id(r.hostDeviceId) && typeof r.rootPublicKey === 'string' && KEY_PATTERN.test(r.rootPublicKey)
     && /[AEIMQUYcgkosw048]$/.test(r.rootPublicKey) && (r.region === 'cn' || r.region === 'global');

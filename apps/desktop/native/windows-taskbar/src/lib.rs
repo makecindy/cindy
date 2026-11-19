@@ -3,6 +3,7 @@
 //! owned window's light/dark mode, which tints its Windows 11 system backdrop.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+mod deep_link;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -163,6 +164,22 @@ pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bo
         }
         if x == bounds.left && y == bounds.top { return true; }
         SetWindowPos(window, HWND::default(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).is_ok()
+    }
+}
+
+// A privacy mask must disappear from capture, including the area it covers.
+// Electron's content-protected state also accepts WDA_MONITOR (a black area).
+#[napi]
+pub fn exclude_privacy_mask_from_capture(handle: Buffer) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut affinity = 0;
+    unsafe {
+        SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE).is_ok()
+            && GetWindowDisplayAffinity(window, &mut affinity).is_ok()
+            && affinity == WDA_EXCLUDEFROMCAPTURE.0
     }
 }
 

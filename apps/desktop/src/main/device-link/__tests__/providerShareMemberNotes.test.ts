@@ -41,10 +41,10 @@ describe('provider share member notes', () => {
   it('persists notes across store recreation, preserves other members and removes cleared overrides', async () => {
     const first = makeStore();
     const second = makeStore();
-    expect(second.read()).toEqual({});
+    await expect(second.readStrict()).resolves.toEqual({});
     await first.set('m1', 'Alice', assertCurrent);
     await second.set('m2', 'Bob', assertCurrent);
-    expect(makeStore().read()).toEqual({ m1: 'Alice', m2: 'Bob' });
+    await expect(makeStore().readStrict()).resolves.toEqual({ m1: 'Alice', m2: 'Bob' });
     await first.set('m1', '', assertCurrent);
     expect(makeStore().read()).toEqual({ m2: 'Bob' });
   });
@@ -76,11 +76,20 @@ describe('provider share member notes', () => {
     expect(JSON.parse(fs.readFileSync(originalFile, 'utf8')).notes.m1).toBe('Alice');
   });
 
+  it('rejects a strict read that finishes after the account changes', async () => {
+    const store = makeStore();
+    await store.set('m1', 'Alice', assertCurrent);
+    const pending = store.readStrict();
+    owner = 'owner-b';
+    await expect(pending).rejects.toThrow('[PRECONDITION_FAILED] Could not read provider share member notes');
+  });
+
   it('keeps an unreadable file intact and reports a save failure without exposing its contents', async () => {
     fs.mkdirSync(path.dirname(file()), { recursive: true });
     fs.writeFileSync(file(), '{private broken content');
     const store = makeStore();
     expect(store.read()).toEqual({});
+    await expect(store.readStrict()).rejects.toThrow('[PRECONDITION_FAILED] Could not read provider share member notes');
     await expect(store.set('m1', 'Alice', assertCurrent)).rejects.toThrow(
       '[PRECONDITION_FAILED] Could not save provider share member note',
     );

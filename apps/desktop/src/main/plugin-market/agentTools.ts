@@ -1,6 +1,6 @@
 import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import type { PluginMarketService } from './service.js';
-import type { PluginMarketItem } from '../../shared/pluginMarket.js';
+import { type PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { ServerApiError } from '../serverApiClient.desktop.js';
@@ -29,7 +29,8 @@ export interface PluginMarketAgentDeps {
   captureInstall(signal?: AbortSignal): {
     assertCurrent(): void;
     release(): void;
-    consentPrompt: GhostInstallConsentPrompt;
+    ownerGeneration: number;
+    consentPrompt(publisher: string | null): GhostInstallConsentPrompt;
   };
 }
 
@@ -44,6 +45,10 @@ function catalogItem(item: PluginMarketItem, installed: InstalledState) {
     availability: installed.exists ? installed.errorCode ?? 'available' : 'not-installed',
   };
 }
+
+// All task adapters on this Host share pending offers. A second caller never
+// borrows the first task's decision or repeats its mutation.
+const pendingInstalls = new Set<string>();
 
 /** Narrow Agent adapter: live catalog discovery and first install, with no credential projection. */
 export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
@@ -69,6 +74,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
       };
     },
     async install(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
+      let claimedInstall: string | undefined;
       let release: (() => void) | undefined;
       try {
         const authority = deps.captureInstall(signal);
@@ -85,6 +91,13 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           plugin: catalogItem(detail, installed),
           ghost_id: detail.ghostId,
         };
+        const key = JSON.stringify([authority.ownerGeneration, detail.pluginId, detail.releaseId]);
+        if (pendingInstalls.has(key)) return {
+          ok: false, errorCode: 'INSTALL_IN_PROGRESS',
+          message: 'This release already has an installation in progress on this computer. Do not open another confirmation. Check ghost_info before continuing the unfinished step.',
+        };
+        pendingInstalls.add(key);
+        claimedInstall = key;
         // Recheck at the service's final commit boundary, including concurrent local imports.
         const assertCurrent = () => {
           authority.assertCurrent();
@@ -100,7 +113,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             expectedManifest: detail.manifest,
             allowSourceReplacement: false,
           },
-          { consent: { prompt: authority.consentPrompt, initiator: 'agent' }, assertCurrent },
+          { consent: { prompt: authority.consentPrompt(detail.author), initiator: 'agent' }, assertCurrent },
         );
         // Once committed, cancellation cannot turn the durable installation
         // into a failure. The live check runs at package placement instead.
@@ -139,7 +152,10 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           ok: false, errorCode: isIpcError(error) ? error.code : 'INSTALL_UNAVAILABLE',
           message: 'Installation was not confirmed. Inspect the selected plugin before retrying; do not claim an account connection or completed work.',
         };
-      } finally { release?.(); }
+      } finally {
+        if (claimedInstall) pendingInstalls.delete(claimedInstall);
+        release?.();
+      }
     },
   };
 }

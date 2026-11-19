@@ -33,11 +33,39 @@ export function projectGhostAgentModels(views: ProviderView[], availableAgents: 
           providerName: provider.name,
           efforts: [...model.efforts],
           defaultEffort: model.defaultEffort,
+          // Optional catalog display data (non-personal, same as the picker); omitted when absent.
+          ...(typeof model.icon === 'string' && model.icon ? { icon: model.icon } : {}),
+          ...(typeof model.group === 'string' && model.group ? { group: model.group } : {}),
+          ...(Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+          supportsFastMode: model.supportsFastMode === true,
+          ...(model.supportsUltrafastMode === true ? { supportsUltrafastMode: true as const } : {}),
+          ...displayNames(model.effortDisplayNames),
+          ...(typeof provider.logoKind === 'string' ? { logoKind: provider.logoKind } : {}),
         });
       }
     }
   }
   return { ok: true, models };
+}
+
+function displayNames(value: Partial<Record<string, string>> | undefined): { effortDisplayNames?: Record<string, string> } {
+  const entries = Object.entries(value ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0);
+  return entries.length ? { effortDisplayNames: Object.fromEntries(entries) } : {};
+}
+
+/** Adds the picker's localized description (by model id and group) without touching cached projections. */
+export function withGhostModelDescriptions(
+  result: GhostAgentModelsResult,
+  describe: (model: { id: string; group?: string }) => string | undefined,
+): GhostAgentModelsResult {
+  if (!result.ok) return result;
+  return {
+    ...result,
+    models: result.models.map((model) => {
+      const description = describe({ id: model.id, ...(model.group ? { group: model.group } : {}) });
+      return description ? { ...model, description } : model;
+    }),
+  };
 }
 
 /** Plugin GET /agent-models caches successful locations and per-device catalogs for 60s. */

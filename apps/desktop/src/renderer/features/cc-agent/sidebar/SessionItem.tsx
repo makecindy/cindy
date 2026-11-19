@@ -1,3 +1,6 @@
+import { ResolvedProjectIcon } from './ResolvedProjectIcon';
+import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { SessionSnoozeAction, useSessionSnooze } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -34,7 +37,7 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { Archive, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
+import { Archive, Check, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
@@ -61,7 +64,7 @@ import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
 import { useTaskInfoWorktree } from './sessionWorktreeInfo';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
-import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { useScrollActiveRowIntoView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
   canHighlightSessionDisplayTitle,
@@ -254,6 +257,7 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 }
 
 export interface SessionItemProps {
+  inboxMode?: boolean;
   /** Shared guests retain navigation and the leave-sharing menu, without owner actions or selection. */
   navigationOnly?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
@@ -271,7 +275,7 @@ export interface SessionItemProps {
   onClick: SessionClickHandler;
   onAction: (
     sessionId: string,
-    action: 'delete' | 'archive' | 'archive-now' | 'unarchive',
+    action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive',
     sharedTaskId?: string,
   ) => void;
   onRename: (sessionId: string, newTitle: string) => void;
@@ -329,6 +333,7 @@ export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): 
  */
 export const SessionItem = withSidebarNavigation<SessionItemProps>(function SessionItem({
   navigate,
+  inboxMode = false,
   session,
   isActive,
   isRunning,
@@ -349,6 +354,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const followers = useSessionFollowers(session);
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
@@ -368,6 +374,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const snoozeAction = useSessionSnooze(session);
   const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
@@ -463,7 +470,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
   const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
-  const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;
+  // The inbox drops the automation mark and the project name: the row's project icon already
+  // says where it belongs (2026-11-18 user decision).
+  const hasAutomationMeta = !inboxMode && (boundSchedules.length > 0 || isAutomationGenerated);
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
   //   1. 门控 Run 按钮的可见性 —— schedule 已被删除但会话保留(disposition
@@ -679,12 +688,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
 
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
-  useEffect(() => {
-    if (isActive && !navigationOnly) scrollIntoNearestView(rowRef.current);
   // navigationOnly is fixed for the lifetime of a mounted row; shared role switches
   // unmount the old list, so the active-session scroll contract stays isActive-only.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
+  useScrollActiveRowIntoView(rowRef, isActive, { navigationOnly, inboxMode });
 
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
   // 监听（点击不在 confirm 胶囊上就立刻撤回）。退出 pending → 全部清理。这两条退路确保
@@ -848,7 +854,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
+  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked;
+  const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
+    !inboxMode &&
     isAutomationGenerated &&
     !insideAutomationGroup &&
     !isArchived &&
@@ -872,17 +881,28 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <Play size={14} strokeWidth={2} />
         </SessionAction>
       )}
-      <SessionAction
-        label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          prefetchRemovalPreflight();
-          setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-        }}
-        isActive={isActive}
-      >
-        <EllipsisVertical size={14} strokeWidth={2} />
-      </SessionAction>
+      {inboxMode ? (
+        canSnooze && (
+          <SessionSnoozeAction
+            action={snoozeAction}
+            session={session}
+            isActive={isActive}
+            onOpenChange={setSnoozeOpen}
+          />
+        )
+      ) : (
+        <SessionAction
+          label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            prefetchRemovalPreflight();
+            setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+          }}
+          isActive={isActive}
+        >
+          <EllipsisVertical size={14} strokeWidth={2} />
+        </SessionAction>
+      )}
       {isArchived && !remoteWritesBlocked ? (
         <SessionAction
           label={t('ccAgent.sidebar.sessionMenu.unarchive')}
@@ -890,6 +910,20 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           isActive={isActive}
         >
           <Undo size={14} strokeWidth={2} />
+        </SessionAction>
+      ) : canQuickArchive && inboxMode ? (
+        // 收件箱：「完成」单击生效；鼠标悬停在完成按钮上时排列冻结（TaskInbox），不会点到跳动的行。
+        // 未提交改动的确认仍保留，见 handleActionClick。
+        <SessionAction
+          inboxComplete
+          label={t('ccAgent.sidebar.inbox.complete')}
+          onClick={() => {
+            prefetchRemovalPreflight();
+            onAction(session.id, 'complete');
+          }}
+          isActive={isActive}
+        >
+          <Check size={14} strokeWidth={2} />
         </SessionAction>
       ) : canQuickArchive ? (
         <SessionAction
@@ -1010,8 +1044,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           保证两处完全一致。
           外包 15px 定宽槽:状态图标本体 12px,槽宽与顶部导航/文件夹图标(15)一致,
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
-      <span className="flex w-[15px] shrink-0 items-center justify-center">
+      <span className={cn("flex shrink-0 items-center justify-center", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
+          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
+            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+              remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+              name={sourceLabel} size={18} />
+          ) : undefined}
           session={session}
           isRunning={leftIconRunning}
           isAttached={isAttached}
@@ -1064,7 +1103,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
-          {boundSchedules.length > 0 ? (
+          {!hasAutomationMeta ? null : boundSchedules.length > 0 ? (
             <ScheduleBindingBadge
               schedules={boundSchedules}
               deviceLinkDeviceId={session.deviceLinkDeviceId}
@@ -1095,17 +1134,23 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           )}
           {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
-          {sourceLabel ? (
+          {sourceLabel && !inboxMode ? (
             <span
               title={sourceLabel}
+              data-project-source
               className={cn(
-                'min-w-0 truncate text-xs font-normal',
+                'inline-flex min-w-0 items-center gap-1 text-xs font-normal',
                 isActive
                   ? 'text-sidebar-item-active-foreground/70'
                   : 'text-[var(--cmd-palette-item-meta)]',
               )}
             >
-              {sourceLabel}
+              {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+                <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
+                  remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+                  name={sourceLabel} size={14} />
+              )}
+              <span className="truncate">{sourceLabel}</span>
             </span>
           ) : null}
         </span>
@@ -1135,7 +1180,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 'transition-opacity duration-[120ms]',
                 !navigationOnly && !archivePending &&
                   'group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-                menuPos !== null && 'opacity-0 w-0 overflow-hidden',
+                actionsOpen && 'opacity-0 w-0 overflow-hidden',
                 archivePending && 'opacity-0 w-0 overflow-hidden',
                 // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
                 ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
@@ -1202,7 +1247,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
               尺寸/视觉与 Project Header 的 ProjectAction 同套（size-5 / icon 14 /
               strokeWidth 2 / gap-0.5）；普通行 hover 走 sidebar-item-hover，选中行
               则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。
-              组装顺序固定为 [Run(automation only), More, Archive | Undo]：
+              普通模式为 [Run(automation only), More, Archive | Undo]；收件箱用稍后处理替换 More，
+              不再显示 Run，其他操作仍可从右键菜单进入：
                 - 非 archived：More + Archive；Archive pill 撤回(超时/点外面)后
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
@@ -1214,13 +1260,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   aria-hidden
                   className={cn(
                     'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
-                    menuPos !== null
+                    actionsOpen
                       ? 'flex'
                       : 'hidden group-hover:flex group-focus-within/slot:flex',
                   )}
                 >
                   {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
-                  <span className="size-5 shrink-0" />
+                  {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
                   {isArchived && !remoteWritesBlocked ? (
                     <span className="size-5 shrink-0" />
                   ) : canQuickArchive ? (
@@ -1230,7 +1276,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 <div
                   className={cn(
                     'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                    menuPos !== null
+                    actionsOpen
                       ? 'opacity-100'
                       : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
                   )}
@@ -1283,6 +1329,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
+            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => rowRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}
@@ -1329,15 +1376,17 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
 });
 
 /** SessionItem 右侧 hover action 图标按钮 —— 尺寸/视觉与 Project Header 的
- *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 圆角 md /
+ *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 标准按钮圆角 /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
  *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
+  inboxComplete,
   label,
   onClick,
   isActive,
   children,
 }: {
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   isActive: boolean;
@@ -1345,8 +1394,10 @@ function SessionAction({
 }) {
   return (
     <Tip text={label}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        tone="quiet"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
@@ -1355,15 +1406,15 @@ function SessionAction({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 p-0 flex items-center justify-center',
           'focus:outline-none',
           isActive
-            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-            : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+            : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
         )}
       >
         {children}
-      </button>
+      </Button>
     </Tip>
   );
 }

@@ -28,6 +28,8 @@ import type { RemoteAgentKind } from '@cindy/device-link';
 
 import { isSkillDisabled } from '@cindy/maker-core';
 
+import { codexHomeDir as resolveCodexHomeDir } from '../../../shared/codexHome.js';
+
 import { isShareCredentialPath } from '../credentials';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
 import {
@@ -275,9 +277,9 @@ export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, home = os.
   return env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(home, '.claude');
 }
 
-/** 本机 Codex 的主目录(CODEX_HOME，默认 ~/.codex)。 */
+/** 本机 Codex 的主目录(CODEX_HOME，默认 ~/.codex)。判据集中在 shared/codexHome.ts。 */
 export function codexHomeDir(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string {
-  return env.CODEX_HOME && path.isAbsolute(env.CODEX_HOME) ? env.CODEX_HOME : path.join(home, '.codex');
+  return resolveCodexHomeDir(env, home);
 }
 
 const PERSONAL_CLAUDE_DIRECTORIES = ['skills', 'agents', 'commands', 'rules'] as const;

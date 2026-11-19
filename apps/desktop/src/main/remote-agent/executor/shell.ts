@@ -86,7 +86,8 @@ export function resolveExecutorShell(): ExecutorShell {
       file: process.env.ComSpec || 'cmd.exe',
       dialect: 'cmd',
       scriptName: 'script.cmd',
-      args: ['/d', '/s', '/c', 'script.cmd'],
+      // Do not depend on cwd executable search (disabled by NoDefaultCurrentDirectoryInExePath).
+      args: ['/d', '/s', '/c', '.\\script.cmd'],
     };
   }
   const preferred = process.env.SHELL;
@@ -202,6 +203,14 @@ export function runOnce(script: string, opts: RunOptions): Promise<RunResult> {
         file = await writeScriptFile(os.tmpdir(), shell, opts.cwd, script);
       } catch (error) {
         reject(error);
+        return;
+      }
+      // Cancellation can arrive during asynchronous filesystem preparation,
+      // before a child exists and before its abort listener is installed.
+      if (opts.signal?.aborted) {
+        try { await file.cleanup(); }
+        catch (error) { reject(error); return; }
+        resolve({ output: Buffer.alloc(0), exitCode: null, timedOut: false, aborted: true });
         return;
       }
       let child: ChildProcess;

@@ -8,12 +8,17 @@ review 的完整口径见 `docs/dev-rules/development-workflow.md` §3，本文�
 
 本仓的规则是正本，不要凭通用最佳实践判断对错：
 
-- `AGENTS.md` —— 规则索引与触发条件，先看它决定该读哪几份。
+- `AGENTS.md` —— 全局约束、红线与各模块入口。
+- `docs/dev-rules/rule-index.md` —— 规则索引：每份规则的读取时机与适用路径，由各规则文档
+  开头的声明生成。
 - `docs/dev-rules/` —— 工程规则；`docs/product-rules/` —— 产品行为规则；
   `docs/design-rules/DESIGN.md` —— 权威视觉规范。
 - `.github/PULL_REQUEST_TEMPLATE.md` —— 风险分类的口径。
 
-diff 命中哪个模块，就读 `AGENTS.md` 索引里对应那条指向的规则文件，再评审。
+拿 diff 改到的每个路径去规则索引「适用路径」一表里比对，命中的规则都要读；判定为「主题」
+的规则不能由路径判定，按它写的读取时机判断这次改动是否相关。读完再评审。评审环境不能运行脚本
+（第 5 节），所以直接读索引文件；能运行时 `node scripts/rule-index.mjs for <路径…>` 给出
+同一结果。
 
 ## 2. 严重度映射
 

@@ -45,6 +45,7 @@ import {
   buildRemoteCreateSessionOptions,
   normalizeCreateSessionResult,
   resolveStartedDowngradeOrCommit,
+  resolveNewSessionSkillDraft,
   sessionFromCreateResult,
   type NewSessionDraft,
 } from '@/session/newSession';
@@ -308,6 +309,7 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
       ...draft,
       attachments: params.attachments,
     }),
+    ...(params.precreatedWorktree ? { projectDir: params.precreatedWorktree.originalWorkingDir } : {}),
     pendingLocalCreation: true,
   };
 }
@@ -996,7 +998,7 @@ async function createSessionIdempotent(
   // 状态(UI 快照保持提交时语义)。precreated 分支在 persist started 后重验并
   // 重建(见下),其余路径直接使用本初值。
   let createOpts = {
-    ...buildRemoteCreateSessionOptions(effectiveDraft),
+    ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
   };
 
@@ -1073,7 +1075,7 @@ async function createSessionIdempotent(
         if (patch) {
           effectiveDraft = { ...effectiveDraft, ...patch };
           createOpts = {
-            ...buildRemoteCreateSessionOptions(effectiveDraft),
+            ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
             id: task.sessionId,
           };
         }
@@ -1312,7 +1314,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
     phase('creating');
-    const createOutcome = await createSessionIdempotent(task, finalDraft);
+    // The durable outbox resolves when preparing delivery, including cold recovery.
+    // Direct enqueue resolves after openLink, before creating any host session.
+    const creationDraft = params.transport.handoffFirstMessage ? finalDraft
+      : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
+    assertTaskOwnerCurrent(task);
+    const createOutcome = await createSessionIdempotent(task, creationDraft);
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
@@ -1394,6 +1401,16 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 已删除来源。
     if (!freshSession && (draftPatch !== null || effectiveFinalDraft !== finalDraft)) {
       remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, sessionForQueue);
+    }
+    if (!freshSession) {
+      // createSession 已成功：电脑上建好的是本机发起的普通任务。弱网下没拿到权威行时，
+      // 乐观行也要带上已确认的来源；否则管线收口后任务入口查不到来源，会把正在看的
+      // 会话页切成「正在读取任务」。镜像已带来源时以镜像为准。
+      const row = remoteSessionStore.getSessions()
+        .find((session) => session.id === sessionId && session.deviceLinkDeviceId === params.deviceId);
+      if (row && row.source === undefined) {
+        remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { source: null });
+      }
     }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,

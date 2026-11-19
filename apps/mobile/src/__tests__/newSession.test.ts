@@ -1,4 +1,5 @@
 import { reconcileNewSessionCatalogDraft, reconcileNewSessionSubmitDraft, revalidateNewSessionDraftAfterAuth, restoreNewSessionFastPreference } from '@/session/newSessionRuntimeReconciliation';
+import { buildComposerPaletteCacheKey } from '@/session/composerPaletteCache';
 import { newSessionDraft } from './fixtures/newSession';
 import { modelNeedsReselection } from '../session/modelReselection';
 import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
@@ -23,6 +24,7 @@ import {
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   applyRemoteAgentPick,
+  resolveNewSessionSkillDraft,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
@@ -76,6 +78,44 @@ const newSessionSources = [
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+// Unit regression: catalog refresh/submit used to replace a chosen account when
+// its offer disappeared. Default-selection tests do not protect an existing draft.
+describe('new task draft retains its selected provider', () => {
+  const model = { id: 'gpt-6-sol', name: 'GPT', contextWindow: 100_000, efforts: [], defaultEffort: null };
+  const openai: ProviderModelRow['provider'] = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+    source: 'builtin', auth: { method: 'oauth' }, models: { codex: [model] },
+    routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+  };
+  const rows: ProviderModelRow[] = [{ provider: openai,
+    model: { ...model, displayName: 'GPT', contextWindow: 100_000 } }];
+  const fresh = { providers: [openai] } as DeviceProvidersPayload;
+  const draft = newSessionDraft({ agentKind: 'codex', model: model.id, providerId: 'xd' });
+  const guard = { rows, providers: fresh.providers, catalogKnown: true, genAt: 0 };
+
+  it('keeps the draft identity when only another account offers the same model', () => {
+    expect(reconcileNewSessionCatalogDraft(draft, rows, fresh)).toBe(draft);
+    expect(draft.providerId).toBe('xd');
+  });
+
+  it.each(['submit', 'after-auth'] as const)('%s refuses the unavailable selected account', entry => {
+    const run = () => entry === 'submit'
+      ? reconcileNewSessionSubmitDraft(draft, guard, () => false, key => key)
+      : revalidateNewSessionDraftAfterAuth(draft, fresh, () => false, key => key);
+    expect(run).toThrow('session.common.modelUnavailableReselect');
+    expect(draft.providerId).toBe('xd');
+  });
+
+  it('retains an explicit choice while the catalog is unknown', () => {
+    expect(reconcileNewSessionSubmitDraft(draft, { ...guard, catalogKnown: false }, () => false, key => key))
+      .toMatchObject({ model: model.id, providerId: 'xd' });
+  });
+
+  it('still resolves an intentionally default-source draft', () => {
+    expect(reconcileNewSessionSubmitDraft({ ...draft, providerId: null }, guard, () => false, key => key))
+      .toMatchObject({ model: model.id, providerId: 'openai' });
+  });
 });
 
 function modelRow(
@@ -572,9 +612,9 @@ describe('isNewSessionRuntimePending', () => {
     const draft = newSessionDraft({ agentKind: 'codex', model: 'delisted-model', providerId: 'gone' });
     expect(() => reconcileNewSessionSubmitDraft(draft, {
       rows: [], providers: [], catalogKnown: true, genAt: 0,
-    }, () => false, key => key)).toThrow('delisted-model');
+    }, () => false, key => key)).toThrow('session.common.modelUnavailableReselect');
     expect(() => revalidateNewSessionDraftAfterAuth(draft, { providers: [] }, () => false, key => key))
-      .toThrow('delisted-model');
+      .toThrow('session.common.modelUnavailableReselect');
   });
 });
 
@@ -2077,6 +2117,26 @@ describe('new session model', () => {
 });
 
 describe('new session composer surface', () => {
+  it('uses the destination skill name after switching a Pi draft to Claude', async () => {
+    const draft = newSessionDraft({ agentKind: 'pi', workspaceKind: 'dialogue', firstMessage: '/foo review',
+      selectedSkill: { name: 'foo', invocation: 'skill:foo', context: buildComposerPaletteCacheKey('pc', 'pi', '') } });
+    const maker = { listAgentSkills: vi.fn().mockResolvedValue({ success: true,
+      skills: [{ kind: 'agent-skill', name: 'foo', source: 'skill' }] }) };
+    const pi = await resolveNewSessionSkillDraft(draft, 'pc', maker);
+    expect(pi.firstMessage).toBe('/skill:foo review');
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    for (const form of [draft, pi]) {
+      const claude = await resolveNewSessionSkillDraft({ ...form, agentKind: 'claude-code' }, 'pc', maker);
+      expect(claude.firstMessage).toBe('/foo review');
+    }
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('claude-code', {});
+    maker.listAgentSkills.mockResolvedValueOnce({ success: true, skills: [
+      { kind: 'agent-skill', name: 'foo', runtimeCommandName: 'toolkit:foo' },
+    ] });
+    const qualified = await resolveNewSessionSkillDraft({ ...draft, agentKind: 'claude-code' }, 'pc', maker);
+    expect(qualified.firstMessage).toBe('/toolkit:foo review');
+  });
+
   // The native caret may echo before a render; these screen-only callbacks must
   // publish text first. Restored text/caret behavior runs through newSessionForm
   // in newSessionDraftRecovery.test.ts and newSessionIncomingShare.test.ts.
@@ -2089,10 +2149,11 @@ describe('new session composer surface', () => {
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
 
-    for (const source of [slashSource, atSource]) {
+    for (const [source, update] of [[slashSource, 'patchDraft({'], [atSource, 'setFirstMessageDraft(next)']]) {
       expect(source).toContain('const current = firstMessageRef.current;');
       expect(source).toContain('const selection = { start: next.length, end: next.length };');
-      expect(source.indexOf('setFirstMessageDraft(next)')).toBeLessThan(
+      expect(source).toContain(update);
+      expect(source.indexOf(update)).toBeLessThan(
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
@@ -2340,18 +2401,19 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource).not.toContain('return false;\n            }\n          },\n          shouldDefer:');
   });
 
-  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 60s)', async () => {
+  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 300s)', async () => {
     // 2026-07-29 与 main 合并后,移动端逐通道超时统一走 invokeTimeouts 的
     // resolveMobileInvokeTimeoutMs(mobile 专属表 → 协议契约表 INVOKE_TIMEOUT_OVERRIDES_MS
-    // 兜底),worktree:create 的 60s 预算经协议表兜底生效——两层缺一都会让
-    // 被控端建完 worktree 而控制端已超时放弃。
+    // 兜底),worktree:create 的预算经协议表兜底生效——两层缺一都会让
+    // 被控端建完 worktree 而控制端已超时放弃。2026-11-16 起为 300s:使用 Multibox 的仓库
+    // 同步克隆整个工作区,实测 67–88s。
     const contextSource = readTextLf(
       resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'),
       'utf8',
     );
     expect(contextSource).toContain('resolveMobileInvokeTimeoutMs(channel, args)');
     const { resolveMobileInvokeTimeoutMs } = await import('@/device-link/invokeTimeouts');
-    expect(resolveMobileInvokeTimeoutMs('worktree:create')).toBe(60_000);
+    expect(resolveMobileInvokeTimeoutMs('worktree:create')).toBe(300_000);
   });
 });
 

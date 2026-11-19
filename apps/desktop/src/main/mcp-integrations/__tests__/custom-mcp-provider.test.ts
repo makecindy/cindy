@@ -170,3 +170,9 @@ describe('CustomMcpProvider', () => {
     expect(Object.keys(dash)[0]).not.toBe(Object.keys(under)[0]);
   });
 });
+
+// Shared Desktop/Node Host provider: only the user's configured display name
+// enters card generation; the transport ID remains private and unchanged.
+it('carries the configured display name into the App server snapshot', () => {
+  expect(make({ name: 'Team reports', id: 'private-slug' }).appServerConfig()).toMatchObject({ name: 'Team reports', id: 'private-slug' });
+});

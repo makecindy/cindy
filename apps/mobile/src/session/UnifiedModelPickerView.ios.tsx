@@ -27,6 +27,7 @@ import {
   autocorrectionDisabled,
   textInputAutocapitalization,
   lineLimit,
+  id,
 } from "@expo/ui/swift-ui/modifiers";
 import {
   Check,
@@ -193,10 +194,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           {group.rows.map((row) => (
             <ComposerNativeRow
               key={row.key}
+              modifiers={[id(`${group.key}:${row.key}`)]}
               title={row.entry.displayName}
               subtitle={[
                 mobileAgentLabel(row.config.agent),
                 row.subtitle,
+                row.sourceUnavailableReason,
                 row.quotaLabel,
               ]
                 .filter(Boolean)
@@ -254,6 +257,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   >
                     {row.subtitle}
                   </Text>
+                  {row.sourceUnavailableReason ? (
+                    <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                      {row.sourceUnavailableReason}
+                    </Text>
+                  ) : null}
                   {row.quotaLabel ? (
                     <Text
                       modifiers={[
@@ -312,7 +320,17 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <ComposerNativeRow
       key={item.id}
       title={item.remote?.providerLabel ?? item.label}
-      subtitle={item.quota?.label}
+      subtitle={[item.quota?.label, item.sourceUnavailableReason].filter(Boolean).join(" · ")}
+      subtitleContent={item.sourceUnavailableReason ? (
+        <VStack alignment="leading" spacing={2}>
+          {item.quota?.label ? (
+            <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>{item.quota.label}</Text>
+          ) : null}
+          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+            {item.sourceUnavailableReason}
+          </Text>
+        </VStack>
+      ) : undefined}
       testID={`${p.testID}.source.${item.id}`}
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
@@ -373,6 +391,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         active: !options && !page,
         header: listHeader,
         content: listContent,
+        initialScrollTargetId: p.groups.flatMap(group =>
+          group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+        )[0],
       }}
     >
       {p.error ? (

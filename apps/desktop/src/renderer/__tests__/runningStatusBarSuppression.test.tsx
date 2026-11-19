@@ -17,7 +17,10 @@ import {
   resolveRunningUsageMeta,
 } from '@/features/cc-agent/lib/runningTokenUsage';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({
+  t: (key: string, values?: { rate?: string; tokens?: string }) =>
+    [key, values?.rate ?? values?.tokens].filter(Boolean).join(' '),
+}) }));
 
 // Execute the actual status bar without loading the entire session view's IPC/store graph.
 const source = readFileSync(
@@ -35,7 +38,7 @@ const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'RunningStatusBar',
 );
 if (!component) throw new Error('RunningStatusBar not found');
-const compiled = ts.transpileModule(component.getText(ast), {
+const compiled = ts.transpileModule(component.getText(ast).replace(/^export\s+/, ''), {
   compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const Icon = () => null;
@@ -60,6 +63,7 @@ const deps = {
   STATUS_BAR_FADE_MS: 400,
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
+  useTurnElapsed: vi.fn<() => number | null>(() => 1000),
   formatRecentOutputTokenRate,
   formatRunningTokenCount,
   resolveRunningUsageMeta,
@@ -71,6 +75,9 @@ const RunningStatusBar = new Function(
 )(deps) as React.ComponentType<{
   visible: boolean;
   suppressContent?: boolean;
+  preparing?: boolean;
+  backgroundTasksRunning?: boolean;
+  onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
   status: string;
   reconnectStatus?: string | null;
@@ -86,10 +93,24 @@ const RunningStatusBar = new Function(
     elapsedMs: number;
     streaming: boolean;
     peak?: number;
+    totalOutputTokens?: number;
   };
 }>;
 
 afterEach(cleanup);
+
+it('keeps background stop available during remote preparation without displaying old metrics', () => {
+  const stop = vi.fn();
+  const props = { visible: true, preparing: true, status: 'Waiting for remote response',
+    startedAt: 1, tokenUsage: 1234, outputTokens: 1234, generationDurationMs: 1000 };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} backgroundTasksRunning onStopBackgroundTasks={stop} />);
+  fireEvent.click(screen.getByRole('button', { name: 'chat.backgroundActivity.stopAll' }));
+  expect(stop).toHaveBeenCalledOnce();
+  expect(container.querySelector('[data-running-status-meta]')?.textContent).not.toContain('1234');
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
 it.each([false, true])('reconnect hides stale speed and pinned history, then waits for fresh samples (pinned=%s)', (pinned) => {
   const props = {
@@ -188,11 +209,12 @@ it('paused token speed hides the current rate but keeps average and peak', () =>
   // A tool call pauses generation: the cached live rate (fresh for 60s) must not
   // be shown as a current speed, while average and peak still describe the turn.
   rerender(
-    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average }} />,
+    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average, totalOutputTokens: 5_300 }} />,
   );
   expect(trigger()?.textContent).not.toContain('tokenRate');
   expect(currentRate()?.textContent).toContain('—');
-  expect(value('chat.runningStatus.averageRate')?.textContent).not.toContain('—');
+  expect(value('chat.runningStatus.averageRate')?.textContent).toContain('100');
+  expect(value('chat.runningStatus.outputTotal')?.textContent).toContain('5.3k');
   expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
 
   // Streaming resumes: the live reading is back.
@@ -249,4 +271,65 @@ it.each([
   />);
   expect(screen.getByText(statusKey)).toBeTruthy();
   expect(container.querySelector('.status-bar-shimmer') !== null).toBe(shimmers);
+});
+
+it('shows streamed token count while tokenSpeed is warming up with rate 0', () => {
+  const { container, rerender } = render(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 0, average: 60, tokens: 120, elapsedMs: 2_000, streaming: true }}
+    />,
+  );
+  const trigger = () => container.querySelector('[data-running-status-meta] button');
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenCount');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
+
+  rerender(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 85, average: 70, tokens: 210, elapsedMs: 3_000, streaming: true, peak: 85 }}
+    />,
+  );
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+
+  // After a tool call starts a new request within the same turn, streaming=true & rate=0 falls back to tokenCount.
+  rerender(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 0, average: 70, tokens: 230, elapsedMs: 3_400, streaming: true, peak: 85 }}
+    />,
+  );
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenCount');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
+});
+
+it('shows tokens alone until the executing device supplies elapsed time', () => {
+  deps.useTurnElapsed.mockReturnValue(null);
+  try {
+    const { container } = render(<RunningStatusBar visible status="Thinking" startedAt={1}
+      tokenUsage={1000} outputTokens={100} generationDurationMs={5000} />);
+    const meta = container.querySelector('[data-running-status-meta]')!;
+    expect(meta.textContent).toContain('tokenCount');
+    expect(meta.textContent).not.toMatch(/·|0s/);
+  } finally {
+    deps.useTurnElapsed.mockReturnValue(1000);
+  }
 });

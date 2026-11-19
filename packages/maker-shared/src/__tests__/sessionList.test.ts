@@ -1223,3 +1223,32 @@ describe('trim whitespace before grouping', () => {
     expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
   });
 });
+
+// Unit: existing group lanes retain their own cwd but belong to the buddy project on phones.
+// Covers the zero-message failure path absent from ordinary project fixtures.
+it('groups companion lanes by owner project even when execution is dialogue-only', () => {
+  const lane = session('old-group', { source: 'bot', workspaceKind: 'dialogue', workingDir: '/isolated/chat',
+    companion: { taskProjectDir: '/buddy/workspace' }, _count: { messages: 0 } });
+  const sections = buildRemoteSessionSections([lane], Date.now());
+  expect(sections.map(s => s.key)).toEqual(['project:/buddy/workspace']);
+  expect(sections[0].data[0].session.workingDir).toBe('/isolated/chat');
+});
+
+it('derives an active follow-up from active current targets, independently of the latest run', () => {
+  const bound = schedule('active', { targetSessionId: 's1' });
+  // 2026-11-18 user decision: any active automation bound to the task counts, not only PR follow-ups.
+  expect(buildSessionScheduleIndex([schedule('routine', { targetSessionId: 's1' })], new Map()).get('s1')?.hasActiveFollowUp).toBe(true);
+  const stopped = schedule('paused', { targetSessionId: 's1', status: 'paused' });
+  const runs = new Map([
+    ['paused', [run('latest', 'paused')]],
+    ['historical', [run('old', 'historical', { sessionId: 'old-task' })]],
+  ]);
+  const index = buildSessionScheduleIndex([bound, stopped, schedule('historical')], runs);
+  expect(index.get('s1')).toMatchObject({ running: false, scheduleStatus: 'paused', hasActiveFollowUp: true });
+  expect(index.get('old-task')?.hasActiveFollowUp).toBe(false);
+  expect(buildSessionScheduleIndex([stopped], runs).get('s1')?.hasActiveFollowUp).toBe(false);
+  expect(buildSessionScheduleIndex([{ ...bound, status: 'expired' }, stopped], runs).get('s1')?.hasActiveFollowUp).toBe(false);
+  const retargeted = buildSessionScheduleIndex([{ ...bound, targetSessionId: 'new-task' }, stopped], runs);
+  expect(retargeted.get('s1')?.hasActiveFollowUp).toBe(false);
+  expect(retargeted.get('new-task')).toMatchObject({ hasActiveFollowUp: true, running: false, latestRunAt: 0 });
+});

@@ -21,7 +21,7 @@ describe('Bot named worker transactions', () => {
         scheduled_model_baseline TEXT,
         sdk_session_id TEXT, total_token_usage INTEGER NOT NULL, total_cost_usd REAL NOT NULL,
         context_tokens INTEGER NOT NULL, context_window INTEGER NOT NULL, fast_mode INTEGER NOT NULL,
-        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, user_send_at INTEGER,
+        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, user_send_at INTEGER,
         agent_kind TEXT NOT NULL, orca_role TEXT, parent_session_id TEXT, forked_at_message_id TEXT,
         worktree_path TEXT, extra_dirs TEXT NOT NULL, remote_host_id TEXT, provider_id TEXT, agent_device_id TEXT,
         source TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -348,6 +348,22 @@ describe('Bot named worker transactions', () => {
       .toThrow('inactiveCindyIds');
   });
 
+  // #6578: a confirmed cloud deletion releases the name, without deleting the local identity/history.
+  // Existing archive coverage bypassed the cloud-copy transaction; this is the smallest worker/db input.
+  it('retires a cloud copy without deleting its profile version, and releases its name', () => {
+    const args = { id: 'old', displayName: 'Mia', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Identity', capabilitiesJson: '{}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 2 } })).toEqual({ changed: true });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 3 } })).toEqual({ changed: false });
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'new' } });
+    expect(db.prepare('SELECT id,status FROM bot_profiles ORDER BY id').all()).toEqual([
+      { id: 'new', status: 'active' }, { id: 'old', status: 'archived' },
+    ]);
+    expect(db.prepare('SELECT identity_source FROM bot_profile_versions WHERE bot_id=?').get('old')).toEqual({ identity_source: 'Identity' });
+    db.prepare("UPDATE bot_profiles SET status='deleting' WHERE id='new'").run();
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'new', at: 4 } })).toEqual({ changed: false });
+  });
+
   it('atomically rejects duplicate names and a second Cindy without touching the first profile', () => {
     const args = { id: 'first', displayName: 'Renamed', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Custom identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
     tx(db, { name: 'bots.createProfile', args });
@@ -545,7 +561,7 @@ describe('Bot named worker transactions', () => {
       ['routine', 'routine'], ['second-routine', 'routine']]) {
       db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, status,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-        plan_mode_enabled, cleared_at, pinned_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
         worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id);
       db.prepare('INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, created_at, archived_at) VALUES (?, ?, ?, 1, ?, 1, ?)')
         .run(id, 'bot-1', id, role, role === 'history' ? 1 : null);

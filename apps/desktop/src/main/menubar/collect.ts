@@ -1,4 +1,6 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
+import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
 import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
 /**
@@ -22,7 +24,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
-import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -78,7 +80,7 @@ export interface MenubarCollectDeps {
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   /** Null means the provider still uses the original single-account reader. */
-  readSubscriptionPool?(providerId: SubscriptionProvider): Promise<SubscriptionPoolView | null>;
+  readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
@@ -130,12 +132,13 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (!provider.connected || provider.suspended || provider.removed) return null;
     // Migrated routes remain addressable for old tasks, but are now displayed by the pool.
     if (provider.subscriptionPoolAlias && deps.readSubscriptionPool) return null;
-    if (isSubscriptionProvider(provider.id) && deps.readSubscriptionPool) {
+    if ((isSubscriptionProvider(provider.id) || provider.subscriptionPool || provider.subscriptionAccountPool) && deps.readSubscriptionPool) {
       const providerId = provider.id;
       const pool = await safe<SubscriptionPoolView | null | false>(`pool:${providerId}`, () => deps.readSubscriptionPool!(providerId), false);
       // A failed pool read must not substitute the CLI default's identity or quota.
       if (pool === false) {
-        const source = provider.id === 'openai' ? codexSource(provider, null, deps.nowMs) : claudeSource(provider, null, deps.nowMs);
+        const source = (provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
+          ? codexSource(provider, null, deps.nowMs) : claudeSource(provider, null, deps.nowMs);
         return { ...source, account: null, accountKeys: [], pooled: true };
       }
       if (pool?.configured) {
@@ -285,7 +288,7 @@ export function sameSubscriptionAccount(a: MenubarSubscriptionInput, b: MenubarS
   // hosts have no workspace ID, so keep those entries separate rather than
   // hiding a quota or assigning one workspace's running marker to another.
   if (a.family === 'codex' && (a.pooled || b.pooled) &&
-      !left.some(key => key.startsWith('codex:id:') && right.includes(key))) return false;
+      !left.some(key => (key.startsWith('codex:id:') || key.startsWith('codex:verified:')) && right.includes(key))) return false;
   if (left.some((key) => right.includes(key))) return true;
   // Pool entries are known distinct accounts; similar windows alone cannot identify them.
   if (a.pooled || b.pooled) return false;
@@ -335,22 +338,18 @@ function identityKeys(family: string, provider: ProviderView, ...ids: [string, u
   }
   const identity = accountIdentity(provider);
   if (identity) keys.push(`${family}:identity:${identity.toLowerCase()}`);
+  if (family === 'codex') {
+    const workspace = ids.find(([kind]) => kind === 'id')?.[1];
+    const verified = provider.openAiAccount?.accountKey
+      ?? (identity && typeof workspace === 'string' ? codexAccountDisplayKey(identity, workspace) : undefined);
+    if (verified) keys.push(`codex:verified:${verified}`);
+  }
   return keys;
 }
 
 function accountIdentity(provider: ProviderView): string | null {
   const identity = provider.openAiAccount?.identity ?? provider.subscriptionAccount?.identity ?? null;
   return identity && identity.trim() ? identity.trim() : null;
-}
-
-/** "pro" → "Pro", "max_20x" → "Max 20x"; product names stay as the service writes them. */
-export function planLabel(raw: string | null | undefined): string | null {
-  if (!raw || !raw.trim()) return null;
-  return raw
-    .trim()
-    .split(/[_\s-]+/)
-    .map((word) => (/^[a-z]/.test(word) ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ');
 }
 
 /** A window whose reset already passed has unknown usage until the next read. */
@@ -406,7 +405,7 @@ export function codexSource(
     logoSvg: familyLogo('codex'),
     brand: 'Codex',
     account: accountIdentity(provider),
-    plan: planLabel(bucket?.planType ?? full?.planType),
+    plan: formatCodexPlanLabel(bucket?.planType ?? full?.planType),
     windows,
     credits: creditAmount,
     creditsUnlimited: credits?.unlimited === true,
@@ -423,7 +422,7 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
     const signedIn = account.status === 'ready' || account.status === 'limited';
     const usage = signedIn ? account.usage : undefined;
     const view = { ...provider, openAiAccount: undefined, subscriptionAccount: undefined };
-    const source = provider.id === 'openai'
+    const source = (pool.kind ?? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
       ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
       : claudeSource(view, usage?.claude ?? null, nowMs);
     const identity = account.identity?.trim() || null;
@@ -431,8 +430,10 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       ...source,
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
-      plan: planLabel(account.plan) ?? source.plan,
-      accountKeys: [...(source.accountKeys ?? []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
+      plan: (source.family === 'claude'
+        ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName)
+        : formatCodexPlanLabel(account.planType ?? account.plan)) ?? source.plan,
+      accountKeys: [...(source.accountKeys ?? []), ...(account.accountKey ? [`${source.family}:verified:${account.accountKey}`] : []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
       consuming: account.running > 0,
       resetCredits: null,
@@ -446,6 +447,7 @@ function codexPoolPayload(usage: SubscriptionAccountUsage['codex']): CodexAccoun
     value && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
       ? { ...value, usedPercent: value.usedPercent } : null;
   return {
+    planType: usage.planType,
     appServerBuckets: Object.fromEntries(Object.entries(usage.buckets).map(([id, bucket]) => [id, {
       ...bucket, primary: window(bucket.primary), secondary: window(bucket.secondary),
     }])),
@@ -478,7 +480,7 @@ export function claudeSource(
     logoSvg: familyLogo('claude'),
     brand: 'Claude',
     account: provider.id === 'anthropic' ? null : accountIdentity(provider),
-    plan: planLabel(snapshot?.subscriptionType),
+    plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier, snapshot?.planDisplayName),
     windows,
     credits: null,
     creditsUnlimited: false,
@@ -661,10 +663,14 @@ export function usageScope(
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
+    const daily = scope.daily[index];
+    if (row.agentKind === 'auxiliary') {
+      daily.tokens[3] = (daily.tokens[3] ?? 0) + finite(row.tokens);
+      continue;
+    }
     const harness = harnessOf(row.agentKind);
     const slot = HARNESSES.indexOf(harness);
     const money = finite(row.money?.amount);
-    const daily = scope.daily[index];
     daily.money[slot] += money;
     daily.tokens[slot] += finite(row.tokens);
     daily.paid += finite(row.apiMoney?.amount);
@@ -690,14 +696,14 @@ function modelSeries(
   dayCount: number,
   label: (model: string) => string,
 ): MenubarModelSeries {
-  type Entry = { harness: MenubarHarness; money: number[]; tokens: number[]; recent: number };
+  type Entry = { harness: MenubarHarness | 'auxiliary'; money: number[]; tokens: number[]; recent: number };
   const byModel = new Map<string, Entry>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
     const name = label(row.model);
     const entry = byModel.get(name)
-      ?? { harness: harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+      ?? { harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
     const tokens = finite(row.tokens);
     entry.money[index] += finite(row.money?.amount);
     entry.tokens[index] += tokens;
@@ -748,16 +754,20 @@ async function collectTasks(
   safe: Safe,
 ): Promise<MenubarTaskInput[]> {
   const tokensBySession = new Map<string, number>();
+  const conversationTokensBySession = new Map<string, number>();
   for (const row of usage?.taskDaily ?? []) {
     if (row.day !== today) continue;
     const [device, ...rest] = row.taskKey.split(':');
     if (device !== 'local') continue;
     const sessionId = rest.join(':');
     tokensBySession.set(sessionId, (tokensBySession.get(sessionId) ?? 0) + finite(row.tokens));
+    conversationTokensBySession.set(sessionId, (conversationTokensBySession.get(sessionId) ?? 0)
+      + Math.max(0, finite(row.tokens) - finite(row.auxiliaryTokens)));
   }
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
+    if (row.agentKind === 'auxiliary') continue;
     if (row.day !== today) continue;
     const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
@@ -798,7 +808,7 @@ async function collectTasks(
           harness: harnessOf(row?.agentKind ?? rate?.harness),
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: rate && rate.tokens > 0 ? (tokens * rate.money) / rate.tokens : 0,
+          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,

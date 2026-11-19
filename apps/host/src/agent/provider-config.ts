@@ -11,7 +11,6 @@ import { customProviderHeaderStorageKey, customProviderSecretStorageKey, provide
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
-import { buildPiNativeProvidersFromConfigs } from '../../../desktop/src/main/maker-host/pi-native-catalog.js';
 import { createProviderService } from '../../../desktop/src/main/maker-host/provider-service.js';
 import { hasCustomProviderCredential } from '../../../desktop/src/main/maker-host/provider-connection-state.js';
 import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/maker-host/provider-public-view.js';
@@ -21,7 +20,10 @@ import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/gro
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
-import { setActiveCatalog, setCustomProviderConfigs, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { setActiveCatalog, setCustomProviders, setCustomProviderConfigs, setSubscriptionPoolProviders, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { publishSubscriptionPoolProviders } from '../../../desktop/src/main/maker-host/subscriptionPoolCatalog.js';
+import { readCreatedSubscriptionProvidersIfReadable } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createCatalogCache } from '../../../desktop/src/main/maker-host/catalogCache.js';
 import { readModelCatalogOverrides } from '../../../desktop/src/main/maker-host/model-catalog-override-store.js';
 import { readModelDisableOverrides } from '../../../desktop/src/main/maker-host/model-disable-store.js';
@@ -30,6 +32,30 @@ import { isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import type { ProviderSecretStore } from '../../../desktop/src/main/secrets/providerSecretStore.js';
 import { createCodexAccountAuth } from '../../../desktop/src/main/maker-host/codex-account-auth.js';
+
+/**
+ * The profile's Codex account service (createCodexAccountAuth), with the provider config's
+ * scope: its owner, its check and whether it is closed. Also used by the parity tests, so they
+ * run the Host's own login and logout.
+ */
+export function createHostCodexAccounts(
+  options: { profileDir: string; getCodexBinary?(): string | null; publish?(channel: string, payload: unknown): void },
+  scope: { owner: string; check(): void; closed(): boolean },
+) {
+  return createCodexAccountAuth({
+    getUserDataDir: () => { scope.check(); return options.profileDir; },
+    getCodexBinary: () => { scope.check(); return options.getCodexBinary?.() ?? null; },
+    isProvider: id => { scope.check(); return id === 'openai' || getActiveCatalog().providers.some(provider =>
+      provider.id === id && provider.source === 'user' && provider.auth.native === 'codex'); },
+    accountHome: id => { scope.check(); return id === 'openai' ? path.join(options.profileDir, 'codex-home') : undefined; },
+    broadcastCodexAccountAuthReady: providerId => {
+      if (!scope.closed() && activeOwnerScopeKey() === scope.owner && !isAppSessionBoundaryPending()) options.publish?.('usage:codex-account-auth-ready', { providerId });
+    },
+    broadcastCodexAccountAuthStarted: providerId => {
+      scope.check(); options.publish?.('usage:codex-account-auth-started', { providerId });
+    },
+  });
+}
 
 /** Owner-bound configuration and the existing encrypted header migration. */
 export function createHostProviderConfig(options: { profileDir: string; ownerId: string; openExternal(url: string): Promise<void>;
@@ -73,19 +99,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     resolveOutboundProxy: resolveHostOutboundProxy,
     readStatus: readClaudeCliLoginStatusBySpawn,
   });
-  const codexAccounts = createCodexAccountAuth({
-    getUserDataDir: () => { check(); return options.profileDir; },
-    getCodexBinary: () => { check(); return options.getCodexBinary?.() ?? null; },
-    isProvider: id => { check(); return id === 'openai' || getActiveCatalog().providers.some(provider =>
-      provider.id === id && provider.source === 'user' && provider.auth.native === 'codex'); },
-    accountHome: id => { check(); return id === 'openai' ? path.join(options.profileDir, 'codex-home') : undefined; },
-    broadcastCodexAccountAuthReady: providerId => {
-      if (!closed && activeOwnerScopeKey() === owner && !isAppSessionBoundaryPending()) options.publish?.('usage:codex-account-auth-ready', { providerId });
-    },
-    broadcastCodexAccountAuthStarted: providerId => {
-      check(); options.publish?.('usage:codex-account-auth-started', { providerId });
-    },
-  });
+  const codexAccounts = createHostCodexAccounts(options, { owner, check, closed: () => closed });
   const headers = createCustomProviderHeaderService({
     getCurrentDbClientUserId: () => { check(); return owner; },
     listCustomProviders: async () => { check(); const rows = await listCustomProviders(); check(); return rows; },
@@ -106,11 +120,27 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     },
   });
   const readKey = (id: string, agent: string) => options.credentials.read(key(customProviderSecretStorageKey(storedCustomProviderId(id), agent)));
+  const log = createLogger('host-provider-config');
+  let listGeneration = 0;
   const list = async () => {
-    const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
-    setCustomProviderConfigs(configs);
-    setLocalCatalogOverrides(readModelCatalogOverrides());
-    return configs;
+    check();
+    const generation = ++listGeneration;
+    try {
+      const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
+      if (generation !== listGeneration) return configs;
+      setCustomProviderConfigs(configs);
+      publishSubscriptionPoolProviders({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
+      setLocalCatalogOverrides(readModelCatalogOverrides());
+      return configs;
+    } catch (err) {
+      check();
+      if (generation === listGeneration) {
+        // Desktop's failed refresh clears both ordinary and subscription providers.
+        setCustomProviders([]);
+        log.warn('failed to load custom providers; cleared current owner catalog snapshot', { err: String(err) });
+      }
+      throw err;
+    }
   };
   const cache = createCatalogCache(() => { check(); return options.profileDir; });
   const cancelLogins = async () => {
@@ -172,12 +202,6 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       });
       const views = await service.listProviders({ allowSideEffects: false }); check();
       return views.map(withoutProviderHeaderCredentials);
-    },
-    async piNativeProviders() {
-      const configs = await list();
-      // Protocol, endpoint, header isolation and model limits use the exact same
-      // projection as Desktop. Unknown capacities are never replaced with guesses.
-      return buildPiNativeProvidersFromConfigs(configs, readKey);
     },
   };
   setCustomProviderKeyReader(readKey);

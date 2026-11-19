@@ -301,6 +301,7 @@ export interface SlackHookMcpDeps {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  getSessionProject?: (sessionId: string) => Promise<{ projectDir: string | null; remoteHostId: string | null }>;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;

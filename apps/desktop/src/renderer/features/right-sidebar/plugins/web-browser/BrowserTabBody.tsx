@@ -55,6 +55,7 @@ import type { TabKindHostContext } from '../../types';
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
 import { useBrowserComment } from './useBrowserComment';
+import { useHiddenPageAudioMute } from './useHiddenPageAudioMute';
 import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
 
@@ -98,6 +99,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 测试)按可见处理,与 active 的既有缺省语义一致。
   const tabVisible = active === true && shellVisible !== false;
   const [chromeOverlayOpen, setChromeOverlayOpen] = useState(false);
+  const [nativeFocusRequest, setNativeFocusRequest] = useState(0);
+  const restoreNativePageFocus = useCallback(() => setNativeFocusRequest((value) => value + 1), []);
   // BrowserChrome 的 imperative ref —— Cmd/Ctrl+L 快捷键调它的 focusUrlBar()。
   const chromeRef = useRef<BrowserChromeHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -116,8 +119,11 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     tabId,
     slotRef,
     tabVisible && !chromeOverlayOpen,
+    nativeFocusRequest,
   );
   const browser = isNativePopup ? nativeBrowser : webviewBrowser;
+  // 页面看不见（切走页签／任务、收起侧栏、最小化窗口）时静音，重新可见时恢复（#9308）。
+  useHiddenPageAudioMute(webviewBrowser.webview, tabVisible);
   const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
   const stateUrlRef = useRef(state.url);
   const browserUrlRef = useRef(browser.url);
@@ -497,6 +503,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         onOpenInSystemBrowser={handleOpenInSystemBrowser}
         onCopyLink={handleCopyLink}
         onOverlayOpenChange={setChromeOverlayOpen}
+        onRestorePageFocus={isNativePopup ? restoreNativePageFocus : undefined}
       />
       {/* webview slot:flex-1 占满剩余空间。pool 的 wrapper 用 100% width/height
           填满,所以这里不需要再设尺寸。

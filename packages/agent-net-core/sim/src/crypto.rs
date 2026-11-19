@@ -248,6 +248,11 @@ impl<S: Suite> SecurePeer<S> {
 
     /// 发起方在 `created_us` 时刻发起，配合 `Shifted` 模拟时钟不从 0 开始的真实设备。
     pub fn pair_at(config: Config, seed: u64, checked: bool, created_us: u64) -> (Self, Self) {
+        Self::pair_configs(config.clone(), config, seed, checked, created_us)
+    }
+
+    /// 两端各用自己的配置（比如发包上限不同的新旧版本）。
+    pub fn pair_configs(initiator_config: Config, responder_config: Config, seed: u64, checked: bool, created_us: u64) -> (Self, Self) {
         let build = |seed: u64| {
             let crypto = TestCrypto::<S>::from_seed(seed);
             if checked { crypto } else { crypto.unchecked() }
@@ -257,12 +262,12 @@ impl<S: Suite> SecurePeer<S> {
         let remote = responder.public();
         // 两端的连接号不同：写错成自己的号会被对端拒收。
         let (initiator_config, responder_config) =
-            (Config { connection_id: seed as u32 ^ 0x5EED_0001, ..config.clone() }, Config { connection_id: seed as u32 ^ 0x5EED_0002, ..config.clone() });
+            (Config { connection_id: seed as u32 ^ 0x5EED_0001, ..initiator_config }, Config { connection_id: seed as u32 ^ 0x5EED_0002, ..responder_config });
         let connection = SecureConnection::connect(initiator, initiator_config.clone(), PROLOGUE, &remote, &[], created_us).expect("connect");
-        let buffer = vec![0; config.max_packet_size];
+        let (initiator_buffer, responder_buffer) = (vec![0; initiator_config.max_packet_size], vec![0; responder_config.max_packet_size]);
         (
-            Self { state: SecureState::Open(Box::new(connection)), config: initiator_config, buffer: buffer.clone(), check_invariants: checked, established_at: None },
-            Self { state: SecureState::Listening(Some(responder)), config: responder_config, buffer, check_invariants: checked, established_at: None },
+            Self { state: SecureState::Open(Box::new(connection)), config: initiator_config, buffer: initiator_buffer, check_invariants: checked, established_at: None },
+            Self { state: SecureState::Listening(Some(responder)), config: responder_config, buffer: responder_buffer, check_invariants: checked, established_at: None },
         )
     }
 

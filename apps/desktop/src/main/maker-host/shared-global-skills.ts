@@ -62,6 +62,9 @@ export interface SharedProjectSkillLinksResult {
   changed: boolean;
   actions: LinkAction[];
   warnings: string[];
+  /** Full diagnostics remain in warnings; log only new conflicts and every I/O failure. */
+  warningsToReport: string[];
+  persistentWarnings: string[];
 }
 
 interface PrepareProjectOptions {
@@ -320,12 +323,10 @@ async function cleanupBrokenManagedLinks(
   return changed;
 }
 
-async function ensureDirectoryLink(
+async function inspectDirectoryLink(
   source: SkillEntry,
   targetPath: string,
-  useRelativeTarget = false,
-  assertMutationAllowed?: () => void,
-): Promise<{ status: LinkStatus; changed: boolean; reason?: string }> {
+): Promise<{ status: LinkStatus; changed: boolean; reason?: string } | null> {
   const targetReal = await realPathOrNull(targetPath);
   if (targetReal && targetReal === source.realPath) {
     return { status: 'kept', changed: false };
@@ -345,6 +346,17 @@ async function ensureDirectoryLink(
       return { status: 'error', changed: false, reason: (err as Error).message };
     }
   }
+  return null;
+}
+
+async function ensureDirectoryLink(
+  source: SkillEntry,
+  targetPath: string,
+  useRelativeTarget = false,
+  assertMutationAllowed?: () => void,
+): Promise<{ status: LinkStatus; changed: boolean; reason?: string }> {
+  const existing = await inspectDirectoryLink(source, targetPath);
+  if (existing) return existing;
 
   assertMutationAllowed?.();
   try {
@@ -390,7 +402,10 @@ async function linkEntriesIntoRoot(
     }
 
     const targetPath = path.join(targetRoot, entry.name);
-    const result = await withLinkMutation([entry.name, path.basename(entry.realPath)], async () => {
+    // Reading an existing link/conflict needs no write authority or on-disk lease.
+    // Missing targets are inspected again inside the lease before any mutation.
+    const existing = await inspectDirectoryLink(entry, targetPath);
+    const result = existing ?? await withLinkMutation([entry.name, path.basename(entry.realPath)], async () => {
       if (sourceIdentity(entry.path) !== entry.identity) return { status: 'skipped' as const, changed: false };
       return ensureDirectoryLink(entry, targetPath, useRelativeTarget, () => {
         assertMutationAllowed?.();
@@ -629,9 +644,9 @@ export async function sharedGlobalSkillLinksFingerprint(
  *   gated global projection instead (#9282 — a Codex/Pi user without Claude must not
  *   get a `~/.claude` directory from merely opening a task in their home directory).
  */
-export async function prepareSharedProjectSkillLinks(
+async function prepareProjectSkillLinks(
   opts: PrepareProjectOptions,
-): Promise<SharedProjectSkillLinksResult> {
+): Promise<Omit<SharedProjectSkillLinksResult, 'warningsToReport'>> {
   const paths = sharedProjectSkillsPaths(opts.workingDir);
   if (paths.workingDir === path.resolve(os.homedir())) {
     const global = await prepareSharedGlobalSkillLinks({ homeDir: paths.workingDir });
@@ -640,6 +655,7 @@ export async function prepareSharedProjectSkillLinks(
       changed: global.changed,
       actions: global.actions,
       warnings: global.warnings,
+      persistentWarnings: global.persistentWarnings,
     };
   }
   const sharedRootCompare = (await realPathOrNull(paths.sharedSkillsDir))
@@ -672,7 +688,7 @@ export async function prepareSharedProjectSkillLinks(
   const initialSharedEntries = (await listSkillEntries('shared', paths.sharedSkillsDir))
     .filter((entry) => !(entry.isSymlink && pointsInto(entry, [claudeRootCompare])));
   if (initialClaudeEntries.length === 0 && initialSharedEntries.length === 0) {
-    return { ...paths, changed, actions: [], warnings: [] };
+    return { ...paths, changed, actions: [], warnings: [], persistentWarnings: [] };
   }
 
   const actions: LinkAction[] = [];
@@ -696,5 +712,26 @@ export async function prepareSharedProjectSkillLinks(
   warnings.push(...sharedToClaude.warnings);
   changed = sharedToClaude.changed || changed;
 
-  return { ...paths, changed, actions, warnings };
+  return {
+    ...paths, changed, actions, warnings,
+    persistentWarnings: [...claudeToShared.persistentWarnings, ...sharedToClaude.persistentWarnings],
+  };
+}
+
+// Diagnostic history only: never cache scan results or suppress mutation failures.
+// Each fresh scan replaces the previous conflict set, so resolved/reappearing
+// conflicts are reported again. Bound history across projects and large skill sets.
+const projectConflictWarnings = new Map<string, Set<string>>();
+export async function prepareSharedProjectSkillLinks(
+  opts: PrepareProjectOptions,
+): Promise<SharedProjectSkillLinksResult> {
+  const result = await prepareProjectSkillLinks(opts);
+  const key = normalizeForCompare(result.workingDir);
+  const previous = projectConflictWarnings.get(key);
+  const persistent = new Set(result.persistentWarnings);
+  const warningsToReport = result.warnings.filter(warning => !persistent.has(warning) || !previous?.has(warning));
+  projectConflictWarnings.delete(key);
+  if (persistent.size) projectConflictWarnings.set(key, new Set([...persistent].slice(0, 256)));
+  while (projectConflictWarnings.size > 128) projectConflictWarnings.delete(projectConflictWarnings.keys().next().value!);
+  return { ...result, warningsToReport };
 }

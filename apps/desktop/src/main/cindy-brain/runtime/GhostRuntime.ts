@@ -94,6 +94,11 @@ export class GhostRuntime {
     return this.entries.get(id)?.state ?? 'off';
   }
 
+  isRunningInstall(ghost: InstalledGhost): boolean {
+    const entry = this.entries.get(installedGhostStoragePart(ghost));
+    return entry?.state === 'running' && entry.identity === sandboxIdentity(ghost);
+  }
+
   listStates(): Record<string, GhostRuntimeState> {
     const out: Record<string, GhostRuntimeState> = {};
     for (const [id, entry] of this.entries) out[id] = entry.state;

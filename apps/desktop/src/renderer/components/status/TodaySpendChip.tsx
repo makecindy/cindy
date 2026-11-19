@@ -81,6 +81,8 @@ import {
   selectRemoteCodexAccountUsage,
   useRemoteClaudeAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteXaiRateLimit,
   useRemoteXaiSubscriptionUsage,
 } from '@/hooks/useRemoteDeviceUsage';
@@ -89,6 +91,7 @@ import {
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -156,6 +159,7 @@ import {
   sessionAccountCodexPayload,
   sessionAccountDisplay,
   useSessionSubscriptionAccount,
+  sessionSubscriptionPoolProvider,
 } from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -933,7 +937,7 @@ export function TodaySpendChip({
   });
   // cc 订阅判定对齐 main 的 isClaudeSubscriptionSession(register.ts)+ proxy 实际路由:
   //   - 显式选 Anthropic 供应商 → 订阅直连(Claude 模型直连 api.anthropic.com,
-  //     LiteLLM 看不到, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
+  //     这类消费不计入 Cindy AI 账号额度, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
   //   - 默认路由(providerId=null)→ **优先用 proxy 观察到的会话生效路由**
   //     (claude-session-route-registry, 每请求真值):cc 子进程凭证在 spawn 时冻结,
   //     用全局活性凭证状态重算会与实际路由发散(典型:gateway-spawn 会话跑着时
@@ -958,8 +962,8 @@ export function TodaySpendChip({
     isDefaultRouteClaudeSession &&
     observedClaudeRoute == null &&
     (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const { providers: localQuotaProviders } = useProviders();
-  const { providers: deviceQuotaProviders } = useDeviceProviders(accountDeviceId ?? undefined);
+  const { providers: localQuotaProviders, loading: localQuotaLoading, error: localQuotaError } = useProviders();
+  const { providers: deviceQuotaProviders, loading: deviceQuotaLoading, error: deviceQuotaError } = useDeviceProviders(accountDeviceId ?? undefined);
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
@@ -1023,8 +1027,21 @@ export function TodaySpendChip({
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
     vendorKey === 'codex' && (isXaiAccount || (providerId == null && isXaiPrefixedModel));
+  // A saved null route can resume on its pinned account's isolated OAuth host even
+  // when the default host has no login or still reports a gateway credential.
+  // Only an actual task binding establishes this fact; unknown/default reads do not.
+  const implicitCodexAccount = useSessionSubscriptionAccount(null, accountDeviceId,
+    !accountUnreadable && vendorKey === 'codex' && providerId == null &&
+    !remoteHostId && !isCodexXaiProvider && !isCodexGatewayBudgetModel &&
+    sessionSubscriptionPoolProvider('codex', providerId, remoteHostId, undefined, true, {
+      modelId, providers: quotaProviders,
+      catalogReady: isDeviceLinkRemote
+        ? !deviceQuotaLoading && !deviceQuotaError
+        : !localQuotaLoading && !localQuotaError,
+    }) === 'openai');
+  const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
   // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
-  // 全局 authInjection 只用于未指定来源的旧任务，不能因本机 Codex 断开或其它
+  // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
   // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
   // device-link 远程 codex 与 SSH 远程同口径:非 xai / 非折扣模型 / 非显式 XD 即按订阅
@@ -1042,7 +1059,7 @@ export function TodaySpendChip({
     (isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
       (!isCodexGatewayBudgetModel &&
-        (isOpenAiAccount || (providerId == null && codexAuthInjection === 'oauth-bearer'))));
+        (isOpenAiAccount || (providerId == null && (hasImplicitCodexBinding || codexAuthInjection === 'oauth-bearer')))));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =
@@ -1086,7 +1103,7 @@ export function TodaySpendChip({
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
-  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
+  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证读取企业账号额度。
   const isClaudeGateway =
     vendorKey === 'cc' &&
     !isAnyRemoteSession &&
@@ -1108,7 +1125,7 @@ export function TodaySpendChip({
           (codexAuthInjection === 'provider-oauth' && hasGatewayKey))));
   const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   // device-link 远程网关形态:显式 XD / codex 折扣模型 / pi 默认(provider 创建时固化,
-  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 LiteLLM 配额镜像,
+  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 Cindy AI 企业账号配额镜像,
   // 本机 quota hook(usesGatewayQuota)对远程保持关闭;credit 三池 handler 绑定主窗口
   // sender 不镜像 —— 按本机「拿不到就隐藏」的既有降级语义,credit 行远程不显示。
   const isDeviceLinkRemoteGateway =
@@ -1128,15 +1145,13 @@ export function TodaySpendChip({
         (providerId == null || providerId === 'xd')));
   // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
   // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
-  const taskAccount = sessionAccountDisplay(
-    useSessionSubscriptionAccount(
-      !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
-        ? providerId
-        : null,
-      accountDeviceId,
-    ),
-    t,
+  const explicitTaskAccount = useSessionSubscriptionAccount(
+    !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
+      ? providerId
+      : null,
+    accountDeviceId,
   );
+  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
   const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
   const shouldReadLocalCodexAccountUsage =
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
@@ -1168,10 +1183,16 @@ export function TodaySpendChip({
   );
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
+  const remoteCodexDeviceId = isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null;
+  const liveRemoteCodex = Boolean(remoteCodexDeviceId && !isChatgptBridge && !isProviderShareAgentDeviceId(remoteCodexDeviceId));
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null,
+    remoteCodexDeviceId,
     providerId ?? 'openai',
+    // Native quota reads persist a snapshot on the host. Long-lived task chips
+    // share Settings updates and refresh on opening/recovery, without polling.
+    { live: liveRemoteCodex, poll: false },
   );
+  const remoteCodexRefresh = useRemoteCodexRefreshState(liveRemoteCodex ? remoteCodexDeviceId : null, providerId ?? 'openai');
   const taskAccountCodexPayload = React.useMemo(
     () =>
       readsTaskAccountUsage && usesCodexQuotaForm
@@ -1254,6 +1275,12 @@ export function TodaySpendChip({
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const refreshRemoteCodex = React.useCallback(() => {
+    if (liveRemoteCodex && remoteCodexDeviceId) requestRemoteCodexLiveRefresh(remoteCodexDeviceId, providerId ?? 'openai');
+  }, [liveRemoteCodex, remoteCodexDeviceId, providerId]);
+  React.useEffect(() => {
+    if (quotaPopoverOpen) refreshRemoteCodex();
+  }, [quotaPopoverOpen, refreshRemoteCodex]);
   const costDetails = useUsageCostDetails(sessionId, quotaPopoverOpen);
   // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
   // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
@@ -1843,7 +1870,7 @@ export function TodaySpendChip({
       );
     }
     // Account quota is separate from lifetime task cost. API and SSH-remote routes never borrow it;
-    // device-link 网关形态用被控端 LiteLLM 配额镜像(claudeQuota 已切换),credit 三池不镜像。
+    // device-link 网关形态用被控端 Cindy AI 企业账号配额镜像(claudeQuota 已切换),credit 三池不镜像。
     if (usesGatewayQuota || isDeviceLinkRemoteGateway) {
       account.title = providerDisplayNameById('xd', quotaProviders, t);
       if (creditTotals) {
@@ -2060,9 +2087,11 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={codexQuotaReadFailed ? {
+            account={codexQuotaReadFailed || remoteCodexRefresh.failed ? {
               ...account,
-              refreshFailure: { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+              refreshFailure: liveRemoteCodex
+                ? { retry: refreshRemoteCodex, retrying: remoteCodexRefresh.refreshing }
+                : { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
             } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}

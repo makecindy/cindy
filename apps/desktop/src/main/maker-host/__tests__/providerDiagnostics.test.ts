@@ -12,6 +12,26 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const usageLog = vi.hoisted(() => ({
+  record: vi.fn(async (_tokens: unknown, _route: unknown) => {}),
+}));
+vi.mock('../../usage/auxiliaryUsage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../usage/auxiliaryUsage.js')>();
+  const create = (attribution: Record<string, unknown> = {}) =>
+    Object.assign(
+      async (tokens: unknown, route: Record<string, unknown> = {}) =>
+        usageLog.record(tokens, { ...attribution, ...route }),
+      { close: () => {} },
+    );
+  return {
+    ...actual,
+    createAuxiliaryUsageRecorder: create,
+    withAuxiliaryUsage: async (
+      attribution: Record<string, unknown>,
+      run: (record: ReturnType<typeof create>) => Promise<unknown>,
+    ) => run(create(attribution)),
+  };
+});
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
 }));
@@ -40,6 +60,7 @@ afterEach(() => {
   setDiagnosticsKeyReader(() => null);
   __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  usageLog.record.mockClear();
   setDiagnosticsOAuthTokenReader(() => null);
 });
 
@@ -102,6 +123,46 @@ describe('classifyProviderError', () => {
         code: 'CONTEXT_TOO_LONG', retryable: false,
       });
     }
+  });
+
+  // #9470: unit, real classifier. Existing field-pattern coverage missed Google's
+  // quoted Unknown name rejection; raw and JSON-escaped messages reach consumers.
+  it.each([400, 422])('%i recognizes explicit Unknown name payload rejections', (status) => {
+    const message = 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field. Unknown name "max_tokens": Cannot find field.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'WIRE_INCOMPATIBLE', retryable: false,
+      });
+    }
+  });
+
+  // #9470 P2: unit, real classifier; field order and JSON escaping must not
+  // turn a rejected request field into a missing model (no live gateway covered).
+  it.each([400, 422])('%i ignores rejected field names when matching model errors', (status) => {
+    for (const fields of [['model', 'messages'], ['anthropic_version', 'model', 'messages']]) {
+      const message = 'Invalid JSON payload received. '
+        + fields.map((field) => `Unknown name "${field}": Cannot find field.`).join(' ');
+      for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+        expect(classifyProviderError({ status, bodyText })).toMatchObject({
+          code: 'WIRE_INCOMPATIBLE', retryable: false,
+        });
+      }
+    }
+  });
+
+  it.each([
+    [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
+    [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
+    [400, 'Unknown name "customer"', 'UNKNOWN'],
+    [401, 'Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid API key. Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid model name. Invalid JSON payload received. Unknown name "messages"', 'MODEL_NOT_FOUND'],
+    [400, 'insufficient_quota. Invalid JSON payload received. Unknown name "messages"', 'QUOTA_EXCEEDED'],
+    [400, 'prompt is too long. Invalid JSON payload received. Unknown name "messages"', 'CONTEXT_TOO_LONG'],
+    [500, 'Invalid JSON payload received. Unknown name "messages"', 'UPSTREAM_ERROR'],
+  ] as const)('preserves classification for %i / %s', (status, bodyText, code) => {
+    expect(classifyProviderError({ status, bodyText }).code).toBe(code);
   });
 
   it.each([
@@ -372,6 +433,20 @@ function fakeResponse(status: number, body = ''): Response {
 }
 
 describe('runProviderProbe（注入 fetch，不联网）', () => {
+  // #9470: production probe result and log must carry the classifier's code.
+  it('reports an Unknown name field rejection as wire incompatible', async () => {
+    const r = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(400, JSON.stringify({ error: {
+        message: 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field.',
+      } })),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 400 });
+    expect(probeLog.warn.mock.calls[0]?.[1]).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', model: 'm', status: 400,
+    });
+  });
+
   it('2xx → ok + latency', async () => {
     const r = await runProviderProbe(
       { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
@@ -450,6 +525,64 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
+  });
+
+  it('records trailing usage from a later network chunk and keeps the served model', async () => {
+    const frames = [
+      { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+      {
+        model: 'served-model',
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 40 },
+          completion_tokens: 2,
+        },
+      },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encode = new TextEncoder();
+        for (const frame of frames)
+          controller.enqueue(encode.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const result = await runProviderProbe(
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'requested-alias',
+        wireProtocol: 'openai-chat',
+        apiKey: 'fake',
+      },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
+
+  it('keeps observed usage when a probe stream disconnects after its first payload', async () => {
+    let step = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const frames = [
+          { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+          { model: 'served-model', usage: { prompt_tokens: 100, completion_tokens: 2 } },
+        ];
+        if (step === frames.length) { controller.error(new Error('socket disconnected')); return; }
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frames[step++])}\n\n`));
+      },
+    });
+    await expect(runProviderProbe({ agent: 'codex', baseUrl: 'https://x.example', modelId: 'alias', wireProtocol: 'openai-chat', apiKey: 'fake' },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))).rejects.toThrow('socket disconnected');
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 2 }), expect.objectContaining({ model: 'served-model' }));
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -1010,6 +1143,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenAuth).toBe('sk-saved');
   });
 
+  // #8679: saved providers probe the first chat model, which the user never picks in the test button's
+  // context. A bare "upstream 5xx" made a failure on that model read like the whole provider (or the model
+  // that just answered) was broken, so the result must say which model was tested.
+  it('testProviderConnection(saved) 失败时仍带回被测模型 ID', async () => {
+    setCustomProviders([buildUserProvider({
+      ...config,
+      runtimes: { 'claude-code': { ...config.runtimes['claude-code'],
+        models: [{ id: 'glm-5.2', name: 'GLM' }, { id: 'glm-5.2-air', name: 'GLM Air' }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    const r = await testProviderConnection(
+      { kind: 'saved', providerId: 'my-relay', agent: 'claude-code' },
+      async () => fakeResponse(500, '{}'),
+    );
+    expect(r).toMatchObject({ ok: false, modelId: 'glm-5.2' });
+  });
+
   it('oauth-token 供应商:探测 token 走 authorization 头,绝不发 x-api-key(与真实路由同口径)', async () => {
     const oauthConfig = {
       ...config,
@@ -1231,6 +1381,39 @@ describe('automatic Pi protocol connection test', () => {
     { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]);
   const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('does not overcount cumulative prompt/cache snapshots in native probing', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      sse([
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 20 },
+            completion_tokens: 1,
+          },
+        },
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 40 },
+            completion_tokens: 2,
+          },
+        },
+      ]),
+    );
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: true });
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
 
   it('uses native streaming and stops on the first successful generation', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => chat());

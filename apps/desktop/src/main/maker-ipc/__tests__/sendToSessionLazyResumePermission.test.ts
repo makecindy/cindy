@@ -1,5 +1,7 @@
+import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
@@ -22,6 +24,7 @@ import ts from 'typescript';
 
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
@@ -108,10 +111,10 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
+    '\n  setBotInvitationWelcomeDispatch(',
   );
   const groupDispatch = slice(
-    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>',
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
@@ -121,13 +124,15 @@ function botTaskDispatchSlice(): string {
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
+${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage =')}
 ${dispatchBotSessionMessage}
 ${pluginSource}
 ${sendToSession};
 // Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
 const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
 const groupDispatch = ${groupDispatch};
-return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession };`,
+return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
+enqueueGroupMessage: ${slice('async function enqueueSendToSessionMessage(params: {', '\n  async function buildSessionControlInputItem(')} };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -138,6 +143,7 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
+  enqueueGroupMessage: (input: Record<string, unknown>) => Promise<void>;
   sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
   sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
@@ -185,6 +191,7 @@ function botTaskDispatchHarness(
     where: () => dbChain,
     limit: async () => [],
   };
+  const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
     getPluginHostToolCaller: () => undefined,
     sanitizeSourceName,
@@ -225,7 +232,10 @@ function botTaskDispatchHarness(
       rows[id]
         ? { status: 'active', title: id, userSendAt: null, providerId: 'fixture-provider', ...rows[id] }
         : null,
-    getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+    getDbClient: () => dbClient,
+    getCurrentDbClientSnapshot: () => dbClient,
+    normalizeAutoTitle,
+    refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
@@ -259,6 +269,7 @@ function botTaskDispatchHarness(
     commitAgentIslandUserPrompt: noop,
     rollbackAgentIslandUserPrompt: noop,
     createDbMessage: asyncNoop,
+    persistUserTurnMessage: asyncNoop,
     runAcceptedCallback: async (callback?: () => unknown) => {
       await callback?.();
     },
@@ -280,6 +291,7 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
@@ -444,7 +456,7 @@ describe('external handoff to hidden group lanes', () => {
       live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         botSessionLinks: links,
-        syncBotLanePermission: sync, createDbMessage: persist,
+        syncBotLanePermission: sync, persistUserTurnMessage: persist,
       });
     return { ...h, sync, persist, accepted };
   }
@@ -544,7 +556,7 @@ describe('companion internal delivery after automation', () => {
       path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
-        createDbMessage: async () => { shadowed = true; },
+        persistUserTurnMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
       .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'shadowed' });
@@ -622,6 +634,7 @@ describe('idle forwarded request authorization', () => {
   // an existing one; direct send previously left its next handoff without a source.
   it('queues the first verified request of a newly created task', async () => {
     const broadcast = vi.fn();
+    const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
     const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
@@ -629,6 +642,7 @@ describe('idle forwarded request authorization', () => {
         ({ row, value: await create(row, async () => {}) }),
       enqueueSendToSessionMessage: enqueue,
       broadcastSessionCreated: broadcast,
+      refineCreatedTaskTitle: refineTitle,
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
@@ -636,6 +650,7 @@ describe('idle forwarded request authorization', () => {
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);
     expect(broadcast).toHaveBeenCalledWith('new-child');
     expect(broadcast).toHaveBeenCalledTimes(1);
@@ -687,6 +702,38 @@ describe('idle forwarded request authorization', () => {
     }));
     expect(h.sendOptions).toHaveLength(0);
     expect(h.readAutoReviewHistory).not.toHaveBeenCalled();
+  });
+});
+
+// #10631 review, integration tier: stop can win during asynchronous input building.
+// Execute the real group adapter and both enqueue paths; late onAccepted is too late.
+describe('group dispatch cancellation during preparation', () => {
+  it.each([false, true])('never enqueues a stopped execution (attachments=%s)', async attachments => {
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const enqueue = vi.fn();
+    let current = true;
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      path,
+      inputCoordinator: { shouldQueueNewTurn: () => false, ensureQueueRestored: async () => {}, enqueue },
+      buildSessionControlInputItem: async (input: Record<string, unknown>) => {
+        started(); await gate; return { ...input, createOpts: {} };
+      },
+      orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: vi.fn() },
+    });
+    h.scope.enqueueSendToSessionMessage = h.enqueueGroupMessage;
+    const dispatch = h.groupDispatch({ targetSessionId: 'child', clientId: 'bot-group:stopped',
+      message: 'Cancelled group request', persistedContent: 'Cancelled group request',
+      assertDispatchCurrent: () => { if (!current) throw new Error('STALE_EXECUTOR'); },
+      onAccepted: vi.fn(),
+      ...(attachments ? { attachments: [{ id: 'file', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }] } : {}),
+    }).catch(error => ({ ok: false, message: String(error) }));
+    await preparing;
+    current = false; release();
+    expect(await dispatch).toMatchObject({ ok: false });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(h.sentTo).toEqual([]);
   });
 });
 
@@ -814,5 +861,46 @@ describe('queued cold start keeps the persisted Plan', () => {
     };
     await reconcile('child', co);
     expect(co).toMatchObject({ permissionMode: 'auto', planMode: planModeEnabled });
+  });
+});
+
+// #10692, guard-tier wiring: the real shared send preparation must pass the same
+// read-only canonical history resolver as startup and retain the durable rebuild.
+// Runtime tests cover allocation; this protects ordinary/retry/lazy Host consumers
+// from silently omitting the injected resolver in register.ts's large closure.
+describe('unbound Codex pre-send history wiring', () => {
+  it('resolves history through the host and completes the original recovery before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const order: string[] = [];
+    const assertCurrent = vi.fn();
+    const history = vi.fn(async () => ({ historyHome: 'original-home' }));
+    const rebuild = vi.fn(async (_id: string, check: () => void) => { check(); order.push('durable-handoff'); });
+    const cancelUsageLimitWait = vi.fn(() => { order.push('cancel-wait'); });
+    const failover = vi.fn();
+    const prepare = vi.fn(async (id: string, deps: {
+      resolveCodexHistoryHome(thread: string): Promise<string | undefined>;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(await deps.resolveCodexHistoryHome('legacy-thread')).toBe('original-home');
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+      readCodexThreadStorageReadOnly: history,
+      prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('old-task')).toBe(true);
+    expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
+    expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
+    expect(order).toEqual(['durable-handoff', 'cancel-wait']);
+    expect(failover).not.toHaveBeenCalled();
   });
 });

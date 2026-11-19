@@ -40,8 +40,10 @@ describe('authManager 注入点(静态源码断言)', () => {
   });
 
   it('注入形态 = 真实 CindyAuthClient + fetch 构造参数(scenarioFetch ?? 真 fetch)', () => {
-    expect(authManagerSource).toContain(
-      'fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit))',
+    // #10627: diagnostics wrap both transports; the production fallback and
+    // dev-only scenario must still feed the real client's fetch option.
+    expect(authManagerSource).toMatch(
+      /fetch:\s*withProviderResponseDiagnostics\(\s*scenarioFetch \?\? \(async \(input, init\) => net\.fetch\(input, init as RequestInit\)\)/,
     );
     // 不替换 client、不 fake 方法:注入点仍是唯一的 new CindyAuthClient 构造
     expect(authManagerSource.match(/new CindyAuthClient\(/g)).toHaveLength(1);

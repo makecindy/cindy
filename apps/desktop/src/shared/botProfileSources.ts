@@ -1,5 +1,8 @@
 import { createIpcError } from './ipc-errors.js';
 
+/** After trimming, measured in JavaScript UTF-16 code units, as in the writer. */
+export const BOT_PROFILE_SOURCE_MAX_LENGTH = 12000;
+
 export interface BotProfileSourceFailure {
   field: 'identitySource' | 'userContextSource';
   maxLength: number;
@@ -21,7 +24,7 @@ export function readBotProfileSource(value: unknown, field: BotProfileSourceFail
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string') throw createIpcError('INVALID_PARAMS', `${field} 必须是字符串`);
   const text = value.trim();
-  if (text.length > 12000) throw new BotProfileSourceTooLong(field, 12000);
+  if (text.length > BOT_PROFILE_SOURCE_MAX_LENGTH) throw new BotProfileSourceTooLong(field, BOT_PROFILE_SOURCE_MAX_LENGTH);
   return text;
 }
 

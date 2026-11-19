@@ -11,9 +11,22 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  return {
+    useTranslation: () => ({
+      t: (key: string, options?: { value?: number; version?: string }) => {
+        if (key === 'settings.remoteControl.v2.ms') return `${options?.value} ms`;
+        if (key === 'settings.devices.apps.cindy') return common.settings.devices.apps.cindy;
+        if (key === 'settings.devices.apps.cindyFriend') return common.settings.devices.apps.cindyFriend;
+        if (key === 'settings.remoteControl.v2.popover.version') {
+          return common.settings.remoteControl.v2.popover.version.replace('{{version}}', options?.version ?? '');
+        }
+        return key;
+      },
+    }),
+  };
+});
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
 import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
@@ -28,6 +41,7 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
     isMobile: false,
     status: 'direct',
     path: 'direct',
+    controlLinkOpen: true,
     rttMs: 3,
     flow: null,
     flowText: null,
@@ -43,6 +57,31 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 }
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
+
+// Non-Cindy Apps on desktop platforms must not be probed as outdated Cindy or
+// offered remote desktop. The real locale also exposes the fixed Cindy version
+// brand that a key-only translation stub missed. Minimal input: App + version. Unit.
+it.each(['cindy-friend', 'other-app'])('labels app=%s and excludes it from card and batch computer actions', app => {
+  const command = vi.fn();
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  const peer = node({ id: app, app, appVersion: '1.4.0', encrypted: true });
+  render(<><DeviceNodePopover node={peer} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />
+    <RemoteSwitchBatch nodes={[peer]} entries={new Map()} /></>);
+  const appName = app === 'cindy-friend' ? 'Cindy Friend' : app;
+  expect(screen.getByText(`${appName} · Work PC`)).toBeTruthy();
+  expect(screen.getByText(`Windows · ${appName} 1.4.0`)).toBeTruthy();
+  expect(remoteDesktop()).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(command).not.toHaveBeenCalled();
+});
+
+// App version routing must preserve both legacy omission and explicit Cindy.
+it.each([undefined, 'cindy'])('keeps the Cindy version label for app=%s', app => {
+  render(<DeviceNodePopover node={node({ id: `version-${app ?? 'legacy'}`, app, appVersion: '1.4.0', remoteControlEnabled: false })}
+    relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+  expect(screen.getByText('Work PC')).toBeTruthy();
+  expect(screen.getByText('Windows · Cindy 1.4.0')).toBeTruthy();
+});
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -96,7 +135,9 @@ describe('DeviceNodePopover', () => {
     expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
     // 2026-11-08: route details must identify the actual protocol, not just direct versus relay.
     const protocol = encrypted === undefined ? '' : `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · `;
-    expect(screen.getByText(protocol + 'settings.remoteControl.v2.path.direct')).toBeTruthy();
+    // 2026-11-13: 协议画成图标 + 名称后文字分在两段里，完整的「协议 · 路径」在这一行的悬停提示上。
+    const pathRow = screen.getByTitle(protocol + 'settings.remoteControl.v2.path.direct');
+    expect(pathRow.textContent?.replace(/\s/g, '')).toBe((protocol + 'settings.remoteControl.v2.path.direct').replace(/\s/g, ''));
     expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
   });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {
@@ -154,11 +195,57 @@ describe('HubNodePopover', () => {
     relay: { name: 'Cindy', selfHosted: false, rttMs: 20, flow: null },
   } as unknown as TopologyModel;
 
+  // 2026-11-13 用户要求延迟显示整数。现有卡片测试只传整数，无法发现小数直接显示的回归。
+  // 真实设备与中转卡片入口，分别覆盖 186.252 向下和 186.752 向上取整。tier: unit。
+  it('rounds peer and relay latency to whole milliseconds', () => {
+    render(<>
+      <DeviceNodePopover node={node({ rttMs: 186.252 })} relayName="Cindy" onRemoteDesktop={vi.fn()} />
+      <HubNodePopover model={{ ...model, relay: { ...model.relay, rttMs: 186.752 } }} linkStatus="online" issue={null} standby={false} />
+    </>);
+    expect(screen.getByText('186 ms · settings.remoteControl.v2.popover.rttNote')).toBeTruthy();
+    expect(screen.getByText('settings.devices.linkStatus.online · 187 ms')).toBeTruthy();
+  });
+
   it('只展示与中转的连接、连接问题与待机说明,不重复提供同页管理入口', () => {
     render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby />);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);
     expect(screen.getByText('连接已失效')).toBeTruthy();
     expect(screen.getByText('settings.devices.standbyHint')).toBeTruthy();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  // 2026-11-18 用户要求这台电脑也写出它实际用的连接方式。原来本机卡片只有与中转的连接，没有连接方式。
+  // 最小失败输入:relayProtocol 为 Agent-Net / Device Link 且在线;连接中时主连接还没定，不能先写成 Device Link。tier: unit。
+  it('在线时单独一行写这台电脑用的连接方式，连接中不写', () => {
+    const { unmount } = render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'agent-net' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.remoteControl.v2.popover.protocol')).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.v2.protocol.agentNet')).toBeTruthy();
+    expect(screen.getByText('settings.devices.linkStatus.online · 20 ms')).toBeTruthy();
+    unmount();
+
+    const legacy = render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.remoteControl.v2.protocol.deviceLink')).toBeTruthy();
+    legacy.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="connecting" issue={null} standby={false} />);
+    expect(screen.queryByText('settings.remoteControl.v2.popover.protocol')).toBeNull();
+    expect(screen.queryByText('settings.remoteControl.v2.protocol.deviceLink')).toBeNull();
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
+  });
+
+  // 2026-11-18 用户要求：看得出中转走的是 Agent-Net 的 UDP 还是 WS,往返是那条路的。原来这一行只有状态和心跳往返。
+  // 最小失败输入:Agent-Net 主连接、transport 为 udp / websocket;连接中不写走法。tier: unit。
+  it('与中转那一行写经中转的数据走 UDP 还是 WS,连接中不写', () => {
+    const relay = { ...model.relay, protocol: 'agent-net' as const };
+    const udp = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp', rttMs: 9 } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.udp · 9 ms')).toBeTruthy();
+    udp.unmount();
+
+    const ws = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'websocket' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.websocket · 20 ms')).toBeTruthy();
+    ws.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp' } }} linkStatus="connecting" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
   });
 });

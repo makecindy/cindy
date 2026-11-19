@@ -3,13 +3,16 @@
  * native SwiftUI sheet (InputHandoffSheet.ios.tsx); elsewhere a bottom panel
  * with the platform's own text fields. Both read the same props.
  */
+import { useEffect, useRef } from "react";
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   View,
+  type ScrollViewInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
@@ -35,16 +38,26 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
   const insets = useSafeAreaInsets();
   const mode = inputHandoffSheetMode(snapshot);
   const remote = snapshot.remoteInput === true;
+  const scroll = useRef<ScrollViewInstance>(null);
+  const focusedTop = useRef<number | null>(null);
+  const revealField = () => {
+    if (focusedTop.current !== null) scroll.current?.scrollTo({ y: Math.max(0, focusedTop.current - spacing.sm), animated: false });
+  };
+  useEffect(() => {
+    const listener = Keyboard.addListener('keyboardDidShow', revealField);
+    return () => listener.remove();
+  }, []);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.sheetBackdrop}
       >
         <Pressable accessibilityRole="button" accessibilityLabel={t("interaction.inputHandoff.action.close")} style={{ flex: 1 }} onPress={onClose} />
         <View style={[styles.sheetPanel, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]} testID="interaction.inputHandoff.sheet">
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing.lg }}>
-            <InputHandoffSheetHeader snapshot={snapshot} />
+          <InputHandoffSheetHeader snapshot={snapshot} />
+          <ScrollView ref={scroll} onLayout={revealField} style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing.lg }}>
+            <InputHandoffSheetContext snapshot={snapshot} />
             {mode === "fields" ? (
               <>
                 {embedded}
@@ -55,38 +68,44 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
                   disabled={busy || !remote}
                   onChange={props.onChange}
                   onSubmit={props.onSubmit}
+                  onFieldFocus={top => { focusedTop.current = top; revealField(); }}
                 />
               </>
             ) : (
               embedded
             )}
+            {mode === "fields" || mode === "code" ? (
+              <Text style={styles.sheetNote}>{t("interaction.inputHandoff.sheetNote")}</Text>
+            ) : null}
             {error ? <Text style={styles.error}>{error}</Text> : null}
-            {mode === "qr" && props.qr ? (
-              <InputHandoffQrActions {...props} qr={props.qr} />
-            ) : mode === "picture" || mode === "qr" ? null : (
-              <>
-                <Text style={styles.sheetNote}>{t("interaction.inputHandoff.sheetNote")}</Text>
-                <View style={styles.sheetButtons}>
-                  <MainWindowActionButton
-                    grow
-                    action={{
-                      label: t(mode === "code" ? "interaction.inputHandoff.action.done" : "interaction.inputHandoff.action.continue"),
-                      tone: "primary",
-                      busy,
-                      disabled: mode === "fields" && !remote,
-                      testID: "interaction.inputHandoff.continue",
-                      onPress: mode === "code" ? props.onDone : props.onSubmit,
-                    }}
-                  />
-                  <MainWindowActionButton
-                    grow
-                    action={{ label: t("interaction.inputHandoff.action.close"), tone: "secondary", onPress: onClose }}
-                  />
-                </View>
-              </>
-            )}
-            <InputHandoffQuietLinks {...props} />
           </ScrollView>
+          {mode === "qr" && props.qr ? (
+            <InputHandoffQrActions {...props} qr={props.qr} />
+          ) : mode === "picture" || mode === "qr" ? null : (
+            <>
+              <View style={styles.sheetButtons}>
+                <MainWindowActionButton
+                  grow
+                  action={{
+                    label: t(mode === "code" ? "interaction.inputHandoff.action.done" : "interaction.inputHandoff.action.continue"),
+                    tone: "primary",
+                    busy,
+                    disabled: mode === "fields" && !remote,
+                    testID: "interaction.inputHandoff.continue",
+                    onPress: mode === "code" ? props.onDone : props.onSubmit,
+                  }}
+                />
+              </View>
+            </>
+          )}
+          <View style={styles.quietRow}>
+            {mode === "fields" || mode === "code" ? (
+              <Pressable accessibilityRole="button" onPress={onClose} style={styles.quietLink}>
+                <Text style={styles.body}>{t("interaction.inputHandoff.action.close")}</Text>
+              </Pressable>
+            ) : null}
+            <InputHandoffQuietLinks {...props} />
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -94,29 +113,43 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
 }
 
 function InputHandoffSheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot }) {
-  const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   const { colors } = useTheme();
   const place = inputHandoffPlace(snapshot.source);
   const kind = inputHandoffPlaceKind(snapshot);
   const Icon = snapshot.qr === "scan" ? QrCode : kind === "web" ? Globe : kind === "terminal" ? SquareTerminal : AppWindow;
   return (
-    <View style={styles.sheetHeader}>
+    <View style={styles.sheetHeadingRow}>
       <View style={styles.sheetIcon}>
-        <Icon color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+        <Icon color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
       </View>
-      <Text style={styles.sheetTitle}>{snapshot.purpose}</Text>
-      <View style={styles.place}>
+      <View style={styles.sheetHeadingText}>
+        <View style={styles.place}>
         {place.secure ? <Lock color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} /> : null}
-        <Text numberOfLines={1} style={styles.placeText}>{place.label}</Text>
+          <Text style={styles.placeText}>{place.label}</Text>
+        </View>
       </View>
+    </View>
+  );
+}
+
+function InputHandoffSheetContext({ snapshot }: { snapshot: InputHandoffSnapshot }) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeInputHandoffStyles);
+  return (
+    <View style={styles.sheetHeader}>
+      <Text style={styles.sheetTitle}>{snapshot.purpose}</Text>
       {snapshot.note ? (
         <Text style={styles.sheetNote}>{t("interaction.inputHandoff.agentNote", { note: snapshot.note })}</Text>
       ) : null}
       {snapshot.command ? <Text style={styles.mono}>{snapshot.command}</Text> : null}
-      {inputHandoffWarnings(snapshot, t).map((warning) => (
-        <Text key={warning} style={styles.warning}>{warning}</Text>
-      ))}
+      {inputHandoffWarnings(snapshot, t).length ? (
+        <View style={styles.sheetWarnings}>
+          {inputHandoffWarnings(snapshot, t).map((warning) => (
+            <Text key={warning} style={styles.note}>{warning}</Text>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -194,12 +227,12 @@ function InputHandoffQuietLinks({ snapshot, busy, onPicture, onLiveView, qr }: I
       ) : null}
       {picture ? (
         <Pressable accessibilityRole="button" disabled={busy} onPress={onPicture} style={styles.quietLink}>
-          <Text style={styles.meta}>{t("interaction.inputHandoff.action.picture")}</Text>
+          <Text style={styles.body}>{t("interaction.inputHandoff.action.picture")}</Text>
         </Pressable>
       ) : null}
       {onLiveView ? (
         <Pressable accessibilityRole="button" onPress={onLiveView} style={styles.quietLink} testID="interaction.inputHandoff.liveView">
-          <Text style={styles.meta}>{t("interaction.inputHandoff.action.liveView")}</Text>
+          <Text style={styles.body}>{t("interaction.inputHandoff.action.liveView")}</Text>
         </Pressable>
       ) : null}
     </View>

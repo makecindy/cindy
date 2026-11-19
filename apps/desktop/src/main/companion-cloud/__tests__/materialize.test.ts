@@ -1,3 +1,8 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
+import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 import { describe, expect, it, vi } from 'vitest';
 import { materializeCompanion } from '../materialize.js';
 import { createCompanionStore, storedValueHash } from '../store.js';
@@ -60,6 +65,55 @@ describe('materializeCompanion', () => {
     expect(result).toEqual({ created: true, inserted: 0, rebuild: 'skipped', notices: ['permissions'] });
     expect(state.bot('bot_mia')?.demoted).toBeUndefined();
     expect(local.host.rebuildContext).not.toHaveBeenCalled();
+  });
+
+  // #9339: existing fakeLocal.restoreMemory accepts every filename, hiding the
+  // digest rejection. Unit tier: real materialize -> service -> isolated storage;
+  // one storage-generated digest plus a curated control must clear demotion.
+  it('completes takeover with a storage-generated digest and a curated memory', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-digest-takeover-'));
+    try {
+      const source = new MemoryStorage(path.join(dir, 'source'), DEFAULT_MEMORY_CONFIG);
+      const destination = new MemoryStorage(path.join(dir, 'destination'), DEFAULT_MEMORY_CONFIG);
+      await source.init(dir);
+      await destination.init(dir);
+      const prefs: Array<{ key: string; value: unknown }> = [profilePref];
+      for (const type of ['digest', 'user'] as const) {
+        await source.write({ type, name: 'takeover', title: type, description: 'takeover fixture', body: `${type} body` });
+        const filename = `${type}_takeover.md`;
+        prefs.push({ key: `companion.memory.v1:${filename}`, value: {
+          filename, content: await fs.readFile(path.join(dir, 'source', filename), 'utf8'),
+        } });
+      }
+      const service = createBotMemoryService({
+        getStore: async () => destination as unknown as MakerMemoryStore,
+        readBot: async () => ({ canonicalSessionId: null }),
+        requestRefresh: async () => undefined,
+      });
+      const local = fakeLocal({
+        readMemory: (_id, filename) => fs.readFile(path.join(dir, 'destination', filename), 'utf8').catch(error => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        }),
+        restoreMemory: (id, filename, raw) => service.restoreRaw(id, filename, raw),
+        removeMemory: (id, filename) => service.removeRaw(id, filename),
+      });
+      const { api } = cloud(prefs);
+      const { state } = memoryState();
+      state.update(actor.externalId, actor.id, entry => { entry.demoted = true; });
+      const run = () => materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      await run();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect((await destination.read('digest_takeover.md')).body).toBe('digest body');
+      expect((await destination.read('user_takeover.md')).body).toBe('user body');
+      expect(await destination.getIndex()).not.toContain('digest_takeover.md');
+      expect(await destination.getIndex()).toContain('user_takeover.md');
+      await run();
+      expect(state.isDemoted(actor.externalId)).toBe(false);
+      expect((await destination.read('digest_takeover.md')).body).toBe('digest body');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('updates an existing companion from the cloud; a tombstone deletes the local file whatever it holds', async () => {

@@ -4,7 +4,6 @@ import type { MobileHomeDeviceFilterItem, MobileHomeProjectGroup } from '@/sessi
 import { buildHomeProjectMachineIdentities } from '@/session/homeProjectMachineIdentity';
 
 const connected = {
-  status: 'online' as const,
   getPresenceAvailability: (_deviceId: string): boolean | null => true,
   unresponsiveDevices: new Set<string>(),
   revokedDevices: new Set<string>(),
@@ -80,8 +79,6 @@ describe('project machine identity parity with Desktop', () => {
   it.each([
     ['unknown presence', { getPresenceAvailability: (): boolean | null => null }, false],
     ['offline or remote disabled', { getPresenceAvailability: (): boolean | null => false }, true],
-    ['relay reconnecting', { status: 'connecting' as const }, true],
-    ['relay stopped', { status: 'stopped' as const }, true],
     ['unresponsive host', { unresponsiveDevices: new Set(['mac']) }, true],
     ['revoked host', { revokedDevices: new Set(['mac']) }, true],
   ] as const)('uses shared evidence for %s even while the roster says ready', (_label, evidence, disconnected) => {

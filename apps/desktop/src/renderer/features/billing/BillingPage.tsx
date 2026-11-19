@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Check,
   CircleDollarSign,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Copy,
   CreditCard,
   ExternalLink,
@@ -62,6 +63,8 @@ import {
   type SupportedPurchaseOption,
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
+import { takePendingGiftCardCode } from './giftCardIntent';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
@@ -109,6 +112,7 @@ const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
  * 沿用现有每页10笔的密度；服务端统一查询成功充值和每笔已付订阅账单。
  */
 const ORDER_HISTORY_LIMIT = 10;
+const PROMOTIONAL_GRANTS_PAGE_SIZE = 10;
 
 /** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
 function maskedOrderId(orderId: string): string {
@@ -307,6 +311,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const ordersRequestRef = useRef<{ cursor?: string; previousCursors: (string | undefined)[] }>({ previousCursors: [] });
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
+  const [giftCardDialog, setGiftCardDialog] = useState<{ open: boolean; code: string | null }>({
+    open: false,
+    code: null,
+  });
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -364,6 +372,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     resetSelection();
     setTopupDialogOpen(true);
   }, [resetSelection, searchParams, setSearchParams]);
+
+  // 礼品卡唤起链接：兑换码不进 URL，由 MainLayout 暂存在内存，这里取走一次。
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'redeem-gift-card') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    setGiftCardDialog({ open: true, code: takePendingGiftCardCode() });
+  }, [searchParams, setSearchParams]);
 
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
@@ -504,7 +521,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
-      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 服务端的 paid tier 认有效订阅、兑换过的礼品卡和未全额退款的成功充值订单；两类支付
       // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
       if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
         void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
@@ -1146,12 +1163,25 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               issue={balanceError}
               loading={loadingBalance}
               onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
+              onRedeemGiftCard={() => setGiftCardDialog({ open: true, code: null })}
             />
           </BillingGroup>
 
           {(creditUsage || balance) && (
             <BillingGroup
               title={t('billing.usage.title')}
+              action={
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  size="xs"
+                  compact
+                  onClick={() => setSearchParams(new URLSearchParams({ tab: 'usage' }))}
+                >
+                  {t('billing.usage.viewUsage')}
+                  <ChevronRight size={12} aria-hidden="true" />
+                </Button>
+              }
               description={
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
@@ -1166,20 +1196,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
 
-          {creditUsage && (
-            <BillingGroup
-              title={t('billing.usage.promotionalDetails.title')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.usage.promotionalDetails.count', {
-                    count: creditUsage.promotionalGrants.length,
-                  })}
-                </span>
-              }
-            >
-              <PromotionalGrantsCard usage={creditUsage} />
-            </BillingGroup>
-          )}
+          {creditUsage && <PromotionalGrantsCard usage={creditUsage} />}
 
           {(orderHistory.records.length > 0 || ordersError) && <BillingGroup
             title={t('billing.orders.title')}
@@ -1276,6 +1293,18 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onSelectPurchaseOption={setSelectedPurchaseOptionId}
         onCustomAmountChange={setCustomAmount}
         onSubmit={submit}
+      />
+
+      <GiftCardRedeemDialog
+        open={giftCardDialog.open}
+        initialCode={giftCardDialog.code}
+        onClose={() => setGiftCardDialog({ open: false, code: null })}
+        onRedeemed={() => {
+          void loadBalance();
+          // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
+          // AIGateway access group，模型选择器当场解锁付费模型。
+          void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+        }}
       />
 
       <BillingCheckoutDialog
@@ -1580,12 +1609,14 @@ function BillingGroup({
   titleId,
   description,
   badge,
+  action,
   children,
 }: {
   title: string;
   titleId?: string;
   description?: string;
   badge?: React.ReactNode;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -1594,7 +1625,7 @@ function BillingGroup({
         <h3 id={titleId} className={SETTINGS_SECTION_TITLE_CLASS}>
           {title}
         </h3>
-        {badge}
+        {action ?? badge}
       </div>
       {description && (
         <p className="mt-1 max-w-[620px] text-12 leading-5 text-[var(--text-secondary)]">
@@ -1612,12 +1643,14 @@ function BalanceOverviewCard({
   issue,
   loading,
   onPurchase,
+  onRedeemGiftCard,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
   issue: BalanceIssue;
   loading: boolean;
   onPurchase: () => void;
+  onRedeemGiftCard: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1659,16 +1692,28 @@ function BalanceOverviewCard({
             </p>
           )}
         </div>
-        <Button
-          variant="secondary"
-          size="md"
-          compact
-          type="button"
-          onClick={onPurchase}
-          className="shrink-0 select-none"
-        >
-          {t('billing.settings.topupCard.action')}
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onRedeemGiftCard}
+            className="shrink-0 select-none"
+          >
+            {t('billing.giftCard.action')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onPurchase}
+            className="shrink-0 select-none"
+          >
+            {t('billing.settings.topupCard.action')}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -1768,60 +1813,136 @@ function CreditPoolRow({
 function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const [requestedPage, setPage] = useState(1);
+  const pageCount = Math.max(
+    1,
+    Math.ceil(usage.promotionalGrants.length / PROMOTIONAL_GRANTS_PAGE_SIZE),
+  );
+  const page = Math.min(requestedPage, pageCount);
+  const grants = [...usage.promotionalGrants].sort((left, right) => {
+    const leftExpiry = Date.parse(left.expiresAt);
+    const rightExpiry = Date.parse(right.expiresAt);
+    return Number(right.state === 'active') - Number(left.state === 'active') || leftExpiry - rightExpiry;
+  });
+  const pageGrants = grants.slice(
+    (page - 1) * PROMOTIONAL_GRANTS_PAGE_SIZE,
+    page * PROMOTIONAL_GRANTS_PAGE_SIZE,
+  );
+
+  // 保留主干的滚动条宽度补偿；翻页会重新挂载列表，因此同时按页码重新测量。
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+  const grantCount = usage.promotionalGrants.length;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => setScrolls(list.scrollHeight > list.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [grantCount, page]);
+
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {!usage.promotionalGrantsComplete && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.promotionalDetails.incomplete', {
-            count: usage.promotionalGrants.length,
-          })}
-        </p>
-      )}
-      {usage.promotionalGrants.length === 0 ? (
-        <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
-          {t('billing.usage.promotionalDetails.empty')}
-        </p>
-      ) : (
-        <div
-          className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
-          role="list"
-        >
-          {usage.promotionalGrants.map((grant) => (
-            <div
-              key={grant.grantId}
-              role="listitem"
-              className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
-            >
-              <div className="col-span-3 min-w-0 lg:col-span-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                    {grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
-                  </p>
-                  <PromotionalGrantStatus state={grant.state} />
-                </div>
-                <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
-                  {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
-                  })}
-                </p>
-              </div>
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.original')}
-                amount={grant.originalAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.used')}
-                amount={grant.usedAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.remaining')}
-                amount={grant.remainingAmount}
-              />
+    <BillingGroup
+      title={t('billing.usage.promotionalDetails.title')}
+      badge={
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
+          </span>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('billing.orders.history.previous')}
+              </Button>
+              <span aria-live="polite" className="text-11 tabular-nums text-[var(--text-secondary)]">
+                {page}/{pageCount}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === pageCount}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('billing.orders.history.next')}
+              </Button>
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </section>
+      }
+    >
+      <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+        {!usage.promotionalGrantsComplete && (
+          <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+            {t('billing.usage.promotionalDetails.incomplete', { count: usage.promotionalGrants.length })}
+          </p>
+        )}
+        {grants.length === 0 ? (
+          <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.empty')}
+          </p>
+        ) : (
+          <div
+            key={page}
+            ref={listRef}
+            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto"
+            role="list"
+          >
+            {pageGrants.map((grant) => (
+              <div
+                key={grant.grantId}
+                role="listitem"
+                className={cn(
+                  'grid grid-cols-3 gap-x-3 gap-y-2 py-3 pl-5 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
+                  scrolls ? 'pr-2' : 'pr-5',
+                )}
+              >
+                <div className="col-span-3 min-w-0 lg:col-span-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                      {grant.source?.type === 'subscription_rollover'
+                        ? t('billing.usage.promotionalDetails.rolloverName')
+                        : grant.source?.type === 'gift_card'
+                          ? t('billing.usage.promotionalDetails.giftCard', {
+                              sender: grant.source.senderName,
+                            })
+                          : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                    </p>
+                    <PromotionalGrantStatus state={grant.state} />
+                  </div>
+                  <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
+                    {t('billing.usage.promotionalDetails.expiresAt', {
+                      date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
+                    })}
+                  </p>
+                </div>
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.original')}
+                  amount={grant.originalAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.used')}
+                  amount={grant.usedAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.remaining')}
+                  amount={grant.remainingAmount}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </BillingGroup>
   );
 }
 
@@ -2215,7 +2336,8 @@ function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
-    <div className="min-w-0 text-right">
+    // 窄窗口下三项排在名称下面，和名称一起靠左；宽窗口下与名称同一行，按数字靠右对齐。
+    <div className="min-w-0 text-left lg:text-right">
       <p className="truncate text-10 text-[var(--text-tertiary)]">{label}</p>
       <p className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
         {formatMoney(amount, BILLING_CURRENCY, billingLocale)}
@@ -2471,17 +2593,27 @@ function BillingOfferDialog({
                       </p>
                     )}
                     {selected.offer.rolloverCap !== null && (
-                      <p className="text-12 text-[var(--text-secondary)]">
-                        {t('billing.comparison.rollover', {
-                          amount: formatMoney(
-                            selected.offer.rolloverCap,
-                            selected.offer.currency,
-                            billingLocale,
-                          ),
-                          period: t(
-                            `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
-                          ),
-                        })}
+                      <p
+                        className={cn(
+                          'text-12 text-[var(--text-secondary)]',
+                          selected.offer.interval === 'MONTH' && 'whitespace-pre-line',
+                        )}
+                      >
+                        {t(
+                          selected.offer.interval === 'MONTH'
+                            ? 'billing.comparison.rolloverMonthly'
+                            : 'billing.comparison.rollover',
+                          {
+                            amount: formatMoney(
+                              selected.offer.rolloverCap,
+                              selected.offer.currency,
+                              billingLocale,
+                            ),
+                            period: t(
+                              `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
+                            ),
+                          },
+                        )}
                       </p>
                     )}
                   </div>

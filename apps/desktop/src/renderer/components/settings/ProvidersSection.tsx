@@ -1,3 +1,7 @@
+import type { ProviderErrorCode } from '../../../shared/providerErrors';
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { Select } from '@/components/ui/select';
+import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { providersSettings } from './ProvidersSection.settings-search';
 import {
@@ -101,8 +105,10 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
-import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
-import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
+import { placementErrorKey } from './SubscriptionPlacement';
+import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
@@ -136,7 +142,6 @@ import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShar
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
-import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import {
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
@@ -178,6 +183,7 @@ function providerHasModels(provider: ProviderView): boolean {
     (provider.imageModels?.length ?? 0) > 0 ||
     (provider.videoModels?.length ?? 0) > 0 ||
     (provider.audioModels?.length ?? 0) > 0 ||
+    (provider.evaluationModels?.length ?? 0) > 0 ||
     (provider.embeddingModels?.length ?? 0) > 0
   );
 }
@@ -206,11 +212,14 @@ function RemoteProviderAccessRow({
   remoteControlEnabled,
   pendingShareRequests,
   onManageShare,
+  poolName,
 }: {
   provider: ProviderView;
   remoteControlEnabled: boolean;
   pendingShareRequests: number;
   onManageShare: () => void;
+  /** Set for a connection merged into an account pool: its switch follows that pool and is changed there. */
+  poolName?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -236,7 +245,9 @@ function RemoteProviderAccessRow({
           {t('settings.providers.detail.remoteAccess.label')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-          {gate === 'remote-off' ? (
+          {poolName !== undefined && gate !== 'remote-off' ? (
+            t('settings.providers.detail.remoteAccess.followsPool', { pool: poolName })
+          ) : gate === 'remote-off' ? (
             <>
               {t('providerShare.entry.remoteControlOff')}{' '}
               <button data-setting-id={providersSettings.sharing.id}
@@ -265,7 +276,7 @@ function RemoteProviderAccessRow({
         />
         <Switch data-setting-id={providersSettings.sharing.id}
           checked={enabled}
-          disabled={busy || !remoteControlEnabled}
+          disabled={busy || !remoteControlEnabled || poolName !== undefined}
           aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
           onCheckedChange={(next) => {
             const previous = enabled;
@@ -444,6 +455,8 @@ function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
   return (
     provider.source === 'builtin' &&
     provider.id !== 'xd' &&
+    // A provider created for subscription accounts is managed through its accounts (2026-11-13).
+    !provider.subscriptionPool &&
     (['openai', 'anthropic', 'xai'].includes(provider.id) ||
       (provider.auth.method === 'oauth' && !!provider.auth.oauth) ||
       (provider.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(provider.id)))
@@ -705,7 +718,7 @@ function DetailHeader({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  // Borrowing another computer's sign-in: this computer's own accounts and "not connected" do not apply.
+  // Model execution can be remote while account management still belongs to this computer.
   const borrowing = useProviderBorrow(provider).borrowed !== null;
   const canRename = !!provider && provider.id !== 'xd' && !isOrganizationManagedProvider(provider);
   const resolvedDelete =
@@ -717,7 +730,9 @@ function DetailHeader({
         }
       : undefined);
   const subscription = useProviderSubscriptionCard(provider);
-  const resetEnabled = Boolean(provider && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex');
+  // A created subscription provider reads usage per account in its account list instead.
+  const resetEnabled = Boolean(provider && !provider.subscriptionPool
+    && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex');
   const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(resetEnabled, provider?.id ?? 'openai');
   const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -741,9 +756,14 @@ function DetailHeader({
         })
       : null;
 
-  const subscriptionPool = provider && isSubscriptionProvider(provider.id) ? provider.id : null;
+  // Account pool kind behind this provider: the built-in one, or (2026-11-13) a provider whose
+  // accounts the host manages in that pool (created, or a legacy Codex connection with accounts).
+  const subscriptionKind = !provider ? null
+    : isSubscriptionProvider(provider.id) ? provider.id
+      : provider.subscriptionAccountPool ?? provider.subscriptionPool ?? null;
+  const subscriptionPool = subscriptionKind && provider ? provider.id : null;
   const dashboard =
-    provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+    subscriptionKind === 'anthropic' || provider?.auth.native === 'claude'
       ? {
           label: t('settings.providers.usage.openClaudeUsage'),
           onOpen: () => void window.electronAPI.openExternal('https://claude.ai/settings/usage'),
@@ -860,7 +880,12 @@ function DetailHeader({
               data-testid="provider-detail-actions"
               className="flex shrink-0 items-center gap-2.5"
             >
-              {borrowing ? null : status?.kind === 'connected' ? (
+              {borrowing && (status || primaryAction) && (
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t('settings.providers.detail.runLocation.optionLocal')}
+                </span>
+              )}
+              {status?.kind === 'connected' ? (
                 <ConnectedPill />
               ) : status?.kind === 'reconnect-required' ? (
                 <ReconnectRequiredPill />
@@ -869,7 +894,7 @@ function DetailHeader({
                   {status.label}
                 </span>
               ) : null}
-              {primaryAction && !borrowing && <PillButton {...primaryAction} />}
+              {primaryAction && <PillButton {...primaryAction} />}
             </div>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
@@ -901,11 +926,6 @@ function DetailHeader({
                     <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
                       <Pencil size={18} className="mr-2.5" />
                       {editAction.label}
-                    </DropdownMenuItem>
-                  )}
-                  {borrowing && primaryAction && (
-                    <DropdownMenuItem onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
-                      {t('settings.providers.detail.runLocation.signInHere')}
                     </DropdownMenuItem>
                   )}
                   {menuItems}
@@ -948,12 +968,16 @@ function DetailHeader({
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {/* Pooled subscription accounts show the provider card in the default account's row. */}
-        {subscriptionPool && !borrowing && (
+        {subscriptionPool && subscriptionKind && (
           <SubscriptionAccountsSection
             key={subscriptionPool}
             providerId={subscriptionPool}
+            kind={subscriptionKind}
+            providerName={provider?.name}
+            locationLabel={borrowing ? t('settings.providers.detail.runLocation.optionLocal') : undefined}
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
+            expectAccounts={provider?.connected === true}
           />
         )}
         {assetModule ??
@@ -984,21 +1008,29 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const [pooled, setPooled] = useState(false);
-  const [poolConnected, setPoolConnected] = useState(false);
+  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
+  const [pooled, setPooled] = useState(provider?.subscriptionAccountPool === providerId);
+  const [poolConnected, setPoolConnected] = useState(provider?.connected === true);
+  const [poolUnknown, setPoolUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     let current = true;
-    const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
+    const refresh = () => window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
       .then(view => { if (current) {
         const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
+        // Accounts that could not be read are unknown, not signed out (2026-11-18): offering
+        // sign-in here made a network problem look like a lost login.
+        const unknown = !connected && view.accounts.some(account => account.status === 'unavailable');
         setPooled(view.configured);
         setPoolConnected(connected);
-        onPoolConnectionChange?.(view.configured ? connected : null);
+        setPoolUnknown(unknown);
+        onPoolConnectionChange?.(view.configured && !unknown ? connected : null);
       } }).catch(() => {});
-    refresh();
-    const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) refresh(); });
+    refreshRef.current = refresh;
+    void refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) void refresh(); });
     return () => {
       current = false; off();
       onPoolConnectionChange?.(null);
@@ -1010,6 +1042,12 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
     : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
   const connected = poolConnected;
   const act = async () => {
+    if (poolUnknown && !login.current) {
+      // Re-read only; a recovered account announces itself to the account list as well.
+      setBusy(true);
+      try { await refreshRef.current(); } finally { setBusy(false); }
+      return;
+    }
     if (login.current) {
       await window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
       return;
@@ -1025,19 +1063,67 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
       }
       onChanged();
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
-        toast.error(t(code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
-          ? 'subscriptionAccounts.providerManagedAuth'
-          : 'subscriptionAccounts.failed'));
+      const key = subscriptionAccountErrorKey(error);
+      if (key) toast.error(t(key));
     } finally { login.current = null; setBusy(false); }
   };
   return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
     icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
     title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
     subtitle={t('subscriptionAccounts.title')}
-    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected') }}
-    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : poolUnknown ? 'subscriptionAccounts.unavailable' : 'settings.providers.pill.disconnected') }}
+    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : poolUnknown ? 'subscriptionAccounts.signIn.retry' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+}
+
+/**
+ * A provider Cindy created for subscription accounts (2026-11-13). It mirrors its built-in
+ * subscription's routes but is never that connection: signing in and out happens per account in
+ * the account list, and deleting it only stops using its accounts (their CLI logins stay).
+ */
+function CreatedSubscriptionHeader({ provider, kind, onChanged, children }: {
+  provider: ProviderView; kind: SubscriptionProvider; onChanged: () => void; children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [connected, setConnected] = useState(provider.connected);
+  const [unknown, setUnknown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let current = true;
+    const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId: provider.id })
+      .then((view) => {
+        if (!current) return;
+        const ready = view.accounts.some((account) => account.status === 'ready' || account.status === 'limited');
+        setConnected(ready);
+        setUnknown(!ready && view.accounts.some((account) => account.status === 'unavailable'));
+      }).catch(() => {});
+    refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged((event) => { if (event.providerId === kind) refresh(); });
+    return () => { current = false; off(); };
+  }, [provider.id, kind]);
+  const remove = async () => {
+    if (!(await confirm({
+      title: t('subscriptionAccounts.placement.deleteTitle', { name: provider.name }),
+      description: t('subscriptionAccounts.placement.deleteDescription'),
+      confirmText: t('subscriptionAccounts.placement.deleteConfirm'),
+      confirmVariant: 'destructive',
+    }))) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'remove-provider', providerId: provider.id });
+      onChanged();
+    } catch (error) {
+      toast.error(t(error instanceof Error && error.message.includes('Account is in use')
+        ? 'subscriptionAccounts.placement.deleteInUse'
+        : placementErrorKey(error)));
+    } finally { setBusy(false); }
+  };
+  return <DetailHeader provider={{ ...provider, connected }} children={children}
+    icon={kind === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
+    title={provider.name}
+    subtitle={t('subscriptionAccounts.title')}
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(unknown ? 'subscriptionAccounts.unavailable' : 'settings.providers.pill.disconnected') }}
+    deleteAction={busy ? undefined : { label: t('settings.providers.custom.deleteAria'), onClick: () => void remove() }} />;
 }
 
 function AnthropicHeader({
@@ -2402,6 +2488,8 @@ function ListRow({
   const title = providerDisplayName(provider, t);
   return (
     <div
+      // Listed-source identity shared with the model picker rail (`local:<providerId>`).
+      data-listed-source={`local:${provider.id}`}
       className={cn(
         'relative flex w-full items-center rounded-lg text-left transition-colors',
         selected
@@ -2571,6 +2659,8 @@ export function ProvidersSection() {
   const onOpenaiPoolConnectionChange = useCallback((connected: boolean | null) => {
     setOpenaiPoolState(connected === null ? null : { dataOwnerId, connected });
   }, [dataOwnerId]);
+  // Memory only, while this page is open. A new owner starts empty, never seeing these accounts.
+  const subscriptionPoolViews = useMemo(() => new Map<string, SubscriptionPoolView>(), [dataOwnerId]);
   const remoteControlEnabled = useRemoteControlEnabled();
   // 供应商分享：入口提示点读待审批申请与待处理的转分享请求；管理页是本页的子页面(返回回到供应商详情)。
   // 带 hostDeviceId 的申请在另一台电脑的分享里(那台的供应商 id 可能与本机重名)，只计入那台的组入口。
@@ -2596,8 +2686,11 @@ export function ProvidersSection() {
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
-  const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
-  const ownedShares = useOwnedProviderShares(ownRemoteProviders.map(entry => entry.deviceId));
+  const providerGroups = useLocalProviderGroupsState();
+  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds, ownedShares } = useOwnRemoteProviderList();
+  const remoteDisable = useRemoteProviderDisable();
+  const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
+    ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
@@ -2732,6 +2825,9 @@ export function ProvidersSection() {
         if (
           p.id === 'xd' ||
           p.connected ||
+          // A provider created for subscription accounts stays listed while signed out, so its
+          // accounts can be signed in again or the provider deleted (2026-11-13).
+          !!p.subscriptionPool ||
           p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
           openaiHasImageCap ||
@@ -2774,12 +2870,22 @@ export function ProvidersSection() {
     [orderedVisibleProviders, pendingProviderOrderIds],
   );
   const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
-  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localBase = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localExempt = (providerId: string) => !providerGroups.ready || !!providerGroups.groups[providerId];
+  // Which equal account connection a folded row opens (its account list lives on the root row).
+  const localDuplicates = duplicateSubscriptionProviders(localBase.filter(provider => !localExempt(provider.id)));
   const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
-  // The same provider on another computer folds into this computer's listed entry (run location lives there).
-  const localProviderIds = new Set(listProviders.map(item => item.id));
-  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id)
-    && (entry.group || !localProviderIds.has(entry.provider.id)));
+  const unsharedRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  // Same rule as both model pickers: an equal source is listed once; this computer's entry represents it.
+  const listedFolds = listedSourceFolds({
+    base: localBase,
+    baseExempt: localExempt,
+    others: [...new Set(unsharedRemoteProviders.map(entry => entry.deviceId))].map(deviceId => ({
+      deviceId, providers: unsharedRemoteProviders.filter(entry => entry.deviceId === deviceId).map(entry => entry.provider),
+    })),
+  });
+  const ordinaryLocalProviders = localBase.filter(provider => !listedFolds.hiddenBase.has(provider.id));
+  const ordinaryRemoteProviders = unsharedRemoteProviders.filter(entry => !listedFolds.hiddenOther.get(entry.deviceId)?.has(entry.provider.id));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
@@ -3016,16 +3122,20 @@ export function ProvidersSection() {
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
     const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
-    // Match the connection header immediately, including auth invalidation before catalog refresh.
+    // Pool connection state covers all its accounts; native auth only describes the legacy default login.
     return selected?.id === 'openai'
       ? {
           ...selected,
           connected: openaiPoolState && openaiPoolState.dataOwnerId === dataOwnerId
             ? openaiPoolState.connected
-            : isChatGptConnectionConnected(codexAuth.state, selected.connected),
+            : selected.subscriptionAccountPool === 'openai'
+              ? selected.connected
+              : isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
+  const selectedAccountRoot = effectiveSelected ? localDuplicates.get(effectiveSelected.id) ?? effectiveSelected.id : null;
+  const selectedAccountConnections = listProviders.filter(provider => provider.id === selectedAccountRoot || localDuplicates.get(provider.id) === selectedAccountRoot);
   const selectedBorrow = useProviderBorrow(effectiveSelected);
   // 借用时模型区整块换成「运行于」那台电脑的清单；本机目录、发现失败与刷新都不适用。
   const selectedBorrowedModels = selectedBorrow.borrowed && selectedBorrow.borrowedCatalog
@@ -3037,7 +3147,6 @@ export function ProvidersSection() {
       try {
         const scope = await window.electronAPI.maker.listProviders();
         const ok = await confirm({
-          presentation: 'standard',
           title: t('settings.providers.custom.deleteConfirm.title'),
           description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
           confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
@@ -3082,6 +3191,7 @@ export function ProvidersSection() {
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
+        let failureCode: ProviderErrorCode | undefined;
         const refreshedAgents = new Set<AgentKind>();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
@@ -3101,7 +3211,12 @@ export function ProvidersSection() {
             apiKey,
             savedProviderId: p.id,
           });
-          if (!r.ok || !r.models) continue;
+          if (!r.ok || !r.models) {
+            // Prefer actionable authentication recovery when every runtime fails.
+            // Partial success still follows the existing merge/save path below.
+            if (!failureCode || failureCode === 'UNKNOWN' || r.code === 'AUTH_INVALID') failureCode = r.code;
+            continue;
+          }
           if (p.auth.native) {
             toast.success(t('settings.providers.models.refreshDone'));
             refetch();
@@ -3120,7 +3235,11 @@ export function ProvidersSection() {
           added += merged.addedIds.length;
         }
         if (!refreshedAgents.size) {
-          toast.error(t('settings.providers.models.refreshFailed'));
+          toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
+            ? 'settings.providers.models.refreshReconnect'
+            : failureCode && failureCode !== 'UNKNOWN'
+              ? `providerError.${failureCode}`
+              : 'settings.providers.models.refreshFailed'));
           return;
         }
         // Main owns the active Registry and classifies the complete discovery
@@ -3216,6 +3335,9 @@ export function ProvidersSection() {
     if (p.id === 'openai')
       return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} onPoolConnectionChange={onOpenaiPoolConnectionChange} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
+    // Created subscription providers copy their built-in's fields; never treat them as that connection.
+    if (p.subscriptionPool)
+      return <CreatedSubscriptionHeader key={p.id} children={children} provider={p} kind={p.subscriptionPool} onChanged={refetch} />;
     if (p.source === 'builtin' && p.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(p.id)) {
       return (
         <BuiltinApiKeyHeader children={children} key={p.id} provider={p} onChanged={refetch} />
@@ -3292,7 +3414,7 @@ export function ProvidersSection() {
       renderItem={(provider, index) => (
         <ListRow
           provider={provider}
-          selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
+          selected={!otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
           reconnectRequired={
             (provider.id === 'openai' && openaiReconnectRequired) ||
             provider.openAiAccount?.reconnectRequired === true
@@ -3327,6 +3449,7 @@ export function ProvidersSection() {
   );
 
   return (
+    <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
     <div className="flex h-full min-h-0 flex-col gap-6">
       {shareManagePage ?? (<>
       <div className="shrink-0">
@@ -3516,6 +3639,18 @@ export function ProvidersSection() {
               renderDetailHeader(
                 effectiveSelected,
                 <>
+                  {selectedAccountConnections.length > 1 && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-3 border-t px-5 py-3 text-13" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+                      <div className="min-w-0 flex-1">
+                        <p>{t('settings.providers.detail.sameAccountConnections')}</p>
+                        <p className="text-12 text-[var(--text-secondary)]">{t('settings.providers.detail.sameAccountConnectionsHint')}</p>
+                      </div>
+                      <Select label={t('settings.providers.detail.sameAccountConnections')} value={effectiveSelected.id}
+                        data-settings-search-action="Select which connection for this account is displayed"
+                        groups={[{ options: selectedAccountConnections.map(provider => ({ value: provider.id, label: providerDisplayName(provider, t) })) }]}
+                        onValueChange={selectProvider} />
+                    </div>
+                  )}
                   {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
                     模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
                     盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
@@ -3587,6 +3722,7 @@ export function ProvidersSection() {
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
                         onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
+                        {...(effectiveSelected.subscriptionPoolAlias ? { poolName: providers.find(p => p.id === (effectiveSelected.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})}
                       />
                     )}
                   {!effectiveSelected.suspended && selectedBorrowedModels && (
@@ -3786,5 +3922,6 @@ export function ProvidersSection() {
         />
       )}
     </div>
+    </SubscriptionPoolViewCache.Provider>
   );
 }

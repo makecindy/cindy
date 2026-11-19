@@ -1,5 +1,5 @@
 import { stripChatQuoteMarkerLines } from './chatQuotes.js';
-import { allDeepLinkSchemes } from './brandIdentity.js';
+import { allDeepLinkSchemes, buildTaskDeepLink } from './brandIdentity.js';
 
 /** Stable cross-client marker for a retryable local Codex resume preflight. */
 export const CODEX_RESUME_NOT_READY_MARKER = '[CODEX_RESUME_NOT_READY]';
@@ -604,10 +604,14 @@ function formatReference(reference: AgentInputReference): string {
     ].join('\n');
   }
   if (reference.kind === 'session') {
+    // The session ID alone cannot locate a task on another device or under a guest grant.
+    const query = reference.href.split('#', 1)[0].split('?')[1];
+    const deviceId = query ? new URLSearchParams(query).get('device') : null;
     return [
       '[Referenced conversation]',
       `Title: ${quotedMetadata(oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`)}`,
       `Session ID: ${quotedMetadata(reference.sessionId)}`,
+      ...(deviceId ? [`Task link: ${quotedMetadata(buildTaskDeepLink(reference.sessionId, deviceId))}`] : []),
       '[/Referenced conversation]',
     ].join('\n');
   }
@@ -675,10 +679,14 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced todo]',
     ].join('\n');
   }
+  // Remote project links store the sidebar identity. Its prefix identifies the
+  // host and is not part of the native working directory.
+  const scoped = /^(device|remote):([^:]+):([\s\S]+)$/.exec(reference.workingDir);
   return [
     '[Referenced project]',
     `Name: ${quotedMetadata(oneLine(reference.name))}`,
-    `Working directory: ${quotedMetadata(reference.workingDir)}`,
+    ...(scoped ? [`Project key: ${quotedMetadata(reference.workingDir)}`] : []),
+    `Working directory: ${quotedMetadata(scoped?.[3] ?? reference.workingDir)}`,
     '[/Referenced project]',
   ].join('\n');
 }

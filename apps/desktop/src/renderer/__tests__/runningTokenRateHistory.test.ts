@@ -7,7 +7,7 @@ import {
   recordTokenSpeed,
   saveCachedRateHistory,
 } from '@/features/cc-agent/lib/runningTokenRateHistory';
-import { readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { binThinkingMarks, formatThinkingShare, readTokenSpeedSnapshot, thinkingStrokeLength, traceHasChart } from '@cindy/maker-shared/usage-format';
 
 const input = { startedAt: 1, outputTokens: 0, generationDurationMs: 0, generationReliable: true };
 const begin = () => recordRunningTokenRate(emptyRateHistory(null), input);
@@ -380,9 +380,179 @@ describe('host token speed (Pi extension algorithm)', () => {
   });
 
   it('accepts only well-formed host snapshots', () => {
+    const measured = speed(10, 1000);
+    expect(readTokenSpeedSnapshot({ ...measured, totalOutputTokens: 5300 })?.totalOutputTokens).toBe(5300);
+    expect(readTokenSpeedSnapshot({ ...measured, totalOutputTokens: -1 })).toEqual(measured);
     expect(readTokenSpeedSnapshot(speed(10, 1000))).toEqual(speed(10, 1000));
     expect(readTokenSpeedSnapshot({ rate: 10 })).toBeUndefined();
     expect(readTokenSpeedSnapshot({ ...speed(10, 1000), rate: Number.NaN })).toBeUndefined();
     expect(readTokenSpeedSnapshot(null)).toBeUndefined();
   });
+
+  it('does not treat a mid-turn provisional elapsedMs adjustment as a new turn reset and keeps plotting', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), {
+      startedAt: 1,
+      speed: { rate: 80, average: 20, tokens: 200, elapsedMs: 10_000, streaming: true, peak: 80 },
+      now: 100,
+    });
+    expect(history.latestRate).toBe(80);
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([10_000]);
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 100, average: 100, tokens: 300, elapsedMs: 3_000, streaming: true, peak: 100 },
+      now: 200,
+    });
+    expect(history.latestRate).toBe(100);
+    expect(history.speedOffsetMs).toBe(7_000);
+    expect(history.peak).toBe(100);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 95, average: 98, tokens: 395, elapsedMs: 4_000, streaming: true, peak: 100 },
+      now: 300,
+    });
+    expect(history.samples.map((sample) => ({ durationMs: sample.durationMs, rate: sample.rate }))).toEqual([
+      { durationMs: 10_000, rate: 80 },
+      { durationMs: 11_000, rate: 95 },
+    ]);
+  });
+
+  it('clears latestRate while a new same-turn request warms up without dropping samples or peak', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), {
+      startedAt: 1,
+      speed: { rate: 80, average: 75, tokens: 300, elapsedMs: 4_000, streaming: true, peak: 90 },
+      now: 100,
+    });
+    expect(history.latestRate).toBe(80);
+    expect(history.samples).toHaveLength(1);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 0, average: 75, tokens: 310, elapsedMs: 4_200, streaming: true, peak: 90 },
+      now: 200,
+    });
+    expect(history.latestRate).toBeNull();
+    expect(history.samples).toHaveLength(1);
+    expect(history.peak).toBe(90);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 110, average: 85, tokens: 550, elapsedMs: 6_500, streaming: true, peak: 110 },
+      now: 300,
+    });
+    expect(history.latestRate).toBe(110);
+    expect(history.samples).toHaveLength(2);
+    expect(history.peak).toBe(110);
+  });
+});
+
+// 生产入口：recordTokenSpeed（状态栏速度图的历史）与 binThinkingMarks（图上的推理笔画）。
+// 规则依据：宿主随速度快照上报最近一次完成的模型请求；同一快照每秒重复到达多次，
+// 图上只能多出一笔，且「上报 0」（没推理就直接回答）与「没上报」必须可区分。unit。
+describe('finished requests on the speed chart', () => {
+  const speed = (elapsedMs: number, request?: { index: number; atMs: number; thinkingTokens?: number; outputTokens?: number }) => ({
+    rate: 50, average: 50, tokens: Math.round(elapsedMs / 20), elapsedMs, streaming: true,
+    ...(request ? { request } : {}),
+  });
+
+  it('adds one mark per finished request, however often its snapshot repeats', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: speed(1200) });
+    expect(history.marks).toBeUndefined();
+    const first = { index: 1, atMs: 2000, thinkingTokens: 516, outputTokens: 1000 };
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(2000, first) });
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(2100, first) });
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(3500, { index: 2, atMs: 3400, thinkingTokens: 0, outputTokens: 720 }) });
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(4000, { index: 3, atMs: 3900, outputTokens: 5000 }) });
+    expect(history.marks).toEqual([
+      { durationMs: 2000, thinkingTokens: 516, requests: 1 },
+      { durationMs: 3400, thinkingTokens: 0, requests: 1 },
+      { durationMs: 3900, thinkingTokens: null, requests: 1 },
+    ]);
+    // The turn's share covers the requests that reported a split: 516 of 1,720, not of 6,720.
+    expect(formatThinkingShare(history.turnThinkingTokens!, history.turnThinkingOutputTokens!)).toBe('30%');
+    // The next turn starts its own share.
+    history = recordTokenSpeed(history, { startedAt: 2, speed: speed(900, { index: 1, atMs: 800, thinkingTokens: 0, outputTokens: 200 }) });
+    expect([history.turnThinkingTokens, history.turnThinkingOutputTokens]).toEqual([0, 200]);
+  });
+
+  it('reads the share so a sliver of reasoning is not shown as none', () => {
+    expect(formatThinkingShare(0, 1000)).toBe('0%');
+    expect(formatThinkingShare(4, 1000)).toBe('<1%');
+    expect(formatThinkingShare(310, 1000)).toBe('31%');
+    // No output to divide by: no share, rather than a made-up one.
+    expect(formatThinkingShare(0, 0)).toBeNull();
+  });
+
+  it('keeps earlier marks and restarts request numbering when the next turn begins', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null),
+      { startedAt: 1, speed: speed(1500, { index: 1, atMs: 1500, thinkingTokens: 40 }) });
+    history = recordTokenSpeed(history,
+      { startedAt: 2, speed: speed(1100, { index: 1, atMs: 1000, thinkingTokens: 900 }) });
+    expect(history.marks?.map((mark) => mark.thinkingTokens)).toEqual([40, 900]);
+    // The second turn continues the axis after the first: its mark is not left of the earlier one.
+    expect(history.marks![1].durationMs).toBeGreaterThanOrEqual(history.marks![0].durationMs);
+  });
+
+  it('reads a request mark from the wire and drops a malformed one without dropping the speed', () => {
+    const base = { rate: 1, average: 1, tokens: 1, elapsedMs: 1, streaming: true };
+    expect(readTokenSpeedSnapshot({ ...base, request: { index: 2, atMs: 900, thinkingTokens: 0, outputTokens: 64 } })?.request)
+      .toEqual({ index: 2, atMs: 900, thinkingTokens: 0, outputTokens: 64 });
+    expect(readTokenSpeedSnapshot({ ...base, request: { index: 0, atMs: 900 } })).toEqual(base);
+    expect(readTokenSpeedSnapshot({ ...base, request: { index: 1, atMs: 5, thinkingTokens: -3 } })?.request)
+      .toEqual({ index: 1, atMs: 5 });
+  });
+
+  it('draws a turn of any length with a fixed number of strokes', () => {
+    // 140 requests, one per second; every tenth one thinks.
+    const marks = Array.from({ length: 140 }, (_, i) => ({
+      durationMs: (i + 1) * 1000, thinkingTokens: i % 10 === 0 ? 1000 : 0, requests: 1,
+    }));
+    const columns = binThinkingMarks(marks, 0, 140_000, 28);
+    expect(columns).toHaveLength(28);
+    expect(columns[0]).toEqual({ column: 0, thinkingTokens: 1000 });
+    expect(columns.at(-1)?.column).toBe(27);
+    expect(columns.reduce((sum, column) => sum + (column.thinkingTokens ?? 0), 0)).toBe(14_000);
+    // Three requests stay three strokes; one that reported no split has no amount, not zero.
+    expect(binThinkingMarks([
+      { durationMs: 1000, thinkingTokens: 512, requests: 1 },
+      { durationMs: 50_000, thinkingTokens: null, requests: 1 },
+      { durationMs: 100_000, thinkingTokens: 0, requests: 1 },
+    ], 0, 100_000, 28).map((column) => [column.column, column.thinkingTokens]))
+      .toEqual([[0, 512], [14, null], [27, 0]]);
+  });
+
+  it('gives a finished turn no chart when it has neither a curve nor reported reasoning', () => {
+    const base = { durationMs: 900, requests: 1, reportedOutputTokens: 0 };
+    // One reading is no curve, and -1 means the provider reported no split: an empty frame otherwise.
+    expect(traceHasChart({ ...base, speed: [[800, 40]], marks: [[900, -1, 1]] })).toBe(false);
+    expect(traceHasChart({ ...base, speed: [[400, 40], [800, 50]], marks: [[900, -1, 1]] })).toBe(true);
+    // A reported zero is still something to show: the request answered without thinking.
+    expect(traceHasChart({ ...base, speed: [], marks: [[900, 0, 1]] })).toBe(true);
+  });
+
+  it('keeps a request without reasoning visible beside a very long think', () => {
+    expect(thinkingStrokeLength(0, 20_000, 20, 1.5)).toBe(1.5);
+    expect(thinkingStrokeLength(20_000, 20_000, 20, 1.5)).toBe(20);
+    // Square-root scale: a think forty times shorter is still a readable stroke, not a sliver.
+    expect(thinkingStrokeLength(500, 20_000, 20, 1.5)).toBeGreaterThan(3);
+  });
+});
+
+
+// Production recordTokenSpeed, regression #11543: a view opening after several requests
+// must recover the host's whole-turn share and marks. Existing cases observe every request.
+// Minimal input is one snapshot with index 3 and three completed requests. Tier: unit.
+it('restores missed requests and the whole-turn reasoning share from a host trace', () => {
+  const trace = { durationMs: 3000, requests: 3, speed: [],
+    marks: [[1000, 10, 1], [2000, 20, 1], [3000, 0, 1]] as Array<[number, number, number]>,
+    reportedOutputTokens: 100 };
+  const speed = { rate: 30, average: 30, tokens: 100, elapsedMs: 3000, streaming: false,
+    request: { index: 3, atMs: 3000, thinkingTokens: 0, outputTokens: 30 }, trace };
+  const restored = recordTokenSpeed(emptyRateHistory(1), { startedAt: 1, speed });
+  expect(restored.turnThinkingTokens).toBe(30);
+  expect(restored.turnThinkingOutputTokens).toBe(100);
+  expect(restored.marks).toHaveLength(3);
+  const repeated = recordTokenSpeed(restored, { startedAt: 1, speed });
+  expect(repeated.marks).toEqual(restored.marks);
+  expect(readTokenSpeedSnapshot(speed)?.trace).toEqual(trace);
 });

@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 584,
+  "count": 585,
   "colors": [
     {
       "id": "surface",
@@ -2921,6 +2921,11 @@
       "id": "plugin-identity-custom-bg",
       "light": "rgba(190, 113, 29, 0.10)",
       "dark": "rgba(190, 113, 29, 0.16)"
+    },
+    {
+      "id": "remote-agent-net-accent",
+      "light": "#7C5CFF",
+      "dark": "#A993FF"
     }
   ]
 }

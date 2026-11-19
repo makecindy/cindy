@@ -34,6 +34,8 @@ const catalog = vi.hoisted(() => ({
 }));
 const catalogDeviceIds = vi.hoisted(() => [] as Array<string | undefined>);
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: () => false,
+  getCachedDeviceProviders: () => null,
   useDeviceProviders: (deviceId?: string) => {
     catalogDeviceIds.push(deviceId);
     return catalog.value;
@@ -191,7 +193,7 @@ describe('ProviderShareReceivedDetail', () => {
     await act(async () => { render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />); });
     expect(catalogDeviceIds).toContain('share:share-1');
     const list = screen.getByTestId('provider-share-received-models');
-    expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5', 'GPT-5.5']);
+    expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5opus', 'GPT-5.5gpt']);
     expect(screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' })).toBeTruthy();
   });
 

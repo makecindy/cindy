@@ -14,9 +14,12 @@ import { getDraft, getDraftForPreferenceSync, setNewMakerDraftOwner } from '../s
 
 import {
   calibrateDraftModel,
+  filterHealthyDraftProviders,
   pickConnectedModelForAgent,
   pickFirstConnectedModelForAgent,
   resolveDraftEffectiveProviderId,
+  resolveDraftFastProviderId,
+  resolveDraftProviderForModel,
   resolveDraftSessionProviderId,
   resolveNewTaskDefaultRoute,
   type DraftModelCalibrationInput,
@@ -907,9 +910,9 @@ describe('factory defaults survive send-time calibration', () => {
   });
 
   it.each([null, 'openai'])('keeps startup visibility switches during calibration (source %s)', preferredProviderId => {
-    const openai = provider('openai', true, { codex: [model('gpt-6.1-sol'), model('gpt-6-astra')] }, 'subscription');
+    const openai = provider('openai', true, { codex: [model('gpt-6.2-sol'), model('gpt-6-astra')] }, 'subscription');
     const isModelEnabled = (agent: AgentKind, providerId: string, candidate: { id: string }) =>
-      !(agent === 'codex' && providerId === 'openai' && candidate.id === 'gpt-6.1-sol');
+      !(agent === 'codex' && providerId === 'openai' && candidate.id === 'gpt-6.2-sol');
     const startup = resolveNewMakerDefaultTuple({ providers: [openai], providersLoading: false,
       availableAgents: new Set(['codex']), availableAgentsLoaded: true, isModelEnabled });
     expect(startup).toMatchObject({ model: 'gpt-6-astra', providerId: 'openai' });
@@ -919,10 +922,10 @@ describe('factory defaults survive send-time calibration', () => {
       .toEqual({ model: 'gpt-6-astra', providerId: 'openai' });
     // Reopening the switch makes the factory recommendation eligible again.
     expect(calibrateDraftModel({ ...input, isModelEnabled: () => true }))
-      .toEqual({ model: 'gpt-6.1-sol', providerId: 'openai' });
+      .toEqual({ model: 'gpt-6.2-sol', providerId: 'openai' });
     // A hidden model explicitly selected by the user still wins.
-    expect(calibrateDraftModel({ ...input, model: 'gpt-6.1-sol', chosenByUser: true, isModelEnabled }))
-      .toEqual({ model: 'gpt-6.1-sol', providerId: null });
+    expect(calibrateDraftModel({ ...input, model: 'gpt-6.2-sol', chosenByUser: true, isModelEnabled }))
+      .toEqual({ model: 'gpt-6.2-sol', providerId: null });
     // Hiding every model must not disable the existing usable-route fallback.
     expect(calibrateDraftModel({ ...input, isModelEnabled: () => false }))
       .toEqual({ model: 'gpt-6-astra', providerId: 'openai' });
@@ -1234,9 +1237,9 @@ describe('模型组 Auto：服务端决定默认与来源', () => {
       providerId: 'xd',
     });
     // 订阅：Codex 订阅在场时 Codex 默认仍是订阅里的 Sol，不受 Pi 侧 Auto 规则影响。
-    const openai = provider('openai', true, { codex: [model('gpt-6.1-sol')] }, 'subscription');
+    const openai = provider('openai', true, { codex: [model('gpt-6.2-sol')] }, 'subscription');
     expect(resolveNewTaskDefaultRoute({ providers: [openai, personal], agent: 'codex' })).toEqual({
-      model: 'gpt-6.1-sol',
+      model: 'gpt-6.2-sol',
       providerId: 'openai',
     });
     // 自定义供应商：记着的自定义来源与模型原样保留。
@@ -1339,6 +1342,121 @@ describe('resolveDraftEffectiveProviderId', () => {
         providerId: null,
         chosenByUser: false,
       }),
+    ).toBeNull();
+  });
+});
+
+/**
+ * 目标目录(远程 / 共享)上的来源与型号必须**成对**:播种来源不提供最终型号时,它就是
+ * 一条路由不出去的来源 —— 发送侧(resolveDeviceLinkSubmission)会原样保留显式来源,
+ * 首条消息必然失败(Codex review #9369)。
+ *
+ * 但只有目录能证明「不提供」才丢弃它:来源断连、目录缺失(旧被控端)都保留用户明确
+ * 选定的来源 —— 静默换成另一家账号 / 计费路径比「按选定来源报不可用」更糟
+ * (provider-sharing §5.3)。
+ */
+describe('resolveDraftProviderForModel', () => {
+  const healthySource = provider('healthy', true, { 'claude-code': [model('claude-sonnet-5')] });
+  const otherSource = provider('other', true, { 'claude-code': [model('claude-opus-5-5')] });
+  const offlineSource = provider('offline', false, { 'claude-code': [model('claude-sonnet-5')] });
+  const disabledModelSource = provider('disabled-model', true, {
+    'claude-code': [{ ...model('claude-sonnet-5'), disabled: true } as unknown as CatalogModel],
+  });
+
+  it('播种来源确实提供最终型号时保留它', () => {
+    expect(
+      resolveDraftProviderForModel('healthy', 'claude-sonnet-5', [healthySource, otherSource], 'claude-code'),
+    ).toBe('healthy');
+  });
+
+  it('播种来源不提供最终型号时不保留它(发送侧会原样带上这个来源)', () => {
+    expect(
+      resolveDraftProviderForModel('healthy', 'claude-opus-5-5', [healthySource, otherSource], 'claude-code'),
+    ).toBeNull();
+    // 同一批来源里真正提供该型号的那家照旧可选。
+    expect(
+      resolveDraftProviderForModel('other', 'claude-opus-5-5', [healthySource, otherSource], 'claude-code'),
+    ).toBe('other');
+  });
+
+  it('来源断连时保留它:连接状态不是「不提供」,丢掉就会静默换成另一家账号', () => {
+    expect(
+      resolveDraftProviderForModel('offline', 'claude-sonnet-5', [offlineSource], 'claude-code'),
+    ).toBe('offline');
+  });
+
+  it('该型号条目被停用时不保留它(目录明确说这家不提供这个型号)', () => {
+    expect(
+      resolveDraftProviderForModel(
+        'disabled-model',
+        'claude-sonnet-5',
+        [disabledModelSource],
+        'claude-code',
+      ),
+    ).toBeNull();
+  });
+
+  it('目录里查不到这个来源时保留它(旧被控端没有目录,无法证明它不提供)', () => {
+    // 目录为空(旧被控端不支持 maker:provider:list)
+    expect(
+      resolveDraftProviderForModel('healthy', 'claude-sonnet-5', [], 'claude-code'),
+    ).toBe('healthy');
+    // 来源已从目录里消失
+    expect(
+      resolveDraftProviderForModel('gone', 'claude-sonnet-5', [healthySource], 'claude-code'),
+    ).toBe('gone');
+  });
+
+  it('型号或来源为空时返回 null', () => {
+    expect(resolveDraftProviderForModel(null, 'claude-sonnet-5', [healthySource], 'claude-code')).toBeNull();
+    expect(resolveDraftProviderForModel('healthy', null, [healthySource], 'claude-code')).toBeNull();
+  });
+});
+
+describe('filterHealthyDraftProviders', () => {
+  const healthySource = provider('healthy', true, { 'claude-code': [model('claude-sonnet-5')] });
+  const brokenSource = {
+    ...provider('broken', true, { 'claude-code': [model('claude-haiku-4-5')] }),
+    // 清单发现失败(unauthorized / regionBlocked 这类确定性失败),但保留了上次成功的清单。
+    modelDiscoveryFailure: { kind: 'unauthorized' },
+  } as unknown as ProviderView;
+
+  it('发现失败的来源不参与默认值(首条消息必然失败)', () => {
+    expect(
+      filterHealthyDraftProviders([brokenSource, healthySource]).map((provider) => provider.id),
+    ).toEqual(['healthy']);
+  });
+
+  it('用户为这个目标记下的来源照旧保留(他选的就该生效)', () => {
+    expect(
+      filterHealthyDraftProviders([brokenSource, healthySource], 'broken').map((provider) => provider.id),
+    ).toEqual(['broken', 'healthy']);
+  });
+
+  it('全部来源都在失败态时退回完整候选(没有更好的选择)', () => {
+    expect(filterHealthyDraftProviders([brokenSource]).map((provider) => provider.id)).toEqual(['broken']);
+  });
+});
+
+describe('resolveDraftFastProviderId', () => {
+  const healthySource = provider('healthy', true, { 'claude-code': [model('claude-sonnet-5')] });
+  const otherSource = provider('other', true, { 'claude-code': [model('claude-opus-5-5')] });
+
+  it('播种来源提供最终型号时按它判定(Fast 是 per-provider 能力)', () => {
+    expect(
+      resolveDraftFastProviderId('healthy', 'claude-sonnet-5', [healthySource, otherSource], 'claude-code', 'other'),
+    ).toBe('healthy');
+  });
+
+  it('播种来源不提供最终型号时用最终算出来的那家,而不是把别家的结论带过来', () => {
+    expect(
+      resolveDraftFastProviderId('healthy', 'claude-opus-5-5', [healthySource, otherSource], 'claude-code', 'other'),
+    ).toBe('other');
+  });
+
+  it('播种来源与最终来源都没有时返回 null', () => {
+    expect(
+      resolveDraftFastProviderId('healthy', 'claude-opus-5-5', [healthySource], 'claude-code', null),
     ).toBeNull();
   });
 });

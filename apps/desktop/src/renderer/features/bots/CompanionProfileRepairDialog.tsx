@@ -72,7 +72,7 @@ function RepairForm({ botId, open, onOpenChange }: Props) {
     finally { savingRef.current = false; if (isDataOwnerGenerationCurrent(owner)) setSaving(false); }
   };
   return <ConfirmDialog open={open} onOpenChange={value => { if (!savingRef.current) onOpenChange(value); }}
-    presentation="standard" cancelFirst maxWidth={600} contentSelectable
+    maxWidth={600} contentSelectable
     title={t('bots.cloud.repair.title')} description={t('bots.cloud.repair.description')}
     confirmText={t('bots.cloud.repair.save')} cancelText={t('bots.cancel')}
     loading={saving} confirmDisabled={loading || invalid || changed} onConfirm={() => void save()}

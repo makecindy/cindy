@@ -1,3 +1,4 @@
+import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
 /**
  * session-runner.test.ts
  * ---------------------------------------------------------------------------
@@ -24,9 +25,10 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
   getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../maker-ipc/sessionRuntimeControl';
 afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
-import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
+import type { AgentEvent, Effort, InteractionRequest, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 
@@ -86,6 +88,7 @@ const h = vi.hoisted(() => {
     readRemotePermissionModes: vi.fn(async () => ['ask', 'bypassPermissions']),
     getWorkspacePref: vi.fn((): unknown => null),
     isWorkspacePrefsMigrated: vi.fn(() => true),
+    isSharedPrefsAdopted: vi.fn(() => true),
     useActualDefaults: false,
     /** 每个 fake session 的事件监听回调(emit done 用)。 */
     statusCbs: new Map<string, (status: 'active' | 'aborting' | 'closed' | 'error') => void>(),
@@ -146,6 +149,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -162,6 +166,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
+vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
@@ -290,6 +295,7 @@ vi.mock('../workspacePrefsStore.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../workspacePrefsStore.js')>()),
   getWorkspacePref: h.getWorkspacePref,
   isWorkspacePrefsMigrated: h.isWorkspacePrefsMigrated,
+  isSharedPrefsAdopted: h.isSharedPrefsAdopted,
 }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: h.listProviders }),
@@ -438,12 +444,10 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls, resolveSharedImProjectConfig } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.desktop.js';
-import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
@@ -452,7 +456,7 @@ import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
-const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -537,6 +541,7 @@ beforeEach(() => {
   } });
   h.getWorkspacePref.mockReturnValue(null);
   h.isWorkspacePrefsMigrated.mockReturnValue(true);
+  h.isSharedPrefsAdopted.mockReturnValue(true);
   h.peekPendingHandoff.mockResolvedValue(null);
   h.listMessagesForAgentHandoff.mockReset();
   h.listMessagesForAgentHandoff.mockResolvedValue([]);
@@ -547,6 +552,22 @@ beforeEach(() => {
 afterEach(() => setMainLocale('en'));
 
 describe('hook task model selection on next send', () => {
+  // Plugin IM must use the canonical row even before an official channel connects.
+  // Existing runner tests only selected adopted channels. Actual shared resolver; unit.
+  it('resolves plugin IM from the shared project row before any official channel adopts it', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'chat', agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask' }
+      : { workspace: 'chat', agentKind: 'codex', model: 'wrong-model', effort: 'low', permissionMode: 'bypassPermissions' });
+    h.getWorkspaceProviderSource.mockImplementation((...args: unknown[]) => args[0] === 'shared' ? 'remote-provider' : 'wrong-provider');
+    h.agentDeviceId = 'share:owner';
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const result = await resolveSharedImProjectConfig('chat', log);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask',
+      providerId: 'remote-provider', agentDeviceId: 'share:owner' });
+    expect(h.readRemoteRoute).toHaveBeenCalledWith({ agentDeviceId: 'share:owner', agentKind: 'codex', providerId: 'remote-provider', model: 'remote-model' });
+  });
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {
@@ -692,8 +713,32 @@ describe('hook task model selection on next send', () => {
     const target = await policy.resolveTarget(providers);
     expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model', providerId: 'xd' });
     expect(target.fingerprint).toBe(policy.fingerprint());
+    // 所有官方机器人共用一套项目配置: 读的是共用的那一份, 不是 Telegram 自己的行。
+    expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
+  // 服务端时, 它原有的按渠道偏好尚未并入共用的那一份 —— 这段时间必须继续按它自己的行跑,
+  // 否则用户原先给这个项目配的模型会在升级后悄悄变回默认。
+  // 生产入口: runner.run 的取值链; 最小失败输入: 渠道未并入 + 该渠道有自己的行。tier: unit。
+  it('渠道原有偏好尚未并入共用配置时, 继续读它自己的那一行与来源', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockReturnValue({
+      channel: 'telegram', teamId: null, workspace: 'repo',
+      agentKind: 'claude-code', model: 'test-model', effort: 'high', permissionMode: null,
+    });
+    await createMakerHookSessionRunner({ log }).run(baseReq({
+      isNew: false, workspaceAlias: 'repo',
+      source: { im: 'telegram', userText: 'hello' },
+    }));
+    const policy = h.followPolicy.mock.calls[0][0];
+    const target = await policy.resolveTarget([connectedProvider('xd', [catalogModel('test-model')])]);
+    expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model' });
+    expect(h.isSharedPrefsAdopted).toHaveBeenCalledWith('telegram');
     expect(h.getWorkspacePref).toHaveBeenCalledWith('telegram', null, 'repo');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('telegram', null, 'repo');
   });
 
   it.each(['telegram', 'slack', 'x'])('resolves automatic %s defaults and follows catalog changes', async (channel) => {
@@ -979,6 +1024,21 @@ describe('hook session 精确接管边界', () => {
     await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
   });
 
+  it.each([
+    { status: 'archived', workDir: process.cwd(), canResume: true },
+    { status: 'archived', workDir: path.join(process.cwd(), 'package.json'), canResume: false },
+    { status: 'deleted', workDir: process.cwd(), canResume: false },
+  ])('归档绑定能否续聊取决于任务状态和目录 ($status, $canResume)', async ({ status, workDir, canResume }) => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status, workingDir: workDir, title: null, userSendAt: null, workspaceKind: 'project', providerId: null,
+    });
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({ ...await fakeMaker.getSessionMeta(), workDir });
+    const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
+    expect(info?.usable).toBe(false);
+    expect(info?.resumableArchive === true).toBe(canResume);
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)
@@ -1029,7 +1089,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
     );
 
     expect(outcome.status).toBe('error');
-    expect(outcome.errorMessage).toContain('已不在工作目录映射里的目录');
+    expect(outcome.errorMessage).toContain('已不属于任何项目');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send).not.toHaveBeenCalled();
   });
@@ -1455,7 +1515,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `hello\n\n${buildHookPromptNote(im)}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
       origin: { kind: 'hook', source: im },
@@ -1492,7 +1552,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       rawChannelText: rawCommand,
     });
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
     });
   });
 
@@ -1629,7 +1689,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
     });
   });
 
@@ -3181,8 +3241,9 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
           h.statusCbs.delete(id);
         };
       },
-      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
-        h.interactionListeners.set(id, listener);
+      setInteractionListener(listener: ((req: unknown) => Promise<unknown>) | import('@cindy/maker-core').InteractionResolver | null) {
+        if (listener) h.interactionListeners.set(id, req => listener(req as import('@cindy/maker-core').InteractionRequest));
+        else h.interactionListeners.delete(id);
       },
       send: vi.fn(
         async (
@@ -3199,6 +3260,38 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       ),
     };
   }
+
+  // Unit regression: native async questions must reach Telegram outside its turn-scoped card carrier.
+  it.each(['async', 'blocking'] as const)('routes %s Telegram questions through the shared App answer gate', async mode => {
+    vi.useFakeTimers();
+    try {
+      const session = makeInteractiveSession('sess-new');
+      let answer!: (decision: import('@cindy/maker-core').InteractionDecision) => void;
+      installDesktopInteractionHandler(session, () => new Promise(resolve => { answer = resolve; }), undefined, (_id, decision) => answer(decision));
+      fakeMaker.createSession.mockResolvedValueOnce(session);
+      const onQuestion = vi.fn(async (_question: InteractionRequest, _controls: import('../../maker-ipc/interactionRouter').QuestionControls) => undefined);
+      const onInteraction = vi.fn();
+      const onInteractionCancel = vi.fn();
+      const run = createMakerHookSessionRunner({ log }).run(baseReq({
+        source: { im: 'telegram', userText: 'Choose a format' },
+        onQuestion, onInteraction, onInteractionCancel,
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      const pending = h.interactionListeners.get('sess-new')!({
+        kind: 'ask_user_question', requestId: 'async-hook', ...(mode === 'async' ? { delivery: 'async' as const } : {}),
+        questions: [{ question: 'Any constraints?' }],
+      });
+      expect(onQuestion).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'async-hook' }),
+        expect.objectContaining({ answer: expect.any(Function), settled: expect.any(Promise) }));
+      expect(onInteraction).not.toHaveBeenCalled();
+      if (mode === 'async') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+      expect(onInteractionCancel).not.toHaveBeenCalled();
+      const controls = onQuestion.mock.calls[0][1];
+      controls.answer({ kind: 'ask_user_question', answers: { 'Any constraints?': 'Keep it short' } });
+      await expect(pending).resolves.toMatchObject({ answers: { 'Any constraints?': 'Keep it short' } });
+      if (mode === 'blocking') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+    } finally { vi.useRealTimers(); }
+  });
 
   it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
     setMainLocale('zh-CN');
@@ -3886,7 +3979,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
       const outcome = await runner.run(xChatReq());
 
       expect(outcome.status).toBe('ok');
-      expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('x', null, 'chat');
+      expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('shared', null, 'chat');
       expect(fakeMaker.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'test-model', providerId: 'xd' }),
       );
@@ -3964,7 +4057,29 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     );
 
     expect(outcome.status).toBe('ok');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则(2026-11-13 用户裁决): 所有官方机器人共用一套配置, 没单独配置过的项目在哪个官方机器人里
+  // 都按同一份默认跑。官方 Slack 以前另读一份自己的默认(早已没有设置入口), 现在与其它三个一致。
+  // 最小失败输入: 一条来自 Slack 的新任务。tier: unit。
+  it('官方 Slack 新任务读的也是 global 默认设置, 不再另读 slack 那一份', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'test-model', effort: 'high' },
+        codex: { providerId: null, model: 'gpt-5.6', effort: 'high' },
+      },
+    });
+    h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
+    const outcome = await createMakerHookSessionRunner({ log }).run(
+      baseReq({ source: { im: 'slack', userText: 'hello' } }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+    expect(h.readImDefaultSettings).not.toHaveBeenCalledWith('slack');
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {
@@ -4145,6 +4260,59 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(materialize).toHaveBeenCalledOnce();
       expect(materialize.mock.calls[0][1]).toContain('我先检查。');
     } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
+
+  // 实踩(2026-11-17 官方飞书): 回复里按工作目录写相对路径 `![加载态](evidence/loading-68.png)`, 图片没发出,
+  // 引用原样进了飞书卡片被平台拒绝, 答案没送达。入口: watchContinuation 收口(与 run 共用 collectOutboundForFinalText);
+  // 可观察结果: turn.end 的正文与附件。既有用例只有绝对路径; 相对路径此前不导入(unit, 导入与读盘照旧注入)。
+  it('imports an image referenced relative to the working directory', async () => {
+    const workDir = process.cwd();
+    const relative = 'resources/app-icons/cat.png'; // 仓库里真实存在的图片: 相对路径要落到真文件才算数
+    const absolute = path.resolve(workDir, relative);
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const replacements = new Map(text.includes(absolute) ? [[absolute, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: [] };
+    });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async () => Buffer.from('cat bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce({ ...makeManualSession('sess-live'), workDir });
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![加载态](${relative})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(materialize.mock.calls[0]![1]).toContain(absolute);
+      expect(outcome.finalText).toBe('结果：🖼️ _加载态_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('cat bytes').toString('base64'));
+    } finally { snapshot.mockRestore(); read.mockRestore(); }
+  });
+
+  // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
+  // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  it('says why a local image over the import limit was not sent', async () => {
+    const source = '/private/task/huge.png';
+    const materialize = vi.fn(async (_id: string, text: string) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: 21 * 1024 * 1024 }) as never);
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![大图](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.attachments ?? []).toEqual([]);
+      expect(outcome.finalText).toMatch(/大图.*20\s?M[Bo]/);
+      expect(outcome.finalText).not.toContain(source);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
   });
 
   it.each(['run', 'continuation'].flatMap((entry) =>

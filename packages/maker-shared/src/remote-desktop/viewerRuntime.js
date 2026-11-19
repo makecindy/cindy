@@ -209,8 +209,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!keyboardEnabled || !control || composing) return;
     const text = keyboardInput.value.replace(keyboardSentinel, "");
     if (text) {
-      for (let i = 0; i < text.length; i += 4096)
-        queue({ kind: "text", text: text.slice(i, i + 4096) });
+      // Text packets have a UTF-16 budget; never split a surrogate pair.
+      let chunk = "";
+      for (const character of text) {
+        if (chunk.length + character.length > 4096) {
+          queue({ kind: "text", text: chunk });
+          chunk = "";
+        }
+        chunk += character;
+      }
+      if (chunk) queue({ kind: "text", text: chunk });
       flush();
     }
     resetKeyboard();
@@ -303,6 +311,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
         ));
+  const touchAtFit = () => !config.desktop && mode === "touch" && zoom <= 1;
   const layout = () => {
     const r =
       config.desktop && desktopScale !== null
@@ -325,10 +334,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             config.desktop ? fillHeight && !viewerSized : false,
             config.desktop ? 1 : 0.1,
           );
+    const centered = touchAtFit();
     return {
       ...r,
-      x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
-      y: viewportHeight() / 2 + verticalOffset(r.height) - fy * r.height,
+      x: viewportLeft() + viewportWidth() / 2 - (centered ? 0.5 : fx) * r.width,
+      y: viewportHeight() / 2 + verticalOffset(r.height) - (centered ? 0.5 : fy) * r.height,
     };
   };
   // 0 at fit, 1 at the pinch limit for the current viewport and display.
@@ -1328,6 +1338,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     queue({ kind: "button", button, down: false, x: cx, y: cy });
   }
   function pan(dx, dy) {
+    if (touchAtFit()) return;
     manualViewMoved = true;
     cursorNeedsEntry = true;
     stopPanAnimation();
@@ -1399,6 +1410,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           (Math.min(maxZoom, multi.zoom) * next.d) / Math.max(1, multi.d),
         ),
       );
+      if (touchAtFit() && requestedZoom > 1) {
+        // The centered picture has moved under the fingers since the pinch
+        // started. Anchor further enlargement to the picture at fit.
+        zoom = 1;
+        multi.anchor = point(next, false);
+      }
       zoom = requestedZoom;
       const r = layout();
       fx =
@@ -1407,6 +1424,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fy =
         multi.anchor.y +
         (viewportHeight() / 2 + verticalOffset(r.height) - next.y) / r.height;
+      if (!config.desktop && mode === "touch" && zoom > 1) {
+        // Bring any pan back continuously over the same near-fit range used
+        // on release. A pinch starting inside that range starts at full weight.
+        const range = multi.zoom > 1 ? Math.min(0.2, multi.zoom - 1) : 0.2;
+        const weight = Math.min(1, (zoom - 1) / range);
+        fx = 0.5 + (fx - 0.5) * weight;
+        fy = 0.5 + (fy - 0.5) * weight;
+      }
       const moved = layout(),
         b = panBounds(moved);
       place(

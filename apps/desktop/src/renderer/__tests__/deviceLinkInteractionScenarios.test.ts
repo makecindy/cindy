@@ -442,21 +442,16 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
-  // 测试价值：第21项删除确认必须进入真实 store，不能被旧 lane 白名单丢弃。
-  // 既有测试只覆盖远控只读投影；最小输入为本机挂起的 fs_delete，tier=unit。
-  it('本机删除确认从权威快照恢复，保留完整目标并经原确认入口作答', async () => {
+  // 第21项不再产生删除确认，旧 lane 不能恢复成新的插件权限卡，tier=unit。
+  it('不把已移除的插件删除确认恢复为权限卡', async () => {
     const s = sid();
     local.localGetPendingInteractions.mockResolvedValue([{ request: {
       kind: 'ghost_grant_confirm', requestId: 'delete-confirm', ghostId: 'file-smoke', ghostName: 'File smoke',
       lane: 'fs_delete', items: [{ name: 'reports', absPath: '/workspace/reports', size: 128, isDirectory: true }],
     } }]);
     await makerChatStore.reconcilePendingInteractions(s);
-    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toMatchObject({
-      requestId: 'delete-confirm', lane: 'fs_delete', items: [{ name: 'reports', isDirectory: true }],
-    });
-    makerChatStore.respondToGhostGrantConfirm(s, { confirmed: false });
-    await flush();
-    expect(local.localResolveInteraction).toHaveBeenCalledWith('delete-confirm', { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toBeNull();
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
     expect(host.resolved).toHaveLength(0);
   });
 
@@ -513,6 +508,55 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
       kind: 'issue_confirm',
       requestId: 'opaque-full-payload',
     });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+  });
+
+  // #11232: 旧端只读用例无法发现新版宿主的推送和快照被误分类；通过 unit 的真实 store 路由验证。
+  it('可远程确认的反馈在推送与重连后保留编辑，提交到宿主，离线期间关闭的卡片也能清理', async () => {
+    const s = openRemoteSession();
+    const request = {
+      kind: 'issue_confirm',
+      requestId: 'remote-feedback',
+      remoteConfirmSupported: true,
+      draft: { title: '原始标题', body: '说明', type: 'bug' },
+      env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    };
+    host.hostInteraction(s, request);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.draft).toEqual(request.draft);
+    const edited = { title: '编辑后的标题', body: '补充说明', type: 'bug' as const, publicName: '匿名' };
+    saveIssueConfirmDraft(s, request.requestId, edited);
+    host.seedPending(s, request);
+    host.seedPending(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, request);
+    await flush();
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe('rename');
+    host.invoke.mockRejectedValueOnce(new Error('connection lost'));
+    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    host.hostInteraction(s, request);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    remoteProjectsStore.clear();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(false);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    makerChatStore.respondToIssueConfirm(s, {
+      confirmed: true, ...edited, submissionIdentity: { kind: 'platform', login: 'cindy-issue' }, uiLanguage: 'zh-CN',
+    });
+    await flush();
+    expect(host.resolved[0]).toMatchObject({ requestId: request.requestId, decision: { confirmed: true, ...edited } });
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    host.seedPending(s, { ...request, requestId: 'snapshot-feedback' });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('snapshot-feedback');
+    host.clearPending(s);
+    await makerChatStore.reconcilePendingInteractions(s);
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
   });
 
@@ -1526,8 +1570,11 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
+    // 没有显式目标时写穿的型号必须是**当前显示的那一个**(draftInitialModel):播种型号在
+    // 目标目录里路由不出去、被换成目录里的另一个型号时,写旧型号等于把新型号的改动写到
+    // 旧型号的远端草稿记忆上(Codex review #9369)。
     expect(pushBody).toContain(
-      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+      'const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;',
     );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);

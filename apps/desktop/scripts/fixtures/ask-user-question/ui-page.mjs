@@ -17,10 +17,10 @@ export default {
     }`,
   },
   cases: {
-    'input-free': { about: 'Full-width free answer with inset voice and icon send', viewport: { width: 320, height: 620 }, data: { question: '请补充你看到的现象。', free: true } },
-    'input-custom': { about: 'Full-width custom choice with inset controls', viewport: { width: 320, height: 620 }, data: { question: '你希望怎样处理？' } },
+    'input-free': { about: 'Free answer starts as one line beside voice and send, then wraps to full width', viewport: { width: 320, height: 620 }, data: { question: '请补充你看到的现象。', free: true } },
+    'input-custom': { about: 'Custom choice starts as one line, then wraps to full width with inset controls', viewport: { width: 320, height: 620 }, data: { question: '你希望怎样处理？' } },
     'input-multi': { about: 'Multi-select custom answer uses one inset submit', viewport: { width: 320, height: 700 }, data: { question: '你希望保留哪些选项？', multi: true } },
-    'input-plan': { about: 'Plan feedback uses a full-width input with inset send', viewport: { width: 320, height: 550 }, data: {} },
+    'input-plan': { about: 'Plan feedback starts as one line, then wraps to a full-width input', viewport: { width: 320, height: 550 }, data: {} },
     unanswered: { about: 'Expired unanswered question remains readable once in history at 320 px', viewport: { width: 320, height: 400 }, data: { question: '是否将测试包完整安装到 Duo？' } },
     withdrawn: { about: 'Withdrawn question retains draft and offers supplemental sending at 320 px', viewport: { width: 320, height: 700 }, data: { question: '你是否已经手动重新登录？', withdrawn: true } },
     'mcp-form-error': { about: 'MCP required/length error keeps draft at 320 px', viewport: { width: 320, height: 600 }, data: { question: 'Name', form: true } },
@@ -41,6 +41,14 @@ export default {
     await page.locator('main').waitFor();
   },
   async check(page, ui) {
+    const checkSingleLine = async () => {
+      const frame = page.getByTestId('interaction-answer-composer');
+      const fieldBox = await frame.locator('textarea').boundingBox();
+      const sendBox = await frame.getByRole('button').last().boundingBox();
+      assert.ok((await frame.boundingBox()).height <= 56, 'An empty answer takes a single line');
+      assert.ok(sendBox.x >= fieldBox.x + fieldBox.width, 'Actions sit beside a single-line answer');
+      assert.ok(Math.abs(sendBox.y + sendBox.height / 2 - (fieldBox.y + fieldBox.height / 2)) <= 2, 'The line is centred on the actions');
+    };
     const checkComposer = async () => {
       const frame = page.getByTestId('interaction-answer-composer');
       const field = frame.locator('textarea');
@@ -60,8 +68,25 @@ export default {
         if (ui.case === 'input-multi') await page.getByText('可以，按这版实现', { exact: true }).click();
         await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.customAnswer') }).click();
       }
+      await checkSingleLine();
       await page.locator('textarea').fill('已重新登录，另补充一个现象。\n这里应该有充足的文字输入空间。');
       await checkComposer();
+      // Regression #10732 / review r4580889358: expanding at two rows used to
+      // leave plan feedback overflow hidden when later input exceeded its cap.
+      // Exercise the real fields in the browser; the old geometry-only checks
+      // never crossed the scroll threshold. UI/e2e tier, two rows -> twelve -> two.
+      const field = page.locator('textarea');
+      await field.fill(Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 行反馈`).join('\n'));
+      await checkComposer();
+      const canScroll = await field.evaluate((el) =>
+        el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto');
+      assert.ok(canScroll, 'Long answers remain scrollable after expanding from short text');
+      await field.evaluate((el) => { el.scrollTop = 0; });
+      await field.hover();
+      await page.mouse.wheel(0, 120);
+      await page.waitForFunction(() => document.querySelector('textarea').scrollTop > 0);
+      await field.fill('缩短后的反馈。\n第二行。');
+      assert.ok(await field.evaluate((el) => el.scrollHeight <= el.clientHeight), 'Shortened answers fit without scrolling');
       return;
     }
     if (ui.case === 'unanswered') {
@@ -74,9 +99,11 @@ export default {
       await page.getByRole('status').waitFor();
       assert.equal(await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).count(), 0);
       const input = page.getByPlaceholder(await ui.t('chat.askUserQuestion.answerPlaceholder'));
+      await checkSingleLine();
       await input.fill('已重新登录，另补充一个现象。');
       assert.equal(await input.inputValue(), '已重新登录，另补充一个现象。');
       await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.sendSupplement'), exact: true }).waitFor();
+      await input.fill('已重新登录，另补充一个现象。\n这里应该有充足的文字输入空间。');
       await checkComposer();
       return;
     }

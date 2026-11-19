@@ -11,6 +11,9 @@ const MAX_PUBLIC_KEY_BYTES = 64 * 1024;
 /** The configured/default SSH Agent endpoint is not currently reachable. */
 export const SSH_AGENT_UNAVAILABLE_CODE = 'SSH_AGENT_UNAVAILABLE';
 
+/** Local configuration diagnoses; never contains endpoint paths or env values. */
+export type AgentUnavailableReason = 'environment-unset' | 'endpoint-empty' | 'endpoint-unavailable';
+
 /** Cindy's deliberately bounded default identity subset, not all OpenSSH versions. */
 export const CINDY_DEFAULT_IDENTITY_NAMES = [
   'id_rsa',
@@ -128,6 +131,7 @@ export function previewAgentEndpoint(identityAgent?: string): {
   endpoint?: string;
   unsupportedReason?: string;
   unavailableReason?: string;
+  unavailableReasonCode?: AgentUnavailableReason;
   explicit: boolean;
 } {
   if (identityAgent === undefined) {
@@ -147,28 +151,35 @@ export function previewAgentEndpoint(identityAgent?: string): {
   }
   const source = identityAgent === 'SSH_AUTH_SOCK' ? '$SSH_AUTH_SOCK' : identityAgent;
   const expanded = expandEnvironment(source);
-  if (expanded.error) return { unavailableReason: expanded.error, explicit: true };
+  if (expanded.error) {
+    return { unavailableReason: expanded.error, unavailableReasonCode: 'environment-unset', explicit: true };
+  }
   let endpoint = expanded.value!;
   if (endpoint === '~') endpoint = os.homedir();
   else if (endpoint.startsWith('~/') || endpoint.startsWith('~\\')) {
     endpoint = path.join(os.homedir(), endpoint.slice(2).replace(/\\/g, '/'));
   }
   if (!endpoint) {
-    return { unavailableReason: 'the configured IdentityAgent endpoint is empty', explicit: true };
+    return {
+      unavailableReason: 'the configured IdentityAgent endpoint is empty',
+      unavailableReasonCode: 'endpoint-empty', explicit: true,
+    };
   }
   return { endpoint, explicit: true };
 }
 
-function throwAgentUnavailable(reason: string): never {
+function throwAgentUnavailable(reason: string, agentUnavailableReason?: AgentUnavailableReason): never {
   const error = new Error(reason);
-  (error as { code?: string }).code = SSH_AGENT_UNAVAILABLE_CODE;
+  Object.assign(error, { code: SSH_AGENT_UNAVAILABLE_CODE, agentUnavailableReason });
   throw error;
 }
 
 export async function resolveAgentEndpoint(identityAgent?: string): Promise<string> {
   const preview = previewAgentEndpoint(identityAgent);
   if (preview.unsupportedReason) throw new Error(preview.unsupportedReason);
-  if (preview.unavailableReason) throwAgentUnavailable(preview.unavailableReason);
+  if (preview.unavailableReason) {
+    throwAgentUnavailable(preview.unavailableReason, preview.unavailableReasonCode);
+  }
   if (!preview.endpoint) {
     throwAgentUnavailable(
       process.platform === 'win32'
@@ -181,7 +192,7 @@ export async function resolveAgentEndpoint(identityAgent?: string): Promise<stri
       const stat = await fs.stat(preview.endpoint);
       if (!stat.isSocket()) throw new Error('not a socket');
     } catch {
-      throwAgentUnavailable('the configured IdentityAgent endpoint is unavailable');
+      throwAgentUnavailable('the configured IdentityAgent endpoint is unavailable', 'endpoint-unavailable');
     }
   }
   return preview.endpoint;

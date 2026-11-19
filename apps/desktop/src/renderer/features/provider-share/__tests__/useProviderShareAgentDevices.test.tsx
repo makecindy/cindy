@@ -28,6 +28,7 @@ const catalog = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: (deviceId: string) => catalog.cached.has(deviceId),
   getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
     providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
   } : null),
@@ -171,7 +172,10 @@ describe('useProviderShareAgentDevices', () => {
     catalog.subscriptions.add('share:subscription');
     catalog.stale.add('share:subscription');
     await act(async () => { push?.(initial); await Promise.resolve(); await Promise.resolve(); });
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([
+      ['share:subscription'],
+      ['share:api', undefined, { retireOnly: true }],
+    ]);
   });
   it('only offers new shares that the controlled host has loaded, even if the controller has more cross-region shares', async () => {
     initial = [share({ shareId: 'both' }), share({ shareId: 'controller-only' })];
@@ -599,7 +603,9 @@ describe('useProviderShareAgentDevices', () => {
       push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]);
       await Promise.resolve(); await Promise.resolve();
     });
-    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:b', 'share:c']);
+    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:a', 'share:b', 'share:c']);
+    expect(catalog.refresh.mock.calls.find(([deviceId]) => deviceId === 'share:a'))
+      .toEqual(['share:a', undefined, { retireOnly: true }]);
     expect(result.current.devices.map((device) => device.deviceId)).toEqual(['share:a', 'share:b']);
   });
 

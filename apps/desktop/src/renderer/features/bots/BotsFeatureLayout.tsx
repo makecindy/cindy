@@ -1,8 +1,8 @@
+import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useContext, useEffect, useRef } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
 import { Outlet, useOutletContext, useParams, useLocation, useNavigate } from 'react-router-dom';
 
-import { useRegisterCCAgentSidebar } from '../cc-agent/useRegisterCCAgentSidebar';
 import { BotSettingsDrawer } from './BotSettingsDrawer';
 import { BotGroupSettingsDrawer } from './BotGroupSettingsDrawer';
 import { GroupMaskProvider } from './GroupMaskProvider';
@@ -10,11 +10,10 @@ import { useBotProfiles } from './botStore';
 import { useBotGroupSummary } from './botGroupStore';
 
 /**
- * 伙伴路由与任务共用同一个侧栏(伙伴段在置顶上方,2026-10-13 定稿):这里只注册
- * 任务侧栏,不再整栏切换成伙伴列表。设置抽屉仍挂在本布局,按自身路由自判开关。
+ * 外层任务布局统一注册侧栏；只有活动伙伴面板拥有窗口的设置抽屉。
  */
 export function BotsFeatureLayout() {
-  useRegisterCCAgentSidebar();
+  const focused = useSplitPaneFocus();
   const history = useContext(MainViewHistoryContext);
   const { botId, deviceId, groupId } = useParams();
   const location = useLocation();
@@ -32,12 +31,12 @@ export function BotsFeatureLayout() {
     }
   }, [selectedGroup, navigate]);
   useEffect(() => {
-    if (!history || deviceId || !botId || history.current.ignoredLocationKey === location.key) return;
+    if (!focused || !history || deviceId || !botId || history.current.ignoredLocationKey === location.key) return;
     const bot = bots.find(candidate => candidate.id === botId);
     if (bot && bot.status !== 'archived' && bot.status !== 'deleting') {
       history.current.lastBotId = bot.id;
     }
-  }, [history, botId, deviceId, bots, location.key]);
+  }, [focused, history, botId, deviceId, bots, location.key]);
   const shellContext = useOutletContext<{
     sidebarWidth?: number;
     rightSidebarCollapsed?: boolean;
@@ -57,8 +56,8 @@ export function BotsFeatureLayout() {
   const content = (
     <>
       <Outlet context={shellContext} />
-      <BotSettingsDrawer />
-      <BotGroupSettingsDrawer />
+      {focused && <BotSettingsDrawer />}
+      {focused && <BotGroupSettingsDrawer />}
     </>
   );
   return groupId && new URLSearchParams(location.search).get('conversationKind') !== 'direct'
