@@ -392,7 +392,24 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   await expect(visitor.openLink(wrong, openPayload)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   await expect(visitor.openLink('b-controller', openPayload)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   if (kind === 'shared-task') await hostTasks.remove(resourceId, memberId);
-  else await hostProviders.setMember(memberId, 'pause');
+  else {
+    // Integration: a fresh guest link to an already signed executor works
+    // without O's Desktop. Earlier checks use the existing online owner link.
+    const input = { shareId: resourceId, memberId, guestDeviceId: guest.deviceId, executorDeviceId: f.b.identity.deviceId };
+    await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
+    visitor.stop();
+    f.host.stop();
+    expect(f.host.getStatus()).toBe('stopped');
+    visitor = f.make(api, false);
+    await visitor.waitUntilOnline(3000);
+    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
+    await visitor.openLink(executorPeer, openPayload);
+    await expect(visitor.invoke(executorPeer, { channel: 'test:echo', args: ['executor starts while owner is offline'] }))
+      .resolves.toMatchObject({ ok: true, result: 'executor starts while owner is offline' });
+    await hostProviders.setMember(memberId, 'pause');
+    f.host.start();
+    await f.host.waitUntilOnline(3000);
+  }
   await vi.waitFor(() => expect(visitor.getStatus()).not.toBe('online'));
   // Its session ends with the grant on both sides; nothing more reaches either business.
   await vi.waitFor(() => { expect(hostSocket.session!(guestPeer)).toBeNull(); expect(visitorSocket.session!(peer)).toBeNull(); });

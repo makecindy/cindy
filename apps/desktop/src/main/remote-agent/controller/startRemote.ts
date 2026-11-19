@@ -78,6 +78,8 @@ export interface StartRemoteAgentDeps {
   startupSignal?: AbortSignal;
   /** Recheck this attempt's permission/explicit-close boundary until its first startup finishes. */
   assertStartupCurrent?(): void;
+  /** From this point a failed or lost write may have started a process on the executor. */
+  onStartupOpenRequest?(): void;
   /** A direct share must renew the original executor's grant before reopening. */
   reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
   /** Background renewal is allowed only while M has confirmed the current grant. */
@@ -791,7 +793,8 @@ async function prepareAndStartRemoteAgentSession(
     active = client;
     let remoteStarted = false;
     try {
-      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen);
+      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen,
+        reconnect ? undefined : deps.onStartupOpenRequest);
       remoteStarted = true;
       if (!reconnect) requireOpen();
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');

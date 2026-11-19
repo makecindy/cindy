@@ -84,15 +84,37 @@ vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
 const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active',
-  availabilityOwner: undefined as { hostDeviceId: string; hostOnline: boolean; standbyOnline: boolean } | undefined,
+  availabilityOwner: undefined as { hostDeviceId: string; hostOnline: boolean; standbyOnline?: boolean; memberId?: string } | undefined,
   listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
   findReceivedShare: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
+  findReceivedShareForExecution: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
   providerShareAccessEpoch: () => guestPermission.epoch,
   onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
+const standbyPlacement = vi.hoisted(() => ({ directory: '', real: false, write: vi.fn() }));
+vi.mock('../../appSessionState.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual, ownerScopedUserDataPath: (...parts: string[]) => parts[0] === 'agent-net-standby-placements'
+    ? path.join(standbyPlacement.directory, ...parts) : actual.ownerScopedUserDataPath(...parts) };
+});
+vi.mock('../controller/agentNetStandbyPlacement.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../controller/agentNetStandbyPlacement.js')>();
+  return {
+    readAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.readAgentNetStandbyPlacement>) =>
+      standbyPlacement.real ? actual.readAgentNetStandbyPlacement(...args) : undefined,
+    rememberAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.rememberAgentNetStandbyPlacement>) => {
+      standbyPlacement.write(...args);
+      if (standbyPlacement.real) await actual.rememberAgentNetStandbyPlacement(...args);
+    },
+    forgetUnusedAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.forgetUnusedAgentNetStandbyPlacement>) => {
+      if (standbyPlacement.real) await actual.forgetUnusedAgentNetStandbyPlacement(...args);
+    },
+  };
+});
+import { readAgentNetStandbyPlacement } from '../controller/agentNetStandbyPlacement.js';
 // The production starter collects only this fixture's supplied project, never the user's home.
 const collectPersonalConfig = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => []));
 vi.mock('../controller/projectFiles', () => ({
@@ -1716,11 +1738,13 @@ describe('shared startup lease budget', () => {
     const prepare = deferred();
     const allocation = deferred();
     let allocations = 0;
+    const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
+      blockClose: false, blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
+      directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
@@ -1733,7 +1757,8 @@ describe('shared startup lease budget', () => {
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
-      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
+      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; admissionId?: string; preferredExecutorDeviceId?: string;
+        runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
       if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
@@ -1745,11 +1770,18 @@ describe('shared startup lease budget', () => {
           ...(!state.legacySwitch ? { generation: request.generation } : {}) } : {} };
       }
       if (request.op === 'allocate') {
+        if (request.preferredExecutorDeviceId && request.sessionId) renewals.set(request.sessionId, Date.now());
+        if (state.authorityOffline) return { ok: true, result: { standbyRetry: true } };
+        if (state.localFirst) return { ok: true, result: { canPrepareStandby: true } };
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
         if (state.blockAllocation) await allocation.promise;
         return { ok: true, result: { deviceId: state.device, generation: grant,
+          ...(state.directStatusBatch ? { directStatusBatch: true } : {}),
+          ...(state.agentNetStandby ? { standby: true } : {}),
           ...(state.duration === undefined ? {} : { leaseDurationMs: request.sessionId === 'sibling' ? 20000 : state.duration }) } };
       }
+      if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
+      if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: 10, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
@@ -1762,6 +1794,7 @@ describe('shared startup lease budget', () => {
             message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
         }
         sessions.set(request.runId!, request.payload!.json!.sessionId);
+        if (state.loseOpenAck) return { ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'open acknowledgement lost' } };
       }
       if (request.op === 'close') {
         if (state.blockClose) await pendingClose.promise;
@@ -1794,7 +1827,7 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch,
+    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -1804,8 +1837,98 @@ describe('shared startup lease budget', () => {
       forgetSharedTaskAuthorization('share:startup-budget', id);
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    standbyPlacement.write.mockClear();
+    standbyPlacement.real = false;
+    standbyPlacement.directory = root;
   });
   afterEach(() => { guestPermission.availabilityOwner = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // Unit: many concurrently open tasks using one share report in one owner request.
+  // Existing roundtrips cover shared event polling and task-local renewal, separate traffic from these status reports.
+  it('coalesces periodic direct task status for an owner that advertises batching', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 360_000; f.state.directStatusBatch = true;
+    const ids = Array.from({ length: 24 }, (_, index) => 'status-' + index);
+    const handles = await Promise.all(ids.map(id => f.open(id)));
+    try {
+      await vi.advanceTimersByTimeAsync(30_100);
+      const reports = f.calls.filter(call => call.op.startsWith('direct-status'));
+      expect(reports).toEqual([{ device: f.owner, op: 'direct-status-batch', statuses: expect.arrayContaining(
+        ids.map(sessionId => ({ sessionId, running: false, generation: expect.any(String) }))) }]);
+      await Promise.all(handles.map(handle => handle.send({ type: 'user', content: 'hello' })));
+      expect(f.calls.filter(call => call.op === 'call' && call.method === 'send')).toHaveLength(ids.length);
+      await Promise.all(handles.map(handle => handle.abort()));
+      expect(f.calls.filter(call => call.op === 'call' && call.method === 'abort')).toHaveLength(ids.length);
+      await vi.advanceTimersByTimeAsync(270_000);
+      expect(f.renewals.size).toBe(ids.length);
+      expect(new Set(f.renewals.values()).size).toBeGreaterThan(1);
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+    expect(f.calls.filter(call => call.op === 'close')).toHaveLength(ids.length);
+  });
+
+  // Unit: the real starter opens a new isolated run at the previously prepared M after losing O or its authority.
+  // Old availability regressions only cover the Device Link cloud assignment path. One anchor and one new task are sufficient.
+  it.each(['owner', 'authority', 'owner-after-local-task'])('reuses a prepared Agent Net executor after losing the %s', async outage => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000; f.state.agentNetStandby = true;
+    f.state.localFirst = outage === 'owner-after-local-task';
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', memberId: 'member', hostOnline: true };
+    const source = await f.open('standby-source');
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      const prepared = f.calls.find(call => call.op === 'standby-prepare');
+      if (outage === 'owner-after-local-task') {
+        expect(prepared?.device).toBe(f.owner);
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.owner]);
+      }
+      if (outage === 'authority') f.state.authorityOffline = true;
+      else { f.state.ownerOffline = true; guestPermission.availabilityOwner!.hostOnline = false; }
+      const first = f.calls.length;
+      const handle = await f.open('standby-new');
+      try {
+        expect(f.calls.slice(first).filter(call => call.op === 'standby-admit' || call.op === 'open')).toEqual([
+          expect.objectContaining({ device: f.target, op: 'standby-admit', sessionId: 'standby-new', sourceSessionId: prepared?.sessionId ?? 'standby-source' }),
+          expect.objectContaining({ device: f.target, op: 'open' }),
+        ]);
+        expect(standbyPlacement.write).toHaveBeenCalledWith(expect.objectContaining({ target: f.target }), 'standby-new', expect.any(Function));
+        await vi.advanceTimersByTimeAsync(110_001);
+        expect(liveSharedTaskTarget('standby-new', f.owner)).toBeNull();
+      } finally { await handle.close(); }
+    } finally { await source.close(); }
+  });
+
+  // Unit: the real startup entry and owner-scoped placement file distinguish
+  // failed local preparation from a lost acknowledgement of a submitted open.
+  it.each(['before-open', 'unknown-open'])('handles the durable standby placement after %s', async phase => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000; f.state.agentNetStandby = true;
+    standbyPlacement.real = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', memberId: 'member', hostOnline: true };
+    const source = await f.open('placement-source');
+    try {
+      f.state.ownerOffline = true;
+      guestPermission.availabilityOwner.hostOnline = false;
+      if (phase === 'before-open') f.state.localFailure = 'fixture preparation failed';
+      else f.state.loseOpenAck = true;
+      await expect(f.open('placement-task')).rejects.toThrow();
+      const location = await readAgentNetStandbyPlacement('startup-budget', 'placement-task');
+      if (phase === 'unknown-open') {
+        expect(location).toMatchObject({ target: f.target, admissionId: expect.any(String) });
+        expect(f.calls.filter(call => call.op === 'direct-release' && call.device === f.target)).toHaveLength(0);
+      } else {
+        expect(location).toBeUndefined();
+        expect(f.calls.filter(call => call.op === 'direct-release' && call.device === f.target)).toEqual([
+          expect.objectContaining({ sessionId: 'placement-task', generation: expect.any(String) }),
+        ]);
+        f.state.localFailure = '';
+        f.state.ownerOffline = false;
+        guestPermission.availabilityOwner.hostOnline = true;
+        const retry = await f.open('placement-task');
+        await retry.close();
+        expect(f.calls.filter(call => call.op === 'allocate' && call.sessionId === 'placement-task')).toHaveLength(1);
+        expect(f.calls.filter(call => call.op === 'direct-locate' && call.sessionId === 'placement-task')).toHaveLength(0);
+      }
+    } finally { await source.close(); }
+  });
 
   // #10826, unit: the real starter must reach the authorized M when O's online
   // heartbeat outlives its link. Existing availability tests never start a task.
