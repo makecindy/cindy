@@ -594,8 +594,18 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         ...(agentNet.active() && compatibilityIssue ? { compatibilityIssue } : {}) } } : {}) }),
     async setEnabled(enabled: boolean) {
       assertCurrent();
+      // Turning remote control on writes the profile's device-link settings outside the service gate, so it
+      // refuses a held profile as setAgentNetEnabled does: at entry and again inside the settings lock.
+      // Turning it off keeps its current path (disable and revoke under a hold are decided separately).
+      if (enabled) refuseWhileHeld();
       if (enabled && !deps.canRegister()) throw new Error('Sign in with cindy-host login to register an independent Host device.');
-      await settings.writeDeviceLinkSetting('remoteControlEnabled', enabled);
+      if (enabled) {
+        await settings.updateDeviceLinkSetting('remoteControlEnabled', () => {
+          assertCurrent();
+          refuseWhileHeld();
+          return true;
+        });
+      } else await settings.writeDeviceLinkSetting('remoteControlEnabled', false);
       sync(); return this.state();
     },
     /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */

@@ -592,15 +592,17 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   fs.writeFileSync(file, initial);
   const holdMessage = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
   let held = holdMessage;
+  let canRegister = false;
   const host = createHostDeviceLink({
     profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
-    getToken: async () => null, canRegister: () => false, profileHold: () => held,
+    getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
     createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
   });
   const server = createHostServer({ instanceId: 'fixture', token: 'fake-token',
-    remoteControl: action => host.setAgentNetEnabled(action === 'agent-net-on') });
+    remoteControl: action => action === 'enable' ? host.setEnabled(true)
+      : host.setAgentNetEnabled(action === 'agent-net-on') });
   t.after(async () => {
     await new Promise(resolve => server.close(resolve));
     await host.stop();
@@ -613,8 +615,11 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
     headers: { authorization: 'Bearer fake-token', 'content-type': 'application/json' },
     body: JSON.stringify({ instanceId: 'fixture', action }),
   });
-  await t.test('both CLI commands refuse a held profile', async () => {
-    for (const action of ['agent-net-on', 'agent-net-off']) {
+  // Turning remote control on writes the same settings file through the same bypass (`/control/remote`);
+  // before this it skipped the hold. Minimal failure: drop refuseWhileHeld() from setEnabled.
+  await t.test('CLI commands that turn something on, or Agent-Net off, refuse a held profile', async () => {
+    canRegister = true;
+    for (const action of ['enable', 'agent-net-on', 'agent-net-off']) {
       const response = await control(action);
       assert.equal(response.status, 409);
       assert.deepEqual(await response.json(), { error: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + holdMessage });
@@ -622,6 +627,12 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
     }
   });
   held = null;
+  await t.test('turning remote control on works again once the hold clears', async () => {
+    const response = await control('enable');
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).remoteControlEnabled, true);
+  });
+  canRegister = false;
   await t.test('queued switch does not write once the owner changes', async t => {
     const before = fs.readFileSync(file, 'utf8');
     const open = fs.openSync;
