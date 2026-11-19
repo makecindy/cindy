@@ -262,11 +262,11 @@ export function MyDevicesPanel({
 
   const handleRename = async (deviceId: string) => {
     const name = editingName.trim();
-    const currentName =
-      (self?.deviceId === deviceId ? self : others.find((d) => d.deviceId === deviceId))
-        ?.name.trim() ?? '';
+    const currentName = self?.deviceId === deviceId
+      ? selfName
+      : others.find((d) => d.deviceId === deviceId)?.name.trim() ?? '';
     setEditingId(null);
-    if (name && name === currentName) return;
+    if (name === currentName) return;
     await s.rename(deviceId, name || null);
   };
 

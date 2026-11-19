@@ -27,6 +27,7 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-devices',
     titleKey: 'settings.remoteControl.sections.myDevices',
     sectionKey: 'settings.sections.remoteControl',
+    keywordKeys: ['settings.devices.delete', 'settings.devices.deleteTitle'],
     aliases: ['device link', 'devices', '设备互联', '我的设备', '设备列表'],
   },
   v2: {
