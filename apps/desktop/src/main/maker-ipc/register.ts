@@ -736,6 +736,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
+import { formatTaskTopicTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { withBotGroupUiMock } from './botGroupUiMock.js';
@@ -1038,6 +1039,7 @@ import {
   isPersistedDirectoryGrantSubset,
 } from './remoteDirectoryGrantUpdate.js';
 import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerGrant.js';
+import { createTaskWritableDirsUpdater } from '../projectDirectoryRuntime.js';
 import {
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
@@ -1607,6 +1609,7 @@ import { createBusinessSessionId } from '../sessionIds.js';
 import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
 import {
   isSessionAutoTitleEligible,
+  refineCreatedTaskTitle,
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
@@ -4358,7 +4361,7 @@ export function applyDirectoryGrants(
         : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs), libraryRootForRuntime(dirs)),
       setWritableDirs: persistOnly
         ? async () => {}
-        : (dirs) => sess.setWritableDirs(dirs),
+        : createTaskWritableDirsUpdater(sess),
     }, {
       validate: async (requested) => {
         if (axis !== 'extraDirs') {
@@ -12165,7 +12168,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           inherited = createDefaults!;
         }
-        const newTitle = title?.trim() || message.split('\n')[0].slice(0, 60);
+        const titleOwner = getCurrentDbClientSnapshot();
+        const newTitle = title?.trim() || normalizeAutoTitle(message);
         const createOpts = buildCreateOptsWithStderr({
           ...(handoffWorktree ? { id: handoffWorktree.sessionId } : {}),
           agentKind: inherited.agentKind,
@@ -12264,6 +12268,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
           }
           assertDesktopSendDispatched(sendResult, 'send_to_session create');
+        }
+        if (!params.sourcePlugin && !title?.trim() && titleOwner === getCurrentDbClientSnapshot()) {
+          void refineCreatedTaskTitle(session.id, message, { initialTitle: newTitle });
         }
         log.info('sendToSession created new session', {
           dispatcherSessionId,
@@ -12976,6 +12983,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
+    refineTitle: (id, subject, initial) => { void refineCreatedTaskTitle(id, subject, { initialTitle: initial }); },
     listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
     create: createRemoteSessionOpener({
       openSession,
@@ -13136,7 +13144,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // A turn is running or queued in a companion's main task: no context rebuild, no hand-over.
   const companionTurnActive = (sessionId: string) => !!maker.getSession(sessionId)?.isTurnRunning?.()
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
+  const refineGroupTopic: NonNullable<BotGroupChatServiceDeps['refineTopicTitle']> = (id, initial, topic) => {
+    void refineCreatedTaskTitle(id, topic.text, initial ? {
+      initialTitle: initial, format: value => formatTaskTopicTitle(value, topic.channel, { participant: topic.participant }),
+    } : undefined);
+  };
   const botGroupChatDeps: BotGroupChatServiceDeps = {
+    refineTopicTitle: refineGroupTopic,
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
     readLaneContext: (id) => {
       const session = maker.getSession(id);
@@ -13154,7 +13168,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : await localExecutionProject(input.groupId, input.botId);
           projectDir = resolved ?? undefined;
         }
-        return await ensureBotGroupLaneSession({ ...input, projectDir }, registeredTaskProject);
+        const lane = await ensureBotGroupLaneSession({ ...input, projectDir }, registeredTaskProject);
+        if (!input.chatAccess && lane.ok && lane.created && input.topic) refineGroupTopic(lane.sessionId, input.title, input.topic);
+        return lane;
       } catch (error) {
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
@@ -13213,7 +13229,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
-    // like a new task of this user's (new-task model and permission), titled with the group's name.
+    // like a new task of this user's (new-task model and permission).
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
       const assertOwner = captureSessionOwner();
       try {

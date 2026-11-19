@@ -100,7 +100,7 @@ import { createHostUsagePricing } from './agent/usage-pricing.ts';
 import { createHostUsageRecording } from './agent/usage-recording.ts';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
-import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge } from '../../desktop/src/main/maker-host/cli-proxy-bridge.js';
 import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
@@ -2099,7 +2099,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => mcpRuntime?.close());
     platformClient?.close(); platformClient = null;
     await attempt(() => platformTools?.close());
-    await attempt(closeClaudeCliProxyBridge);
+    await attempt(closeCliProxyBridge);
     await attempt(() => makerMemory?.dispose());
     await attempt(() => drainedPlugins);
     await attempt(() => drainedApps);

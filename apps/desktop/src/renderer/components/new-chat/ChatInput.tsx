@@ -434,6 +434,7 @@ import {
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
+import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
@@ -3508,8 +3509,10 @@ export function ChatInput({
     attachments: AttachedFile[];
     comments: BrowserCommentDraftItem[];
   } | null>(null);
+  const recordingSamplesRef = useRef<RecordingSamplesRef['current']>(null);
   const voiceInputOptions = useMemo(
     () => ({
+      onSamples: (pcm: ArrayBuffer) => recordingSamplesRef.current?.(pcm),
       onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
       shouldApplyToEditor: () =>
         voiceOwnerStorageKeyRef.current === undefined ||
@@ -5131,14 +5134,7 @@ export function ChatInput({
     }
     // A new directory uses the existing Main-issued writable grant. The local
     // picker cannot authorize paths on an SSH or device-link execution host.
-    if (onOpenProjectSettings) {
-      actions.push({
-        id: 'add-extra-dir',
-        label: t('projectSettings.title'),
-        disabled: settingsLocked,
-        run: onOpenProjectSettings,
-      });
-    } else if (
+    if (
       onWritableDirsChange &&
       writableGrantScope &&
       !remoteHostId &&
@@ -5154,10 +5150,18 @@ export function ChatInput({
           totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
-        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
+        disabled: settingsLocked || composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
         opensPanelPage: true,
         run: () => openAddDirectoryViewRef.current(),
+      });
+    }
+    if (onOpenProjectSettings) {
+      actions.push({
+        id: 'project-settings',
+        label: t('projectSettings.title'),
+        disabled: settingsLocked,
+        run: onOpenProjectSettings,
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -10062,7 +10066,7 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    addDirViewOpen ? (
+                    addDirViewOpen && !settingsLocked ? (
                       <AddDirectoryPanel
                         addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
                         workingDir={workingDir}
@@ -10442,6 +10446,7 @@ export function ChatInput({
                   )}
                   {!queueEditActive && (
                     <VoiceInputButton
+                      samplesRef={recordingSamplesRef}
                       state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
                       // The surrounding controls stay locked during voice input, but
                       // this control must remain enabled so the recording can stop.
@@ -10709,6 +10714,7 @@ export function ChatInput({
 }
 
 function VoiceInputButton({
+  samplesRef,
   state,
   onHoldChange,
   emptyComposer,
@@ -10723,6 +10729,7 @@ function VoiceInputButton({
   onReleaseToSendChange,
   className,
 }: {
+  samplesRef: RecordingSamplesRef;
   state: import('@cindy/voice-input-core').VoiceInputState;
   onHoldChange: (holding: boolean) => void;
   emptyComposer: boolean;
@@ -10762,7 +10769,7 @@ function VoiceInputButton({
 
   // ── 录音态宽度形变 + 计时(DESIGN.md §14.4「Desktop composer send / stop」)──
   // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
-  // 文案已移除):三根红色音量条(复用已登记的 voice-mic-wave 循环)+ 计时。
+  // 文案已移除):三根实时录音音量条+ 计时。
   // 会话内与新建对话框共用同一套(不再按 create-agent 分叉)。
   // 计时数字 tabular-nums 等宽,配合"分钟位数变化才重新量宽",秒跳动不抖框。
   const [recSeconds, setRecSeconds] = useState(0);
@@ -10996,13 +11003,8 @@ function VoiceInputButton({
           <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
             <Mic size={15} />
           </span>
-          <span
-            data-voice-mic-active={activeRecording ? 'true' : undefined}
-            className={cn(iconLayer, 'h-4 gap-[2px]', showBars ? iconShown : iconHidden)}
-          >
-            <span data-voice-mic-bar="1" className="h-[10px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
-            <span data-voice-mic-bar="2" className="h-[14px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
-            <span data-voice-mic-bar="3" className="h-[10px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
+          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
+            <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
           </span>
           <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
             <Spinner size={15} spinning={showProcessing} />

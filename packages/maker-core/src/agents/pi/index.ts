@@ -555,6 +555,22 @@ function oneLineDescription(text: string, maxLen: number): string {
   return line.length > maxLen ? line.slice(0, maxLen - 1) + '…' : line;
 }
 
+// A copy of Windows process.env loses case-insensitive lookup. When spellings
+// collide, Node passes the first in lexical order to the child. Keep all bypasses.
+function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
+  const keys = Object.keys(env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key)).sort();
+  for (const key of keys) {
+    const name = key.toUpperCase();
+    if (name === key) continue;
+    if (name === 'NO_PROXY') {
+      env.NO_PROXY = [env.NO_PROXY, env[key]].filter(Boolean).join(',');
+    } else {
+      env[name] ??= env[key];
+    }
+    delete env[key];
+  }
+}
+
 /**
  * NO_PROXY 兜底:pi 的模型请求打的是 Cindy 本地 compat proxy(loopback),bridge 的
  * MCP fetch 也是 localhost —— 用户设了全局 HTTP_PROXY 时这些请求不能进代理隧道。
@@ -5850,6 +5866,14 @@ export class PiAgent extends BaseAgent {
         const promptHash = createHash('sha256').update(appendSystemPrompt);
         if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
         spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
+      }
+      if (!remote && this.deps.getLocalPiHttpsProxy) {
+        if (process.platform === 'win32') normalizeWindowsProxyEnv(spawnEnv);
+        const proxy = await this.deps.getLocalPiHttpsProxy(spawnEnv);
+        if (proxy) {
+          spawnEnv.HTTPS_PROXY = proxy;
+          spawnEnv.https_proxy = proxy;
+        }
       }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;

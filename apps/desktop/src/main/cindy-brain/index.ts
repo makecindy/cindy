@@ -5087,7 +5087,7 @@ async function getGhostConfigurableMediaModels(
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels(true) : [];
     const availability = await loadPluginMediaAvailability(type, localVideoModels.length, () =>
-      listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway }),
+      listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway, includeSharedImages: type === 'image' }),
     );
     const candidates = selectExecutableCoreMediaModels([...availability.models, ...localVideoModels], type)
       .filter((model) =>
@@ -5716,6 +5716,34 @@ function resolveCustomVideoConnection(providerId: string, modelId: string, agent
 }
 
 configureProviderMediaRuntime({
+  async generateSharedSubscriptionImage(request, assertAllowed, signal) {
+    const { providerId, model, prompt, size, aspectRatio, quality, resolution, nativeParameters } = request;
+    const beforeDispatch = () => {
+      assertAllowed();
+      const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
+      if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
+        || !listLocalProviderMediaModels(false, ['image.generate']).some(candidate =>
+          candidate.providerId === providerId && candidate.id === model)) {
+        throw new Error('SHARED_IMAGE_UNAVAILABLE');
+      }
+    };
+    beforeDispatch();
+    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
+    if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
+    try {
+      const channel = createCodexImageChannel({
+        providerId,
+        hasOAuthLogin: () => true,
+        getAuth: remoteAuth.getAuth,
+        onAuthFailure: async failure => { await remoteAuth.onAuthFailure(failure); },
+        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        beforeDispatch: () => { beforeDispatch(); remoteAuth.assertDispatchable(); },
+      });
+      return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, resolution, nativeParameters, signal }));
+    } finally {
+      remoteAuth.release();
+    }
+  },
   guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);

@@ -71,6 +71,7 @@ import {
   selectSessionWithCount,
   selectSessionsByIds,
   flattenSessionReadRow,
+  projectSessionDetail,
   projectSessionReadResult,
   type SessionListRow,
 } from '../sessionQueries';
@@ -950,7 +951,8 @@ export const discardProvisionalSessionRow = (sessionId: string) => discardSessio
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
 const FORK_PLACEHOLDER_TITLE_PREFIX = '[Fork';
 
-let _onUserTitleWritten: ((sessionId: string) => void) | null = null;
+type UserTitleListener = (sessionId: string, owner: ReturnType<typeof readCurrentDbClientSnapshot>) => void;
+let _onUserTitleWritten: UserTitleListener | null = null;
 
 /**
  * 注入「用户手动写过标题」的通知(传 null 清除;由 maker-ipc 的自动起名模块注册)。
@@ -960,14 +962,14 @@ let _onUserTitleWritten: ((sessionId: string) => void) | null = null;
  * 智能标题会把他刚保存的名字覆盖掉(PR #510 review P1)。`sessions` 表没有「谁写的」
  * 这一列,所以由改名出口显式说一声,自动起名据此收手。
  */
-export function setOnUserSessionTitleWritten(fn: ((sessionId: string) => void) | null): void {
+export function setOnUserSessionTitleWritten(fn: UserTitleListener | null): void {
   _onUserTitleWritten = fn;
 }
 
 /** 用户改名出口统一调这个(自动起名自己的写入**不**调)。 */
-function noteUserTitleWritten(sessionId: string): void {
+function noteUserTitleWritten(sessionId: string, owner: ReturnType<typeof readCurrentDbClientSnapshot>): void {
   try {
-    _onUserTitleWritten?.(sessionId);
+    _onUserTitleWritten?.(sessionId, owner);
   } catch {
     // 自动起名是附属功能,通知失败不该影响改名主流程。
   }
@@ -1462,7 +1464,7 @@ export function registerSessionIpc(
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionReadResult(row, opts.resolveContextWindow);
+    return projectSessionDetail(row, opts.resolveContextWindow);
   });
 
   /**
@@ -1721,6 +1723,7 @@ export async function updateSessionInDb(
     );
   }
   const dbClient = getDbClient();
+  const titleOwner = typeof p.title === 'string' ? readCurrentDbClientSnapshot() : null;
   const db = dbClient.drizzle;
   // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
   // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
@@ -1770,7 +1773,7 @@ export async function updateSessionInDb(
     // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
-    if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    if (typeof p.title === 'string') noteUserTitleWritten(sid, titleOwner);
     // 窗口预算不是会话列（见 session-context-budget-store 头注）：旧值从偏好文件读，
     // 下面的应用回调靠它判断「有效窗口是否真的变了」（已重新展开为同一值时不必关掉活实例）。
     // 写入放在 UPDATE 之后（与广播同一顺序），保证 UI 先看到新选择。
@@ -2038,7 +2041,7 @@ export async function patchSessionMetaInDb(
   const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
-  if (patch.title !== undefined) noteUserTitleWritten(sessionId);
+  if (patch.title !== undefined) noteUserTitleWritten(sessionId, readCurrentDbClientSnapshot());
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
   // Guarded cleanup must not cancel a task before its unused check commits.
   if (options.unusedOnly && (patch.status !== 'deleted' || typeof dbClient.tx !== 'function'))
@@ -2192,7 +2195,9 @@ export async function renameSessionTitlesInDb(
   if (changes.length === 0) return [];
   const ownerScope = captureOwnerScope();
 
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const titleOwner = readCurrentDbClientSnapshot();
+  const db = dbClient.drizzle;
   const ids = changes.map((change) => change.sessionId);
   const rows = await db
     .select({
@@ -2232,10 +2237,13 @@ export async function renameSessionTitlesInDb(
   if (dryRun) return preview;
 
   await beforeMutation?.();
+  if (titleOwner && titleOwner !== readCurrentDbClientSnapshot()) {
+    throwIpcError('PRECONDITION_FAILED', 'Account changed before renaming tasks');
+  }
   // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
   // 一样先记号后写库,不给并发的智能标题留窗口。
-  for (const change of changes) noteUserTitleWritten(change.sessionId);
-  const applied = await getDbClient()
+  for (const change of changes) noteUserTitleWritten(change.sessionId, titleOwner);
+  const applied = await dbClient
     .tx('sessions.renameTitles', { changes })
     .catch((err) => {
       const code = (err as { code?: string }).code;

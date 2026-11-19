@@ -280,6 +280,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   hold = new Promise(resolve => { release = resolve; });
   const mobileWrite = clients[0].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'during-handoff', text: 'still connected' }] });
   await waitFor(() => writes === 2);
+  const startedAt = Date.now() - 252000;
+  sqlite.prepare('UPDATE sessions SET active_turn_started_at=? WHERE id=?').run(startedAt, 'task');
   clients[2].stop();
   await waitFor(() => !sockets.has('desktop'));
   release();
@@ -289,6 +291,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(host.state().status, 'online');
   assert.equal(clients[0].getStatus(), 'online');
   clients[2] = await connect('desktop');
+  const clock = await clients[2].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] });
+  assert.equal(clock.result.activeTurnStartedAt, startedAt);
+  assert.ok(clock.result.turnElapsedMs >= 252000 && clock.result.turnElapsedMs <= Date.now() - startedAt);
+  sqlite.prepare('UPDATE sessions SET last_turn_ended_at=? WHERE id=?').run(startedAt + 252731, 'task');
   assert.equal(writes, 2, 'reattaching the desktop must not replay mobile writes');
   hold = undefined;
   // Coexistence plan A: while a desktop uses the profile, a phone's send, a new task and a plugin
@@ -320,6 +326,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const neighbor = await clients[1].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] });
   assert.equal(neighbor.ok, true);
   assert.equal(neighbor.result.id, 'task');
+  assert.equal(neighbor.result.turnElapsedMs, 252731);
   const forbidden = await clients[2].invoke('host', { channel: 'host:execute-arbitrary', args: [] }).catch(error => ({ denied: error }));
   assert.ok(forbidden.denied || forbidden.ok === false);
   await host.setEnabled(false);
