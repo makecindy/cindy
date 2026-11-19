@@ -4873,12 +4873,12 @@ export default async function cindyBridge(piApi: any) {
     const model = runtimeRequest?.model ?? ctx.model;
     const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
     let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    next = reserveLargeCompletionHeadroom(next, model) ?? next;
     if (modelRequestControlActive) {
       const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
         model: model.id, request: next });
       next = response.request ?? next;
     }
-    next = reserveLargeCompletionHeadroom(next, model) ?? next;
     next = boundedChatToolIds(next, model);
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.

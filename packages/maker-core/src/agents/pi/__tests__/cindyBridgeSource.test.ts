@@ -685,17 +685,52 @@ describe('cindy-bridge extension source', () => {
     expect(reserve({ max_tokens: 1_010_781 }, { ...model, api: 'openai-responses' })).toBeUndefined();
     expect(730_000 + reserve({ max_tokens: 344_480 }, model)!.max_tokens)
       .toBeLessThanOrEqual(model.contextWindow);
-    expect(reserve({ max_tokens: 70_000 }, { ...model, maxTokens: 384_000 })?.max_tokens)
-      .toBe(16_384);
+    expect(reserve({ max_tokens: 70_000 }, { ...model, maxTokens: 384_000 })?.max_tokens).toBe(16_384);
   });
 
-  it('applies the completion reserve in the native provider request hook', () => {
-    const hook = CINDY_BRIDGE_EXTENSION_SOURCE.slice(
-      CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("pi.on('before_provider_request'"),
-      CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("const mcpGateway", CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("pi.on('before_provider_request'")),
-    );
-    expect(hook.indexOf('reserveLargeCompletionHeadroom')).toBeGreaterThan(hook.indexOf('runtimeModelControl'));
-    expect(hook.indexOf('reserveLargeCompletionHeadroom')).toBeLessThan(hook.indexOf('boundedChatToolIds'));
+  it('executes the registered native provider request hook and preserves explicit ceilings', async () => {
+    const helperStart = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function reserveLargeCompletionHeadroom(');
+    const helperEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function boundedChatToolIds(', helperStart);
+    const hookStart = CINDY_BRIDGE_EXTENSION_SOURCE.lastIndexOf("pi.on('before_provider_request'");
+    const hookEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('  const mcpGateway', hookStart);
+    const hook = CINDY_BRIDGE_EXTENSION_SOURCE.slice(hookStart, hookEnd);
+    const compiled = ts.transpileModule(
+      CINDY_BRIDGE_EXTENSION_SOURCE.slice(helperStart, helperEnd) + '\n' + hook,
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    let callback!: (event: any, ctx: any) => Promise<Record<string, unknown>>;
+    const sandbox: any = {
+      process: { env: {} },
+      pi: { on: (name: string, handler: (event: any, ctx: any) => Promise<Record<string, unknown>>) => {
+        if (name === 'before_provider_request') callback = handler;
+      } },
+      runtimeRequestModel: () => undefined,
+      astraResponsesPayload: () => undefined,
+      nativeFastPayload: async () => undefined,
+      modelRequestControlActive: false,
+      runtimeModelControl: async () => ({ request: undefined }),
+      boundedChatToolIds: (payload: Record<string, unknown>) => payload,
+      projectPiRequestDiagnostics: () => ({}),
+      performance,
+    };
+    runInNewContext(compiled, sandbox);
+    const payload = { max_tokens: 1_010_781, messages: [{ role: 'user', content: 'hello' }] };
+    const adjusted = await callback({ payload }, {
+      model: { api: 'openai-completions', contextWindow: 1_048_576, maxTokens: 1_048_576 },
+      ui: { notify: vi.fn() },
+    });
+    expect(adjusted.max_tokens).toBe(994_397);
+    expect(payload.max_tokens).toBe(1_010_781);
+    sandbox.modelRequestControlActive = true;
+    sandbox.runtimeModelControl = vi.fn(async () => ({ request: { max_tokens: 70_000, messages: [{ role: 'user', content: 'short' }] } }));
+    const explicit = await callback({ payload: { max_tokens: 384_000, messages: [{ role: 'user', content: 'short' }] } }, {
+      model: { api: 'openai-completions', contextWindow: 1_048_576, maxTokens: 384_000 },
+      ui: { notify: vi.fn() },
+    });
+    expect(explicit.max_tokens).toBe(70_000);
+    expect(sandbox.runtimeModelControl).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      phase: 'payload', request: expect.objectContaining({ max_tokens: 384_000 }),
+    }));
   });
 
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
