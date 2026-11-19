@@ -151,8 +151,54 @@ describe('buildTopology:状态五档', () => {
       links: [{ ...link('pc', 'relay', 25, true, 2), encrypted: false }],
       agentNetRoutes: [{ deviceId: 'pc', path: 'direct', rttMs: 9 }],
     });
-    expect(model.nodes[0]).toMatchObject({ status: 'relay', rttMs: 25, encrypted: false, flow: 'out' });
+    expect(model.nodes[0]).toMatchObject({ status: 'relay', rttMs: 25, encrypted: false, flow: 'out', transport: 'websocket' });
     expect(remoteSwitchAvailability(model.nodes[0])).toEqual({ visible: true, block: null });
+  });
+
+  // 2026-11-19 用户要求：每台电脑之间的链接也显示实际底层传输协议（UDP / WS / WebRTC）。
+  // 生产入口:buildTopology → TopologyNode.transport。覆盖缺口:此前只给中转站写 transport,对端节点没有传输协议字段。
+  // 最小失败输入:混合 Agent-Net 直连/经中转(UDP/WS/未上报) 与 Device Link 直连/经中转(主连接为 Agent-Net UDP 时旧版中转仍须是 WS)及未建链/离线。tier: unit。
+  it('按实际链路协议与路径推导对端底层传输协议,不猜测未知状态', () => {
+    const devices = [
+      device({ deviceId: 'an-direct' }),
+      device({ deviceId: 'an-relay' }),
+      device({ deviceId: 'an-route-direct' }),
+      device({ deviceId: 'dl-direct' }),
+      device({ deviceId: 'dl-relay' }),
+      device({ deviceId: 'unknown-host' }),
+      device({ deviceId: 'connecting' }),
+      device({ deviceId: 'offline', online: false }),
+    ];
+    const links = [
+      { ...link('an-direct', 'direct', 8), encrypted: true },
+      { ...link('an-relay', 'relay', 24), encrypted: true },
+      { ...link('dl-direct', 'direct', 6), encrypted: false },
+      { ...link('dl-relay', 'relay', 52), encrypted: false },
+      link('unknown-host', 'direct', 5),
+    ];
+    const agentNetRoutes = [
+      { deviceId: 'an-route-direct', path: 'direct' as const, rttMs: 4 },
+      { deviceId: 'connecting', path: 'connecting' as const, rttMs: null },
+    ];
+    const udpRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'udp' });
+    expect(Object.fromEntries(udpRelay.nodes.map((n) => [n.id, n.transport]))).toEqual({
+      'an-direct': 'udp',
+      'an-relay': 'udp',
+      'an-route-direct': 'udp',
+      'dl-direct': 'webrtc',
+      'dl-relay': 'websocket',
+      'unknown-host': null,
+      connecting: null,
+      offline: null,
+    });
+
+    const wsRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'websocket' });
+    expect(wsRelay.byId.get('an-relay')?.transport).toBe('websocket');
+    expect(wsRelay.byId.get('an-direct')?.transport).toBe('udp');
+
+    const unknownRelay = buildTopology({ ...base, devices, links, relayProtocol: 'agent-net' });
+    expect(unknownRelay.byId.get('an-relay')?.transport).toBeNull();
+    expect(unknownRelay.byId.get('dl-relay')?.transport).toBe('websocket');
   });
 
   // 用户反馈(2026-11-06):按延迟排,延迟一刷新图块就换位置。组内只按名字排(数字按数值)。
