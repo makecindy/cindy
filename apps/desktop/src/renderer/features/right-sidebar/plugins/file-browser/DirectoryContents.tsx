@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
 import { FileFilterInput } from '@/features/cc-agent/workdir-browse/FileFilterInput';
+import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { pickFileIcon } from '@/components/ui/file-type-icon';
 import type { DirEntry } from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
@@ -162,12 +163,11 @@ export function DirectoryContents({
               }}
             >
               {sorted.slice(row.index * columns, (row.index + 1) * columns).map((entry, offset) => (
+                <Tip key={entry.relPath} text={entry.name}>
                 <button
                   type="button"
-                  key={entry.relPath}
                   data-file-index={row.index * columns + offset}
                   aria-current={entry.relPath === previousEntry || undefined}
-                  title={entry.name}
                   onClick={() => onOpen(entry)}
                   onKeyDown={(event) => {
                     const index = row.index * columns + offset;
@@ -234,6 +234,7 @@ export function DirectoryContents({
                     </small>
                   )}
                 </button>
+                </Tip>
               ))}
             </div>
           ))}

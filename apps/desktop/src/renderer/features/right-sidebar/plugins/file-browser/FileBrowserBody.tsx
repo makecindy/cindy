@@ -1,3 +1,4 @@
+import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 /**
  * FileBrowserBody — file-browser plugin 的 TabBody 实现。
@@ -836,9 +837,11 @@ function TreeHeader({
 
   return (
     <div className="flex shrink-0 items-center justify-between pt-2 pb-1 pl-3 pr-2">
-      <button type="button" onClick={onOpenRoot} className="truncate text-sm font-semibold text-foreground hover:underline" title={workdir}>
+      <Tip text={workdir}>
+      <button type="button" onClick={onOpenRoot} className="truncate text-sm font-semibold text-foreground hover:underline">
         {displayName}
       </button>
+      </Tip>
       <div className="flex shrink-0 items-center gap-1.5">
         {/* 搜索 / 显示被忽略的目录 / 收起 / 刷新（搜索态只剩退出搜索）——
             与 doc 模式侧栏共用 FileTreeHeaderActions，不再各维护一份。 */}
