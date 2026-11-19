@@ -928,7 +928,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     ts,
     dbClient,
     ownerScope,
-    touchRecentWorkdir,
+    touchRecentWorkdir: (...args) => touchRecentWorkdir(...args),
     broadcastRecentWorkdirsChanged,
   });
 }
@@ -1871,7 +1871,7 @@ export async function updateSessionInDb(
       row,
       dbClient,
       ownerScope,
-      touchRecentWorkdir,
+      touchRecentWorkdir: (...args) => touchRecentWorkdir(...args),
       broadcastRecentWorkdirsChanged,
     });
     // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
