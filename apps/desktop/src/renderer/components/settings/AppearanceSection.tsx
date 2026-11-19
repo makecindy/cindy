@@ -706,8 +706,6 @@ export function AppearanceSection() {
           </SettingsCard>
         </SettingsSection>
 
-        <ChatLayoutSettings />
-
         <WallpaperSection />
 
         <SettingsSection
@@ -923,6 +921,7 @@ export function AppearanceSection() {
             />
 
             <LayoutResetControl />
+            <ChatLayoutSettings />
           </SettingsCard>
         </SettingsSection>
       </div>
