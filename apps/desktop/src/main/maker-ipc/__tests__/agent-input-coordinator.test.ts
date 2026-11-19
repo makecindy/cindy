@@ -7893,7 +7893,7 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
   // Existing stale-abort tests keep the replacement busy; they do not cover a
   // lost terminal after it becomes idle, or the close-cleared null-token risk.
   // Unit tier: memory ports and fake timers, no real network or user database.
-  it.each(['lost-terminal', 'normal-terminal', 'closed', 'new-stop', 'paused', 'live-busy', 'unknown-live'] as const)(
+  it.each(['lost-terminal', 'busy-to-idle', 'busy-then-closed', 'normal-terminal', 'closed', 'new-stop', 'paused', 'live-busy', 'unknown-live'] as const)(
     'rechecks the replacement after a stale Stop without reviving it: %s',
     async (boundary) => {
       vi.useFakeTimers();
@@ -7917,7 +7917,7 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
         await flush();
         expect(h.sendToAgent).toHaveBeenCalledTimes(2);
 
-        h.setLiveRunning(boundary === 'live-busy' ? true : boundary === 'unknown-live' ? 'unknown' : false);
+        h.setLiveRunning(['live-busy', 'busy-to-idle', 'busy-then-closed'].includes(boundary) ? true : boundary === 'unknown-live' ? 'unknown' : false);
         h.reconcileTurnIdle.mockImplementation(() => { h.setRunning(false); return true; });
         if (boundary === 'closed') {
           h.coordinator.stop(sid, { keepQueue: true, pauseQueue: false });
@@ -7934,14 +7934,27 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
         }
         abort.resolve();
         await flush();
+        if (boundary === 'busy-to-idle' || boundary === 'busy-then-closed') {
+          // The old abort can settle before the replacement goes idle. No
+          // terminal or user action will provide another wakeup afterwards.
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+          expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+          if (boundary === 'busy-then-closed') {
+            h.setRunning(false);
+            h.setLiveSessionPresent(false);
+            h.coordinator.onSessionClosed(sid);
+          }
+          h.setLiveRunning(false);
+        }
         await vi.advanceTimersByTimeAsync(1_000);
         await flush();
 
-        const shouldDispatch = boundary === 'lost-terminal' || boundary === 'normal-terminal';
+        const shouldDispatch = boundary === 'lost-terminal' || boundary === 'busy-to-idle' || boundary === 'normal-terminal';
         expect(h.sendToAgent).toHaveBeenCalledTimes(shouldDispatch ? 3 : 2);
         expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
           .toEqual(shouldDispatch ? [] : ['queued']);
-        if (boundary === 'lost-terminal') {
+        if (boundary === 'lost-terminal' || boundary === 'busy-to-idle') {
           expect(h.reconcileTurnIdle).toHaveBeenCalledOnce();
           expect(h.sendToAgent.mock.calls[2]![3].persistUserMessage?.clientId).toBe('queued');
         } else {

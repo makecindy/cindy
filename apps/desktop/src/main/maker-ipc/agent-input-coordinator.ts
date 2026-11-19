@@ -3483,7 +3483,9 @@ export class AgentInputCoordinator {
             current.activeTurn !== null &&
             isActiveTurnDispatched(current.activeTurn)
           ) {
-            this.scheduleDrain(sessionId, 'stale-abort-replacement');
+            // The replacement may still be busy now and lose its terminal
+            // later. Keep the existing retry alive until it can prove idle.
+            this.scheduleDrainAfterExternalTurnSettles(sessionId, 'stale-abort-replacement');
           }
           log.info('ignoring stale abort completion', {
             sessionId,
