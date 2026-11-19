@@ -149,6 +149,8 @@ interface Running {
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
   /** A short grace lets the already captured terminal drain its persistence queue. */
   orphanedAt?: number;
+  /** Chat-only dispatch uses a queue receipt while recovery retains this source identity. */
+  sourceClientId?: string;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
   laneLookup?: Promise<void>;
@@ -1993,6 +1995,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
+        ...(run?.accepted ? { inputClientId: run.clientId } : {}),
         executionId: e.id, sourceMessageId: e.source_message_id, isSelfRequested: e.requester_id === selfId,
         ...speakerRequesterName(e.bot_id, e.requester_id),
         ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
@@ -3412,7 +3415,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         assertDispatchCurrent: () => {
           if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
         },
-        onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
+        onQueued: async clientId => { run.sourceClientId ??= run.clientId; run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;
         } });
@@ -3729,7 +3732,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Do not renew an orphan forever after a lost terminal or a newer task turn.
       // Reuse the existing heartbeat and terminal receipt; never abort the newer input.
       const inputLive = run.accepted && run.sessionId && deps.isGroupInputLive
-        ? deps.isGroupInputLive(run.sessionId, run.clientId) : undefined;
+        ? deps.isGroupInputLive(run.sessionId, run.clientId)
+          || (!run.inTask && !!run.sourceClientId && deps.isGroupInputLive(run.sessionId, run.sourceClientId)) : undefined;
       if (inputLive === false) {
         run.orphanedAt ??= Date.now();
         if (Date.now() - run.orphanedAt >= 30_000) {
@@ -4547,11 +4551,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A task card's task also runs its owner's own turns: only this turn's input ends it.
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
         && (terminal.activeInputClientId ? r.clientId === terminal.activeInputClientId
+          || !r.inTask && r.sourceClientId === terminal.activeInputClientId
           : !deps.isGroupInputLive && !r.inTask));
       void taskCards.noteTurn(terminal, run?.inTask === true)
         .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
       if (!run) return local.settleLaneTurn(terminal);
-      if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
+      if (!terminal.activeInputClientId && !run.accepted) return false;
       await settleExecution(run, terminal, terminal.undispatched);
       return true;
     },

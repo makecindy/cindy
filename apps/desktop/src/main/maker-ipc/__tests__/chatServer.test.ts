@@ -1770,6 +1770,30 @@ describe('Chat Server result delivery and refresh', () => {
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
+  // Unit / #11488: chat-only dispatch replaces the queue receipt, while recovery
+  // retains retrySourceClientId. Exercise both terminal identities after heartbeats.
+  it.each(['source', 'queue'])('keeps chat-only recovery live and accepts its %s terminal', async identity => {
+    let source = '';
+    deps.dispatch = vi.fn(async input => {
+      source = input.clientId!;
+      await input.onQueued?.('chat-only-queue');
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
+    deps.isGroupInputLive = (_sessionId, clientId) => clientId === source;
+    await start();
+    fixture.handle.mockImplementation(route => route.endsWith('/executions') ? { body: [execution] } : response(route));
+    const snapshot = await service.getGroup(roomId);
+    expect(snapshot).toMatchObject({ ok: true, group: { round: { speakers: [expect.objectContaining({ inputClientId: 'chat-only-queue' })] } } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: identity === 'source' ? source : 'chat-only-queue' })).toBe(true);
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2].content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ namespace: 'cindy.work-record', data: expect.objectContaining({ clientId: 'chat-only-queue' }) }),
+    ]));
+  });
+
   // Unit / lifecycle regression: the real heartbeat must retire an accepted input
   // whose terminal notification was lost, without publishing a later task's reply.
   // Existing lease tests only covered server refusals, not locally orphaned runs.
