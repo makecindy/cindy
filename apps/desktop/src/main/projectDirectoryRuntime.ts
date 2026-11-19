@@ -87,12 +87,8 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
       ...projectDefaults.filter((item) => item.access === 'read').map((item) => item.path),
     ]),
   ];
-  const requestedWrite = [
-    ...new Set([
-      ...legacyWrite,
-      ...projectDefaults.filter((item) => item.access === 'write').map((item) => item.path),
-    ]),
-  ];
+  const projectWrites = new Set(projectDefaults.filter(item => item.access === 'write').map(item => item.path));
+  const requestedWrite = [...new Set([...legacyWrite, ...projectWrites])];
   // A pre-existing read-only task override is never silently promoted by project inheritance.
   const write = row.remoteHostId
     ? requestedWrite.filter(
@@ -110,7 +106,7 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
             return within(item, blocked) || within(blocked, item);
           }),
       )
-    : await excludeDirectoryGrantConflictsWithSlots(requestedWrite, read);
+    : await excludeDirectoryGrantConflictsWithSlots(requestedWrite, read, projectWrites);
   const assertCurrent = () => {
     const current = getActiveDataOwnerPushStamp();
     if (
@@ -137,6 +133,6 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
   assertCurrent();
   inheritedSessions.set(session, !row.remoteHostId && projectDefaults.length > 0 ? {
     activeDirs: write,
-    projectDirs: new Set(projectDefaults.filter(item => item.access === 'write').map(item => item.path)),
+    projectDirs: projectWrites,
   } : null);
 }

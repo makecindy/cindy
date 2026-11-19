@@ -77,10 +77,13 @@ export function nextLibraryExtraDirs(current: readonly string[], root: string | 
 export async function excludeDirectoryGrantConflictsWithSlots(
   candidates: readonly string[],
   blocked: readonly string[],
+  retainCoveredRoots?: ReadonlySet<string>,
 ): Promise<string[]> {
   const runtimeAccepted = await excludeDirectoryGrantConflicts(
     extraDirsForRuntime(candidates),
     extraDirsForRuntime(blocked),
+    undefined,
+    retainCoveredRoots,
   );
   const accepted = new Set(runtimeAccepted);
   return candidates.filter((dir) => accepted.has(libraryRootFromSlot(dir)));
@@ -204,6 +207,7 @@ export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
   resolvePath?: (dir: string) => Promise<string>,
+  retainCoveredRoots?: ReadonlySet<string>,
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
   // Bounded recovery probes must not treat a timed-out alias as a disjoint tree.
@@ -219,8 +223,12 @@ export async function excludeDirectoryGrantConflicts(
     if (candidateKey === null) continue;
     const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
       isSelfOrSubdir(candidateKey, blockedKey!) || isSelfOrSubdir(blockedKey!, candidateKey));
+    // Keep an independently granted project root inside an accepted task root so either source can be revoked.
+    // An ancestor outside the accepted scope still conflicts, as does any overlap with a read-only root.
     const overlapsAcceptedTree = acceptedKeys.some((acceptedKey) =>
-      isSelfOrSubdir(candidateKey, acceptedKey) || isSelfOrSubdir(acceptedKey, candidateKey));
+      isSelfOrSubdir(candidateKey, acceptedKey)
+        ? !retainCoveredRoots?.has(candidate)
+        : isSelfOrSubdir(acceptedKey, candidateKey));
     if (!overlapsBlockedTree && !overlapsAcceptedTree) {
       result.push(candidate);
       acceptedKeys.push(candidateKey);

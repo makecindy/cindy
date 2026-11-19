@@ -182,6 +182,27 @@ it('never promotes a pre-existing read-only task override through project defaul
   } as unknown as Session);
   expect(observed).toEqual([[]]);
 });
+// Unit regression for #11511: disjoint grants do not exercise source retention after tree overlap.
+it.each(['task parent', 'project parent'] as const)('preserves only inherited write access already active with a %s', async (order) => {
+  const child = path.join(output, 'shared');
+  await mkdir(child, { recursive: true });
+  const [taskDir, projectDir] = order === 'task parent' ? [output, child] : [child, output];
+  h.row!.writableDirs = JSON.stringify([taskDir]);
+  await setProjectDirectories(`local:${main}`, [{ path: projectDir, access: 'write' }], () => {});
+  let live: string[] = [];
+  const session = {
+    id: 'task', capabilities, setExtraDirs: vi.fn(),
+    setWritableDirs: async (dirs: string[]) => { live = dirs; },
+  } as unknown as Session;
+  await applyProjectDirectoriesForTurn(session);
+  const before = [...live];
+  expect(before).toContain(taskDir);
+  const edit = createTaskWritableDirsUpdater(session);
+  await edit([]);
+  expect(live).toEqual(order === 'task parent' ? [child] : []);
+  await edit([taskDir]); // Roll back the same edit.
+  expect(live).toEqual(before);
+});
 it('old hosts remain compatible while malformed directory payloads cannot become write grants', () => {
   expect(
     resolveProjectDirectories(
