@@ -8276,6 +8276,7 @@
         "cindyEmbedText": "Puede enviar texto para convertirlo en vectores (para búsqueda semántica)",
         "cindyModelsDecisions": "Puede usar modelos de decisión (consume tu cuota de modelos)",
         "cindyModelsRerank": "Puede usar modelos de reordenación (consume tu cuota de modelos)",
+        "cindyModelsMediaRequest": "Puede generar imágenes y vídeos, sintetizar voz y transcribir audio con Cindy AI (consume tu cuota de modelos)",
         "cindyEmbedTextDetail": "El texto se envía al modelo de embeddings del sistema y se convierte en números, hasta {{max}} elementos por llamada. Pueden aplicarse cargos por uso del modelo. Los vectores van solo al complemento; no se escribe nada en tu propia biblioteca.",
         "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
         "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
@@ -21735,14 +21736,14 @@
     },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
-      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "lead": "Si llevas varias tareas a la vez, la bandeja de entrada las agrupa por estado. En Pendientes verás los nuevos resultados y lo que espera tu respuesta.",
       "pending": {
         "title": "Pendientes",
         "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
       },
       "done": {
         "title": "Hecho",
-        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+        "body": "Acostúmbrate a vaciar la bandeja de entrada. Pulsa Hecho cuando hayas atendido una tarea."
       },
       "snooze": {
         "title": "Pospuestas",

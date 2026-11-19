@@ -432,6 +432,10 @@ Telegram 个人 bot、官方旧服务端兼容回应与 hello 声明复用同一
 交给两条路径，只作用于这一轮；不改 maker-core 的 `SendOrigin`，以免插件钩子等把它当作非用户轮次。
 两条路径共用 `isRelayedChannelTurnSource` 一个判据。
 
+个人 Telegram 渠道自有任务还有一种回传：在 Cindy 里回答该渠道轮次提出的异步问题，
+原轮结束后，续答结果回到提问的聊天和话题。连续追问与该续答触发的后台唤醒沿用同一去向；普通 App 输入仍在
+Cindy 内回复。去向仅对原运行实例与机器人账号有效，重启后不会根据历史会话补发。
+
 Agent 自己唤醒的轮次（2026-10-13 补齐）：Claude Code 的后台子代理、后台命令等完成后，CLI 自己注入
 `<task-notification>` 开新一轮，Cindy 这边没有任何 `Session.send`，旧版因此既没有开始信号也没有来源，
 被当作桌面输入留在桌面，只有原 IM 轮次还挂着的那一段（wake 任务的 continuation claim 让 IM 轮次等到第一次

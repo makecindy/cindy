@@ -72,6 +72,7 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { TELEGRAM_QUESTION_ORIGIN, activateTelegramQuestionReply, withTelegramQuestionPolicy } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
@@ -141,6 +142,7 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  readonly [TELEGRAM_QUESTION_ORIGIN]?: import('@cindy/maker-core').SendOrigin;
   /** Main-only observation: preparation may have side effects even if selection later changes. */
   onRuntimePreparation?: () => void;
   readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
@@ -1894,11 +1896,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               await assertAppCurrent?.();
             }
           : assertAppCurrent;
-        // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
+        // Cross-task mail uses the session binding; question answers carry their own scoped route.
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
-        ), () => sess.send(outgoing as never, {
+        ), () => withTelegramQuestionPolicy(so[TELEGRAM_QUESTION_ORIGIN], sess, questionOptions => sess.send(outgoing as never, {
+          ...questionOptions,
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent || deps.assertQuotaContinuation
@@ -1951,7 +1954,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
-          ...(so.origin ? { origin: so.origin } : {}),
+          origin: so.origin ?? so[TELEGRAM_QUESTION_ORIGIN],
           ...(mainOwnedSendContext
             ? { [MAIN_OWNED_SEND_CONTEXT]: mainOwnedSendContext }
             : {}),
@@ -2090,6 +2093,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             if (persistUserMessage?.clientId) {
               deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
             }
+            activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
@@ -2098,7 +2102,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
           },
-        }));
+        })));
         if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {

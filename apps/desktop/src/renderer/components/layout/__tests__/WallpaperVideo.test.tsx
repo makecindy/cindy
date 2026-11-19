@@ -15,7 +15,7 @@ vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => state.reduc
 vi.mock('@/lib/wallpaper', () => ({ isSceneWallpaper: (id: string) => id.startsWith('cindy-') }));
 
 describe('dynamic wallpaper lifecycle', () => {
-  it('keeps visibility on the video over an opaque theme backing without an independent veil', () => {
+  it('keeps visibility on the frame over an opaque theme backing without an independent veil', () => {
     // The import tracks CSS dependencies for Vitest related; unit mode stubs CSS
     // modules, so read the source explicitly. Pixel/HDR acceptance stays separate.
     const css = parse(readFileSync(resolve(__dirname, '../../../styles/globals.css'), 'utf8'));
@@ -30,7 +30,7 @@ describe('dynamic wallpaper lifecycle', () => {
     };
     expect(declarations('.app-wallpaper-video').background).toBe('var(--surface)');
     expect(declarations('.app-wallpaper-video').opacity).toBeUndefined();
-    expect(declarations('.app-wallpaper-video video').opacity).toBe(
+    expect(declarations('.app-wallpaper-video :is(video, canvas)').opacity).toBe(
       'calc(100% - var(--app-wallpaper-veil))',
     );
     css.walkRules((rule) => {
@@ -103,6 +103,64 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(ensureVideo).not.toHaveBeenCalled();
     unmount();
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+  });
+  // Regression: a viewport-sized playing video lets Chromium hold a display
+  // wake lock. The macOS media layer needs a hidden decoder and a visible frame.
+  it('keeps the macOS decoder out of layout and paints its frames onto the wallpaper', () => {
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, platform: 'darwin' });
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage,
+    } as unknown as CanvasRenderingContext2D);
+    const videoPrototype = HTMLVideoElement.prototype;
+    const originalRequest = Object.getOwnPropertyDescriptor(videoPrototype, 'requestVideoFrameCallback');
+    const originalCancel = Object.getOwnPropertyDescriptor(videoPrototype, 'cancelVideoFrameCallback');
+    const requestFrame = vi.fn<(callback: VideoFrameRequestCallback) => number>();
+    requestFrame.mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValue(3);
+    const cancelFrame = vi.fn();
+    Object.defineProperties(videoPrototype, {
+      requestVideoFrameCallback: { configurable: true, value: requestFrame },
+      cancelVideoFrameCallback: { configurable: true, value: cancelFrame },
+    });
+    try {
+      const src = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
+      const { rerender, unmount } = render(
+        <WallpaperVideo wallpaperId="custom" motion="static" customWallpaperUrl={src} />,
+      );
+      const video = document.querySelector('video')!;
+      const canvas = document.querySelector('canvas')!;
+      Object.defineProperties(video, {
+        readyState: { value: HTMLMediaElement.HAVE_CURRENT_DATA },
+        videoWidth: { value: 1920 },
+        videoHeight: { value: 1080 },
+      });
+
+      expect(video.hidden).toBe(true);
+      expect(video.muted).toBe(true);
+      expect(video.play).not.toHaveBeenCalled();
+      fireEvent.loadedData(video);
+      expect(canvas.width).toBe(1920);
+      expect(canvas.height).toBe(1080);
+      expect(drawImage).toHaveBeenCalledWith(video, 0, 0);
+      expect(canvas.parentElement!.style.opacity).toBe('1');
+
+      rerender(<WallpaperVideo wallpaperId="custom" motion="dynamic" customWallpaperUrl={src} />);
+      expect(video.play).toHaveBeenCalledOnce();
+      const [callback] = requestFrame.mock.calls[0]!;
+      callback(0, {} as VideoFrameCallbackMetadata);
+      expect(drawImage).toHaveBeenCalledTimes(2);
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      unmount();
+      expect(cancelFrame).toHaveBeenCalledWith(2);
+    } finally {
+      cleanup();
+      if (originalRequest)
+        Object.defineProperty(videoPrototype, 'requestVideoFrameCallback', originalRequest);
+      else Reflect.deleteProperty(videoPrototype, 'requestVideoFrameCallback');
+      if (originalCancel)
+        Object.defineProperty(videoPrototype, 'cancelVideoFrameCallback', originalCancel);
+      else Reflect.deleteProperty(videoPrototype, 'cancelVideoFrameCallback');
+    }
   });
   it('reports an unplayable custom video and releases its decoder', () => {
     const onFailure = vi.fn();

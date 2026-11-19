@@ -8276,6 +8276,7 @@
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para pesquisa semântica)",
         "cindyModelsDecisions": "Pode usar modelos de decisão (consome a tua quota de modelos)",
         "cindyModelsRerank": "Pode usar modelos de reordenação (consome a tua quota de modelos)",
+        "cindyModelsMediaRequest": "Pode gerar imagens e vídeos, sintetizar voz e transcrever áudio com Cindy AI (consome a tua quota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado para o modelo de embeddings do sistema e convertido em números, até {{max}} itens por chamada. Podem aplicar-se custos de modelos. Os vetores são enviados apenas para o plugin — nada é escrito na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na Web pública com Cindy AI",
         "cindySearchWebDetail": "Os pedidos de pesquisa acedem à Web pública e podem consumir a quota de Cindy AI.",
@@ -21735,14 +21736,14 @@
     },
     "taskInbox": {
       "title": "Conheça a caixa de entrada",
-      "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
+      "lead": "Se acompanha várias tarefas em simultâneo, a caixa de entrada agrupa-as por estado. Em Pendentes, encontra novos resultados e tarefas que aguardam resposta.",
       "pending": {
         "title": "Pendentes",
         "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam a sua resposta."
       },
       "done": {
         "title": "Concluído",
-        "body": "Resolveu? Um clique em Concluído move-a para Tratadas. Volta sozinha se houver novidades."
+        "body": "Crie o hábito de esvaziar a caixa de entrada. Clique em Concluído assim que tratar de uma tarefa."
       },
       "snooze": {
         "title": "Adiadas",

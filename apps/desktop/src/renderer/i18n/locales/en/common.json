@@ -8204,6 +8204,7 @@
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
         "cindyModelsDecisions": "Can call decision models (uses your model quota)",
         "cindyModelsRerank": "Can call reranking models (uses your model quota)",
+        "cindyModelsMediaRequest": "Can call Cindy AI for image and video generation, speech synthesis and transcription (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
@@ -21529,14 +21530,14 @@
     },
     "taskInbox": {
       "title": "Meet the Inbox",
-      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",
+      "lead": "When you’re juggling several tasks, the inbox groups them by status. Look in Pending for new results and tasks that need a reply.",
       "pending": {
         "title": "Pending",
         "body": "Tasks show up here when they finish with a result or are waiting for your answer."
       },
       "done": {
         "title": "Done",
-        "body": "Handled it? Click Done once and it moves to Processed. It comes back by itself if there’s news."
+        "body": "Make a habit of clearing your inbox. Click Done when you’ve handled a task."
       },
       "snooze": {
         "title": "Snoozed",

@@ -2788,10 +2788,10 @@ html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-
   }
 }
 
-/* Blend video into an opaque theme surface before composing with the UI.
+/* Blend wallpaper frames into an opaque theme surface before composing with the UI.
    A separate translucent veil over a hardware video overlay changes brightness
    when P3 content switches Windows HDR output to scRGB. Keep visibility on the
-   video itself; the wrapper opacity is reserved for loading/exit crossfades.
+   media itself; the wrapper opacity is reserved for loading/exit crossfades.
    The crossfade uses the same tier and curve as the still-image fade above
    (DESIGN.md §14.4, maintainer ruling D-11, 2026-11-11). */
 .app-wallpaper-video {
@@ -2802,7 +2802,7 @@ html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-
   background: var(--surface);
   transition: opacity var(--motion-fast) var(--motion-ease-move);
 }
-.app-wallpaper-video video {
+.app-wallpaper-video :is(video, canvas) {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2828,7 +2828,7 @@ html[data-wallpaper-blur='true'] body::after {
 html[data-wallpaper-blur='true'] .app-wallpaper-video {
   overflow: hidden;
 }
-html[data-wallpaper-blur='true'] .app-wallpaper-video video {
+html[data-wallpaper-blur='true'] .app-wallpaper-video :is(video, canvas) {
   position: absolute;
   inset: calc(-3 * var(--app-wallpaper-blur));
   width: calc(100% + 6 * var(--app-wallpaper-blur));
