@@ -46,16 +46,15 @@ import { isIpcError } from '../../../shared/ipc-errors.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
+import { openSession, type OpenedSessionRow } from '../sessionOpening.js';
 import { resolveBusinessSessionId } from '../../sessionIds.js';
-import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap.js';
-import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store.js';
 import {
   readBotModelChainSettingsState,
   resetBotModelChainSettings,
   readEffectiveBotModelChain,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
-import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
+import { extractMessagePreview, sessionToCamel } from '../mapper.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
@@ -66,6 +65,7 @@ import {
 import {
   botProfileDir,
   ensureBotWorkspaceDir,
+  ensureBotChatOnlyWorkspaceDir,
   migrateBotProfileFolder,
   readBotProfileFolder,
   writeBotProfileFolder,
@@ -112,7 +112,7 @@ import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvat
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
 import type { BotPackageOpening } from '../../../shared/botMarket.js';
 import { botDmThreadRouteKey, parseBotDmThreadRouteKey, type BotDmThreadSummary } from '../../../shared/botDmThread.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, groupLaneUsesChatWorkspace, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -121,7 +121,7 @@ import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.
 import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
-import { readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
+import { privateBotWorkspace, readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
 import { resolveMemoryScopeKey } from '@cindy/maker-core';
 
 const log = createLogger('bots');
@@ -314,6 +314,28 @@ export type EnsureBotGroupLaneResult =
   | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string }
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
+function botSessionPayload(row: OpenedSessionRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    workingDir: row.workingDir ?? null,
+    ...(row.projectDir ? { projectDir: row.projectDir } : {}),
+    workspaceKind: row.workspaceKind,
+    model: row.model,
+    effort: row.effort,
+    fastMode: row.fastMode,
+    permissionMode: row.permissionMode,
+    agentKind: row.agentKind,
+    remoteHostId: row.remoteHostId ?? null,
+    providerId: row.providerId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
+    extraDirs: row.extraDirs,
+    source: row.source,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 /**
  * The Bot's isolated lane for one group chat (docs/product-rules/bot-group-chat.md).
  * Same Profile, Home workspace and model chain as the canonical Chat; never a
@@ -344,7 +366,8 @@ export async function ensureBotGroupLaneSession(input: {
   talkPlanId?: string;
   personalDigest?: boolean;
   projectDir?: string;
-}): Promise<EnsureBotGroupLaneResult> {
+  continueConversation?: boolean;
+}, registeredProject?: (dir: string) => Promise<string | null>): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -356,7 +379,7 @@ export async function ensureBotGroupLaneSession(input: {
     : input.chatAccess && input.threadRootId ? chatGroupThreadRouteKey(input.groupId, input.chatAccess, input.threadRootId)
     : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
-    .select({ sessionId: botSessionLinks.sessionId, workingDir: sessions.workingDir, projectDir: sessions.projectDir })
+    .select({ sessionId: botSessionLinks.sessionId, workingDir: sessions.workingDir, projectDir: sessions.projectDir, workspaceKind: sessions.workspaceKind })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
@@ -368,9 +391,17 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  // All group contexts share the resolved folder; access is enforced independently.
-  const wantedProject = input.projectDir ?? null;
-  const moves = !!existing && !!wantedProject && !input.plan && existing.workingDir !== wantedProject;
+  let wantedProject = input.projectDir ?? null;
+  if (input.continueConversation && existing?.projectDir && registeredProject)
+    wantedProject = await registeredProject(existing.projectDir) ?? wantedProject;
+  const conversationOnly = groupLaneUsesChatWorkspace(routeKey);
+  const chatDir = conversationOnly ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, groupLaneOfRouteKey(routeKey)) : null;
+  owner.assertCurrent();
+  const priorProject = existing?.projectDir ?? (existing?.workspaceKind === 'project' ? existing.workingDir : null);
+  const legacyHome = !wantedProject && existing?.workingDir === path.join(botProfileDir(owner.userDataDir, input.botId), 'workspace');
+  const moves = !!existing && (chatDir
+    ? existing.workingDir !== chatDir || priorProject !== wantedProject
+    : !input.plan && (priorProject !== wantedProject || legacyHome));
   if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();
@@ -392,61 +423,19 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan || wantedProject ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.plan ? input.plan.workDir : wantedProject ?? await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = wantedProject && !conversationOnly ? ('project' as const) : ('dialogue' as const);
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...(wantedProject ? { projectDir: wantedProject } : {}),
-        ...botSessionRouteFields(config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-group-lane',
-  });
-  owner.assertCurrent();
-  const result = await client.tx<BotGroupsCreateLaneResult>('bots.createGroupLane', {
+  const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+    body: { title: input.title, workspaceKind, projectDir: wantedProject,
+      workingDir: chatDir || input.plan?.workDir || wantedProject || undefined, ...botSessionRouteFields(config, primaryRoute) },
+  }, async row => client.tx<BotGroupsCreateLaneResult>('bots.createGroupLane', {
     botId: input.botId,
     groupId: input.groupId,
     routeKey,
-    ...(moves ? { replaceOtherWorkingDir: true } : {}),
-    session: {
-      id: row.id,
-      title: row.title,
-      workingDir: row.workingDir ?? null,
-      ...(row.projectDir ? { projectDir: row.projectDir } : {}),
-      workspaceKind: row.workspaceKind,
-      model: row.model,
-      effort: row.effort,
-      fastMode: row.fastMode,
-      permissionMode: row.permissionMode,
-      agentKind: row.agentKind,
-      remoteHostId: null,
-      providerId: row.providerId ?? null,
-      agentDeviceId: row.agentDeviceId ?? null,
-      extraDirs: row.extraDirs,
-      source: row.source,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    },
-  });
+    ...(moves ? { replaceSessionId: existing.sessionId } : {}),
+    session: botSessionPayload(row),
+  }));
   owner.assertCurrent();
   if (result.permissionRepairCanonicalSessionId) {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
@@ -555,59 +544,19 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = 'dialogue' as const;
-  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(undefined);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...botSessionRouteFields(config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-channel-lane',
-  });
-  owner.assertCurrent();
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
+    ({ value: result } = await openSession({
+      id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title: input.title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, row => client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
       botId: input.botId,
       routeKey: input.routeKey,
-      session: {
-        id: row.id,
-        title: row.title,
-        workingDir: row.workingDir ?? null,
-        workspaceKind: row.workspaceKind,
-        model: row.model,
-        effort: row.effort,
-        fastMode: row.fastMode,
-        permissionMode: row.permissionMode,
-        agentKind: row.agentKind,
-        remoteHostId: null,
-        providerId: row.providerId ?? null,
-        agentDeviceId: row.agentDeviceId ?? null,
-        extraDirs: row.extraDirs,
-        source: row.source,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      },
-    });
+      session: botSessionPayload(row),
+    })));
   } catch (cause) {
     if ((cause as { code?: unknown } | null)?.code === 'BOT_UNAVAILABLE'
       || (cause instanceof Error && cause.message.includes('伙伴当前不可用'))) {
@@ -685,61 +634,21 @@ export async function ensureBotDmThreadSession(input: {
     .from(sessions)
     .where(eq(sessions.id, input.rootSessionId))
     .limit(1);
-  const workspaceKind = 'dialogue' as const;
-  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(undefined);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...botSessionRouteFields(config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-thread-lane',
-  });
-  owner.assertCurrent();
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>('bots.createThreadLane', {
+    ({ value: result } = await openSession({
+      id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title: input.title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, row => client.tx<BotGroupsCreateLaneResult>('bots.createThreadLane', {
       botId: input.botId,
       routeKey,
       rootSessionId: input.rootSessionId,
       rootClientId: input.rootClientId,
-      session: {
-        id: row.id,
-        title: row.title,
-        workingDir: row.workingDir ?? null,
-        workspaceKind: row.workspaceKind,
-        model: row.model,
-        effort: row.effort,
-        fastMode: row.fastMode,
-        permissionMode: canonical?.permissionMode ?? row.permissionMode,
-        agentKind: row.agentKind,
-        remoteHostId: null,
-        providerId: row.providerId ?? null,
-        agentDeviceId: row.agentDeviceId ?? null,
-        extraDirs: row.extraDirs,
-        source: row.source,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      },
-    });
+      session: { ...botSessionPayload(row), permissionMode: canonical?.permissionMode ?? row.permissionMode },
+    })));
   } catch (cause) {
     const code = (cause as { code?: unknown } | null)?.code;
     const message = cause instanceof Error ? cause.message : '';
@@ -1242,15 +1151,23 @@ async function readProfile(
         )
     : [];
   const byId = new Map(sessionRows.map((row) => [row.id, row]));
-  // Runtime snapshots are durable history. The list needs only the latest per
-  // task; fetching every frozen capability JSON grows with months of restarts.
+  // Each batch returns at most one snapshot per linked task. The correlated
+  // lookup uses the session/prepared index inside SQLite; historical capability JSON
+  // stays in the worker instead of crossing one RPC per link (or all at once).
   const runtimeRows: (typeof botRuntimeSnapshots.$inferSelect)[] = [];
-  for (const link of links) {
+  const runtimeSessionIds = [...new Set(links.map(link => link.sessionId))];
+  for (let offset = 0; offset < runtimeSessionIds.length; offset += 100) {
     owner.assertCurrent();
+    const batch = runtimeSessionIds.slice(offset, offset + 100);
     runtimeRows.push(...await db.select().from(botRuntimeSnapshots)
-      .where(eq(botRuntimeSnapshots.sessionId, link.sessionId))
-      .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt))
-      .limit(1));
+      .where(inArray(botRuntimeSnapshots.id, db.select({
+        // Keep the outer column qualified: Drizzle strips column qualifiers in
+        // single-table projections, which would otherwise bind to latest.id.
+        id: sql<string>`(SELECT latest.id FROM bot_runtime_snapshots AS latest
+          WHERE latest.session_id = "sessions"."id"
+          ORDER BY latest.prepared_at DESC, latest.applied_at DESC, latest.id DESC LIMIT 1)`,
+      }).from(sessions).where(inArray(sessions.id, batch)))));
+    owner.assertCurrent();
   }
   const runtimeBySession = new Map<string, (typeof runtimeRows)[number]>();
   for (const row of runtimeRows) {
@@ -1754,7 +1671,7 @@ function hostReadPosition(botId: string): number {
 }
 
 /** Positions advanced on the phone or another Mac live only in the host ledger. */
-function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
+export function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
   let host: Record<string, number> = {};
   let acknowledged: Record<string, number> = {};
   try {
@@ -2498,7 +2415,7 @@ export function registerBotIpc(): void {
     const remote = isDeviceLinkInvoke();
     if (!remote) assertTrustedAppRendererEvent(event);
     const client = tryGetDbClient();
-    if (!client) return [];
+    if (!client) throwIpcError('PRECONDITION_FAILED', 'DbClient not ready');
     const owner = captureBotOperationOwner();
     const welcomeContext = !remote && raw && typeof raw === 'object'
       ? normalizeBotWelcomeContext((raw as Record<string, unknown>).welcomeContext) : undefined;
@@ -2713,79 +2630,24 @@ export function registerBotIpc(): void {
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
     const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
     if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
-    const workspaceKind = 'dialogue' as const;
-    const workingDir = await ensureBotWorkspaceDir(
-      owner.userDataDir,
-      botId,
-      app.getPath('userData'),
-    );
-    const insertRow = {
-      ...sessionCreateToRow(
-        sessionId,
-        {
-          workspaceKind,
-          workingDir,
-          ...botSessionRouteFields(config, primaryRoute),
-          remoteHostId: undefined,
-          source: 'bot',
-        },
-        now,
-      ),
-      title: profile.displayName,
-    };
-    const gitSafety = readGitSafetySettings();
-    await ensureProjectGitInitialized({
-      workingDir,
-      workspaceKind,
-      remoteHostId: null,
-      sessionId,
-      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-      autoInitProjectGit: gitSafety.autoInitProjectGit,
-      source: 'local-db:bots:create-canonical-session',
-    });
-
-    let canonicalSessionId: string | null = null;
-    let archivedCanonicalSessionId: string | null = null;
-    let created = false;
-    // Profile/model/workspace preparation can outlive the originating group
-    // grant. Revalidate immediately before committing the Session/link CAS.
-    await beforeCommit?.();
-    owner.assertCurrent();
-    const result = await client.tx<BotsReplaceCanonicalSessionResult>(
-      'bots.replaceCanonicalSession',
-      {
+    const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
+    const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title: profile.displayName, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, async (insertRow, assertCurrent) => {
+      await beforeCommit?.();
+      assertCurrent();
+      return client.tx<BotsReplaceCanonicalSessionResult>('bots.replaceCanonicalSession', {
         botId,
-        expectedCanonicalSessionId: recoverableCompatibilityMirror
-          ? null
-          : expectedCanonicalSessionId,
-        compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror
-          ? expectedCanonicalSessionId
-          : null,
+        expectedCanonicalSessionId: recoverableCompatibilityMirror ? null : expectedCanonicalSessionId,
+        compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror ? expectedCanonicalSessionId : null,
         expectedProfileVersion,
-        session: {
-          id: insertRow.id,
-          title: insertRow.title,
-          workingDir: insertRow.workingDir ?? null,
-          workspaceKind: insertRow.workspaceKind,
-          model: insertRow.model,
-          effort: insertRow.effort,
-          fastMode: insertRow.fastMode,
-          permissionMode: insertRow.permissionMode,
-          agentKind: insertRow.agentKind,
-          remoteHostId: insertRow.remoteHostId ?? null,
-          providerId: insertRow.providerId ?? null,
-          agentDeviceId: insertRow.agentDeviceId ?? null,
-          extraDirs: insertRow.extraDirs,
-          source: insertRow.source,
-          createdAt: insertRow.createdAt,
-          updatedAt: insertRow.updatedAt,
-        },
+        session: botSessionPayload(insertRow),
         now,
-      },
-    );
-    canonicalSessionId = result.canonicalSessionId;
-    archivedCanonicalSessionId = result.archivedCanonicalSessionId;
-    created = result.created;
+      });
+    });
+    const canonicalSessionId = result.canonicalSessionId;
+    const archivedCanonicalSessionId = result.archivedCanonicalSessionId;
+    const created = result.created;
 
     owner.assertCurrent();
     if (!canonicalSessionId) {

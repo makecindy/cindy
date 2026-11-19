@@ -29,7 +29,7 @@ import { Button } from '@/components/ui/button';
  * singleton 拿当前 dirty 状态,跟 doc 模式行为一致。
  */
 
-import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { openHtmlFileByPreference } from '@/components/chat/messageLinkActions';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';

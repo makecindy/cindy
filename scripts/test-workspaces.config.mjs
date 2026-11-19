@@ -102,6 +102,7 @@ const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // The Terra proxy regression starts a real Codex binary when explicitly configured.
   'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
+  'src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
@@ -162,6 +163,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Actual send closures: Pi startup/retry race and literal-input isolation (#11112).
+  'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
@@ -243,6 +246,11 @@ const desktopGuardInclude = [
   // the full device-link singleton would start Electron runtime wiring. Keep it in the explicit
   // guard tier rather than letting its source extraction enter ordinary unit tests.
   'src/main/mcp-apps/__tests__/remoteViews.test.ts',
+  // Executes the picker admission and confirmation branches it extracts from the source text of
+  // register.ts and of sessionRuntimeSelectionApply.ts (handleSetModel moved there). Importing
+  // register.ts would load Electron, so the test reads source text instead; that extraction stays in
+  // the guard tier, as remoteViews above.
+  'src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts',
   'src/renderer/features/cc-agent/sidebar/__tests__/sessionCardReviewRegressions.test.ts',
   'src/renderer/__tests__/orcaModelWindowSelection.test.ts',
   'src/renderer/__tests__/markdownRendererXdtAudio.test.ts',

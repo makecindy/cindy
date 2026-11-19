@@ -456,6 +456,8 @@ const isDev =
   process.env.NODE_ENV !== 'production' &&
   !process.argv.includes('make') &&
   !process.argv.includes('package');
+const usePrebuiltPersonalInterface = isDev && /^[a-f0-9]{64}$/.test(process.env.CINDY_PERSONAL_ASSET_DIGEST ?? '') &&
+  !!process.env.CINDY_PERSONAL_GENERATION && !!process.env.CINDY_PERSONAL_MONITOR_DIR;
 const isWin = process.platform === 'win32';
 
 /**
@@ -746,6 +748,27 @@ function installMacAgentActivityExtension(buildPath: string, platform: string, a
   if (platform !== 'darwin' || process.platform !== 'darwin') return;
   for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
     runAgentActivityBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
+/**
+ * macOS desktop widgets (subscription quota, daily usage). `build.mjs` skips every step
+ * without the macOS 14 SDK. The extension's entitlements (App Sandbox and its read-only
+ * data folder) are written per app id at install; release signing keeps them.
+ */
+function runDesktopWidgetsBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/desktop-widgets/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS desktop widgets build failed');
+}
+
+function installMacDesktopWidgetsExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runDesktopWidgetsBuild(['extension', path.join(buildPath, appDir), arch]);
   }
 }
 
@@ -1146,7 +1169,11 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         dest,
         arch,
         MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
-        [],
+        // Names Cindy in the system owner-verification prompt; identifier unchanged.
+        [
+          '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+          '-Xlinker', path.join(__dirname, 'native', 'remote-desktop', 'macos-input-Info.plist'),
+        ],
         'remote desktop input',
       );
     } finally {
@@ -2105,6 +2132,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2119,6 +2152,11 @@ const config: ForgeConfig = {
         runAgentActivityBuild([
           'addon',
           path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
+        runDesktopWidgetsBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/desktop-widgets/cindy-desktop-widgets.node'),
           arch,
         ]);
       }
@@ -2148,6 +2186,7 @@ const config: ForgeConfig = {
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
+          installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();
@@ -2159,7 +2198,7 @@ const config: ForgeConfig = {
     // chat-data-localization F1：自动 unpack 任何 *.node 原生模块（better-sqlite3）
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
     new PersonalNativeLaunchPlugin({}),
-    new VitePlugin({
+    ...(usePrebuiltPersonalInterface ? [] : [new VitePlugin({
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
       // packaged builds retain Forge's normal concurrency.
@@ -2201,6 +2240,11 @@ const config: ForgeConfig = {
           entry: 'src/main/voice-input/speaker/speakerGateWorker.ts',
           config: 'vite.speaker-gate-worker.config.ts',
           // 声纹过滤的 ONNX 推理是同步 CPU 计算，隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/im/imessage/archiveWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2338,6 +2382,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/quotaTrayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/remoteDesktopViewerPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
@@ -2376,7 +2425,7 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.ts',
         },
       ],
-    }),
+    })]),
     // FusesPlugin conflicts with VitePlugin on `start` command — only load for package/make
     ...(isDev
       ? []

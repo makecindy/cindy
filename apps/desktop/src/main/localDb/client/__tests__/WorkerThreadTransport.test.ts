@@ -212,7 +212,7 @@ describe('WorkerThreadTransport', () => {
           context_window_runtime INTEGER,
           fast_mode INTEGER NOT NULL,
           cleared_at INTEGER,
-          pinned_at INTEGER,
+          pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
           user_send_at INTEGER,
           agent_kind TEXT NOT NULL,
           workspace_kind TEXT NOT NULL,

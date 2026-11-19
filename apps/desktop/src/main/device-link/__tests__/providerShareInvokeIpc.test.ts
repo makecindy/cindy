@@ -16,14 +16,15 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
 const noteFailure = vi.hoisted(() => vi.fn());
+const crossRegion = vi.hoisted(() => ({ enabled: false, invoke: vi.fn() }));
 vi.mock('../providerShareGuest.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../providerShareGuest.js')>()),
   resolveRemoteAgentTargetWhenReady: async () => 'host-peer',
   noteProviderShareAccessFailure: noteFailure,
 }));
 vi.mock('../providerShareCrossRegion.js', () => ({
-  isCrossRegionProviderShareTarget: () => false,
-  crossRegionInvoke: vi.fn(),
+  isCrossRegionProviderShareTarget: () => crossRegion.enabled,
+  crossRegionInvoke: crossRegion.invoke,
 }));
 
 import { handleProviderShareInvoke } from '../ipc';
@@ -34,6 +35,8 @@ const deps = { invoke } as unknown as Parameters<typeof handleProviderShareInvok
 beforeEach(() => {
   invoke.mockReset();
   noteFailure.mockReset();
+  crossRegion.enabled = false;
+  crossRegion.invoke.mockReset();
 });
 
 describe('provider share renderer reads', () => {
@@ -54,13 +57,17 @@ describe('provider share renderer reads', () => {
     await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:agent:status', ['codex'])).resolves.toEqual({ binaryReady: true });
   });
 
-  it('reads through the background link to the owner computer when it is wired in', async () => {
+  // #10826 unit: both regional renderer routes must reach the production adapter's
+  // availability fallback; bypassing it leaves a readable HTTPS directory unused.
+  it.each([false, true])('uses the background share adapter across regions (%s)', async differentRegion => {
+    crossRegion.enabled = differentRegion;
     // relay 只在建链时登记受邀者这台电脑:直接发 invoke 会被拒成 providerShare peer unavailable。
     const hostInvoke = vi.fn(async () => ({ ok: true as const, result: { providers: [] } }));
     await expect(handleProviderShareInvoke({ invoke, invokeProviderShareHost: hostInvoke }, 'share:s1', 'maker:provider:list', [{ capabilities: [] }]))
       .resolves.toEqual({ providers: [] });
     expect(hostInvoke).toHaveBeenCalledWith('host-peer', 'maker:provider:list', [{ capabilities: [] }]);
     expect(invoke).not.toHaveBeenCalled();
+    expect(crossRegion.invoke).not.toHaveBeenCalled();
   });
 
   it('logs why a read failed, once a minute per error', async () => {

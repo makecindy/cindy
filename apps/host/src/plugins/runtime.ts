@@ -26,7 +26,7 @@ import type { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-br
 import type { Session } from '@cindy/maker-core';
 import { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
 import { getGhostPickedDirectory } from '../../../desktop/src/main/cindy-brain/pickGrantsStore.js';
-import { HostStorageService, type StorageShareFacts } from '../../../desktop/src/main/cindy-brain/storageService.js';
+import { HostStorageService } from '../../../desktop/src/main/cindy-brain/storageService.js';
 import { createHostStorageProviders } from '../../../desktop/src/main/cindy-brain/storageProviders.js';
 import { GhostNotifySlot } from '../../../desktop/src/main/cindy-brain/notifySlot.js';
 import { getDirDepositVault, getSaveDepositVault } from '../../../desktop/src/main/cindy-brain/dirDeposit.js';
@@ -73,7 +73,6 @@ interface PluginRuntimeOptions {
   getUser?(): User | null;
   account?: PluginAccountPorts;
   confirmConnectionHost?(id: string, label: string, host: string): Promise<boolean>;
-  confirmStorageShare?(facts: StorageShareFacts, current: () => boolean): Promise<boolean>;
   appContext(): GhostAppContextResult;
   getSession(id: string): Session | undefined;
   requestFileConfirmation: GhostGrantConfirmBridge['request'];
@@ -160,7 +159,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
     getGhost, list: () => options.manager.list(), secret, kv, identity,
     account: options.account ?? { hasLogin: () => false, post: unavailable, endpoint: unavailable,
-      openExternal: unavailable, modelAccessReady: () => false },
+      openExternal: unavailable },
     publish: options.publish, signal: stopSignal.signal });
   const require = createRequire(import.meta.url);
   const library = new GhostLibrarySlot({
@@ -199,11 +198,13 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const storage = new HostStorageService({ ownerKey: () => owner, getGhost, handoff, listGhosts: () => options.manager.list(),
     providers: createHostStorageProviders({ kv, files: fsSlot, library, handoff, media: files,
       kvChanged: id => authorization.changes.emit(id, { source: 'kv' }) }),
-    confirmShare: (facts, check) => options.confirmStorageShare?.(facts, () => current() && check()) ?? Promise.resolve(false),
   });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
+    getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) ?? undefined,
+    resolveWebSocketAgent: hostOutbound.createOutboundHttpAgent,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
+    resolveSavedCredential: (id, key) => authorization.resolveSavedCredential(id, key),
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit),
     fetchPublicImpl: (url, init, before) => hostOutbound.guardedOutboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit, before),
     readHandoffFile: (id, ref) => { assertCurrent(); return handoff.read(id, ref); },
@@ -263,19 +264,20 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const disposeRuntimeHostServices = (id: string) => {
-    fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+    network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
   };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
     hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
-      return decl ? authorization.oauth.getFreshAccessToken(id, key, decl, accountId)
-        : { ok: false, error: 'NO_ACCOUNT' };
+      if (!decl) return { ok: false, error: 'NO_ACCOUNT' };
+      return authorization.oauth.getNodeAccessToken(id, key, decl, accountId);
     },
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),
     authenticatedFetch: (id, request, authorization, check, signal) => network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request),
     sendToGhost: (id, payload) => { void sandbox.deliver(id, payload); }, log,
   });
   const download = new PluginDownloadSlot({ getGhost, root: id => root('plugin-downloads', id), scope: () => owner,
@@ -284,6 +286,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
     hostTools: options.hostToolRequest,
     fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
+    network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
     node: (id, payload, check) => download.withNodeDownloads(id, payload as Record<string, unknown>, request => node.handleRequest(id, request), check),
@@ -340,7 +343,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
           onChanged: key => authorization.changed(input.ghostId, 'connection', key), log });
       },
       ghostModelPickerProvider: null,
-      ghostAgentModelsProvider: null, ghostMediaModelsProvider: null,
+      ghostAgentModelsProvider: null, ghostModelPreferencesProvider: null, ghostMediaModelsProvider: null,
       serveGhostMedia: (id, file, range) => files.read(id, `cindy-media://blobs/${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostLibraryFile: (id, file, range) => files.read(id, `library:${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostGallery: async id => {
@@ -391,6 +394,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        network.disposeGhost(key);
         browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
         await node.stopAndWait(key);
@@ -412,6 +416,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await finish(() => network.disposeAll());
     await finish(() => browserExtensions.dispose());
     await finish(() => authorization.close());
     await finish(() => enableChanges);

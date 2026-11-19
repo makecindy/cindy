@@ -15,7 +15,7 @@ import {
   type ViewProps,
   type ViewStyle,
 } from 'react-native';
-import { TextInput } from '@/components/AppText';
+import { Text, TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector, type Gesture } from '@/platform/gestureHandler';
 type NativeGesture = ReturnType<typeof Gesture.Native>;
@@ -285,6 +285,9 @@ export function MobileComposerInputRow({
   // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
   // 收起态文字会继续走 iOS 6/0 光学偏移,对不齐新增的 34pt +。
   const geometricSingleLine = !cardLayout;
+  // The collapsed viewport is one line, but a multiline native input wraps its
+  // placeholder. Draw an ellipsized hint without changing/remounting the editor.
+  const collapsedPlaceholder = geometricSingleLine && inputElement == null && value.length === 0 && !!placeholder;
   // iOS composer dock pill: every end control sits concentric with the pill,
   // i.e. its visible circle is as far from the pill edge as from the top and
   // bottom. The leading attachment keeps its 44pt hit area (its visible 34pt
@@ -331,7 +334,7 @@ export function MobileComposerInputRow({
     <TextInput
       ref={inputRef as never}
       accessibilityLabel={accessibilityLabel}
-      accessibilityHint={accessibilityHint}
+      accessibilityHint={accessibilityHint ?? (collapsedPlaceholder ? placeholder : undefined)}
       autoFocus={autoFocus}
       caretHidden={caretHidden}
       cursorColor={cursorColor}
@@ -345,7 +348,7 @@ export function MobileComposerInputRow({
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
       onPressIn={onPressIn}
-      placeholder={placeholder}
+      placeholder={collapsedPlaceholder ? '' : placeholder}
       placeholderTextColor={placeholderTextColor}
       scrollEnabled={scrollEnabled}
       selection={selection}
@@ -393,6 +396,11 @@ export function MobileComposerInputRow({
               {textInputElement}
             </TextInputWrapper>
           ) : textInputElement)}
+          {collapsedPlaceholder ? <Text
+            accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+            numberOfLines={1} ellipsizeMode="tail"
+            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
+          >{placeholder}</Text> : null}
           {inputOverlay}
           {!cardLayout && onCollapsedPress ? (
             // VoiceOver still reaches the input itself and focuses it directly.

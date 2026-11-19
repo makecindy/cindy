@@ -1,3 +1,5 @@
+import { botLearningTracker } from '../botLearningTracker.js';
+import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -483,6 +485,26 @@ describe('production Session event pipeline', () => {
     } finally { await current.dispose(); }
   });
 
+  // #11032: safe diagnostics must reach live delivery, continuation classification
+  // and the existing persistence writer. No schema/UI/continuation policy changes.
+  it('retains gateway diagnostics for live and persisted watchdog consumers', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    const data = { message: 'The model connection has been retrying for 120s without making progress. (HTTP 502)',
+      reason: 'codex_reconnect_stalled', errorStatus: 502, isTerminal: true, idleMs: 120000 };
+    try {
+      h.emit(event('error', data));
+      await microtasks();
+      expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
+        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502 }), expect.any(Object),
+      );
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'error', data }),
+      }));
+      expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledWith('task', data, null, 'error-row');
+    } finally { await h.dispose(); }
+  });
+
   it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
     const current = harness();
     try {
@@ -761,6 +783,70 @@ describe('production Session event pipeline', () => {
       expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
       expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
     } finally { close(); await h.dispose(); }
+  });
+
+  // #10499: host-authored notices must be localized before both banner and durable-row delivery.
+  it.each([
+    ["en", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable."],
+    ["en", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Could not verify cindy_helper for this task. Task result reporting may be unavailable."],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任务已启用 cindy_helper，但目前不可用，任务结果可能无法回传。"],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNVERIFIED", "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。"],
+    ["ko", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["ko", "CINDY_EXPECTED_HELPER_UNVERIFIED", "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["es", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está habilitado, pero no está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["es", "CINDY_EXPECTED_HELPER_UNVERIFIED", "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["de", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["de", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已啟用 cindy_helper，然今不可用；差事結果或無法回傳。"],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已启用 cindy_helper，然今不可用；差事结果或无法回传。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。"],
+  ] as const)('localizes Codex helper diagnostics in %s (%s)', async (locale, code, text) => {
+    setMainLocale(locale);
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const errorData = { code, message: 'technical fallback', isTerminal: false };
+      const error = event('error', errorData, { source: 'codex' });
+      h.emit(error);
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain(text);
+      expect(error.data).toEqual(errorData);
+      const noticeData = { code, text: 'technical fallback', isFinal: true };
+      const notice = event('text', noticeData, { source: 'codex', standaloneText: true });
+      h.emit(notice);
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledExactlyOnceWith('task', text, null);
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(notice.data).toEqual(noticeData);
+      h.emit(event('text', { text: 'Actual reply', isFinal: true }, { source: 'codex' }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', expect.objectContaining({ text: 'Actual reply' }), null, undefined);
+      expect(h.handle.send).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
+  it.each([
+    { source: 'codex' as const, standalone: false },
+    { source: 'pi' as const, standalone: true },
+  ])('does not reinterpret model prose or another harness notice ($source, $standalone)', async ({ source, standalone }) => {
+    setMainLocale('zh-CN');
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const data = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', text: 'Original prose', isFinal: true };
+      h.emit(event('text', data, { source, ...(standalone ? { standaloneText: true as const } : {}) }));
+      if (standalone) expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Original prose', null);
+      else expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
+    } finally { await h.dispose(); }
   });
 
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
@@ -1352,6 +1438,36 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // The Node Host holds the same terminal errors for context recovery (apps/host context-recovery.ts
+  // holdsOverflowBroadcast); a class added here must be added there.
+  it('holds the same terminal errors as the Host context recovery', async () => {
+    // A non-literal specifier: the Host's source is loaded at run time, outside the desktop's type program.
+    const hostModule = 'context-recovery.ts';
+    const { holdsOverflowBroadcast } = await import(`../../../../../host/src/agent/${hostModule}`) as {
+      holdsOverflowBroadcast(session: { remoteHostId?: string | null }, event: AgentEvent): boolean;
+    };
+    const { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } = await import('@cindy/maker-core');
+    const cases: Array<[string, unknown]> = [
+      ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+      ['context overflow by message', { message: 'prompt is too long: 210000 tokens > 200000 maximum' }],
+      ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+      ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'rejected option' }],
+      ['retryable overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long', isTerminal: false }],
+      ['ordinary failure', { message: 'boom', reason: 'sdk_crash' }],
+    ];
+    for (const [name, data] of cases) {
+      const h = harness();
+      h.activity.setSessionInTurn('task', true);
+      // Keeps a held broadcast in the map instead of the no-owner path re-sending it at once.
+      (h.deps.agentInputCoordinatorHolder as { isAutoResumeDeferred: ReturnType<typeof vi.fn> })
+        .isAutoResumeDeferred.mockReturnValue(true);
+      const terminal = event('error', data);
+      h.emit(terminal);
+      expect(holdsOverflowBroadcast(h.session, terminal), name).toBe(h.deps.overflowSuppressedBroadcasts.size === 1);
+      await h.dispose();
+    }
+  });
+
   it('does not flush a stale suppressed error onto a later unrelated error', async () => {
     const h = harness();
     h.activity.setSessionInTurn('task', true);
@@ -1509,6 +1625,32 @@ describe('production Session event pipeline', () => {
       });
       expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'failed-row');
       expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'does not seal a partial %s reply as successful when shutdown cancels its turn',
+    async (source) => {
+      const h = harness();
+      h.emit(event('text', { text: 'Working on the remaining changes' }, { source }));
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('partial-row');
+      h.emit(event('done', { status: 'cancelled' }, { source }));
+      expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'partial-row');
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'keeps a normal %s reply eligible for the successful assistant seal',
+    async (source) => {
+      const h = harness();
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-row');
+      h.emit(event('done', { status: 'completed' }, { source }));
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'completed-row', undefined);
+      expect(effects.fn('markAssistantTurnFailed')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );
@@ -3246,5 +3388,40 @@ describe('Codex generated images through the production event pipeline', () => {
       expect(seen).toEqual(['image', 'done']);
       expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
     } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
+});
+
+// #10318: exercise the real pipeline and feedback adapter, not just tracker helpers.
+// One paired Codex write must retain its path across preparation/persistence; stale,
+// child and background traffic must never feed a foreground memory receipt (unit).
+describe('native memory receipt event wiring', () => {
+  it.each(['foreground', 'failed', 'background', 'child', 'old-instance', 'old-generation'])
+  ('keeps memory feedback scoped for %s events', async mode => {
+    const h = harness();
+    const publish = vi.fn();
+    const receipt = { kind: 'memory' as const, key: 'user_tea.md', title: 'Tea', action: 'created' as const };
+    const read = vi.fn(async (paths: readonly string[]) => paths.length ? [receipt] : []);
+    const identity = learningTurnIdentity(h.session);
+    botLearningTracker.markProjectTeammate(h.session.id, read);
+    botLearningTracker.observe(h.session.id, identity, publish);
+    const extra = mode === 'background' ? { turnScope: 'background' as const }
+      : mode === 'child' ? { agentMeta: { parentUuid: 'child' } }
+        : mode === 'old-instance' ? { sessionInstanceId: 'replaced' }
+          : mode === 'old-generation' ? { sessionTurnGeneration: h.session.getTurnGeneration() - 1 } : {};
+    try {
+      h.emit({ type: 'tool_use', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', toolName: 'file_change',
+          input: { changes: [{ path: '.cindy/memory/user_tea.md', kind: { type: 'add' } }] } } });
+      h.emit({ type: 'tool_result_full', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', fullText: 'add memory', isError: mode === 'failed' } });
+      botLearningTracker.seal(h.session.id, identity, 'reply');
+      await read.mock.results[0].value;
+      expect(read).toHaveBeenCalledWith(mode === 'foreground' ? ['.cindy/memory/user_tea.md'] : []);
+      if (mode === 'foreground') expect(publish).toHaveBeenCalledWith('reply', [receipt]);
+      else expect(publish).not.toHaveBeenCalled();
+    } finally {
+      botLearningTracker.markProjectTeammate(h.session.id);
+      await h.session.close();
+    }
   });
 });

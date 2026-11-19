@@ -17,7 +17,11 @@ import { useSyncExternalStore } from 'react';
  */
 
 export type WorktreeCreationState =
-  | { status: 'creating'; name: string }
+  /**
+   * startedAt:进入 creating 的时刻(ms),用于加载卡片的「已等待」计时。调用方不必传,
+   * set 时自动补上;同一 session 连续 creating 保留首次时刻,切走再切回视图不会从 0 重计。
+   */
+  | { status: 'creating'; name: string; startedAt?: number }
   | { status: 'failed'; name: string; error: string };
 
 const states = new Map<string, WorktreeCreationState>();
@@ -50,7 +54,15 @@ export const worktreeCreationStore = {
   /** 设置/覆盖某 session 的状态;触发通知。 */
   set(sessionId: string, state: WorktreeCreationState): void {
     if (!sessionId) return;
-    states.set(sessionId, state);
+    if (state.status === 'creating' && state.startedAt === undefined) {
+      const previous = states.get(sessionId);
+      const startedAt = previous?.status === 'creating' && previous.startedAt !== undefined
+        ? previous.startedAt
+        : Date.now();
+      states.set(sessionId, { ...state, startedAt });
+    } else {
+      states.set(sessionId, state);
+    }
     notify();
   },
 

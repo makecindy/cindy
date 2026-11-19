@@ -21,7 +21,7 @@ import { filterVisibleSharedTasks } from './sharedTaskVisibility';
 /** Uses the existing session mirror; choosing a task must not reconnect or fetch it again. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const ignoreTaskAction = () => {};
-type SharedTaskSessionAction = 'delete' | 'archive' | 'archive-now' | 'unarchive';
+type SharedTaskSessionAction = 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive';
 type SharedTaskRow = {
   key: string;
   role: 'owned' | 'joined';

@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Añadir widget",
+  "widgetGuideIntro": "Los widgets son tarjetas en la pantalla de inicio. Puedes ver tu cuota restante y los tokens usados hoy sin abrir Cindy.",
+  "widgetGuideExample": "Un widget de Cindy junto a los iconos de las apps en la pantalla de inicio.",
+  "widgetGuidePicker": "Editar → Añadir widget",
+  "widgetGuideIOS": "Mantén pulsado un espacio vacío de la pantalla de inicio y toca {{picker}}.\n\nBusca Cindy, elige «Cuota de suscripciones» o «Uso diario» y toca «Añadir widget».",
+  "widgetGuideAndroid": "Mantén pulsado un espacio vacío de la pantalla de inicio y toca «Widgets».\n\nBusca Cindy y arrastra «Cuota de suscripciones» o «Uso diario» a la pantalla de inicio.",
+  "widgetGuideHome": "Pantalla de inicio",
+  "widgetGuideLock": "Pantalla de bloqueo",
+  "widgetGuideLockIOS": "También en la pantalla de bloqueo: mantenla pulsada y toca «Personalizar».",
+  "widgetGuideDismiss": "Entendido",
+  "usageOther": "Otros",
+  "usageTitle": "Resumen de uso",
+  "usageOnlyDevice": "Solo {{name}}",
+  "usagePlans": "Cuotas disponibles",
+  "usageBudget": "Presupuesto restante del período",
   "management": {
     "title": "Gestión de dispositivos",
     "openDevice": "Ver detalles de {{name}}",
@@ -331,6 +346,7 @@
       "renameDevice": "Cambiar el nombre de {{label}}",
       "project": "Proyecto {{title}}",
       "dialogue": "Conversación",
+      "automation": "Automatizaciones",
       "openAutomationLatest": "Abrir la última sesión de la automatización {{title}}",
       "automationTask": "Automatización {{title}}",
       "openConversation": "Abrir sesión {{title}}",
@@ -356,7 +372,9 @@
     },
     "menu": {
       "groupDialogue": "Conversación",
+      "groupAutomation": "Automatización",
       "dialogueFolder": "Conversación",
+      "automationFolder": "Automatizaciones",
       "search": "Buscar",
       "settings": "Configuración",
       "remoteSettings": "Configuración de conexión remota",
@@ -426,7 +444,34 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todo",
       "filterHideAllTeammates": "Ocultar todo",
-      "filterSelectedTeammates": "{{count}} seleccionados"
+      "filterSelectedTeammates": "{{count}} seleccionados",
+      "inbox": {
+        "inbox": "Pendientes",
+        "working": "En curso",
+        "snoozed": "Pospuestas",
+        "archived": "Procesadas",
+        "snooze": "Posponer tarea",
+        "complete": "Hecho",
+        "wake": "Mostrar ahora",
+        "restore": "Restaurar tarea",
+        "process": "Marcar como procesada (archivar)",
+        "empty": "La bandeja está vacía",
+        "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
+        "hours": "En {{count}} horas",
+        "hours_one": "En {{count}} hora",
+        "hours_many": "En {{count}} horas",
+        "hours_other": "En {{count}} horas",
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Mañana",
+        "nextWeek": "La próxima semana",
+        "indefinite": "Indefinidamente",
+        "custom": "Personalizar…",
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año."
+      },
+      "taskListMode": {
+        "enterInbox": "Bandeja de entrada",
+        "leaveInbox": "Lista de tareas"
+      }
     },
     "search": {
       "placeholder": "Buscar en títulos o contenido…",

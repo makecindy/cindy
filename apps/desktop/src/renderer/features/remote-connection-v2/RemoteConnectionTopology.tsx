@@ -37,7 +37,17 @@ import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
-import { formatRtt, protocolKind, protocolLabel, rowSubtitle, type ProtocolKind } from './topologyPresentation';
+import {
+  formatRtt,
+  protocolKind,
+  protocolKindLabel,
+  protocolLabel,
+  relayRouteLabel,
+  relayTransportLabel,
+  rowSubtitle,
+  selfProtocolKind,
+  type ProtocolKind,
+} from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -47,6 +57,35 @@ const HUB = 56;
 /** 手机图块:竖着的窄条(intrinsic-geometry,见 CSS)。 */
 const PHONE_W = 24;
 const PHONE_H = 38;
+/** 这台电脑的名字与下面那行连接方式:名字中心离细环的距离,两行的高度;最下沿离细环 HUB_TEXT_BOTTOM。 */
+const HUB_NAME_GAP = 14;
+const HUB_NAME_H = 18;
+const HUB_PROTOCOL_H = 16;
+const HUB_TEXT_BOTTOM = HUB_NAME_GAP + HUB_NAME_H + HUB_PROTOCOL_H / 2;
+/**
+ * 中转站的字从圆点中心朝扇出那一侧最多伸多远:扇出的线离开圆点后拐上去(或拐下去),
+ * 在字那一高度离圆点中心都在 35px 以外(紧凑行高、上下各两行时最近),这里留几像素空。
+ */
+const RELAY_LABEL_OUTER = 32;
+/** 中转站的字离圆点的空隙与一行的高度(text-11,行高 1.3)。 */
+const RELAY_LABEL_GAP = 6;
+const RELAY_LINE_H = 11 * 1.3;
+
+/**
+ * 中转站的字从圆点中心朝中间最多伸多远。往中间那段 S 形线从字的高度穿过时(字写在上面而线从上面下来,
+ * 或反过来),停在它的拐点之前;否则停在中间细环之前，细环按离圆点最近的那行宽字(协议，没有时是名字)
+ * 的高度取实际宽度，整个在细环上方或下方时不受细环限制。最下面「UDP / WS · 往返」那行较短、居中，不算。
+ */
+function relayReachTowardHub(m: TopologyLayout['m'], hub: Point, relay: Point, below: boolean, hasRouteLine: boolean): number {
+  const dx = Math.abs(hub.x - relay.x);
+  const edge = below ? relay.y + m.relayR + RELAY_LABEL_GAP : relay.y - m.relayR - RELAY_LABEL_GAP;
+  if (below ? hub.y > edge : hub.y < edge) return Math.max(0, Math.floor((m.relayR + 3 + dx - m.ring) / 2 - 8));
+  // 写在上面时自上而下是名字、协议、「UDP / WS · 往返」;写在下面时名字紧贴圆点、往下是协议和走法、往返。
+  const nameEdge = below || !hasRouteLine ? edge : edge - RELAY_LINE_H;
+  const dy = Math.abs(hub.y - nameEdge);
+  const chord = dy < m.ring ? Math.sqrt(m.ring * m.ring - dy * dy) : 0;
+  return Math.max(0, Math.floor(dx - chord - 4));
+}
 /** 拓扑容器上定义的颜色,子元素与 CSS 只引用 --rcv2-ok / --rcv2-live / --rcv2-error(忙碌直接读 --warning-accent)。 */
 const LIVE_STYLE = {
   ['--rcv2-ok' as string]: 'var(--status-success)',
@@ -281,6 +320,9 @@ export function RemoteConnectionTopology({
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
   const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
+  const selfProtocol = selfProtocolKind(model, linkStatus);
+  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
+  const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
   // 悬停优先于打开的浮层:鼠标移到别的设备上时跟着它走。
   const focusId = hoverId ?? openId;
   const setCardOpen = (id: string) => (open: boolean) => setOpenId((cur) => (open ? id : cur === id ? null : cur));
@@ -330,43 +372,64 @@ export function RemoteConnectionTopology({
       if (model.relay.flow) {
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
+      const relayProtocol = protocolKindLabel(model.relay.protocol, t);
+      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+      // 最下面一行：经中转的数据走 UDP 还是 WS,紧跟那条路的往返，如「UDP · 25 ms」。
+      const relayPath = [relayTransportLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
+      const relayDescription = [model.relay.name, relayRouteLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
-      // 中转站的名字和它的往返写在小圆点旁边:贴着圆点朝中间那一侧排开(扇出的线都在另一侧),
-      // 中间来的那段线从下面上来就放上面,反之放下面,不和线打架。
-      const labelAbove = hub.y > g.relay.y + 1;
-      const labelX = g.relay.x + group.side * m.relayR;
+      // 中转站的名字、连接方式和往返写在小圆点正上方、居中(用户反馈 2026-11-18:原来写在圆点下面朝中间排开,
+      // 和这台电脑的名字、连接方式挤成一团)。这台电脑的字总在圆盘下面,所以只有中转站整个落在那些字
+      // 下面(直连多到拆成两组时才会)才写到圆点下面;此时往中间那段线从上面下来,下面反而是空的。
+      // 圆点上方:往中间那段线几乎是平的,扇出的线要离开圆点 RELAY_LABEL_OUTER 以外才拐上来。
+      // 名字太长时贴着扇出那一侧的边界朝中间伸(relayReachTowardHub);还放不下就折成两行(葡语
+      // 「Retransmissor Cindy」、自建中转的长名字),再长才截断(悬停圆点与两张卡片里有全名)。
+      // 名字下面写协议，再下面写经中转的数据走 UDP 还是 WS 和那条路的往返(用户要求 2026-11-18:这台电脑名字下面的
+      // 「Agent-Net」看不出是在说中转，也分不出 Agent-Net 的 UDP、WS 和 Device Link)。协议和走法分两行：
+      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。
+      const labelBelow = g.relay.y + m.relayR + RELAY_LABEL_GAP >= hub.y + m.ring + HUB_TEXT_BOTTOM + 4;
+      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '');
+      const leftRoom = group.side === -1 ? RELAY_LABEL_OUTER : towardHub;
+      const rightRoom = group.side === -1 ? towardHub : RELAY_LABEL_OUTER;
       nodes.push(
         <div key={`${group.id}:station`} style={placed(g.relay.x, g.relay.y, size, size, animate)}>
           <span
             className="rcv2-relay flex h-full w-full items-center justify-center rounded-full border"
             role="img"
-            aria-label={model.relay.name}
+            aria-label={relayDescription}
+            title={relayDescription}
           >
             <Radio size={14} strokeWidth={1.75} aria-hidden />
           </span>
         </div>,
         <div
           key={`${group.id}:station:label`}
-          className="pointer-events-none flex flex-col whitespace-nowrap text-11 leading-[1.3] text-[var(--text-tertiary)]"
+          className="pointer-events-none flex flex-col items-center text-center text-11 leading-[1.3] text-[var(--text-tertiary)]"
           style={{
             position: 'absolute',
             left: 0,
             top: 0,
-            alignItems: group.side === 1 ? 'flex-end' : 'flex-start',
-            transform: `translate3d(${Math.round(labelX)}px, ${Math.round(labelAbove ? g.relay.y - m.relayR - 6 : g.relay.y + m.relayR + 6)}px, 0) translate(${group.side === 1 ? '-100%' : '0'}, ${labelAbove ? '-100%' : '0'})`,
+            maxWidth: leftRoom + rightRoom,
+            // 先按自身宽度居中到圆点上,再夹在左右可用范围内(百分比是标签自己的宽度)。
+            transform: `translate3d(${Math.round(g.relay.x)}px, ${Math.round(labelBelow ? g.relay.y + m.relayR + RELAY_LABEL_GAP : g.relay.y - m.relayR - RELAY_LABEL_GAP)}px, 0) translate(clamp(${-leftRoom}px, -50%, calc(${rightRoom}px - 100%)), ${labelBelow ? '0' : '-100%'})`,
             transition: animate ? 'transform var(--motion-base) var(--motion-ease-move)' : undefined,
           }}
           aria-hidden
         >
-          <span>{model.relay.name}</span>
-          {model.relay.rttMs !== null ? (
+          <span className="line-clamp-2 max-w-full break-words rounded bg-[var(--settings-theme-card-bg)] px-1">{model.relay.name}</span>
+          {model.relay.protocol && relayProtocol ? (
+            <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1">
+              <ProtocolMark kind={model.relay.protocol} label={relayProtocol} className="text-11 leading-[1.3] text-[var(--text-tertiary)]" />
+            </span>
+          ) : null}
+          {relayPath ? (
             <span
               className={cn(
-                'tabular-nums',
+                'whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1 tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {formatRtt(model.relay.rttMs, t)}
+              {relayPath}
             </span>
           ) : null}
         </div>,
@@ -386,7 +449,7 @@ export function RemoteConnectionTopology({
         }}
         aria-hidden
       >
-        {t(`settings.remoteControl.v2.group.${group.key}`)}
+        {t(group.key === 'connecting' ? 'settings.devices.linkStatus.connecting' : `settings.remoteControl.v2.group.${group.key}`)}
       </span>,
     );
     for (const row of rows) {
@@ -535,7 +598,7 @@ export function RemoteConnectionTopology({
             type="button"
             className="rcv2-hub flex items-center justify-center rounded-full border"
             style={placed(hub.x, hub.y, HUB, HUB, animate)}
-            aria-label={selfName}
+            aria-label={selfDescription}
           >
             <PlatformGlyph platform={model.self?.platform ?? null} isMobile={false} size={22} />
           </button>
@@ -551,13 +614,29 @@ export function RemoteConnectionTopology({
       </Popover>
       <div
         className="pointer-events-none flex items-center justify-center"
-        style={placed(hub.x, hub.y + m.ring + 14, 180, 18, animate)}
+        style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP, 180, HUB_NAME_H, animate)}
         aria-hidden
       >
         <span className="max-w-full truncate rounded bg-[var(--settings-theme-card-bg)] px-1.5 text-12 font-medium leading-[1.5] text-[var(--text-primary)]">
           {selfName}
         </span>
       </div>
+      {/* 这台电脑自己用的连接方式，与其它设备名字下面同一个图标 + 名称(用户要求 2026-11-18) */}
+      {selfProtocol && selfProtocolLabel ? (
+        <div
+          className="pointer-events-none flex items-center justify-center"
+          style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP + HUB_NAME_H, 180, HUB_PROTOCOL_H, animate)}
+          aria-hidden
+        >
+          <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
+            <ProtocolMark
+              kind={selfProtocol}
+              label={selfProtocolLabel}
+              className="text-12 leading-[1.3] text-[var(--text-tertiary)]"
+            />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

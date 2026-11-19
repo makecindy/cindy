@@ -1,7 +1,13 @@
 # cindy-updater 高风险模块
 
 > **状态**：权威开发规则（authoritative）
-> **读取时机**：修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）之前
+> **读取时机**：修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）之前；更新包经
+> 统一下载器下载，改它的传输、重试或超时行为同样属于更新链路的改动（#10938）
+> **适用路径**：`apps/desktop/cindy-updater/**`、`apps/desktop/src/main/downloader/**`、`apps/desktop/src/main/update*.ts`、
+> `apps/desktop/src/main/__tests__/update*`、
+> `apps/desktop/src/main/{manifestService,linuxInstallation,windowsInstallationVersion,auto-update-settings-store}.ts`、
+> `apps/desktop/src/main/agent-app-update/**`、
+> `apps/desktop/src/main/agent-binaries/**/{background-update,startup-policy,factory-startup-update}*`
 
 `cindy-updater` 负责桌面客户端的自动更新，由独立的更新器（`apps/desktop/cindy-updater/`，
 Tauri 实现）与 Electron 侧的更新服务（`apps/desktop/src/main/updateService.ts`）组成。它是

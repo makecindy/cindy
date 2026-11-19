@@ -14,6 +14,7 @@
 import { findCatalogModel, isModelSelectableForNewRoute } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 import type { RemoteAgentCaps } from '@cindy/device-link';
+import type { SubscriptionPoolScheduling } from '../../shared/subscriptionAccounts.js';
 
 import {
   effectiveConcurrencyLimit,
@@ -51,6 +52,8 @@ export interface ProviderGroupRouterDeps {
   /** Owner-only, model-specific confirmation from a configured multi-account pool. */
   /** ownComputer：选电脑请求来自自己的其他电脑，本机账号池里的旧 Codex 连接按同账号授权核对(与实际启动一致)。 */
   readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<boolean | null>;
+  /** Owner-only anonymous new-assignment facts. Old/unknown peers remain one physical member. */
+  readPoolScheduling?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<SubscriptionPoolScheduling | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -60,6 +63,8 @@ export interface ProviderGroupRouterDeps {
    * 不提供 = 只算本机任务。
    */
   externalRunning?(providerId: string, memberKey: string): number;
+  /** 同账号控制端／受邀者尚未到执行端的预选，已包含在 externalRunning 中。 */
+  externalPending?(providerId: string, memberKey: string): number;
   /** 冷却的落盘位置；不提供 = 只在本次运行内有效。 */
   coolingStore?: {
     read(): ProviderGroupPersistedCooling;
@@ -171,6 +176,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   if (hasLegacyCooling) persistCooling();
 
   const lastPicked = new Map<string, string>();
+  const roundPicks = new Map<string, number>();
   const tried = new Map<string, { at: number; keys: Set<string> }>();
   /** 本机任务刚选中、还没开始运行一轮的临时占用：任务 id → 那台。 */
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
@@ -188,7 +194,17 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     let read = poolReads.get(readKey);
     if (!read) {
       read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model,
-        { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null) };
+        { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null).then(available => {
+        // Keep the caller's wait bounded, but use a late confirmation on the next pick.
+        // A newer failure or an expired/removed scope must not be undone.
+        if (available === true && cooling.get(key) === remembered && remembered[scope] > deps.now()) {
+          const next = { ...remembered };
+          delete next[scope];
+          cooling.set(key, next);
+          persistCooling();
+        }
+        return available;
+      }) };
       poolReads.set(readKey, read);
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     }
@@ -196,16 +212,9 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     if (read.cooling !== remembered) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const available = await Promise.race([read.result, new Promise<null>((resolve) => {
+      await Promise.race([read.result, new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
       })]);
-      // A newer failure wins over a slow read. Clear only this model's quota
-      // cooldown; authentication/overload and other models retain their scopes.
-      if (available !== true || cooling.get(key) !== remembered) return;
-      const next = { ...remembered };
-      delete next[scope];
-      cooling.set(key, next);
-      persistCooling();
     } finally {
       clearTimeout(timer);
     }
@@ -260,6 +269,17 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     return Math.max(running(providerId, resolved.member.key), resolved.reportedRunning ?? 0);
   }
 
+  /** These picks are known not to have reached account admission yet. Other
+   * busy accounts must not hide them by making the pool's total look larger. */
+  function pendingLocalRunning(providerId: string, memberKey: string): number {
+    let count = 0;
+    for (const [sessionId, entry] of provisional) {
+      if (entry.providerId === providerId && entry.memberKey === memberKey && entry.until > deps.now()
+        && !deps.isTurnRunning(sessionId)) count++;
+    }
+    return count;
+  }
+
   /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */
   function offersModel(resolved: ResolvedProviderGroupMember, agentKind: AgentKind, model: string): boolean {
     if (resolved.state !== 'ok' || !resolved.view) return false;
@@ -281,13 +301,31 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     return (r: ResolvedProviderGroupMember) => r.member.paused && !(input.localTask === true && r.member.kind === 'local');
   }
 
+  /** Scope follows the final executor identity. A local owner's task on another
+   * own computer is owner work; a guest plan never inherits that grant. */
+  function poolReadOptions(input: ProviderGroupPickInput, member: ProviderGroupMember) {
+    return {
+      remote: member.kind !== 'local' || input.localTask !== true,
+      ownComputer: input.ownComputer === true || (input.localTask === true && member.kind === 'device'),
+    };
+  }
+
   return {
     async pick(input) {
       const config = deps.readGroup(input.providerId);
       if (!config) return { kind: 'none' };
-      const usable = usableFor(input);
+      // Continuity snapshots keep new-task discovery available, but cannot
+      // justify moving an existing task just to balance cached quota/load.
+      const offers = usableFor(input);
+      const usable = (r: ResolvedProviderGroupMember) => offers(r)
+        && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
-      const resolved = await deps.directory.resolveMembers(input.providerId, config, {
+      // Failed remote members must not start another catalog/usage read during
+      // selection. Keep local metadata for activity labels, and the quota origin
+      // for rebalance comparison; neither becomes eligible through this read.
+      const selectionConfig = input.exclude?.size ? { ...config, members: config.members.filter((member) =>
+        member.kind === 'local' || !input.exclude!.has(member.key) || member.key === input.quotaRebalance) } : config;
+      const resolved = await deps.directory.resolveMembers(input.providerId, selectionConfig, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
         // 已经有一台能用、未满载、可以分的电脑：不再等慢的那几台。
         enough: (r) => usable(r)
@@ -298,26 +336,67 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
-        .map((r) => recoverPoolCooling(input.providerId, r.member, input.model,
-          r.member.kind !== 'local' || input.localTask !== true, input.ownComputer === true)));
+        .map((r) => {
+          const options = poolReadOptions(input, r.member);
+          return recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer);
+        }));
+      const schedules = new Map<string, SubscriptionPoolScheduling>();
+      if (deps.readPoolScheduling && !input.quotaRebalance) await Promise.all(resolved
+        .filter(r => !r.pending && !r.providerContinuity?.stale && r.member.kind !== 'share'
+          && offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+          && !paused(r) && !input.exclude?.has(r.member.key))
+        .map(async r => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const summary = await Promise.race([
+              deps.readPoolScheduling!(r.member, input.model, poolReadOptions(input, r.member)).catch(() => null),
+              new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS); }),
+            ]);
+            if (summary) schedules.set(r.member.key, summary);
+          } finally { clearTimeout(timer); }
+        }));
       const now = deps.now();
-      const schedulable: SchedulableMember[] = resolved.map((r) => {
+      const resolvedByKey = new Map(resolved.map((r) => [r.member.key, r]));
+      // Reading fewer members must not remove the last-picked position from the
+      // round-robin order. Unread members occupy their slot but cannot be selected.
+      const schedulable: SchedulableMember[] = config.members.map((member) => {
+        const r = resolvedByKey.get(member.key);
+        if (!r) return { key: member.key, usable: false, paused: member.paused,
+          running: 0, limit: 0, weight: member.weight };
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
+        const schedule = schedules.get(r.member.key);
+        const physicalRunning = memberRunning(input.providerId, r);
+        const accountFull = schedule?.accounts === 0 && schedule.full;
+        // A quota preview may intentionally describe a busy/cooling account.
+        // New-assignment facts take precedence over that representative, while
+        // physical continuity, model authorization and machine cooling still apply.
+        const ready = schedule
+          ? (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
+            && offersModel(r, input.agentKind, input.model)
+            && coolingUntil(input.providerId, r.member.key, input.model) === null
+          : usable(r);
         return {
           key: r.member.key,
-          usable: usable(r) && (!input.quotaRebalance
+          usable: ready && (!schedule || schedule.accounts > 0 || accountFull) && (!input.quotaRebalance
             || (memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member) && !!quota.quota && !quota.fiveHourTight)),
           paused: paused(r),
-          running: memberRunning(input.providerId, r),
-          limit: effectiveConcurrencyLimit(r.member),
+          running: physicalRunning,
+          limit: accountFull ? 0 : effectiveConcurrencyLimit(r.member),
+          ...(schedule?.accounts ? {
+            selectionRunning: schedule.running + Math.max(pendingLocalRunning(input.providerId, r.member.key)
+              + (deps.externalPending?.(input.providerId, r.member.key) ?? 0),
+              running(input.providerId, r.member.key) - schedule.totalRunning),
+            roundSlots: schedule.accounts,
+          } : {}),
           weight: r.member.weight,
-          urgency: quota.urgency,
-          fiveHourTight: quota.fiveHourTight,
+          urgency: schedule ? schedule.urgency : quota.urgency,
+          fiveHourTight: schedule ? schedule.fiveHourTight : quota.fiveHourTight,
         };
       });
       const key = pickProviderGroupMember(schedulable, config.strategy, {
         exclude: input.exclude,
         lastPicked: lastPicked.get(input.providerId) ?? null,
+        roundPicks: roundPicks.get(input.providerId),
         random: deps.random,
       });
       if (!key) {
@@ -345,12 +424,14 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       if (input.quotaRebalance) {
         const current = resolved.find((r) => r.member.key === input.quotaRebalance);
         const chosen = resolved.find((r) => r.member.key === key)!;
-        const currentQuota = current && providerGroupMemberUsageState(current, input.model, now, input.agentKind).quota;
+        const currentQuota = current && !current.providerContinuity?.stale
+          && providerGroupMemberUsageState(current, input.model, now, input.agentKind).quota;
         const targetQuota = providerGroupMemberUsageState(chosen, input.model, now, input.agentKind).quota;
         if (!currentQuota || !targetQuota || providerGroupRebalanceTarget(currentQuota, [{ key, quota: targetQuota }], now) !== key) {
           return { kind: 'unavailable', resolved };
         }
       }
+      roundPicks.set(input.providerId, lastPicked.get(input.providerId) === key ? (roundPicks.get(input.providerId) ?? 0) + 1 : 1);
       lastPicked.set(input.providerId, key);
       if (input.reserveFor) {
         provisional.set(input.reserveFor, {
@@ -371,7 +452,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const usable = usableFor(input);
       const paused = pausedFor(input);
       return resolved.flatMap((r) => {
-        if (input.exclude.has(r.member.key) || !usable(r) || paused(r)) return [];
+        if (input.exclude.has(r.member.key) || r.providerContinuity?.stale || !usable(r) || paused(r)) return [];
         if (memberRunning(input.providerId, r) >= effectiveConcurrencyLimit(r.member)) return [];
         const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         if (!state.quota || state.fiveHourTight) return [];

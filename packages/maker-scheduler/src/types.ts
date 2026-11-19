@@ -5,7 +5,7 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read' | 'settings.read' | 'usage.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -108,6 +108,8 @@ export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
   'jira.comment',
   'sessions.dispatch',
   'feishu.read',
+  'settings.read',
+  'usage.read',
 ];
 
 /**
@@ -313,13 +315,15 @@ export interface Schedule {
   fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
-   * - project: workingDir is a user-selected project directory.
+   * - project: workingDir selects the execution directory; membership is resolved separately.
    * - dialogue: runner allocates an app-managed dialogue cwd per fire.
    *
    * Heartbeat schedules ignore this and use the target session's existing cwd.
    */
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
@@ -350,6 +354,8 @@ export interface Schedule {
    * 前置检查脚本。undefined = 未配置，完全走原有流程（零行为变化）。
    * 详见 PreRunHookConfig。
    */
+  /** null disables earlier command-based detection; absence preserves older schedules. */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig;
   /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
   webhookTrigger?: ScheduleWebhookTrigger;
@@ -387,6 +393,13 @@ export interface ScheduleRunTrigger {
   detail?: string;
 }
 
+/** Safe facts returned to the originating task when its own automation ends. */
+export interface ScheduleClosureFailure {
+  firedAt: number;
+  errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+  laterRunSucceeded: boolean;
+}
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
@@ -395,6 +408,8 @@ export interface ScheduleRun {
   finishedAt?: number;
   status: RunStatus;
   errorMsg?: string;
+  /** Read-only history projection. The original terminal status is retained. */
+  failureRecovered?: boolean;
   /** 本次 run 产生的真实 API 账单费用。 */
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */
@@ -420,7 +435,7 @@ export interface ScheduleRun {
   /** 本轮实际执行过前置检查时的结构化结果。 */
   preRunHookResult?: PreRunHookRunResult;
   /** 本轮由什么触发；缺省为定时或手动。 */
-  triggerSource?: 'webhook';
+  triggerSource?: 'webhook' | 'pr-status' | 'pr-check';
   /** 用户已读时间戳（毫秒）；NULL 表示未读。仅对终态 run 有意义。 */
   readAt?: number;
   /**
@@ -477,6 +492,8 @@ export interface CreateScheduleInput {
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */
@@ -493,6 +510,7 @@ export interface CreateScheduleInput {
    * device-link——无法用“带 key 的 undefined”表达清列,null 是等价通道;
    * create 时 null 与 undefined 同义,引擎归一成 undefined）。
    */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig | null;
   /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
   webhookTrigger?: ScheduleWebhookTriggerInput | null;

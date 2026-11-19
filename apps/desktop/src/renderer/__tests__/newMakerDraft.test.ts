@@ -48,6 +48,7 @@ const testWindow = {
   },
   removeEventListener() {},
 };
+let engineFollow: typeof import('../features/cc-agent/remoteDraftEngineFollow');
 let draftStore: DraftModule;
 let secondWindow: DraftModule;
 let onStorage: ((event: StorageEvent) => void) | undefined;
@@ -60,6 +61,7 @@ beforeAll(async () => {
   vi.resetModules();
   storageListeners.length = 0;
   draftStore = await import('@/state/newMakerDraft');
+  engineFollow = await import('../features/cc-agent/remoteDraftEngineFollow');
   onStorage = storageListeners.at(-1);
 });
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   testWindow.localStorage = memStorage;
   vi.stubGlobal('localStorage', memStorage);
   draftStore.__reloadForTest();
+  engineFollow.resetRemoteDraftEngineFollow();
 });
 
 async function loadModule() {
@@ -202,7 +205,7 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
       access: { kind: 'subscription', product: 'ChatGPT' },
-      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+      models: { codex: [{ id: 'gpt-6.2-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
     });
     expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
     const draft = getDraft();
@@ -828,6 +831,19 @@ describe('newMakerDraft store', () => {
     const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
+  });
+
+  it('restores the remotely selected engine and model on the next draft', async () => {
+    const store = await loadModule();
+    store.patchVendorPrefs('codex', { model: 'old-model' });
+    store.switchVendor('pi');
+    store.patchVendorPrefs('codex', { model: 'chosen-model', providerId: 'chosen-source' }, { selectVendor: true });
+    store.patchVendorPrefsPreservingModelChoice('codex', { model: 'old-model', effort: 'high' });
+
+    const reopened = (await reloadModule()).getDraft();
+    expect(reopened.vendor).toBe('codex');
+    expect(reopened.lastByVendor.codex).toMatchObject({ model: 'chosen-model', providerId: 'chosen-source' });
+    expect(reopened.modelChosenByVendor.codex).toBe(true);
   });
 
   it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
@@ -2122,4 +2138,47 @@ it('persists the default, preserves explicit permissions, isolates owners and re
   m.setNewMakerDraftOwner('permission-owner');
   expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+});
+
+// #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。
+// 最小失败输入：本机 Pi → 远程 Claude → 改目录 → 重启，应仍用本机 Pi。
+describe('remote engine is a window-local choice', () => {
+  function followRemote() {
+    draftStore.switchVendor('pi');
+    const next = engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: 'remote', currentVendor: 'pi',
+      defaultsReady: true, selectedAgentKind: 'claude-code',
+    });
+    expect(next).toBe('cc');
+    draftStore.switchVendor(next!, { remoteFollow: true });
+  }
+  it('keeps the local engine on disk and in preference sync through unrelated writes and restart', () => {
+    followRemote();
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('pi');
+  });
+  it('remembers a controller choice while this window is following another computer', () => {
+    followRemote();
+    draftStore.patchVendorPrefs('codex', { model: 'chosen' }, { selectVendor: true });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('codex');
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBe('codex');
+  });
+  it('preserves manual selection even after selecting the followed engine again', () => {
+    followRemote();
+    draftStore.switchVendor('codex', { userSelected: true });
+    draftStore.switchVendor('cc', { userSelected: true });
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBeNull();
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('cc');
+  });
 });

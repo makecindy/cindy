@@ -24,7 +24,7 @@ function fakeClient(t, captured) {
     pollDesktopAuthorization: async () => ({ status: 'ok', code: 'auth-code' }),
     exchangeAuthorizationCode: async (code, verifier) => {
       captured.exchange = { code, verifier };
-      return { [ACCESS]: 'bearer', [REFRESH]: 'rotated' };
+      return { status: 'ok', [ACCESS]: 'bearer', [REFRESH]: 'rotated' };
     },
   };
 }
@@ -66,17 +66,25 @@ test('reports unknown login methods instead of guessing', async () => {
   );
 });
 
-test('fails when the exchange yields no refresh token', async () => {
-  const client = fakeClient(null, {});
-  client.exchangeAuthorizationCode = async () => ({ [ACCESS]: 'only-access' });
-  await assert.rejects(
-    () => runHostLogin({
+test('reports a login outcome that needs another step instead of a missing token', async () => {
+  const outcomes = [
+    [{ status: 'binding_required', bindType: 'phone', bindTicket: 'bind-ticket' }, /must bind a phone number first/],
+    [{ status: 'select_account', loginTicket: 'login-ticket', accounts: [{}] }, /matches several Cindy accounts/],
+    [{ status: 'sso_verification_required', verificationTicket: 'sso-ticket', channel: 'sms', targetMasked: '138****0000' }, /extra verification code/],
+  ];
+  for (const [outcome, message] of outcomes) {
+    const client = fakeClient(null, {});
+    client.exchangeAuthorizationCode = async () => outcome;
+    const store = memoryStore();
+    const error = await runHostLogin({
       client,
-      store: memoryStore(),
+      store,
       region: 'cn',
       hostedCallbackUrl: 'https://auth.example/desktop/callback',
       openBrowser: async () => {},
-    }),
-    /no refresh token/,
-  );
+    }).then(() => null, (reason) => reason);
+    assert.match(error?.message ?? '', message);
+    assert.doesNotMatch(error.message, /ticket|0000/);
+    assert.equal(store.records.size, 0);
+  }
 });

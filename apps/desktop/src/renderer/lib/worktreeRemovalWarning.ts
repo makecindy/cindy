@@ -11,7 +11,11 @@
  * 的 worktree(main 侧只会 auto-stash 兜底,用户拿不到告警和取消机会)。
  * 所以免确认的判据必须是「确认干净」,而不是「不是脏的」。
  */
-export type WorktreeRemovalPreflight = 'clean' | 'dirty' | 'unknown';
+export type WorktreeRemovalPreflight = 'clean' | 'dirty' | 'dirty-discardable' | 'unknown';
+
+export function isDirtyWorktree(preflight: WorktreeRemovalPreflight): boolean {
+  return preflight === 'dirty' || preflight === 'dirty-discardable';
+}
 
 async function queryWorktreeRemovalPreflight(
   sessionId: string,
@@ -23,9 +27,10 @@ async function queryWorktreeRemovalPreflight(
           deviceLinkDeviceId,
           'worktree:removal-preview',
           [sessionId],
-        ) as { hasWorktree: boolean; dirty: boolean }
+        ) as { hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }
       : await window.electronAPI.worktreeRemovalPreview(sessionId);
-    return preview.hasWorktree && preview.dirty ? 'dirty' : 'clean';
+    if (!preview.hasWorktree || !preview.dirty) return 'clean';
+    return preview.canDiscardChanges === true ? 'dirty-discardable' : 'dirty';
   } catch {
     return 'unknown';
   }
@@ -40,7 +45,7 @@ export async function fetchDirtyWorktreeForRemoval(
   sessionId: string,
   deviceLinkDeviceId?: string | null,
 ): Promise<boolean> {
-  return (await queryWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId)) === 'dirty';
+  return isDirtyWorktree(await queryWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId));
 }
 
 /**
@@ -96,17 +101,18 @@ export function resolveWorktreeRemovalPreflight(
   deviceLinkDeviceId?: string | null,
 ): Promise<WorktreeRemovalPreflight> {
   const now = Date.now();
-  const cached = preflightCache.get(sessionId);
-  if (cached && cached.result === 'dirty' && now - cached.at < DIRTY_PREFLIGHT_TTL_MS) {
+  const cacheKey = JSON.stringify([deviceLinkDeviceId ?? null, sessionId]);
+  const cached = preflightCache.get(cacheKey);
+  if (cached && cached.result && isDirtyWorktree(cached.result) && now - cached.at < DIRTY_PREFLIGHT_TTL_MS) {
     return cached.promise;
   }
   const promise = queryWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
   const entry: PreflightEntry = { at: now, promise };
-  preflightCache.set(sessionId, entry);
+  preflightCache.set(cacheKey, entry);
   // 回填结论:只有 'dirty' 会被后续 resolve 复用。用 entry 身份守卫,避免旧查询
   // 覆盖同一会话更新的那次(query 内部已 swallow 异常,不会 reject)。
   void promise.then((result) => {
-    if (preflightCache.get(sessionId) === entry) entry.result = result;
+    if (preflightCache.get(cacheKey) === entry) entry.result = result;
   });
   // 过期条目没有别的清理时机(会话可能已经被归档/删除),顺手扫一遍,
   // 别让 Map 随会话数无限长大。

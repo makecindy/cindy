@@ -1,4 +1,5 @@
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
@@ -47,7 +48,7 @@ const accountUsage = (providerId: string, [session, week, model]: number[]) => {
     credits: null,
   } };
 };
-const subscriptionControl = { connected: false, commands: [] as { action?: string; providerId: string; loginKey?: string }[], cancel: (): void => {} };
+const subscriptionControl = { connected: false, commands: [] as { action?: string; providerId: string; loginKey?: string }[], cancel: (): void => {}, pending: false, finish: (_ok: boolean): void => {} };
 const unusedReceived = [{
   shareId: 'fixture-received', memberId: 'fixture-member', providerId: 'anthropic',
   providerLabel: 'Anthropic', hostDeviceId: 'fixture-share-host', deviceName: 'Example computer',
@@ -73,14 +74,23 @@ mountPage({
       fixture.devices.push({ deviceId: 'mbp', name: 'MBP-M5', platform: 'darwin' }, { deviceId: 'mini', name: 'Chris的Mac mini', platform: 'darwin' });
       for (const id of ['mbp', 'mini']) fixture.catalogs.set(id, { providers: remote, loading: false, error: null });
     }
+    if (ctx.case.startsWith('local-management')) snapshot.providers[0] = { ...snapshot.providers[0], connected: false, subscriptionAccountPool: 'openai', runLocation: 'mbp' } as typeof snapshot.providers[0];
     if (ctx.case === 'borrowing') snapshot.providers[0] = { ...snapshot.providers[0], connected: false };
     // Anthropic was never signed in here (no removed flag): it must still be listed, borrowed from another computer.
     if (ctx.case === 'never-signed-in') snapshot.providers[1] = { ...snapshot.providers[1], connected: false };
-    // provider-own-computers 页：OpenAI 只有 own-provider 场景单独打开了「允许被远程调用」。
+    // provider-own-computers 页：OpenAI 在 own-provider / own-remote-off 场景打开了「允许被远程调用」。
     if (ctx.page === 'provider-own-computers') {
-      snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' };
+      snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' || ctx.case === 'own-remote-off' };
     }
-    if (ctx.case === 'pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
+    // provider-own-computers 页：并进 OpenAI 账号池、仍有分享的旧连接，开关跟随账号池且不可在这里改。
+    if (ctx.case === 'merged-shared') {
+      snapshot.providers.push({
+        ...provider('openai', 'OpenAI · old connection'), id: 'openai-old', remoteInvocationEnabled: true,
+        subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai',
+      } as typeof snapshot.providers[0]);
+      snapshot.providerOrder.push('openai-old');
+    }
+    if (ctx.case === 'pinned' || ctx.case === 'recovery-pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
     refreshControl.defer = ctx.case === 'wizard-reopen';
     if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
       ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
@@ -90,6 +100,19 @@ mountPage({
       subscriptionAccounts: {
         command: async (command: SubscriptionAccountCommand) => {
           subscriptionControl.commands.push(command);
+          if (command.action === 'login' && ctx.case.startsWith('recovery-')) {
+            subscriptionControl.pending = true;
+            try {
+              await new Promise<void>((resolve, reject) => {
+                subscriptionControl.cancel = () => reject(new Error('[SUBSCRIPTION_LOGIN_CANCELLED] Could not update the subscription account'));
+                subscriptionControl.finish = ok => ok ? resolve() : reject(new Error('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update the subscription account'));
+              });
+              const f = (window as any).providerSourcesFixture;
+              f.snapshot = { ...f.snapshot, providers: f.snapshot.providers.map((p: any) => p.id === 'openai' ? { ...p, connected: true } : p) };
+              window.dispatchEvent(new Event('repro-provider-change'));
+              (window as any).__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
+            } finally { subscriptionControl.pending = false; }
+          }
           if (command.action === 'cancel') subscriptionControl.cancel();
           if (command.action === 'add' || command.action === 'connect') {
             if (ctx.case === 'subscription-cancel') await new Promise<void>((_resolve, reject) => {
@@ -100,8 +123,15 @@ mountPage({
           const configured = ctx.case !== 'borrowing' && !(ctx.case === 'never-signed-in' && command.providerId === 'anthropic');
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
           const defaultAccount = { id: 'default', identity: 'alex@example.com',
-            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
+            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'unavailable' : 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
+          if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
+            return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({
+              ...defaultAccount, id: index === 0 ? 'default' : `account-${index}`,
+              identity: `account${index + 1}@example.com`,
+              status: index === 1 ? 'unavailable' : 'signed-out',
+            })) };
+          }
           return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
             { ...defaultAccount, usage: accountUsage(command.providerId, [12, 34, 8]) },
           ] : command.action === 'preview' ? [defaultAccount] : [] };
@@ -118,8 +148,6 @@ mountPage({
         requestProviderModelsAutoRefresh: async () => ({ ok: true }),
         setProviderOrder: forbid('setProviderOrder'),
         setProviderRunLocation: async () => ({ ok: true }),
-        // provider-own-computers 页：「远程连接」里的「让我的其他电脑用本机模型」开没开。
-        getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'own-on' || ctx.case === 'own-remote-off' }),
         listProviderPresets: async () => ({ presets: BUNDLED_CATALOG.presets ?? [] }),
         localModelList: async () => ({ status: { kind: 'ready' }, models: [], memoryGb: 0 }),
         localModelStatus: async () => ({ kind: 'ready' }),
@@ -129,7 +157,7 @@ mountPage({
       },
       deviceLink: { getState: async () => ({ remoteControlEnabled: ctx.case !== 'own-remote-off' }) },
       providerShare: {
-        command: async () => ({ ready: true, providerIds: [] }),
+        command: async () => ({ ready: true, providerIds: ctx.case === 'merged-shared' ? ['openai-old'] : [] }),
         onOwnedChanged: subscription('ownedChanged'),
       },
       providerGroup: {
@@ -139,5 +167,5 @@ mountPage({
       },
     };
   },
-  render: () => <div className="h-screen p-5"><ProvidersSection /></div>,
+  render: () => <div className="h-screen p-5"><ProvidersSection /><ToastContainer /></div>,
 });

@@ -48,6 +48,7 @@ import {
   type Manifest,
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
+import { createDownloadProgressReporter } from '../downloader/progressReporter.js';
 import { createLogger } from '../logger.js';
 import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
 import { clearPreparedBinaryDownloads, hasPreparedBinaryDownload } from './download-cache.js';
@@ -156,6 +157,7 @@ function linuxCdnBudgetForSignal(sharedSignal: AbortSignal | undefined): number 
 
 const log = createLogger('agent-binaries');
 
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import type {
   BinaryProvisioner,
   BinaryDownloadProgressPayload,
@@ -498,21 +500,26 @@ export async function prepare(
       });
     }
     try {
-      const fallback = await prepareLinuxRuntimeFallback(kind, {
-        signal: opts.signal,
-        onProgress: broadcastProgress
-          ? (event) => {
+      const reporter = broadcastProgress
+        ? createDownloadProgressReporter({
+            initialPhase: 'downloading',
+            emit: (download) => {
               broadcastBinaryDownloadProgress({
-                progress: Math.max(0, Math.min(100, event.percent ?? 0)),
-                speed: event.speedBps > 0 ? `${formatBytes(event.speedBps)}/s` : undefined,
-                downloaded: event.loaded > 0 ? formatBytes(event.loaded) : undefined,
-                total: event.total && event.total > 0 ? formatBytes(event.total) : undefined,
+                progress: download.percent ?? 0,
+                speed: download.speedBps > 0 ? `${formatBytes(download.speedBps)}/s` : undefined,
+                downloaded: download.loaded > 0 ? formatBytes(download.loaded) : undefined,
+                total: download.total && download.total > 0 ? formatBytes(download.total) : undefined,
                 step,
                 totalSteps,
                 vendor: cfg.vendorTag,
+                download,
               });
-            }
-          : undefined,
+            },
+          })
+        : null;
+      const fallback = await prepareLinuxRuntimeFallback(kind, {
+        signal: opts.signal,
+        ...(reporter?.callbacks ?? {}),
       });
       if (fallback.ready) {
         if (broadcastProgress && fallback.installed) {
@@ -588,6 +595,8 @@ async function prepareViaCdn(
   let lastReceived = 0;
   let lastTotal = 0;
   let lastSpeed: string | undefined;
+  let lastDownload: DownloadProgress | undefined;
+  let lastBarProgress = 0;
   let didDownload = false;
 
   // CDN 腿预算(仅 packaged Linux)从「传输真正开始」计起,排队等待不计入:
@@ -626,6 +635,7 @@ async function prepareViaCdn(
 
   const normalizer = new ProgressNormalizer({
     onIpc: (progress) => {
+      lastBarProgress = progress;
       broadcastBinaryDownloadProgress({
         progress,
         speed: lastSpeed,
@@ -634,6 +644,7 @@ async function prepareViaCdn(
         step,
         totalSteps,
         vendor: cfg.vendorTag,
+        download: lastDownload,
       });
     },
   });
@@ -647,6 +658,23 @@ async function prepareViaCdn(
         if (p.status === 'downloading') {
           didDownload = true;
           startCdnBudget();
+        }
+        const phaseChanged = p.download !== undefined && p.download.phase !== lastDownload?.phase;
+        if (p.download) lastDownload = p.download;
+        // The throttled normalizer only speaks when the bar rises a whole percent, so phase
+        // changes (retrying, verifying, and back to downloading) are pushed at once with the
+        // bar where it already is; otherwise "Retrying…" lingers after bytes flow again.
+        if (phaseChanged && p.download) {
+          broadcastBinaryDownloadProgress({
+            progress: lastBarProgress,
+            speed: p.download.phase === 'downloading' ? lastSpeed : undefined,
+            downloaded: lastReceived > 0 ? formatBytes(lastReceived) : undefined,
+            total: lastTotal > 0 ? formatBytes(lastTotal) : undefined,
+            step,
+            totalSteps,
+            vendor: cfg.vendorTag,
+            download: p.download,
+          });
         }
         if (p.downloadProgress) {
           lastReceived = p.downloadProgress.received;
@@ -684,6 +712,19 @@ async function prepareViaCdn(
           step,
           totalSteps,
           vendor: cfg.vendorTag,
+          ...(lastDownload
+            ? {
+                download: {
+                  ...lastDownload,
+                  phase: 'completed' as const,
+                  loaded: lastDownload.total ?? lastDownload.loaded,
+                  percent: 100,
+                  speedBps: 0,
+                  etaSeconds: null,
+                  retryReason: undefined,
+                },
+              }
+            : {}),
         });
       }
       lastReadyPath.set(kind, result.binaryPath);

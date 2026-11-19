@@ -304,6 +304,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // 验证恢复事件是否交给该 peer 的调度器。不是双机故障恢复的端到端验收。
     const callbacks: Array<(peer: string, streamId: string) => void> = [];
     const replayActiveSubscriptions = vi.fn();
+    const broadcast = vi.fn();
     const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
     if (sameStream) sharedHostStreams.set(peer, { streamId: 'accepted-stream', epoch: 1 });
     acceptedRegistration.runInNewContext({
@@ -314,11 +315,18 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       replayActiveSubscriptions,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
+      broadcast, DEVICE_LINK_PUSH,
     });
     expect(callbacks).toHaveLength(1);
     expect(replayActiveSubscriptions).not.toHaveBeenCalled();
 
     callbacks[0](peer, 'accepted-stream');
+    // #11120: even the same stream can have a gap with a tokenless completion.
+    // Run the actual acceptance callback and verify notification precedes replay.
+    if (parseSharedTaskPeer(peer)?.role === 'host') {
+      expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
+      expect(broadcast.mock.invocationCallOrder[0]).toBeLessThan(replayActiveSubscriptions.mock.invocationCallOrder[0]);
+    } else expect(broadcast).not.toHaveBeenCalled();
 
     // Exact target matters: losing the peer argument would replay healthy peers.
     // Ordinary/guest peers and an unchanged shared-host stream must still replay

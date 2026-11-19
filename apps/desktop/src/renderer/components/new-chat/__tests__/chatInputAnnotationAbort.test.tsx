@@ -5,7 +5,7 @@
  * 附件与矢量笔迹原样回到输入框,用户可直接重试。脚手架与 chatInputModelLoading
  * 相同:外部宿主服务全部惰性,编辑器、输入框状态与发送派发真实运行。
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ComponentProps, ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
@@ -13,13 +13,15 @@ import type { ProviderView } from '@cindy/model-providers';
 import { sshNativeCodexProvider, sshModel, sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { ChatInput } from '../ChatInput';
+import { useTaskBotMentions } from '@/features/cc-agent/hooks/useTaskBotMentions';
+import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import type { AtMentionPanel } from '../AtMentionPanel';
 import type { scanAtResources } from '@/lib/atResourceService';
 import type { ExtraDirsButton } from '../ExtraDirsButton';
 import type { PermissionSelector } from '../PermissionSelector';
 import type { ModelSelector } from '../ModelSelector';
-import type { UseVoiceInputResult } from '@/voice-input/useVoiceInput';
+import type { UseVoiceInputOptions, UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -38,6 +40,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   atPanel: null as ComponentProps<typeof AtMentionPanel> | null,
   documentChanged: vi.fn(),
   voiceState: null as UseVoiceInputResult['state'] | null,
+  onSamples: undefined as UseVoiceInputOptions['onSamples'],
   draftText: '',
   draftSource: null as UseVoiceInputResult['draftSource'],
   draftRange: null as UseVoiceInputResult['draftRange'],
@@ -50,8 +53,16 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   uploadChatFolder: vi.fn(),
   cacheImageFromBuffer: vi.fn(),
   atPanelStandin: false,
+  botProfiles: [] as Array<{ id: string; name: string; status: string; enabled?: boolean; hiddenAt?: number; description?: string }>,
+  cloud: { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] } as CompanionCloudSnapshot,
 }));
 
+vi.mock('@/features/bots/botStore', async original => ({
+  ...await original<typeof import('@/features/bots/botStore')>(), useBotProfiles: () => h.botProfiles,
+}));
+vi.mock('@/features/bots/companionCloudStore', async original => ({
+  ...await original<typeof import('@/features/bots/companionCloudStore')>(), useCompanionCloud: () => h.cloud,
+}));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', async (original) => ({ ...await original<typeof import('@/components/ui/confirm-dialog-provider')>(), useConfirmDialog: () => ({ confirm: h.confirm }) }));
@@ -102,7 +113,8 @@ vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query, comman
   <div data-testid="test-slash-palette" data-query={query} data-commands={commands.map(command => command.name).join(',')} /> }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
-vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
+vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null, _disabled: boolean, _messages: unknown, options: UseVoiceInputOptions) => {
+  h.onSamples = options?.onSamples;
   // Attach before ChatInput's first hydration effect so an empty-document
   // replacement on initial mount cannot hide from the regression assertion.
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
@@ -154,6 +166,8 @@ beforeEach(() => {
   h.cacheImageFromBuffer.mockReset().mockResolvedValue(undefined);
   h.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [] });
   h.localProviders = [];
+  h.botProfiles = [{ id: 'rosa', name: 'SyntheticRosa', status: 'active', description: 'Writing buddy' }];
+  h.cloud = { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] };
   h.editor = null;
   h.documentChanged.mockClear();
   h.listening = false;
@@ -173,7 +187,12 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); clearDraft('composer-regression'); h.remoteProviders = []; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}) {
+function TaskComposer(props: ComponentProps<typeof ChatInput>) {
+  const botMentions = useTaskBotMentions(props.deviceLinkDeviceId, props.remoteHostId, props.botMentions);
+  return <ChatInput {...props} botMentions={botMentions} />;
+}
+
+function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, taskRoster = false) {
   const attachmentState: ComponentProps<typeof ChatInput>['attachmentState'] = {
     attachments: [], hasAttachments: false, addFiles: vi.fn(), addClipboardImage: vi.fn(),
     rejections: [], dismissRejection: noOp, clearRejections: noOp, addFolderPath: noOp,
@@ -185,9 +204,110 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}) {
     attachmentState,
     hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
     onSend: vi.fn().mockResolvedValue(true), ...extra };
-  const view = render(<ChatInput {...props} />);
+  const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// #8941 / #10257 mentions subscope. Unit: the shared production roster hook and
+// real ChatInput/Tiptap must offer a buddy beside its same-name task through both
+// @ and +, then serialize the selected stable bot ID. Existing serializer tests
+// do not exercise roster assembly. Minimal input: one active local buddy and one
+// scanned task with the same name; host APIs/panel DOM remain test substitutes.
+it.each([
+  { entry: '@', sessionId: 'ordinary-task' }, { entry: '+', sessionId: 'ordinary-task' },
+  { entry: '@', sessionId: undefined }, { entry: '+', sessionId: undefined },
+])('offers distinct buddy/task choices in $entry with session $sessionId', async ({ entry, sessionId }) => {
+  h.localProviders = [sshProvider('roster-provider', [sshModel('roster-model')], 'claude-code')];
+  h.scan.mockResolvedValue({ success: true, items: [{ type: 'session', name: 'SyntheticRosa',
+    relPath: 'cindy://sessions/rosa-task', _nameLower: 'syntheticrosa', _relPathLower: 'cindy://sessions/rosa-task' }], truncated: false });
+  supplyRangeGeometry();
+  const onSend = vi.fn<ComponentProps<typeof ChatInput>['onSend']>().mockResolvedValue(true);
+  renderComposer({ sessionId, runtimeAgentKind: 'claude-code', vendorKey: 'cc',
+    initialWorkingDir: '/synthetic-workspace', initialModel: 'roster-model',
+    initialProviderId: 'roster-provider', onSend }, true);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  if (entry === '@') {
+    await act(async () => {
+      h.editor!.commands.setContent('<p>@</p>');
+      h.editor!.commands.setTextSelection(2);
+      h.editor!.commands.insertContent('SyntheticRosa');
+    });
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+    await waitFor(() => expect(h.atPanel?.embedded).toBe(true));
+    await act(async () => h.atPanel!.onSearchChange?.('SyntheticRosa'));
+  }
+  await waitFor(() => expect(h.atPanel?.entries.some(e => e.kind === 'resource' && e.item.type === 'session')).toBe(true));
+  const buddy = h.atPanel!.entries.find(e => e.kind === 'resource' && e.item.type === 'bot');
+  expect(buddy).toMatchObject({ kind: 'resource', item: { type: 'bot', name: 'SyntheticRosa' } });
+  await act(async () => h.atPanel!.onSelect(buddy!));
+  expect(h.editor!.getJSON().content?.[0]?.content).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'mentionChip', attrs: expect.objectContaining({ kind: 'bot', path: 'rosa' }) }),
+  ]));
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+  await act(async () => fireEvent.click(send));
+  await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+  expect(onSend.mock.calls[0]?.[6]?.agentReferences).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: 'bot', botId: 'rosa', href: 'cindy://bot/rosa' }),
+  ]));
+});
+
+it('keeps task roster ownership, explicit empty lists and live cloud/profile changes', () => {
+  type Options = Parameters<typeof useTaskBotMentions>;
+  const view = renderHook((args: Options) => useTaskBotMentions(...args), { initialProps: [null, null] as Options });
+  expect(view.result.current).toEqual([{ id: 'rosa', name: 'SyntheticRosa', description: 'Writing buddy' }]);
+  for (const args of [[undefined, null], ['remote-device', null], [null, 'ssh-host']] as Options[]) {
+    view.rerender(args);
+    expect(view.result.current).toBeUndefined();
+  }
+  const explicit = [{ id: 'remote-buddy', name: 'Explicit buddy' }];
+  for (const deviceId of [null, undefined, 'remote-device']) {
+    view.rerender([deviceId, null, explicit]);
+    expect(view.result.current).toBe(explicit);
+    const empty: typeof explicit = [];
+    view.rerender([deviceId, null, empty]);
+    expect(view.result.current).toBe(empty);
+  }
+  h.botProfiles = [
+    { id: 'rosa', name: 'RenamedRosa', status: 'active', hiddenAt: 1 },
+    { id: 'paused', name: 'Paused', status: 'paused' },
+    { id: 'disabled', name: 'Disabled', status: 'active', enabled: false },
+    { id: 'demoted', name: 'Old copy', status: 'active' },
+    { id: 'elsewhere', name: 'Remote home', status: 'active' },
+  ];
+  h.cloud = { ...h.cloud, enabled: true, demotedBotIds: ['demoted'], actors: [
+    { id: 'actor', externalId: 'elsewhere', name: 'Remote home', avatar: null, homeDeviceId: 'other', homeDevice: null },
+  ] };
+  view.rerender([null, null]);
+  expect(view.result.current).toEqual([{ id: 'rosa', name: 'RenamedRosa' }]);
+  h.cloud = { ...h.cloud, enabled: false };
+  view.rerender([null, null]);
+  expect(view.result.current?.map(bot => bot.id)).toEqual(['rosa', 'elsewhere']);
+  h.botProfiles = []; // The owner-scoped store clears before a new account loads.
+  view.rerender([null, null]);
+  expect(view.result.current).toEqual([]);
+});
+
+// Unit regression: existing-task hydration used to scan default Claude/global
+// before the real Codex project arrived. Exercise the actual mounted composer,
+// not just the command loader, and preserve the new-dialogue global roster.
+it('waits for task identity and loads its authoritative project only once', async () => {
+  const view = renderComposer({ sessionId: 'skill-hydration', runtimeAgentKind: null,
+    vendorKey: 'cc', initialWorkingDir: undefined });
+  await act(async () => {});
+  expect(h.listAgentSkills).not.toHaveBeenCalled();
+  view.rerender(<ChatInput {...view.props} runtimeAgentKind="codex" vendorKey="codex"
+    initialWorkingDir="/fixture/real-project" />);
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+  expect(h.listAgentSkills).toHaveBeenLastCalledWith('codex', {
+    sessionId: 'skill-hydration', workingDir: '/fixture/real-project',
+  });
+  view.unmount();
+  h.listAgentSkills.mockClear();
+  renderComposer();
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+});
 
 function supplyRangeGeometry() {
   // jsdom has no layout. Keep real ranges/selections while ProseMirror focuses.
@@ -528,6 +648,32 @@ it('keeps the voice button anchored beside the main action through its lifecycle
   }
 });
 
+// Unit: the position test cannot detect a decorative recording loop. One loud
+// PCM window should advance through the button and disappear after silence.
+it('shows recent microphone levels on the recording button and clears them on stop', async () => {
+  h.voiceState = 'listening';
+  const view = renderComposer();
+  const levels = () => [...view.container.querySelectorAll<HTMLElement>('.composer-recording-bar')]
+    .map((bar) => bar.style.transform);
+  const startingBars = () => view.container.querySelectorAll('.composer-recording-bar[data-starting]');
+  expect(startingBars()).toHaveLength(3);
+  const quiet = levels();
+  expect(quiet).toHaveLength(3);
+  const loud = new Int16Array(640).fill(24000).buffer;
+  const silent = new Int16Array(640).buffer;
+  await act(() => h.onSamples!(loud));
+  expect(startingBars()).toHaveLength(0);
+  const raised = levels()[2];
+  expect(raised).not.toBe(quiet[2]);
+  await act(() => h.onSamples!(silent));
+  expect(levels()).toEqual([quiet[0], raised, quiet[2]]);
+  h.voiceState = 'submitting';
+  await act(() => view.rerender(<ChatInput {...view.props} />));
+  expect(levels()).toEqual(quiet);
+  await act(() => h.onSamples!(loud));
+  expect(levels()).toEqual(quiet);
+});
+
 // 9bc20cf894 / composerMorphScope: choosing a model used to drop focus to body.
 // Generic MorphPopover tests supply their own target and miss ChatInput's wiring.
 // Minimal unit input: one real selector choice, then focus returns to the live editor.
@@ -692,7 +838,7 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
 // off to the install flow: it must not insert `/pr`, send, or keep the typed query.
 it('hands a plugin Skill setup row to its owner instead of inserting it', async () => {
   const onSelect = vi.fn();
-  const view = renderComposer({ sessionId: 'slash-plugin-setup', pluginSkillSetup: {
+  const view = renderComposer({ sessionId: 'slash-plugin-setup', runtimeAgentKind: 'codex', vendorKey: 'codex', pluginSkillSetup: {
     entries: [{ skillName: 'pr', description: 'needs GitHub', meta: 'not installed' }], onSelect } });
   await waitFor(() => expect(h.editor).not.toBeNull());
   await act(async () => {

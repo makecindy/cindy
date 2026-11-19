@@ -121,4 +121,34 @@ describe('history pagination feedback', () => {
     await older;
     expect(view.isLoadingOlder()).toBe(false);
   });
+
+  // 2026-11-17: a remote task stayed on its cached copy and the logs could not tell
+  // whether the latest read was never sent or failed, because only successes were reported.
+  // Desktop and Mobile log this event as-is, so it must carry the code, never the message.
+  it('reports a failed read with its error code and without the error text', async () => {
+    const diagnostic = vi.fn();
+    const transport = {
+      page: vi.fn(async (): Promise<typeof page> => { throw new Error('[DEVICE_LINK_TIMEOUT] /Users/alice/secret.txt'); }),
+      details: vi.fn(),
+      expanded: vi.fn(async () => undefined),
+      diagnostic,
+    };
+    const view = new HistoryViewController(transport);
+    await view.refresh();
+    // Desktop reads go through ipcRenderer.invoke, which wraps the main-side error.
+    transport.page.mockRejectedValueOnce(new Error(
+      "Error invoking remote method 'device-link:invoke': Error: [DEVICE_LINK_NOT_CONNECTED] secret detail"));
+    await view.refresh();
+    transport.page.mockRejectedValueOnce(new Error('connection reset by peer [DEVICE_LINK_TIMEOUT]'));
+    await view.refresh();
+
+    const failures = diagnostic.mock.calls.map(([event]) => event).filter((event) => event.source === 'failed');
+    expect(failures.map((event) => event.failure)).toEqual([
+      { read: 'latest', code: 'DEVICE_LINK_TIMEOUT' },
+      { read: 'latest', code: 'DEVICE_LINK_NOT_CONNECTED' },
+      { read: 'latest', code: 'UNKNOWN' },
+    ]);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('secret');
+    expect(view.getSnapshot().error).toBeTruthy();
+  });
 });

@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "ウィジェットを追加",
+  "widgetGuideIntro": "ウィジェットはホーム画面に置ける小さなカードです。Cindy を開かずに、サブスクの残りや今日のトークン使用量を確認できます。",
+  "widgetGuideExample": "ホーム画面に Cindy のウィジェットとアプリアイコンが並んでいます。",
+  "widgetGuidePicker": "「編集」→「ウィジェットを追加」",
+  "widgetGuideIOS": "ホーム画面の空いている場所を長押しし、{{picker}}をタップします。\n\nCindy を検索し、「サブスクの残り」または「毎日の使用量」を選んで「ウィジェットを追加」をタップします。",
+  "widgetGuideAndroid": "ホーム画面の空いている場所を長押しし、「ウィジェット」をタップします。\n\nCindy の「サブスクの残り」または「毎日の使用量」をホーム画面にドラッグします。",
+  "widgetGuideHome": "ホーム画面",
+  "widgetGuideLock": "ロック画面",
+  "widgetGuideLockIOS": "ロック画面にも追加できます。ロック画面を長押しし、「カスタマイズ」をタップします。",
+  "widgetGuideDismiss": "閉じる",
+  "usageOther": "その他",
+  "usageTitle": "使用量",
+  "usageOnlyDevice": "{{name}} のみ",
+  "usagePlans": "プランの残り利用枠",
+  "usageBudget": "今期の残り予算",
   "management": {
     "title": "デバイス管理",
     "openDevice": "{{name}} のデバイス詳細を表示",
@@ -328,6 +343,7 @@
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
       "dialogue": "チャット",
+      "automation": "自動化",
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
@@ -353,7 +369,9 @@
     },
     "menu": {
       "groupDialogue": "チャット",
+      "groupAutomation": "自動化",
       "dialogueFolder": "チャット",
+      "automationFolder": "自動化",
       "search": "検索",
       "settings": "設定",
       "remoteSettings": "リモート接続設定",
@@ -423,7 +441,33 @@
       "filterTeammatesHeading": "パートナー",
       "filterAnySource": "すべて",
       "filterHideAllTeammates": "すべて非表示",
-      "filterSelectedTeammates": "{{count}} 人を選択"
+      "filterSelectedTeammates": "{{count}} 人を選択",
+      "inbox": {
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後",
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "indefinite": "無期限",
+        "custom": "カスタム…",
+        "invalidTime": "1年以内の未来の日時を選択してください。"
+      },
+      "taskListMode": {
+        "enterInbox": "受信トレイへ",
+        "leaveInbox": "タスク一覧へ"
+      }
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",

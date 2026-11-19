@@ -35,8 +35,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
-import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { materializeTaskImageTextResult, TASK_IMAGE_MAX_BYTES } from '../cindy-media/taskImageDelivery';
+import { localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -158,11 +158,11 @@ import {
   composeInteractionCard,
   registerHookInteraction,
 } from './interactions.js';
-import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs, resolveRelativeImageRefs } from './outbound.js';
+import { compressInlineImage } from '../mcp-integrations/inlineImageCompressor.js';
 import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
-import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -208,6 +208,7 @@ function hookDefaultInputs(
   overrides: HookDispatchOverrides,
   sourceIm: string | null | undefined,
   workspaceCtx: HookWorkspaceCtx | undefined,
+  sharedProject = false,
 ) {
   const prefsChannel: HookPrefsChannel | null =
     sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
@@ -216,7 +217,7 @@ function hookDefaultInputs(
   const workspaceAlias = workspaceCtx?.alias;
   // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
   // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
-  const shared = prefsChannel !== null && isSharedPrefsAdopted(prefsChannel);
+  const shared = sharedProject || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
   const localPref =
     prefsChannel !== null && workspaceAlias
       ? shared
@@ -254,6 +255,17 @@ function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): 
     ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
 }
 
+/** Plugin IM entrances use the same canonical project settings and resolver as official bots. */
+export function sharedImProjectFingerprint(alias: string): string {
+  return JSON.stringify(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+export function resolveSharedImProjectConfig(alias: string, log: { warn(msg: string): void }) {
+  return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
+    log, 'slack', { alias, teamId: null }, undefined, true);
+}
+
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
  * (dispatch options)优先, 缺省落桌面端 IM 新会话默认值(草稿, 建 session 那
@@ -267,8 +279,9 @@ async function resolveNewSessionConfig(
   sourceIm?: string | null,
   workspaceCtx?: HookWorkspaceCtx,
   providerSnapshot?: ProviderView[],
+  sharedProject = false,
 ): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
-  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx);
+  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx, sharedProject);
   const fingerprint = hookDefaultsFingerprint(inputs);
   let providers: ProviderView[] | null = null;
   try {
@@ -586,6 +599,26 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   };
 }
 
+/**
+ * 发给渠道的图片超过单图上限时的压缩阶梯: 先保细节(大边长、高质量), 不行再逐级缩小。
+ * 与给模型看的内联缩略图不同, 这里要让人在聊天里还能看清截图上的字。
+ */
+const OUTBOUND_IMAGE_SHRINK_LADDER = [
+  { maxEdgePx: 4096, webpQuality: 85 },
+  { maxEdgePx: 3072, webpQuality: 82 },
+  { maxEdgePx: 2560, webpQuality: 80 },
+  { maxEdgePx: 2048, webpQuality: 76 },
+  { maxEdgePx: 1600, webpQuality: 72 },
+] as const;
+
+function shrinkOutboundImage(bytes: Buffer, mimeType: string, maxBytes: number) {
+  return compressInlineImage(bytes, mimeType, {
+    targetBytes: maxBytes,
+    ladder: OUTBOUND_IMAGE_SHRINK_LADDER,
+    timeoutMs: 15_000,
+  });
+}
+
 /** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
 function formatHookIncompleteNotice(skippedNames: string[]): string {
   const locale = getResolvedMainLocale();
@@ -623,14 +656,32 @@ async function collectOutboundForFinalText(
   const canReadLocal = allowedFileRoots.length > 0;
   // The public projection is drawn from this whole turn. Import its image URLs
   // once so a temporary source changing cannot split the body from its attachment.
-  const scanText = stripInternalWebCitations(texts.wholeTurn);
+  // 按工作目录写的相对路径图片先补成绝对路径, 再与绝对路径的图片一起导入(否则它们不会被发出,
+  // 引用还会原样留在正文里)。
+  const sourceScanText = stripInternalWebCitations(texts.wholeTurn);
+  const relativeImages = canReadLocal
+    ? await resolveRelativeImageRefs(sourceScanText, allowedFileRoots)
+    : new Map<string, string>();
+  const scanText = rewriteTaskImageReferences(sourceScanText, relativeImages);
   const materialized = canReadLocal
     ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
+  // 没导入成功的本机图片里, 哪些是因为超过导入上限: 提示里要写明上限, 而不是只说「未能发送」。
+  const oversizedLocalImages = new Set<string>();
+  for (const failed of 'failures' in materialized ? materialized.failures : []) {
+    const absPath = localTaskImagePath(failed);
+    if (!absPath) continue;
+    try {
+      if ((await fs.stat(absPath)).size > TASK_IMAGE_MAX_BYTES) oversizedLocalImages.add(absPath);
+    } catch { /* 文件已不在: 按普通的未能发送提示 */ }
+  }
   // Recipients cannot open this computer's files: links to local paths keep only their label.
   const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
-    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements));
+    : rewriteTaskImageReferences(
+      rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), relativeImages),
+      materialized.replacements,
+    ));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
@@ -644,6 +695,13 @@ async function collectOutboundForFinalText(
       ...(canReadLocal && relayXVideo ? { relayVideo: relayXVideo } : {}),
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       formatIncompleteNotice: formatHookIncompleteNotice,
+      // 超过单图上限的图片在本机压一份再发; 远程任务读不到本机文件, 不涉及。
+      ...(canReadLocal ? { shrinkImage: shrinkOutboundImage } : {}),
+      localImageOverLimitMiB: (absPath) => oversizedLocalImages.has(absPath)
+        ? Math.floor(TASK_IMAGE_MAX_BYTES / (1024 * 1024)) : undefined,
+      formatOverLimitName: (name, limitMiB) => t('imBot.outboundAttachmentOverLimit', getResolvedMainLocale())
+        .replace('{{name}}', name)
+        .replace('{{limit}}', String(limitMiB)),
       log,
     });
     if (collected.skipped > 0) {
@@ -1408,7 +1466,7 @@ export function createMakerHookSessionRunner(deps: {
       const publicCompanionNote = req.companionBotId
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {

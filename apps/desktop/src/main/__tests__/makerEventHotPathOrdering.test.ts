@@ -201,15 +201,8 @@ describe('maker:event hot path ordering', () => {
   // broadcasts EVENT before usage/context/island/idle side effects: covered by the executable sessionEventPipeline tests.
 
   // tracks Claude wall clock across continuation segments and only consumes it at product completion: covered by the executable sessionEventPipeline tests.
-  it('preserves the product clock before a silent-stop continuation can emit running', () => {
-    const start = source.indexOf('async function handleSilentStopTurnEnd(');
-    const continuation = source.slice(start, source.indexOf('\nfunction ', start + 1));
-    expectOrder(
-      continuation,
-      'productTurnWallClockTracker.preserveForContinuation(session.id);',
-      'const sendResult = await session.sendHostTurnContinuation(',
-    );
-  });
+  // preserves the product clock before a silent-stop continuation can emit running: the turn-end body is in
+  // silentStopTurnEnd.ts, guarded in hostDesktopSourceContracts.guard.test.ts.
 
   it('uses the assistant API message id as Vertex output-lag evidence', () => {
     const wireSessionSource = readEventModule('sessionClaudeTurnUsage');
@@ -362,7 +355,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
     );
-    expect(source).toContain('if (!attempt.isCurrent()) {');
+    // The hooks' `if (!attempt.isCurrent()) {` is guarded in hostDesktopSourceContracts.guard.test.ts.
     expect(source).toContain(
       'autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);',
     );
@@ -569,10 +562,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
-    expect(source).toContain(
-      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
-    );
+    // The hooks' continuation-only rebuild steps are guarded in hostDesktopSourceContracts.guard.test.ts.
     expect(source).toContain('shouldPreserveWaitingContinuationOnlyAutoResume({');
     expect(source).toContain('leasedAttemptToken,');
     expect(source).toContain(
@@ -593,7 +583,7 @@ describe('maker:event hot path ordering', () => {
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
     expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
     expect(source).toContain('onUnconfirmedAutoResumeTurn:');
-    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+    // The hooks' abandonUnconfirmedPersistedResume step is guarded in hostDesktopSourceContracts.guard.test.ts.
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
@@ -777,7 +767,7 @@ describe('maker:event hot path ordering', () => {
       'const goalPause = pauseGoalBeforeExplicitStop(sid);',
       'inputCoordinator.stop(',
     );
-    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await Promise.all([goalPause, makeInterrupted]);');
+    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await Promise.all([goalPause, makeInterrupted, savedStop]);');
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
@@ -1317,8 +1307,10 @@ describe('session context window budget reconciler', () => {
       source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {'),
       source.indexOf('providerGroupService?.beforeSend(', source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {')),
     );
-    expect(desktopSend).toContain('applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId)');
-    expect(desktopSend).toContain('replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+    const applySwitch = desktopSend.search(/await applyPendingAgentSwitchIfIdle\(agentSwitchDeps, sessionId[,)]/);
+    const replayBudget = desktopSend.indexOf('await replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+    expect(applySwitch).toBeGreaterThanOrEqual(0);
+    expect(replayBudget).toBeGreaterThan(applySwitch);
   });
 
   it('runs drift-recycle closes inside the rehydrate suppression window so the in-flight send survives (cancelled-before-dispatch regression)', async () => {

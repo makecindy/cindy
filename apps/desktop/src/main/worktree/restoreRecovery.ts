@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { GitExecError, gitExec } from './gitExec';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import { buildMultiboxRestoreArgs, isCarriedMultiboxConfig, logMultiboxAddResult, shouldUseMultibox } from './multibox';
 import { readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { extractRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
@@ -58,6 +59,57 @@ function restorableRecord(record: RecycleRecord | null): record is RecycleRecord
   return hasRecordedRecovery(record) && record.phase !== 'restored' && record.phase !== 'pending';
 }
 
+function recordedFilesMatch(record: RecycleRecord, worktreePath: string): Promise<boolean> {
+  return presentFilesMatchSnapshotTree(worktreePath, record.snapshot!.tree,
+    record.multiboxRestore
+      ? (relative) => isCarriedMultiboxConfig(record.meta.baseRepo, worktreePath, relative)
+      : undefined);
+}
+
+/** Clone at the final path so Multibox's cache path relocation remains valid. Only Git
+ * metadata changes afterwards; saved staged, unstaged and untracked files are not overwritten.
+ * The journal marker and directory identity allow a retry after either metadata step. */
+async function restoreMultiboxSnapshot(record: RecycleRecord, worktreePath: string, guardHeld: () => boolean): Promise<boolean> {
+  const snapshot = record.snapshot!;
+  if (!(await gitMetadataUsable(worktreePath))) {
+    if ((await fs.readdir(worktreePath)).length !== 0 || !guardHeld()) return false;
+    await gitExec(['worktree', 'prune'], record.meta.baseRepo);
+    const { stdout } = await gitExec(buildMultiboxRestoreArgs(worktreePath, snapshot.commit, { detach: true }), record.meta.baseRepo);
+    logMultiboxAddResult(worktreePath, stdout);
+  }
+  const identity = await fs.lstat(worktreePath);
+  if (!identity.isDirectory() || identity.isSymbolicLink()
+    || `${identity.dev}:${identity.ino}:${identity.birthtimeMs}` !== record.directoryIdentity) return false;
+  await assertWorktreeGitIdentity(record.meta);
+  if (!(await recordedFilesMatch(record, worktreePath))) return false;
+  let headRef = await readWorktreeHeadRef(worktreePath);
+  const { stdout: headOutput } = await gitExec(['rev-parse', 'HEAD'], worktreePath);
+  const head = headOutput.trim();
+  if (headRef !== null && headRef !== snapshot.headRef) return false;
+  if (head !== snapshot.commit && head !== snapshot.head) return false;
+  if (!(await indexIsRestorable(worktreePath, snapshot.indexTree))
+    && !(await indexIsRestorable(worktreePath, snapshot.tree))) return false;
+  if (!guardHeld()) return false;
+  if (head === snapshot.commit) {
+    if (headRef !== null || await readWorktreeHeadRef(worktreePath) !== null) return false;
+    // Never dereference a branch a user switched to after the probe. CAS rejects a
+    // changed commit; --no-deref guarantees this write cannot move any branch ref.
+    await gitExec(['update-ref', '--no-deref', 'HEAD', snapshot.head, snapshot.commit], worktreePath);
+  }
+  if (!(await indexIsRestorable(worktreePath, snapshot.indexTree))) {
+    await gitExec(['read-tree', snapshot.indexTree], worktreePath);
+  }
+  if (snapshot.headRef && headRef === null) {
+    // Cloning can take minutes. Recheck the original branch immediately before attach;
+    // switch to the same commit preserves WIP and Git still rejects an occupied branch.
+    const { stdout: branchHead } = await gitExec(['rev-parse', '--verify', `${snapshot.headRef}^{commit}`], record.meta.baseRepo);
+    if (branchHead.trim() !== snapshot.head || !guardHeld()) return false;
+    await gitExec(['switch', '--no-guess', snapshot.headRef.slice('refs/heads/'.length)], worktreePath);
+    headRef = await readWorktreeHeadRef(worktreePath);
+  }
+  return snapshot.headRef === undefined || headRef === snapshot.headRef;
+}
+
 /**
  * Restore recorded recycles; return null to retain compatibility with older stash/branch recovery.
  * Records from older clients carry an encrypted archive; newer ones rebuild files from the Git
@@ -79,6 +131,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     if (registered && worktreeGeneration(registered) === record.restoredGeneration) {
       // Registration was the final mutation; finish a journal write interrupted by a crash.
       record.phase = 'restored';
+      delete record.multiboxRestore;
       await writeRecycleRecord(record);
       await releaseRestoredSnapshot(record);
       return true;
@@ -118,7 +171,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       if (record.archive) {
         if (!sameWorktreeFiles(await inventoryWorktree(worktreePath), record.archive.files, true)) return false;
       } else if (await gitMetadataUsable(worktreePath)
-        && !(await presentFilesMatchSnapshotTree(worktreePath, record.snapshot.tree))) {
+        && !(await recordedFilesMatch(record, worktreePath))) {
         return false;
       }
     }
@@ -144,6 +197,9 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       record.phase = 'restoring';
       record.restoredGeneration ??= randomUUID();
       record.directoryIdentity = null;
+      if (!record.archive && !record.restoreCheckoutPath && await shouldUseMultibox(record.meta.baseRepo)) {
+        record.multiboxRestore = true;
+      }
       await writeRecycleRecord(record);
       await fs.mkdir(worktreePath, { recursive: false });
       const stat = await fs.lstat(worktreePath);
@@ -152,6 +208,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     record.phase = 'restoring';
     record.restoredGeneration ??= randomUUID();
     await writeRecycleRecord(record);
+    if (record.multiboxRestore && !(await restoreMultiboxSnapshot(record, worktreePath, legacyGuardHeld))) return false;
     const gitLink = path.join(worktreePath, '.git');
     // A gitfile left pointing at deleted metadata is repaired like a missing one.
     if (!(await gitMetadataUsable(worktreePath)) || record.restoreCheckoutPath) {
@@ -208,7 +265,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       await extractRecoveryArchive(record.archive, worktreePath, true);
     } else {
       // Recheck after the Git link was repaired: surviving files must still be snapshot bytes.
-      if (!(await presentFilesMatchSnapshotTree(worktreePath, record.snapshot.tree))) return false;
+      if (!(await recordedFilesMatch(record, worktreePath))) return false;
       await checkoutMissingSnapshotFiles(worktreePath, record.snapshot.tree);
     }
     if (hasLiveSessionReference(record.meta, await loadLiveSessionPathKeys({ excludeSessionId: sessionId }))) return false;
@@ -224,6 +281,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       ...(headRef ? { branch: headRef.slice('refs/heads/'.length) } : {}),
       generation: record.restoredGeneration, quarantinePath: undefined });
     record.phase = 'restored';
+    delete record.multiboxRestore;
     await writeRecycleRecord(record);
     await releaseRestoredSnapshot(record);
     return true;

@@ -347,6 +347,10 @@ export interface CatalogModel {
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
+  /** Local Pi Chat compatibility override; not inherited public model metadata. */
+  supportsStore?: boolean;
+  /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
+  maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
@@ -556,6 +560,8 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** All actual runtime connections; sourceAgent is set only for a unique preferred route. */
+  sourceAgents?: AgentKind[];
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
@@ -633,6 +639,8 @@ export interface Provider {
   videoModels?: ProviderMediaModel[];
   /** Speech, transcription and realtime audio; each entry retains its explicit mode. */
   audioModels?: ProviderMediaModel[];
+  /** Non-chat decision and reranking endpoints. */
+  evaluationModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。

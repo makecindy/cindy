@@ -1,3 +1,6 @@
+import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
@@ -161,7 +164,6 @@ import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUploa
 import { clearNewSessionAttachmentsForDeviceChange, discardNewSessionUploadedAttachments } from '@/session/newSessionAttachmentCleanup';
 import { useAutoResumeNewSessionDraft, useNewSessionDurableEdit } from '@/session/useNewSessionDraftRecovery';
 import { goBackGuarded } from '@/utils/backGuard';
-import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
   useIncomingShareBatch,
@@ -210,6 +212,8 @@ import {
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
 import { buildDraftWorkerInitialTask } from '@cindy/maker-shared/orca-team';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
@@ -226,7 +230,6 @@ import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
   prefetchContextSheetMediaAssets,
-  resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
@@ -236,6 +239,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  composerSlashInvocationName,
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -597,6 +601,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const projectAliases = useRemoteProjectAliases([selectedDeviceId]);
+  const projectInfo = useProjectInfoSnapshots().get(selectedDeviceId);
   const recentWorkspaces = useMemo(
     () => buildRecentWorkspaceOptions(
       sessions.filter((session) => session.deviceLinkDeviceId === selectedDeviceId),
@@ -721,6 +726,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const createProjectPending = useRef(false);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const workspacePickerHostRef = useRef<ViewInstance>(null);
   const workspacePickerAnchorRef = useRef<ViewInstance>(null);
@@ -3711,11 +3718,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
     const next = insertSlashCommand(current, detectComposerTrigger(current), command);
     if (next === current) return;
-    setFirstMessageDraft(next);
+    patchDraft({
+      firstMessage: next,
+      selectedSkill: command.kind === 'agent-skill' ? {
+        name: command.name, invocation: composerSlashInvocationName(command),
+        context: buildComposerPaletteCacheKey(selectedDeviceId, draft.agentKind,
+          draft.workspaceKind === 'project' ? draft.workingDir.trim() : ''),
+      } : null,
+    });
     const selection = { start: next.length, end: next.length };
     firstMessageSelectionRef.current = selection;
     setFirstMessageSelection(selection);
-  }, [setFirstMessageDraft]);
+  }, [patchDraft, selectedDeviceId, draft.agentKind, draft.workspaceKind, draft.workingDir]);
 
   const selectAtResource = useCallback((item: MobileAtResourceItem) => {
     const current = firstMessageRef.current;
@@ -3777,40 +3791,33 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     return ids;
   }, [pendingUploads]);
-  // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
-    if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
+  // 点照片是一张、底部「加入对话」是选择圈选中的多张：都同步入队，再关闭面板；
+  // 不等待鉴权或上传才占用附件槽位。
+  const addMediaAssetAttachments = useCallback((assets: readonly ContextSheetMediaAsset[]) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !uploadingMediaAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (attachments.length + getPendingUploadCount() + fresh.length > MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     mediaTapAcceptedRef.current = true;
     setAttachmentError(null);
-    enqueueUploads([{
-      kind: 'image' as const,
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({
-          fileName: resolved.filename,
-          uri: resolved.uri,
-        }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC 已在 resolve 阶段一次性转码 + 缩边,跳过 preprocess 防二次有损。
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    }], { token: auth.getAccessToken() });
+    // 候选带上选中序号:并发上传谁先传完都按选中顺序进托盘。
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: auth.getAccessToken() });
     setContextSheetOpen(false);
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
+  const toggleMediaAssetAttachment = useCallback(
+    (asset: ContextSheetMediaAsset) => addMediaAssetAttachments([asset]),
+    [addMediaAssetAttachments],
+  );
+  // 选择圈多选的待选集：留在面板里，点底部按钮才一起加入；没提交就关掉面板即放弃。
+  const mediaSelection = useContextSheetMediaSelection({
+    open: contextSheetOpen,
+    getRemainingSlots: () => MOBILE_MAX_ATTACHMENTS - attachments.length - getPendingUploadCount(),
+    onLimitReached: () => setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    onChanged: () => setAttachmentError(null),
+  });
   const selectedMediaAssetIds = useMemo(() => {
     const attachmentIds = new Set(attachments.map((item) => item.id));
     return new Set(
@@ -4270,6 +4277,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 缓存文件永久留在本地)。
       composerAnnotationsRef.current?.forgetAllAttachments();
       handedOff = true;
+      // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
+      setComposerVoiceHoldArmed(false);
+      firstMessageInputRef.current?.blur();
       router.replace({
         pathname: '/sessions/[sessionId]',
         params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
@@ -4850,7 +4860,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ...effectiveDraft,
       };
       const createOpts = {
-        ...buildRemoteCreateSessionOptions(finalDraft),
+        ...buildRemoteCreateSessionOptions(finalDraft, precreatedWorktree?.originalWorkingDir),
         // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
         // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
         id: sessionId,
@@ -4916,6 +4926,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           ...finalDraft,
           firstMessage: input.objective,
         });
+        if (precreatedWorktree) session.projectDir = precreatedWorktree.originalWorkingDir;
       }
       if (isDefaultDraftSessionTitle(session.title)) {
         const titled = sessionFromCreateResult(result, {
@@ -5280,7 +5291,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   style={({ pressed }) => [styles.selectorRow, pressed && styles.pressed]}
                   testID="newSession.workspaceSelector"
                 >
-                  <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+                  {draft.workspaceKind === 'project' && draft.workingDir && selectedDeviceId ? <ProjectPickerIcon deviceId={selectedDeviceId} workingDir={draft.workingDir} title={workspaceLabel} size={iconSize.action} /> : <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />}
                   <Text style={styles.selectorText} numberOfLines={1}>{workspaceLabel}</Text>
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
@@ -5730,15 +5741,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               )}
               <View style={styles.workspaceDivider} />
               <Pressable
-                accessibilityLabel={t('session.new.chooseOtherFolder')}
+                accessibilityLabel={t('settings.projectInfo.createTitle')}
                 accessibilityRole="button"
                 disabled={creating}
-                onPress={openProjectBrowse}
+                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else openProjectBrowse(); }}
                 style={({ pressed }) => [styles.workspaceOptionRow, pressed && styles.pressed]}
                 testID="newSession.workspaceBrowseOption"
               >
                 <FolderPlus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('session.new.chooseOtherFolder')}</Text>
+                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('settings.projectInfo.createTitle')}</Text>
               </Pressable>
               </ScrollView>
             </View>
@@ -5753,7 +5764,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               disabled={creating}
               enabled={contextSheetOpen}
               onToggleAsset={toggleMediaAssetAttachment}
-
+              selection={mediaSelection}
               selectedAssetIds={selectedMediaAssetIds}
               testID="newSession.contextSheetPhotos"
             />
@@ -5775,6 +5786,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               setContextSheetOpen(false);
             }}
             testID="newSession.collabDraftSubmit"
+          />
+        ) : contextSheetView === 'main' && contextSheetMediaLibraryEnabled && mediaSelection.assets.length > 0 ? (
+          <ContextSheetMediaAddButton
+            disabled={creating}
+            onAddAssets={addMediaAssetAttachments}
+            selection={mediaSelection}
+            testID="newSession.contextSheetAddPhotosButton"
           />
         ) : undefined}
         testID="newSession.contextSheet"
@@ -5923,6 +5941,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       </ContextSheet>
       <OrcaWorkerDirectoryPicker picker={collabForm.directoryPicker}
         deviceId={collabForm.form.executionDeviceId} workingDir={collabForm.form.remoteDir} mode={collabForm.form.remoteDirMode} />
+      {createProjectOpen && selectedDeviceId && (
+        <ProjectSettingsSheet create deviceId={selectedDeviceId} projectKey="local:"
+          title="" directory="" visible onClose={() => setCreateProjectOpen(false)}
+          onCreated={selectRecentProject} />
+      )}
       {nativeSelectionSheet ? (
         <NewTaskSelectionSheet
         page={browseOpen ? 'directory' : devicePickerOpen ? 'device' : workspacePickerOpen ? 'workspace' : null}
@@ -5945,7 +5968,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               (device) => device.deviceId === id); if (option && !deviceSelectorDisabled) selectDevice(option); }}
         onDialogue={selectDialogueWorkspace}
         onProject={selectRecentProject}
-        onBrowse={openProjectBrowse}
+        browseLabel={t('settings.projectInfo.createTitle')}
+        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else openProjectBrowse(); }}
+        onClosed={() => {
+          if (createProjectPending.current) {
+            createProjectPending.current = false;
+            setCreateProjectOpen(true);
+          }
+        }}
         onEnter={(path) => void loadBrowsePath(path)}
         onChoose={chooseWorkingDir}
         onShowHidden={setShowHiddenDirectories}

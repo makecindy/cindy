@@ -249,6 +249,11 @@ export function createHostCodexRuntime(options: {
     registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => { check(); proxy.registerChildThread(parentThreadId, childThreadId); },
   };
   return { deps, proxy, native, readRoute, modelContext,
+    /** This runtime's native Codex history, read only (context recovery's history classification). */
+    codexHistory: {
+      readCodexThreadStorageReadOnly: threadStorage.readCodexThreadStorageReadOnly,
+      classifyCodexHistoryOversized: threadStorage.classifyCodexHistoryOversized,
+    },
     /** Whether this runtime still belongs to the current owner (the agent graph's Codex token reader). */
     isCurrent: current, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
     invalidateNative, authBoundary, systemAuthPath, systemLogin,

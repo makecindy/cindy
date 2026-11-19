@@ -74,7 +74,7 @@ import { SESSION_SYNC_CHANNEL, type Topic } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { SubscriptionAcknowledgements } from '@/device-link/subscriptionAcknowledgements';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
-import { BotGroupProcess, BotGroupProcessEntries } from '@/session/BotGroupProcess';
+import { BotGroupProcess, BotGroupProcessEntries, BotGroupProcessCacheProvider } from '@/session/BotGroupProcess';
 import { TeammateProcess } from '@/session/TeammateProcess';
 import { ProcessDisclosureViewport, useProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
 import { __test_internals as memory } from '@/session/expandedBlockMemory';
@@ -113,6 +113,109 @@ const group = () => el(BotGroupProcess, { process, owned: true, deviceId: 'mac' 
 const meta = { botPrivateReply: true, botGroupLane: true };
 const source = { clientId: 'source', role: 'user', content: 'Request' };
 const final = { clientId: 'final', role: 'assistant', content: 'Final answer', agentMeta: { ...meta, turnCompleted: true } };
+
+// #10412 r4578678478 / unit: virtualized rows used to rescan every history page
+// on return. Earlier remount coverage checked text, not remote reads/subscriptions.
+// Keep the real timeline cache owner mounted while its process cell leaves.
+const cachedGroup = (visible = true) => el(BotGroupProcessCacheProvider, { scope: 'group', children: visible ? group() : null });
+it('reuses a bounded historical turn across virtualized remounts without reads or subscriptions', async () => {
+  history.invoke.mockResolvedValue([source,
+    { clientId: 'note', role: 'assistant', content: 'Saved stage', agentMeta: { assistantPhase: 'commentary' } }, final,
+    { clientId: 'next', role: 'user', content: 'Next turn' }]);
+  await act(async () => root.render(cachedGroup()));
+  await act(async () => header().click());
+  const reads = history.invoke.mock.calls.length, subscriptions = history.subscribe.mock.calls.length;
+  for (let i = 0; i < 10; i++) {
+    await act(async () => root.render(cachedGroup(false)));
+    await act(async () => root.render(cachedGroup()));
+    expect(node.textContent).toContain('Saved stage');
+  }
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  expect(history.subscribe).toHaveBeenCalledTimes(subscriptions);
+  await act(async () => root.render(null));
+  await act(async () => root.render(cachedGroup()));
+  expect(history.invoke.mock.calls.length).toBeGreaterThan(reads);
+});
+
+it.each(['push', 'recovery'] as const)('reuses a still-observed tail but refreshes after offscreen %s', async signal => {
+  vi.useFakeTimers();
+  history.getSubscriptionIdentity.mockReturnValue(1);
+  let note = 'Before change';
+  history.invoke.mockImplementation(async () => [source,
+    { clientId: 'note', role: 'assistant', content: note, agentMeta: { assistantPhase: 'commentary' } }, final]);
+  await act(async () => root.render(cachedGroup()));
+  const reads = history.invoke.mock.calls.length;
+  await act(async () => root.render(cachedGroup(false)));
+  await act(async () => root.render(cachedGroup()));
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  await act(async () => root.render(cachedGroup(false)));
+  note = 'After change';
+  if (signal === 'push') remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: process.sessionId, resyncRequired: true });
+  else history.getSubscriptionIdentity.mockReturnValue(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(history.invoke).toHaveBeenCalledTimes(reads);
+  await act(async () => root.render(cachedGroup()));
+  await act(async () => header().click());
+  expect(node.textContent).toContain('After change');
+  expect(history.invoke).toHaveBeenCalledTimes(reads * 2);
+});
+
+it('keeps a cached failure retryable without retrying just because the cell remounted', async () => {
+  history.invoke.mockRejectedValue(new Error('DEVICE_OFFLINE'));
+  await act(async () => root.render(cachedGroup()));
+  await act(async () => root.render(cachedGroup(false)));
+  await act(async () => root.render(cachedGroup()));
+  expect(history.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => header().click());
+  history.invoke.mockResolvedValue([source, final]);
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Retry')!.click());
+  expect(node.textContent).not.toContain('Retry');
+  expect(history.invoke.mock.calls.length).toBeGreaterThan(1);
+});
+
+// The cache must not turn a completed reply into proof that late records cannot
+// arrive, nor reuse a previous account/device/execution's private process data.
+it.each(['account', 'device', 'execution', 'ownership'] as const)('isolates cached history across %s changes', async boundary => {
+  const tree = (deviceId = 'mac', executionId = process.executionId, owned = true) => el(BotGroupProcessCacheProvider, {
+    scope: 'group', children: el(BotGroupProcess, { process: { ...process, executionId }, deviceId, owned }),
+  });
+  history.invoke.mockResolvedValue([source, final, { clientId: 'next', role: 'user', content: 'Next turn' }]);
+  await act(async () => root.render(tree()));
+  const reads = history.invoke.mock.calls.length;
+  if (boundary === 'account') history.generation++;
+  if (boundary === 'ownership') await act(async () => root.render(tree('mac', process.executionId, false)));
+  await act(async () => root.render(tree(boundary === 'device' ? 'other-mac' : 'mac', boundary === 'execution' ? 'other-execution' : process.executionId)));
+  expect(history.invoke).toHaveBeenCalledTimes(reads + 1);
+});
+
+it('evicts old cached records instead of retaining every history visited by scrolling', async () => {
+  const tree = (executionId: string) => el(BotGroupProcessCacheProvider, {
+    scope: 'group', children: el(BotGroupProcess, { key: executionId, process: { ...process, executionId }, deviceId: 'mac', owned: true }),
+  });
+  history.invoke.mockResolvedValue([source, final, { clientId: 'next', role: 'user', content: 'Next turn' }]);
+  for (let i = 0; i < 65; i++) await act(async () => root.render(tree(`turn-${i}`)));
+  expect(history.invoke).toHaveBeenCalledTimes(65);
+  await act(async () => root.render(tree('turn-63')));
+  expect(history.invoke).toHaveBeenCalledTimes(65);
+  await act(async () => root.render(tree('turn-0')));
+  expect(history.invoke).toHaveBeenCalledTimes(66);
+});
+
+it('keeps already-read notes when a refresh and the explicit retry both fail', async () => {
+  vi.useFakeTimers();
+  history.invoke.mockResolvedValue([source,
+    { clientId: 'note', role: 'assistant', content: 'Already read note', agentMeta: { assistantPhase: 'commentary' } }, final]);
+  await act(async () => root.render(group()));
+  await act(async () => header().click());
+  history.invoke.mockRejectedValue(new Error('DEVICE_OFFLINE'));
+  await act(async () => {
+    remoteSessionStore.applyRemotePush('mac', SESSION_SYNC_CHANNEL, { sessionId: process.sessionId, resyncRequired: true });
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'Retry')!.click());
+  expect(node.textContent).toContain('Already read note');
+  expect(node.textContent).toContain('Retry');
+});
 
 // Unit: main now explains final-only records; settle all bounded windows and
 // preserve #8979's no-disclosure-before-read guarantee.
@@ -217,13 +320,13 @@ it('restores a persisted late tool result after leaving and returning to history
   const rows: import('@cindy/maker-shared/botGroupChat').BotGroupProcessMessage[] = [source,
     { clientId: 'tool', role: 'tool_use', toolUseId: 'tool', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, agentMeta: meta }, final];
   history.invoke.mockImplementation(async () => [...rows]);
-  await act(async () => root.render(group()));
+  await act(async () => root.render(cachedGroup()));
   await act(async () => header().click());
   await act(async () => node.querySelectorAll('button')[1]!.click());
   expect(node.textContent).not.toContain('Late persisted result');
   rows.push({ clientId: 'result', role: 'tool_result', content: 'Late persisted result', toolUseId: 'tool', agentMeta: meta });
-  await act(async () => root.render(null));
-  await act(async () => root.render(group()));
+  await act(async () => root.render(cachedGroup(false)));
+  await act(async () => root.render(cachedGroup()));
   expect(header().getAttribute('aria-expanded')).toBe('true');
   expect(node.textContent).toContain('Late persisted result');
 });

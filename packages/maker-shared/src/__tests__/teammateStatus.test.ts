@@ -54,3 +54,21 @@ it('uses server executions instead of unread messages and ignores stale terminal
   expect(teammateChatActivity({ ...input, executions: [{ status: 'needs_input' }, { status: 'running' }] }).phase).toBe('needs-interaction');
   expect(teammateChatActivity({ ...input, plans: [{ status: 'waiting' }] }).phase).toBe('needs-interaction');
 });
+
+// #10822 / unit: the shared Desktop/Mobile projection must retire a stopped
+// plan's failed attempt, without changing its history or silencing another run.
+// Existing tests cover age and priority, but not an execution's owning plan.
+it('retires only failures belonging to a known closed plan', () => {
+  const failed = { status: 'failed', plan_id: 'stopped-plan', updated_at: '2026-10-29T01:00:00Z' };
+  const input = { executions: [failed], plans: [{ id: 'stopped-plan', status: 'stopped' }], lastMessageAt: 0 };
+  expect(teammateChatActivity(input).phase).toBe('idle');
+  expect(failed.status).toBe('failed');
+  expect(teammateChatActivity({ ...input, plans: [] }).phase).toBe('error');
+  expect(teammateChatActivity({ ...input, executions: [...input.executions,
+    { ...failed, plan_id: 'new-plan' }] }).phase).toBe('error');
+  expect(teammateChatActivity({ ...input, executions: [...input.executions,
+    { status: 'needs_input', plan_id: 'stopped-plan' }] }).phase).toBe('needs-interaction');
+  for (const status of ['proposed', 'waiting']) {
+    expect(teammateChatActivity({ ...input, plans: [{ id: 'stopped-plan', status }] }).phase).toBe('needs-interaction');
+  }
+});

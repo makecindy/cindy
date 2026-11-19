@@ -22,8 +22,11 @@ import {
   stableCitationBoundary,
   translateErrorNotification,
   translateAgentMessageDelta,
+  translateReasoningSummaryTextDelta,
+  translateReasoningTextDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
+  translateOmittedItem,
   translatePlanUpdatedNotification,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
@@ -33,6 +36,7 @@ import {
   resetCodexGenerationTiming,
   resumeCodexGeneration,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -152,6 +156,54 @@ describe('Codex assistant text streaming contract', () => {
       } },
     });
     expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
+  // #8412, unit: a late background completion cannot replace the foreground
+  // generation clock. Earlier late-event tests checked only emitted events.
+  it.each(['normal', 'omitted'])('keeps foreground timing across a %s background completion', (kind) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const item = { type: 'commandExecution', id: 'old-tool', command: 'pwd', cwd: '/repo',
+      status: 'inProgress', aggregatedOutput: '', exitCode: null };
+    translateItemNotification('started', { threadId: 't1', turnId: 'old', item }, q, makeCtx(rt));
+    beginCodexGenerationTurn(rt, 'foreground', 200);
+    const ctx = { ...makeCtx(rt), background: true };
+    if (kind === 'normal') translateItemNotification('completed', {
+      threadId: 't1', turnId: 'old', item: { ...item, status: 'completed' },
+    }, q, ctx);
+    else translateOmittedItem('completed', { threadId: 't1', turnId: 'old',
+      item: { id: item.id, type: item.type } }, q, ctx);
+    finalizeCodexGenerationTurn(rt, 'foreground', 400);
+    expect(codexGenerationDurationMs(rt)).toBe(200);
+    resetCodexGenerationTiming(rt);
+  });
+
+  // #8412 review, unit: an oversized tool result arrives through itemOmitted,
+  // not item/completed. It still proves the earlier commentary was accepted, so
+  // a later stream retry must not mark that commentary failed.
+  it.each(['commandExecution', 'fileChange'])('accepts earlier commentary when a completed %s body was omitted', async (itemType) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'agentMessage', id: 'progress', text: 'Writing the file', phase: 'commentary' } }, q, ctx);
+    if (itemType === 'commandExecution') translateItemNotification('started', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'cat big', cwd: '/repo',
+        status: 'inProgress', aggregatedOutput: '', exitCode: null } } as never, q, ctx);
+    translateOmittedItem('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { id: 'tool', type: itemType } }, q, ctx);
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    const events = await collect(q);
+    if (itemType === 'commandExecution') {
+      expect(events.find(event => event.type === 'tool_result_full')?.data)
+        .toMatchObject({ toolUseId: 'tool', assistantSamplingAccepted: { agentMessageIds: ['progress'] } });
+    } else {
+      expect(events.some(event => event.type === 'tool_use' || event.type === 'tool_result')).toBe(false);
+    }
+    expect(events.filter(event => event.type === 'error' &&
+      (event.data as { assistantAttemptFailure?: unknown }).assistantAttemptFailure)).toEqual([]);
     resetCodexGenerationTiming(rt);
   });
 
@@ -965,6 +1017,62 @@ describe('translateErrorNotification', () => {
     ]);
   });
 
+  // #11061: real native reconnect errors flatten the denial into additionalDetails.
+  // Unit tier: classification must reach the existing actionable model-selection path.
+  it.each([
+    { message: 'Reconnecting... 1/5', additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 403 } } },
+    { message: 'unexpected status 403 Forbidden: user not allowed to access model' },
+    { message: 'HTTP 403: {"error":{"code":"user_model_access_denied"}}' },
+    { message: 'Error running remote compact task', additionalDetails: '{"error":{"type":"user_model_access_denied"}}' },
+    { message: '{"code":"user_model_access_denied"}' },
+  ])('classifies an explicit model permission denial: %j', error => {
+    expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0])).toMatchObject({
+      reason: 'model_unavailable', usageLimit: false, isCapacityError: false,
+      message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+    });
+  });
+
+  it.each([
+    { message: 'HTTP 403: Forbidden' },
+    { message: 'HTTP 403: {"error":{"code":"model_not_found"}}' },
+    { message: 'HTTP 403: {"error":{"metadata":{"code":"user_model_access_denied"}}}' },
+    { message: 'user not allowed to access model' },
+    { message: 'HTTP 401: user not allowed to access model' },
+    { message: 'HTTP 429: user not allowed to access model' },
+    { message: 'HTTP 503: user not allowed to access model' },
+    { message: 'HTTP 403: authentication_failed user not allowed to access model' },
+    { message: 'Reconnecting... 1/5', additionalDetails: '{"error":{"code":"user_model_access_denied"}}', codexErrorInfo: 'unauthorized' },
+    { message: 'Reconnecting... 1/5', additionalDetails: 'HTTP 403: user not allowed to access model',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } } },
+  ])('preserves ambiguous, authentication and transient failures: %j', error => {
+    expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0]).reason).not.toBe('model_unavailable');
+  });
+
+  // #11484 unit: existing 403 fixtures do not cover JSON nested in gateway messages.
+  // Exercise the production classifier, including safe projection and status precedence.
+  it('classifies only the nested account-denial envelope and preserves its safe explanation', () => {
+    const body = JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: {
+      code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply',
+      privateDetail: 'PRIVATE_RESPONSE',
+    } }) } });
+    const error = { message: 'Reconnecting... 1/5', additionalDetails: `unexpected status 407: ${body}`,
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 407 } } } as const;
+    const classified = classifyCodexError(error);
+    expect(classified.data).toEqual({ reason: 'account_access_denied', willRetry: false,
+      message: JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }),
+    });
+    expect(JSON.stringify(classified)).not.toMatch(/PRIVATE_RESPONSE|httpConnectionFailed|Reconnecting/);
+    for (const status of [401, 408, 429, 500, 503]) {
+      expect(classifyCodexError({ ...error, codexErrorInfo: { httpConnectionFailed: { httpStatusCode: status } } }).reason)
+        .not.toBe('account_access_denied');
+    }
+    for (const message of ['HTTP 407: Proxy Authentication Required', 'HTTP 403: Forbidden',
+      'HTTP 407: ACCOUNT_SHARING_ACCESS_DENIED', 'HTTP 407: {"metadata":{"code":"ACCOUNT_SHARING_ACCESS_DENIED"}}']) {
+      expect(classifyCodexError({ message }).reason).not.toBe('account_access_denied');
+    }
+  });
+
   it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
     expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
     expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();
@@ -982,6 +1090,37 @@ describe('translateErrorNotification', () => {
     expect(classifyCodexError({ message: `HTTP/1.1 503: ${modelCode}` }).reason).toBeUndefined();
     expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
   });
+
+  // #11032: native gateway status must survive the real notification translator;
+  // details may contain credentials/user content and are never forwarded (unit).
+  it.each(['httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'] as const)(
+    'preserves only the safe gateway status from %s', async tag => {
+      const q = createAsyncQueue<AgentEvent>();
+      translateErrorNotification({
+        threadId: 'thread-1', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5',
+          codexErrorInfo: { [tag]: { httpStatusCode: 502 } } as never,
+          additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
+        },
+      }, q, makeCtx(newCodexRuntimeState()));
+      const events = await collect(q);
+      expect(events).toEqual([expect.objectContaining({ type: 'error', data: {
+        message: 'Reconnecting... 1/5 (HTTP 502)', errorStatus: 502,
+        codexErrorInfo: tag, isTerminal: false, willRetry: true,
+      } })]);
+      expect(JSON.stringify(events)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
+    },
+  );
+
+  it.each([undefined, null, 200, 401, 403, 429, 529, 502.5, '502', NaN])(
+    'does not invent gateway diagnostics for an absent or other status: %s', status => {
+      const result = classifyCodexError({ message: 'Reconnecting... 1/5',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } as never,
+        additionalDetails: 'HTTP 502 secret body',
+      });
+      expect(result.data).toEqual({ message: 'Reconnecting... 1/5', codexErrorInfo: 'responseStreamDisconnected' });
+    },
+  );
 
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
     expect(classifyCodexError({
@@ -2019,32 +2158,43 @@ describe('translateItemNotification collabAgentToolCall', () => {
     });
   });
 
-  it('keeps wait/send/resume control updates live-only', async () => {
-    const q = createAsyncQueue<AgentEvent>();
-    const ctx = makeCtx(newCodexRuntimeState());
-    const params = {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      item: {
-        type: 'collabAgentToolCall',
-        id: 'wait-1',
-        tool: 'wait',
-        status: 'inProgress',
-        senderThreadId: 'thread-1',
-        receiverThreadIds: ['child-a', 'child-b'],
-        agentsStates: {},
-      },
-    };
+  it.each(['wait', 'sendInput', 'resumeAgent', 'closeAgent'])(
+    'keeps the %s control call out of the Subagent card pipeline',
+    async (tool) => {
+      const q = createAsyncQueue<AgentEvent>();
+      const ctx = makeCtx(newCodexRuntimeState());
+      const base = {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: `${tool}-1`,
+          tool,
+          status: 'inProgress',
+          senderThreadId: 'thread-1',
+          receiverThreadIds: ['child-a', 'child-b'],
+          agentsStates: {},
+        },
+      };
 
-    translateItemNotification('started', params, q, ctx);
+      translateItemNotification('started', base, q, ctx);
+      translateItemNotification('completed', {
+        ...base,
+        item: { ...base.item, status: 'completed' },
+      }, q, ctx);
 
-    const update = (await collect(q)).find((event) => event.type === 'agent_task_update');
-    expect(update?.data).toMatchObject({
-      taskId: 'wait-1',
-      receiverThreadIds: ['child-a', 'child-b'],
-    });
-    expect(update?.data).not.toHaveProperty('subagentObservation');
-  });
+      const events = await collect(q);
+      // 控制调用是普通工具步骤:工具边界照发,但不发 agent_task_update ——
+      // 否则每轮 wait 都会长出一张 "Subagent wait" 卡和一条后台任务行。
+      expect(events.filter((event) => event.type === 'agent_task_update')).toEqual([]);
+      expect(events.map((event) => event.type)).toEqual([
+        'tool_use',
+        'tool_result_full',
+        'tool_result',
+      ]);
+      expect(events[0].data).toMatchObject({ toolUseId: `${tool}-1`, toolName: `collab:${tool}` });
+    },
+  );
 });
 
 describe('translateItemNotification subAgentActivity', () => {
@@ -2868,6 +3018,40 @@ describe('codex speed around unpaired output and human waits', () => {
     }
   };
 
+  // Unit regression: a remote panel received usage and a peak but no live speed during reasoning.
+  // The recorded Codex fixtures only exercise dedicated answer deltas and silent reasoning.
+  it.each(['summary', 'content', 'snapshot'] as const)('publishes live speed for %s reasoning before usage settles', (source) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      const ids = { threadId: 't', turnId: 'turn', itemId: 'r' };
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      const item = { type: 'reasoning', id: 'r', summary: [] as string[], content: [] as string[] };
+      translateItemNotification('started', { ...ids, item }, q, ctx);
+      const chunk = 'word '.repeat(20);
+      for (let i = 1; i <= 14; i++) {
+        vi.setSystemTime(i * 1_000);
+        if (source === 'content') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+        if (source === 'summary') translateReasoningSummaryTextDelta({ ...ids, summaryIndex: 0, delta: chunk }, q, ctx);
+        const parts = source === 'content' ? 'content' : 'summary';
+        translateItemNotification('updated', { ...ids, item: { ...item, [parts]: [chunk.repeat(i)] } }, q, ctx);
+        if (source === 'summary') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+      }
+      const speed = codexSpeedSnapshot(rt);
+      expect(speed?.streaming).toBe(true);
+      expect(speed!.rate).toBeCloseTo(20, 0);
+      expect(speed!.tokens).toBe(280);
+      // A just-published warm-up must not hide the first reading until the next delta.
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, false)).toBe(true);
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, true)).toBe(false);
+      settleCodexSpeedUsage(rt, { outputTokens: 400, reasoningOutputTokens: 400 });
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 400, streaming: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
     vi.useFakeTimers();
     try {
@@ -2884,7 +3068,7 @@ describe('codex speed around unpaired output and human waits', () => {
       translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
       vi.setSystemTime(16_000);
       expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
-      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, tokens: 250, totalOutputTokens: 300, elapsedMs: 5_000, average: 50 });
       translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
       // The next response is timed from its own first byte, at its own 50 tok/s.
       vi.setSystemTime(17_000);

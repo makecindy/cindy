@@ -27,6 +27,8 @@ import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLin
 import {
   selectRemoteCodexAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteCodexRateLimits,
   useRemoteXaiSubscriptionUsage,
   requestRemoteCodexAccountRefresh,
@@ -162,6 +164,7 @@ function useRemoteProviderSubscriptionCard(
   // Ordinary cards keep the upstream shared minute reader; expanded group cards
   // retain their native result + legacy mirror and explicit recovery/15s refresh.
   const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: !groupLive, groupLive, refreshEpoch });
+  const codexRefresh = useRemoteCodexRefreshState(source === 'codex' && !groupLive ? deviceId : null, providerId);
   const limits = useRemoteCodexRateLimits(groupLive && source === 'codex' ? deviceId : null, providerId);
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId, liveObservation);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId, liveObservation);
@@ -173,9 +176,14 @@ function useRemoteProviderSubscriptionCard(
   }, [source]);
   if (source === 'codex') {
     const account = selectRemoteCodexAccountUsage(codex, 'app-server');
-    if (!groupLive) return account
-      ? buildCodexUsageCard(account, null, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language)
-      : null;
+    if (!groupLive) {
+      if (!account && !codexRefresh.failed) return null;
+      const card = buildCodexUsageCard(account, null, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language);
+      if (codexRefresh.failed && deviceId) card.refreshFailure = {
+        retry: () => requestRemoteCodexLiveRefresh(deviceId, providerId), retrying: codexRefresh.refreshing,
+      };
+      return card;
+    }
     return limits || account
       ? buildSettingsCodexUsageCard(limits, account, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language)
       : null;

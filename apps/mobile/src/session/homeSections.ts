@@ -1,9 +1,23 @@
+import { taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import { i18n } from '@/i18n';
-import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
-import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
+import {
+  automationGroupKey,
+  compareSessionListStrings,
+  groupAutomationListItems,
+} from '@cindy/maker-shared/session-list';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import {
+  compareSessionsByStatusThenActivityDesc,
+  type MobileHomePresentation,
+  type MobileHomeProjectGroup,
+  type MobileHomeSessionLike,
+} from './mobileHome';
+import { LIVE_TASK_PRIORITY } from '@cindy/maker-shared/live-task-priority';
 import {
   activityMsFromIso,
+  collectInboxHomePriorityContext,
   EMPTY_HOME_PRIORITY_CONTEXT,
+  naturalPriorityRankForId,
   sessionPriorityRank,
   sessionPriorityRecencyMs,
   type HomeListPriorityContext,
@@ -13,13 +27,21 @@ import {
   normalizeManualProjectOrder,
   type HomeProjectOrder,
 } from './homeProjectOrder';
-import type { RemoteSessionListItem } from './sessionList';
+import {
+  createSessionListTranslator,
+  localizeRemoteSessionListItem,
+  type RemoteSessionListItem,
+} from './sessionList';
+import { taskTeammateId } from './teammateTaskSource';
+import type { RemoteSession } from './types';
 
 /** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
 export type HomeRow =
   | { key: string; kind: 'project'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'dialogue'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'cindy-make'; project: MobileHomeProjectGroup }
+  /** 「自动化」目录:自动化运行出来的任务(项目里的与对话的),组内同一自动化仍收成一行。 */
+  | { key: string; kind: 'automation'; project: MobileHomeProjectGroup }
   | {
       key: string;
       kind: 'session';
@@ -30,13 +52,16 @@ export type HomeRow =
     };
 
 /** SectionList 的一个分区。title 为 null 的分区不渲染表头。 */
-export type HomeSection = { data: HomeRow[]; key: string; title: string | null };
+export type HomeSection = { data: HomeRow[]; key: string; title: string | null; count?: number };
 
 /** 主列表分区跨分组模式保持同一身份，避免 SectionList 把仍存在的行整批卸载重挂。 */
 export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
   groupDialogue?: boolean;
+  /** 自动化运行的任务收进「自动化」目录(与桌面「分组 → 自动化」同口径)。 */
+  groupAutomation?: boolean;
+  automationTitle?: string;
   /** The compact task-switching drawer only renders flat session rows. */
   groupCindyMake?: boolean;
   sortBy?: HomeListSortBy;
@@ -72,10 +97,20 @@ export function buildHomeSections(
     });
   }
 
-  const rows = groupByProject ? buildGroupedHomeRows(home, options) : buildMixedHomeRows(home, options);
+  const partitioned = options.groupAutomation ? partitionAutomationItems(home) : null;
+  const listHome = partitioned?.home ?? home;
+  const automations = partitioned ? mergeAutomationItems(partitioned.automations) : [];
+  // 跨项目合并会换代表运行;排序档位要按合并后的全部成员重新聚合。
+  const rowOptions = automations.length && options.priorityContext
+    ? { ...options, priorityContext: withMergedAutomationPriority(options.priorityContext, automations) }
+    : options;
+  const rows = groupByProject ? buildGroupedHomeRows(listHome, rowOptions) : buildMixedHomeRows(listHome, rowOptions);
+  if (automations.length > 0) {
+    rows.push(buildAutomationGroupRow(automations, rowOptions));
+  }
   if (rows.length > 0) {
     sections.push({
-      data: rows,
+      data: partitioned ? sortHomeRows(rows, rowOptions) : rows,
       key: HOME_MAIN_SECTION_KEY,
       title: null,
     });
@@ -104,8 +139,159 @@ export function homeRowBefore(
   return undefined;
 }
 
-export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' }> {
-  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make');
+export function isFolderHomeRow(
+  row: HomeRow | undefined,
+): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' | 'automation' }> {
+  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make'
+    || row.kind === 'automation');
+}
+
+function isAutomationItem(item: RemoteSessionListItem): boolean {
+  return automationGroupKey(item) !== null;
+}
+
+/**
+ * 按来源(自动化运行)把任务从项目和对话里抽出;只剩自动化任务的项目随之消失,
+ * 与 Cindy Make 目录同口径。Cindy Make 目录不参与。
+ */
+export function partitionAutomationItems(home: MobileHomePresentation): {
+  home: MobileHomePresentation;
+  automations: RemoteSessionListItem[];
+} {
+  const automations: RemoteSessionListItem[] = [];
+  const projects = home.projects.flatMap((project) => {
+    if (project.kind === 'cindy-make') return [project];
+    const sessions = project.sessions.filter((item) => {
+      if (!isAutomationItem(item)) return true;
+      automations.push(item);
+      return false;
+    });
+    if (sessions.length === project.sessions.length) return [project];
+    if (sessions.length === 0) return [];
+    return [{
+      ...project,
+      latestActivityAt: latestActivityAt(sessions),
+      pendingInteractionCount: sessions.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
+      sessionCount: sessions.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
+      sessions,
+    }];
+  });
+  const chats = home.chats.filter((item) => {
+    if (!isAutomationItem(item)) return true;
+    automations.push(item);
+    return false;
+  });
+  return { home: { ...home, chats, projects }, automations };
+}
+
+function automationDeviceKey(item: RemoteSessionListItem): string {
+  const session = item.session as { canonicalDeviceId?: string | null; deviceLinkDeviceId?: string | null };
+  return session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? '';
+}
+
+/**
+ * 上游按项目各自折叠自动化运行。收进「自动化」目录后按设备 + 自动化重新合并,改过项目目录
+ * (或同时有项目内与对话里运行)的同一条自动化只显示一个文件夹。只重建确实被拆开的那些,
+ * 其余保留原对象,行比较仍走引用快路径。
+ */
+export function mergeAutomationItems(
+  items: readonly RemoteSessionListItem[],
+  nowMs = Date.now(),
+): RemoteSessionListItem[] {
+  const buckets = new Map<string, RemoteSessionListItem[]>();
+  for (const item of items) {
+    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? `session:${item.session.id}`;
+    const key = `${automationDeviceKey(item)}|${baseKey}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(item);
+    else buckets.set(key, [item]);
+  }
+  let translate: ReturnType<typeof createSessionListTranslator> | null = null;
+  const merged: RemoteSessionListItem[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.length === 1) {
+      merged.push(bucket[0]);
+      continue;
+    }
+    // 各项目的成员拼在一起会打乱顺序;恢复上游的「状态 → 最近活动」顺序,组内前几条仍是最新的。
+    const runs = bucket
+      .flatMap((item) => item.automationGroup?.items ?? [item])
+      .sort((a, b) => compareSessionsByStatusThenActivityDesc(a.session as MobileHomeSessionLike, b.session as MobileHomeSessionLike));
+    // 与 buildMobileHomePresentation 同一流水线:先折叠再本地化(组内成员已本地化)。
+    const rows = groupAutomationListItems(runs, nowMs, true, automationDeviceKey, mobilePresentationLocalizer);
+    if (rows.length !== 1 || !rows[0].automationGroup) {
+      merged.push(...bucket);
+      continue;
+    }
+    translate ??= createSessionListTranslator();
+    merged.push(localizeRemoteSessionListItem(rows[0], nowMs, translate));
+  }
+  return merged;
+}
+
+/**
+ * 优先级上下文按合并前各组的代表运行收集。合并后的组按每个成员各自的档位取最优,新代表
+ * 只继承这一档:不把不同成员的原始信号并在一起(否则旧目录的完成未读 + 新目录的运行中
+ * 会被当成同一任务的新一轮运行,整组降到 running 档)。
+ */
+export function withMergedAutomationPriority(
+  ctx: HomeListPriorityContext,
+  items: readonly RemoteSessionListItem[],
+): HomeListPriorityContext {
+  let waiting: Set<string> | null = null;
+  let unread: Set<string> | null = null;
+  let running: Set<string> | null = null;
+  for (const item of items) {
+    const members = item.automationGroup?.items;
+    if (!members) continue;
+    const id = item.session.id;
+    const current = naturalPriorityRankForId(id, ctx);
+    const best = members.reduce(
+      (rank, member) => Math.min(rank, naturalPriorityRankForId(member.session.id, ctx)),
+      current,
+    );
+    if (best >= current) continue;
+    if (best === LIVE_TASK_PRIORITY.waiting) {
+      (waiting ??= new Set(ctx.waitingSessionIds)).add(id);
+    } else if (best === LIVE_TASK_PRIORITY.unread) {
+      (unread ??= new Set(ctx.unreadSessionIds)).add(id);
+      if (ctx.runningSessionIds.has(id)) (running ??= new Set(ctx.runningSessionIds)).delete(id);
+    } else if (best === LIVE_TASK_PRIORITY.running) {
+      (running ??= new Set(ctx.runningSessionIds)).add(id);
+    }
+  }
+  if (!waiting && !unread && !running) return ctx;
+  return {
+    ...ctx,
+    runningSessionIds: running ?? ctx.runningSessionIds,
+    unreadSessionIds: unread ?? ctx.unreadSessionIds,
+    waitingSessionIds: waiting ?? ctx.waitingSessionIds,
+  };
+}
+
+/** 「自动化」目录行;items 已经过 mergeAutomationItems。 */
+export function buildAutomationGroupRow(
+  items: readonly RemoteSessionListItem[],
+  options: HomeSectionOptions = {},
+): HomeRow {
+  const title = options.automationTitle ?? i18n.t('devices.list.menu.automationFolder');
+  const sessions = sortSessionItems(items, options);
+  return {
+    key: 'automation',
+    kind: 'automation',
+    project: {
+      deviceId: null,
+      deviceName: '',
+      key: 'automation',
+      latestActivityAt: latestActivityAt(sessions),
+      pendingInteractionCount: sessions.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
+      sessionCount: sessions.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
+      sessions,
+      subtitle: '',
+      title,
+      workingDir: '',
+    },
+  };
 }
 
 /**
@@ -374,4 +560,63 @@ function latestActivityAt(items: readonly RemoteSessionListItem[]): string {
   return items.reduce((latest, item) => (
     item.lastActivityAt > latest ? item.lastActivityAt : latest
   ), '');
+}
+
+
+/** Inbox never uses unread as a settled marker. Automation runs are individually actionable. */
+export function buildInboxHomeSections(
+  home: MobileHomePresentation,
+  collapsed: ReadonlySet<string>,
+  priorityContext: HomeListPriorityContext,
+  nowMs: number,
+): HomeSection[] {
+  const original = buildHomeSections(home, false, true, {
+    groupDialogue: false, groupCindyMake: false, sortBy: 'priority', priorityContext,
+  });
+  const sections: HomeSection[] = [];
+  const groups = new Map<string, HomeRow[]>(['inbox', 'working', 'snoozed', 'archived'].map(key => [key, []]));
+  // Every listed task (including folded automation runs and tasks outside the regular list's
+  // scope) contributes its own unread / waiting signals.
+  const items = original.flatMap(section => section.data)
+    .flatMap(row => row.kind === 'session' ? [row.item] : []);
+  const ctx = collectInboxHomePriorityContext(items, priorityContext.runningSessionIds, {
+    heldPriorityRanks: new Map(priorityContext.heldPriorityRanks),
+    recentlyViewedAtMs: new Map(priorityContext.recentlyViewedAtMs),
+  });
+  for (const section of original) {
+    if (section.key === 'pinned') continue;
+    for (const row of section.data) {
+      if (row.kind !== 'session') continue;
+      for (const item of row.item.automationGroup?.items ?? [row.item]) {
+        const task = item.session;
+        const group = taskInboxSection(task, {
+          ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
+          following: item.scheduleInfo?.hasActiveFollowUp === true,
+          // A teammate's task is listed only while it needs the user or runs (2026-11-18).
+          teammate: taskTeammateId(task as RemoteSession) !== undefined,
+        }, nowMs);
+        if (!group) continue;
+        let sourceLabel = row.sourceLabel;
+        if (group === 'snoozed') {
+          const until = taskSnoozeUntil(task);
+          sourceLabel = Number.isFinite(until)
+            ? new Date(until).toLocaleString(i18n.language)
+            : i18n.t('devices.list.menu.inbox.indefinite');
+        }
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+          sourceLabel });
+      }
+    }
+  }
+  for (const [group, data] of groups) {
+    data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
+      ? group === 'snoozed'
+        ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
+        : compareSessionItemsByPriority(a.item, b.item, ctx)
+      : 0);
+    const key = `inbox-${group}`;
+    sections.push({ key, title: i18n.t(`devices.list.menu.inbox.${group}`), count: data.length,
+      data: collapsed.has(key) ? [] : data });
+  }
+  return sections;
 }

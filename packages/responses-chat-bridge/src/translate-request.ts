@@ -34,6 +34,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Codex normally sends message content as an array, but partner/collaboration
+ * bootstrap items can contain one content part directly. Treat that equivalent
+ * single-part form like a one-element array; keep other shapes fail-closed.
+ */
+function contentParts(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  return isPlainObject(value) && typeof value.type === 'string' ? [value] : null;
+}
+
 /** Collect system/developer messages in order and emit a single leading system message. */
 export function coalesceLeadingSystemMessages(messages: ChatMessage[]): ChatMessage[] {
   const systems: string[] = [];
@@ -186,7 +196,8 @@ function messageContent(
   dropUnsupportedHistoricalImages = false,
 ): string | ChatUserContentPart[] {
   if (typeof item.content === 'string') return item.content;
-  if (!Array.isArray(item.content)) {
+  const rawParts = contentParts(item.content);
+  if (!rawParts) {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
 
@@ -196,7 +207,7 @@ function messageContent(
   let text = '';
   let hasMedia = false;
   const content: ChatUserContentPart[] = [];
-  for (const rawPart of item.content) {
+  for (const rawPart of rawParts) {
     if (!isPlainObject(rawPart) || typeof rawPart.type !== 'string') {
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
     }
@@ -370,11 +381,12 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
   const author = normalizedAuthor || 'agent';
   let body = '';
   let omittedEncryptedContent = false;
+  const rawParts = contentParts(item.content);
   if (typeof item.content === 'string') {
     body = item.content;
-  } else if (Array.isArray(item.content)) {
+  } else if (rawParts) {
     const parts: string[] = [];
-    for (const part of item.content) {
+    for (const part of rawParts) {
       if (!isPlainObject(part) || typeof part.type !== 'string') {
         throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
       }

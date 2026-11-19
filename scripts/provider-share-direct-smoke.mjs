@@ -214,12 +214,16 @@ async function electronMdnsSmoke() {
     window.RTCPeerConnection = class extends NativeRTC {
       constructor(config) { super(config); window.probeConnections.push(this); }
     };
-    startDirectLinkHost(window.directLinkHost);
+    // The file-transfer window loads the same bundle; it only completes the readiness handshake.
+    if (location.search === '?mode=files') void window.filePeerHost.register();
+    else startDirectLinkHost(window.directLinkHost);
   ` }, bundle: true, platform: 'browser', format: 'iife', outfile: join(dir, 'renderer/mdns/assets/runtime.js') });
   await build({ stdin: { resolveDir: root, contents: `
-    import { app, protocol } from 'electron';
+    import { app, ipcMain, protocol } from 'electron';
     import { mkdirSync } from 'node:fs';
     import { desktopDirectRuntime } from './apps/desktop/src/main/device-link/directLink.ts';
+    import { DesktopCaptureWindow } from './apps/desktop/src/main/remote-desktop/captureWindow.ts';
+    import { FILE_PEER_LOCAL } from './apps/desktop/src/shared/filePeer.ts';
     const profile = process.env.CINDY_MDNS_SMOKE_PROFILE;
     if (!profile) throw new Error('ISOLATED_PROFILE_REQUIRED');
     mkdirSync(profile, { recursive: true });
@@ -228,7 +232,10 @@ async function electronMdnsSmoke() {
     protocol.registerSchemesAsPrivileged([{ scheme: 'cindy-desktop-capture',
       privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
     app.on('window-all-closed', () => {});
-    globalThis.probe = { runtime: desktopDirectRuntime };
+    // The production file-transfer window factory, without the transfer business logic.
+    const files = new DesktopCaptureWindow(() => {}, 'files');
+    ipcMain.handle(FILE_PEER_LOCAL.REGISTER, (event) => files.registered(event));
+    globalThis.probe = { runtime: desktopDirectRuntime, files };
   ` }, bundle: true, platform: 'node', format: 'cjs', external: ['electron'],
     define: { DESKTOP_CAPTURE_VITE_DEV_SERVER_URL: 'undefined', DESKTOP_CAPTURE_VITE_NAME: JSON.stringify('mdns') },
     plugins: [{ name: 'isolated-logger', setup(b) {
@@ -341,6 +348,32 @@ async function electronMdnsSmoke() {
         sha256: shouldOpen ? createHash('sha256').update(payload).digest('hex') : undefined }));
       for (const app of apps) await app.evaluate(() => { globalThis.probe.session.close(); globalThis.probe.runtime.suspend(); });
     }
+    // File transfers negotiate in their own hidden window. It must publish the same
+    // literal default-route address as the direct window: with mDNS names only, two
+    // computers on one LAN moved files over TURN while their control link was direct.
+    const fileOffer = await apps[0].evaluate(async () => {
+      const { files } = globalThis.probe;
+      await files.start();
+      try {
+        return await files.contents.executeJavaScript(`(async () => {
+          const pc = new RTCPeerConnection({ iceServers: [] });
+          pc.createDataChannel('files-v2', { ordered: true });
+          await pc.setLocalDescription(await pc.createOffer());
+          if (pc.iceGatheringState !== 'complete') await new Promise(resolve => {
+            const timer = setTimeout(resolve, 4000);
+            pc.addEventListener('icegatheringstatechange', () => {
+              if (pc.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); }
+            });
+          });
+          const sdp = pc.localDescription.sdp;
+          pc.close();
+          return sdp;
+        })()`);
+      } finally { files.dispose(); }
+    });
+    const fileCandidates = stats(fileOffer);
+    assert.ok(fileCandidates.ipv4 > 0 && fileCandidates.mdns === 0, 'file-transfer window must produce literal candidates');
+    console.log(JSON.stringify({ name: 'file-transfer-window-policy', candidates: fileCandidates }));
     console.log('ELECTRON_MDNS_SMOKE=PASS');
   } finally { for (const app of apps) await app.close(); }
 }

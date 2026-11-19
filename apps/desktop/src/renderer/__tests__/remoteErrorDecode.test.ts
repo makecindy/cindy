@@ -5,6 +5,23 @@ import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sha
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  // #10796, unit: the enqueue boundary must keep the transport cause for live
+  // localization and diagnostics; reporting failure must not resend the input.
+  it.each(['TIMEOUT', 'LINK_BUSY', 'UNRESPONSIVE'])('retains remote %s through an enqueue rejection without replay', async cause => {
+    const code = `REMOTE_AGENT_${cause}`;
+    const raw = `LAZY_CREATE_FAILED: [${code}] transport diagnostic`;
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = `remote-transport-${cause}`;
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t(`chat.remoteError.${code}`));
+      expect(sharedTaskRecoveryFor(raw, 'share:provider')).toBe(cause === 'LINK_BUSY' ? 'rate' : 'timeout');
+      expect(enqueue).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
   // Unit: a real lazy-create rejection must retain the account code and reset
   // metadata until the banner translates them in its active locale.
   it('preserves subscription guidance through the actual enqueue rejection', async () => {
@@ -94,6 +111,13 @@ describe('decodeRemoteErrorMessage', () => {
     const raw = 'LAZY_CREATE_FAILED: [REMOTE_COMPAT_MODE_UNSUPPORTED] local provider';
     expect(remoteErrorMessageForBanner(raw)).toBe(raw);
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
+  });
+
+  it('explains an SSH Codex source mismatch after lazy creation fails', () => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] SSH Codex uses the remote native connection';
+    const expected = i18n.t('settings.remote.startSession.unsupportedCodexSource');
+    expect(decodeRemoteErrorMessage(raw)).toBe(expected);
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
   });
 
   // #9855, unit: keep the metadata diagnostic marker through the real store's

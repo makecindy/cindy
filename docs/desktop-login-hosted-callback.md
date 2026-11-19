@@ -3,6 +3,9 @@
 > **状态**：两端均已实现，等待端点清单开启
 > **读取时机**：改动 auth-server 侧托管回调路由、结果展示页模板，或调整 desktop
 > 系统浏览器登录链路之前
+> **适用路径**：`apps/desktop/src/main/{authHostedCallback,authLoopbackCallback,oauthResultPage}.ts`、
+> `apps/desktop/scripts/export-login-callback-template.ts`、
+> `apps/desktop/scripts/lib/loginCallbackCopy.ts`、`apps/host/src/auth/login.mjs`
 
 本文是客户端仓与 auth-server 仓之间的接口契约，描述**已实现**的形态。
 

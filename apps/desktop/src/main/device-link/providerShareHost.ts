@@ -24,7 +24,7 @@ import { createLogger } from '../logger.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { providerShareApi, providerShareOwnerKey } from './providerShareApi.js';
-import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
+import { delegatedProviderShareGuestAccess, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import {
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   readProviderShareApprovalWindows,
@@ -416,30 +416,39 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
   const rt = runtime;
   if (!rt) return Promise.resolve();
   const readLocal = async () => {
-    try {
-      const shares = await providerShareApi.listOwned();
-      if (!current(rt)) return;
-      rt.unavailable = new Set(shares.unavailableShareIds);
-      const self = getDeviceId();
-      const next = shares.filter((share) => !self || share.hostDeviceId === self);
-      const before = rt.shares;
-      for (const share of before) for (const member of share.members) {
-        const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
-        if (!after || after.joinedAt !== member.joinedAt) rt.blockedMembers.add(JSON.stringify([share.shareId, member.memberId]));
+    // A local decision replaces the snapshot. Capture it before REST, not after:
+    // all callers share this read and one follow-up for decisions made in flight.
+    while (current(rt)) {
+      let before = rt.shares;
+      try {
+        const shares = await providerShareApi.listOwned();
+        if (!current(rt)) return;
+        if (rt.shares !== before) continue;
+        rt.unavailable = new Set(shares.unavailableShareIds);
+        const self = getDeviceId();
+        const next = shares.filter((share) => !self || share.hostDeviceId === self);
+        for (const share of before) for (const member of share.members) {
+          const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
+          if (!after || after.joinedAt !== member.joinedAt) rt.blockedMembers.add(JSON.stringify([share.shareId, member.memberId]));
+        }
+        await rt.events.prepareSnapshot?.(next);
+        if (!current(rt)) return;
+        if (rt.shares !== before) continue;
+        const complete = !shares.authorityIncomplete;
+        const completenessChanged = rt.complete !== complete;
+        rt.complete = complete;
+        before = next;
+        applySnapshot(rt, next, !!rt.events.prepareSnapshot, completenessChanged);
+        rt.blockedMembers.clear();
+        if (!rt.reconciled && !shares.authorityIncomplete) {
+          rt.reconciled = true;
+          rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
+        }
+      } catch (error) {
+        if (current(rt) && rt.shares !== before) continue;
+        if (current(rt)) log.warn('provider share snapshot refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
       }
-      await rt.events.prepareSnapshot?.(next);
-      if (!current(rt) || rt.shares !== before) return;
-      const complete = !shares.authorityIncomplete;
-      const completenessChanged = rt.complete !== complete;
-      rt.complete = complete;
-      applySnapshot(rt, next, !!rt.events.prepareSnapshot, completenessChanged);
-      rt.blockedMembers.clear();
-      if (!rt.reconciled && !shares.authorityIncomplete) {
-        rt.reconciled = true;
-        rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
-      }
-    } catch (error) {
-      if (current(rt)) log.warn('provider share snapshot refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
+      return;
     }
   };
   // REST 只返回本机分享。远端申请经已有同账号管理通道读取，每台电脑最多一次在途；
@@ -489,7 +498,7 @@ export async function verifyProviderShareMemberGeneration(member: ProviderShareM
   if (!rt || !current(rt)) throw new Error('Provider share owner changed');
   const shares = await providerShareApi.listOwned();
   if (!current(rt)) throw new Error('Provider share owner changed');
-  if (shares.unavailableShareIds?.includes(member.shareId)) throw new Error('Provider share authority unavailable');
+  if (shares.unavailableShareIds?.includes(member.shareId)) throw new Error('[SERVICE_UNAVAILABLE] Provider share authority unavailable');
   const saved = shares.find((share) => share.shareId === member.shareId && share.hostDeviceId === getDeviceId())
     ?.members.find((entry) => entry.memberId === member.memberId);
   if (!saved || saved.status !== 'active' || saved.joinedAt !== member.joinedAt) {
@@ -635,7 +644,7 @@ export function providerShareGuestDenial(controller: string): ProviderShareGuest
 /** 不认识的受邀者连进来：可能是刚同意的成员，按需立即拉一次(限频)。 */
 export async function ensureProviderSharePeerKnown(controller: string): Promise<void> {
   const rt = runtime;
-  if (!rt || ownedProviderShareGuestAccess(controller)) return;
+  if (!rt || ownedProviderShareGuestAccess(controller) || locallyProvenProviderShareDelegation(controller)) return;
   // A second task may arrive on an already admitted executor connection.
   try { await prepareShareAvailability(controller); } catch { /* Old server or no registered standby: retain the existing owner path. */ }
   if (providerShareGuestAccess(controller)) return;

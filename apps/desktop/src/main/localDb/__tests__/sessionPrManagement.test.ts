@@ -20,6 +20,7 @@ import {
   recordPrRefsForImportedMessages,
   recomputePrRefsForSession,
   ensurePrRefsBackfill,
+  setPrRefsChangedListener,
 } from '../../git-context/prRefsStore';
 
 const h = vi.hoisted(() => ({ client: null as unknown, changed: vi.fn() }));
@@ -61,10 +62,48 @@ beforeEach(() => {
     })
     .run();
   verify.mockClear();
+  h.changed.mockClear();
+  setPrRefsChangedListener(h.changed);
 });
 afterAll(() => sqlite.close());
 
 describe('manual PR management', () => {
+  // DB regression: notifications caused redundant window reads/status queries.
+  // Existing persistence tests miss no-op imports and intermediate timestamp
+  // changes during full recomputation; use the public store with real SQLite.
+  it('notifies only for final association changes, including mention ordering', async () => {
+    const url = 'https://github.com/example/repo/pull/1';
+    const first = { id: 'first', clientId: 'first', sessionId: 's',
+      role: 'assistant' as const, content: JSON.stringify(url), createdAt: 10 };
+    await recordPrRefsForImportedMessages('s');
+    expect(h.changed).not.toHaveBeenCalled();
+    db.insert(messages).values(first).run();
+    await recordPrRefsForMessage({ ...first, content: url });
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    await recordPrRefsForImportedMessages('s');
+    expect(h.changed).toHaveBeenCalledTimes(1);
+
+    const later = { ...first, id: 'later', clientId: 'later', createdAt: 20 };
+    db.insert(messages).values(later).run();
+    await recordPrRefsForMessage({ ...later, content: url });
+    expect(h.changed).toHaveBeenCalledTimes(2);
+    expect(await listPrRefs('s')).toMatchObject([{ firstSeenAt: 10, lastSeenAt: 20 }]);
+    // Full recomputation temporarily sets lastSeenAt to 10, then back to 20.
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(2);
+    db.update(messages).set({ content: JSON.stringify('Edited text without a link') })
+      .where(eq(messages.id, 'later')).run();
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(3);
+    expect(await listPrRefs('s')).toMatchObject([{ lastSeenAt: 10 }]);
+    db.delete(messages).run();
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(4);
+    expect(await listPrRefs('s')).toEqual([]);
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(4);
+  });
+
   // DB: MR imports and manual adds share identity across namespace/host/provider.
   // Prior GitHub fixtures cannot detect cross-host collisions or dropped MR messages.
   it('imports multi-group MRs and adds the same number on another host without collision', async () => {
@@ -174,10 +213,10 @@ describe('manual PR management', () => {
     expect(await listPrRefs('s')).toMatchObject([{ id: ref.id, associationSource: 'explicit' }]);
   });
 
-  // Regression: explicit-only mode dropped fresh PRs and missed messages after v1 backfill.
+  // Regression: explicit-only mode dropped fresh PRs and missed messages after v3 backfill.
   // Exercise production scan/import/backfill with real SQLite; metadata-only tests missed visibility.
   it('recovers missed visible messages even after the old backfill completed, once per database', async () => {
-    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v1', value: 'done' }).run();
+    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v3', value: 'done' }).run();
     db.update(sessions).set({ clearedAt: 10 }).where(eq(sessions.id, 's')).run();
     for (const [id, role, createdAt, rewindAt] of [
       ['1', 'assistant', 20, null], ['2', 'user', 30, null],

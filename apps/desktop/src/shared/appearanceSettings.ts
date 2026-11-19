@@ -1,6 +1,8 @@
+import { APP_ICONS, isAppIcon, type AppIcon } from '@cindy/maker-shared/app-icons';
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
 import type { AppearanceFontResource } from './pluginAppearance';
+import type { DownloadProgress } from './downloadProgress';
 
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
@@ -32,13 +34,8 @@ export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
   appIcon?: AppIcon;
 }
 
-/** macOS Dock icon choices; mark and wordmark also have light and dark artwork. */
-export const APP_ICONS = ['default', 'cat', 'wordmark', 'mark'] as const;
-export type AppIcon = (typeof APP_ICONS)[number];
-
-export function isAppIcon(value: unknown): value is AppIcon {
-  return APP_ICONS.includes(value as AppIcon);
-}
+/** macOS Dock icon choices; the list and artwork are shared with Mobile. */
+export { APP_ICONS, isAppIcon, type AppIcon };
 
 export type WallpaperMotion = 'static' | 'dynamic';
 
@@ -49,8 +46,11 @@ export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
 export interface WallpaperDownloadProgress {
   wallpaperId: WallpaperId;
   kind: 'image' | 'video';
+  /** Raw bytes of the current attempt; the tile bar draws this. */
   loaded: number;
   total: number;
+  /** Standard phase (retrying and why, completed) for assistive text. */
+  download?: DownloadProgress;
 }
 
 export interface AppearanceSettings extends PluginAppearanceSettingsFields {

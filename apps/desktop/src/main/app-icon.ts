@@ -1,21 +1,21 @@
 import { app, nativeTheme } from 'electron';
 import path from 'node:path';
 
-import type { AppIcon, AppearanceSettings } from '../shared/appearanceSettings.js';
+import { appIconArtwork } from '@cindy/maker-shared/app-icons';
+import type { AppearanceSettings } from '../shared/appearanceSettings.js';
 import { readAppearanceSettings } from './appearance-settings-store.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 
 /**
  * Dock artwork relative to resources/. Every file already follows the Apple
- * icon grid (rounded corners and transparent margin, see
- * scripts/generate-mac-icns.mjs) because `dock.setIcon` shows images as-is.
+ * icon grid (rounded corners and transparent margin) because `dock.setIcon`
+ * shows images as-is: scripts/generate-app-icons.mjs bakes app-icons/ from the
+ * shared artwork, scripts/generate-mac-icns.mjs the built-in icon.
  */
-const DOCK_ICONS: Record<AppIcon, { light: string; dark: string }> = {
-  default: { light: 'icon-dock.png', dark: 'icon-dock.png' },
-  mark: { light: 'app-icons/mark-light.png', dark: 'app-icons/mark-dark.png' },
-  wordmark: { light: 'app-icons/wordmark-light.png', dark: 'app-icons/wordmark-dark.png' },
-  cat: { light: 'app-icons/cat.png', dark: 'app-icons/cat.png' },
-};
+function dockIconPath(icon: AppearanceSettings['appIcon'], dark: boolean): string {
+  const artwork = appIconArtwork(icon, dark);
+  return artwork ? `app-icons/${artwork}.png` : 'icon-dock.png';
+}
 
 let appliedIconPath: string | null = null;
 
@@ -32,9 +32,8 @@ export function applyDockIcon(
 ): void {
   if (process.platform !== 'darwin' || !app.dock) return;
   if (settings.appIcon === 'default' && app.isPackaged && appliedIconPath === null) return;
-  const artwork = DOCK_ICONS[settings.appIcon];
   const dark = isDark ?? resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors);
-  const relativePath = dark ? artwork.dark : artwork.light;
+  const relativePath = dockIconPath(settings.appIcon, dark);
   const iconPath = app.isPackaged
     ? path.join(process.resourcesPath, relativePath)
     : path.join(__dirname, '../../resources', relativePath);
