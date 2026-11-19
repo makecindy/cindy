@@ -12,7 +12,9 @@ export default {
   },
   cases: {
     structure: {
-      about: 'Task list and inbox switch exclusively from sidebar settings',
+      about: 'Switch modes and filter automation tasks from the inbox menu',
+      // Leave room next to the sidebar for its cascading desktop menus.
+      viewport: { width: 880, height: 560 },
     },
     list: { about: 'Default list-row presentation with inbox actions at narrow width' },
     default: {
@@ -33,8 +35,8 @@ export default {
       await working.locator('> button').click();
       await page.locator('[data-session-id="ready"]').click();
       await scroller.evaluate((node) => { node.scrollTop = 0; });
-      // Move the pointer off the list so the hover freeze does not hold the row.
-      await page.mouse.move(310, 630);
+      // Reading a row inside the list must allow it to change sections.
+      await page.locator('[data-session-id="ready"]').hover({ position: { x: 30, y: 10 } });
       await page.evaluate(() => window.__replyToReady());
       await working.locator('[data-session-id="ready"]').waitFor();
       await page.waitForTimeout(400);
@@ -83,6 +85,51 @@ export default {
       // The project icon is enough: no project name beside inbox titles (2026-11-18 user decision).
       assert.equal(await page.locator('[data-project-source]').count(), 0, 'No project name beside inbox titles');
       await ui.capture('inbox-mode');
+      const pending = page.locator('section > button').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') });
+      const report = page.locator('[data-session-id="report"]');
+      await report.waitFor();
+      const count = Number(await pending.locator('span').last().innerText());
+      const settings = page.getByRole('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') });
+      async function openFilters(inboxMode = true) {
+        await settings.focus();
+        await settings.press('Enter');
+        assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading')) }).count(), inboxMode ? 0 : 1);
+        await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterHeading')) }).press('ArrowRight');
+      }
+      await openFilters();
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true });
+      assert.equal(await hide.getAttribute('aria-checked'), 'false');
+      await hide.click();
+      await report.waitFor({ state: 'detached' });
+      assert.equal(await hide.getAttribute('aria-checked'), 'true');
+      assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
+      await ui.capture('inbox-filter');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await project.waitFor();
+      await report.waitFor();
+      const teammate = page.locator('[data-session-id="teammate"]');
+      await teammate.waitFor();
+      await openFilters(false);
+      assert.equal(await hide.getAttribute('aria-checked'), 'false');
+      await hide.click();
+      await report.waitFor({ state: 'detached' });
+      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterCreatorsHeading')) }).press('ArrowRight');
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).press('Enter');
+      await teammate.waitFor({ state: 'detached' });
+      await page.locator('[data-session-id="ready"]').waitFor();
+      await page.keyboard.press('ArrowLeft');
+      await ui.capture('task-list-filters');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await pending.waitFor();
+      assert.equal(await report.count(), 0);
+      await openFilters();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
+      await report.waitFor();
+      assert.equal(Number(await pending.locator('span').last().innerText()), count);
       return;
     }
 
@@ -129,6 +176,8 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
     // One click on Done archives at once (even for the open task). The list holds still while
@@ -141,6 +190,10 @@ export default {
     assert.equal(await ready.getByRole('button', {
       name: await ui.t('ccAgent.sidebar.sessionMenu.archived'), exact: true,
     }).count(), 0);
+    await ready.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.sessionMenu.unarchive'), exact: true }).waitFor();
+    assert.equal(await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).count(), 0);
+    await page.keyboard.press('Escape');
     await ready.hover();
     await ready
       .getByRole('button', {
@@ -169,10 +222,13 @@ export default {
       previewedUntil,
     );
     const later = page.locator('[data-session-id="later"]');
-    await later.hover();
-    await later
-      .getByRole('button', { name: await ui.t('ccAgent.sidebar.inbox.snooze'), exact: true })
-      .click();
+    await later.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    const indefinite = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true });
+    assert.equal(await indefinite.locator('time').count(), 0);
+    await indefinite.click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z');
+    await later.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).click();
     await page
       .getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.custom'), exact: true })
       .click();

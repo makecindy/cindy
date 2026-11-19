@@ -66,6 +66,7 @@ import {
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
@@ -676,6 +677,7 @@ function createModelRoutingTransform(): RoutingTransform {
       ? isPiProxySubagentRoute(piSessionId, claimedPiSessionToken)
       : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
+    const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     if (
       piSessionId
       && (
@@ -702,7 +704,8 @@ function createModelRoutingTransform(): RoutingTransform {
             error: {
               type: 'authorization_error',
               code: 'pi_provider_mismatch',
-              message: 'PI proxy provider does not match the session provider.',
+              message: piGuest ? SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE
+                : 'PI proxy provider does not match the session provider.',
             },
           });
           res.writeHead(403, {
@@ -714,9 +717,8 @@ function createModelRoutingTransform(): RoutingTransform {
       };
     }
     // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
-    const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
-      return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+      return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
     }
     // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
     // those bytes opaque; the native handler decodes and checks the live grant
@@ -811,7 +813,9 @@ function createModelRoutingTransform(): RoutingTransform {
       !piSessionId && !hostedProviderOffersModel(sessionId, providerId, 'claude-code', model)
         ? refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.')
         : null;
-    if (guest && selectedProviderId !== guest.providerId) return refuseGuestForeignRoute(wireModel);
+    if (guest && selectedProviderId !== guest.providerId) {
+      return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
+    }
     const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
       selectedProviderId,
       getActiveCatalog().providers,
@@ -848,7 +852,7 @@ function createModelRoutingTransform(): RoutingTransform {
     ) {
       // 受邀者只能走分享给它的那份订阅，不能凭模型前缀用到本机用户的其它订阅。
       if (guest && !isOpenAiSubscriptionProviderId(selectedProviderId) && !isXaiSubscriptionProviderId(selectedProviderId)) {
-        return refuseGuestForeignRoute(wireModel);
+        return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       const bridgeProviderId = isExclusiveXaiModelId(wireModel)
         ? (isXaiSubscriptionProviderId(selectedProviderId) ? selectedProviderId : 'xai')
@@ -1176,12 +1180,12 @@ function createModelRoutingTransform(): RoutingTransform {
         return refuseGuestProviderRoute(401, 'invalid_guest_route', 'Invalid or expired shared-provider session.');
       }
       if (hasInternalPiHeader) {
-        return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+        return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       if (!isPlainObject(body)) {
         return guest.providerId === 'xd'
           ? route(body, ctx, guest)
-          : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+          : refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       const wireModel = typeof body.model === 'string' ? body.model : '';
       if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) {

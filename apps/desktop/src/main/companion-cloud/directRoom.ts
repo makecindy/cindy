@@ -4,6 +4,8 @@
  * the room through the conversation mirror, so the execution completes without content.
  */
 import { COMPANION_DIRECT_CLIENT_PREFIX } from './mirror.js';
+import type { BotGroupAttachment } from '../../shared/botGroupChat.js';
+import type { ChatContentBlock } from '../maker-ipc/chatServerMigration.js';
 import type { CompanionApi } from './types.js';
 
 /** Terminal payload of a delivered direct-room execution: no room message of its own. */
@@ -14,8 +16,11 @@ export interface DirectRoomSource {
   authorId: string;
   deleted?: boolean;
   origin?: string;
-  content?: Array<{ type?: string; text?: string; caption?: string; fallback?: string }>;
+  content?: ChatContentBlock[];
 }
+
+export type DeliverToCanonical = (botId: string, text: string, clientId: string, attachments?: BotGroupAttachment[]) =>
+  Promise<{ ok: true } | { ok: false; errorCode: string }>;
 
 /** Names both the execution and the room message, so a take-over never re-inserts it as history. */
 export const directRoomClientId = (executionId: string, sourceMessageId: string) =>
@@ -42,7 +47,8 @@ export async function deliverDirectRoomMessage(input: {
   /** Only the owner's own words reach the companion's main task. */
   humanActorId: string;
   botId: string;
-  deliver: (botId: string, text: string, clientId: string) => Promise<{ ok: true } | { ok: false; errorCode: string }>;
+  prepareAttachments?: (content: ChatContentBlock[]) => Promise<{ attachments: BotGroupAttachment[]; notice?: string }>;
+  deliver: DeliverToCanonical;
   /** Lease check right before the irreversible hand-off. */
   beforeDeliver?: () => Promise<void>;
 }): Promise<string> {
@@ -51,9 +57,15 @@ export async function deliverDirectRoomMessage(input: {
     throw new Error('INVALID_EXECUTION_TRIGGER');
   const text = directRoomText(source);
   if (!text) throw new Error('INVALID_INPUT');
+  const media = source.content?.filter(block => block.type === 'media') ?? [];
+  const prepared = media.length ? await input.prepareAttachments?.(media) : undefined;
+  if (media.length && !prepared) throw new Error('ATTACHMENT_UNAVAILABLE');
   await input.beforeDeliver?.();
   const clientId = directRoomClientId(input.executionId, input.sourceMessageId);
-  const delivered = await input.deliver(input.botId, text, clientId);
+  const message = prepared?.notice ? `${text}\n\n${prepared.notice}` : text;
+  const delivered = prepared?.attachments.length
+    ? await input.deliver(input.botId, message, clientId, prepared.attachments)
+    : await input.deliver(input.botId, message, clientId);
   if (!delivered.ok) throw new Error(delivered.errorCode);
   return clientId;
 }

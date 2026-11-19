@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   openRemoteSettings: vi.fn(), onHelperMessage: null as null | ((message: MenubarHelperMessage) => void),
   pool: null as SubscriptionPoolView | null, poolRead: vi.fn(), poolRefresh: vi.fn(),
   poolListeners: new Set<() => void>(),
+  settings: {} as Partial<typeof DEFAULT_MENUBAR_SETTINGS>, deviceLink: false, listDevices: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: mocks.app, Notification: class {} }));
 vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => ({
@@ -29,7 +30,9 @@ vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => (
   },
   subscribeSessionActivity: () => () => {},
 }) }));
-vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: true }) }));
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: () => ({ canUseCindyAccountServices: true, canUseDeviceLink: mocks.deviceLink }), requireAppCapability: () => {},
+}));
 vi.mock('../../appSessionState.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return { ...actual,
@@ -50,7 +53,7 @@ vi.mock('../../device-link/providerShareGuest.js', () => ({
 vi.mock('../../device-link/providerShareRuntime.js', () => ({ readReceivedProviderShareQuota: (...args: unknown[]) => mocks.sharedRead(...args) }));
 vi.mock('../../device-link/index.js', () => ({}));
 vi.mock('../../device-link/dispatch.desktop.js', () => ({ getActiveControllers: () => subscriptions.getControlControllers() }));
-vi.mock('../../device-link/ipc.js', () => ({}));
+vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: () => mocks.listDevices(), defaultDeps: () => ({}) }));
 vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' }));
 vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
@@ -73,7 +76,7 @@ vi.mock('../../usage/claudeAccountUsage.js', () => ({ readClaudeAccountUsageRevi
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
 vi.mock('../../usage/usageHistory.js', () => ({}));
 vi.mock('../../usageBroadcaster.js', () => ({ observeUsageChanges: () => () => {} }));
-vi.mock('../settingsStore.js', () => ({ readMenubarSettings: () => ({ ...DEFAULT_MENUBAR_SETTINGS }), writeMenubarSettings: (value: object) => ({ ...DEFAULT_MENUBAR_SETTINGS, ...value }) }));
+vi.mock('../settingsStore.js', () => ({ readMenubarSettings: () => ({ ...DEFAULT_MENUBAR_SETTINGS, ...mocks.settings }), writeMenubarSettings: (value: object) => ({ ...DEFAULT_MENUBAR_SETTINGS, ...value }) }));
 vi.mock('../MacMenubarNativeHost.js', () => ({ MacMenubarNativeHost: class {
   constructor(options: { onMessage: (message: MenubarHelperMessage) => void }) { mocks.onHelperMessage = options.onMessage; }
   resetFailure() {} prepare() {} suspend() {} stop() {} publish(view: unknown) { mocks.publish(view); }
@@ -81,6 +84,7 @@ vi.mock('../MacMenubarNativeHost.js', () => ({ MacMenubarNativeHost: class {
 vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { return []; } }, estimateDailyBurn: () => null }));
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
+import { QuotaPanelController } from '../../quota-overview/panelController';
 import { getQuotaOverviewService, QuotaOverviewService, readUsageWidgetSnapshot } from '../../quota-overview/service';
 import { beginAppSessionBoundary } from '../../appSessionState';
 const { collectMenubarInputs: collectActual } = await vi.importActual<typeof import('../collect')>('../collect');
@@ -96,6 +100,7 @@ beforeEach(() => {
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
   mocks.pool = null; mocks.poolRead.mockReset(); mocks.poolRefresh.mockReset(); mocks.poolListeners.clear();
+  mocks.settings = {}; mocks.deviceLink = false; mocks.listDevices.mockReset();
   subscriptions.__testing.reset();
   mocks.quota = { spend: 2, maxBudget: 10, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
 });
@@ -369,6 +374,71 @@ it('never serves a build read for the previous account', async () => {
   } finally {
     mocks.auth.dataOwnerId = 'owner';
   }
+});
+
+// #11277 review (hidden card kept reading), engineering-conventions §8.3, unit: real
+// QuotaPanelController -> overview -> collector and share reader. The Windows tray card shows
+// nothing while closed, yet it held the overview from prewarm on, so quota and received shares
+// were read for as long as the app ran; cases above only cover the always-visible macOS item.
+// Minimal input: start a closed card, wait, open, close. The low-quota alert is raised from
+// background builds, so it is the one reader a closed card has. Without a hold there is no build,
+// which a token refresh used to take for an owner change and blank the first frame.
+it.each([{ lowAlert: false }, { lowAlert: true }])('a closed hover card reads for its first frame, then only while open or for the alert (lowAlert $lowAlert)', async ({ lowAlert }) => {
+  mocks.settings = { lowAlert };
+  overview = new QuotaOverviewService();
+  mocks.collect.mockImplementation(async () => emptyMenubarInputs(Date.now(), 'Fixture'));
+  const panel = new QuotaPanelController({ publish() {}, open() {} }, { openNewTask() {}, overview, hoverCard: true });
+  const readsDuring = async (ms: number) => {
+    mocks.collect.mockClear(); mocks.sharedRead.mockClear();
+    await vi.advanceTimersByTimeAsync(ms);
+    return mocks.collect.mock.calls.length + mocks.sharedRead.mock.calls.length;
+  };
+  panel.start();
+  expect(await readsDuring(0)).toBeGreaterThan(0);
+  expect(panel.view).not.toBeNull();
+  expect(await readsDuring(30 * 60_000) > 0).toBe(lowAlert);
+  const firstFrame = panel.view;
+  for (const tokenRefreshed of [...mocks.authListeners]) tokenRefreshed({ isAuthenticated: true });
+  expect(panel.view).toBe(firstFrame);
+  panel.handle({ type: 'panel', open: true });
+  expect(await readsDuring(0)).toBeGreaterThan(0);
+  panel.handle({ type: 'panel', open: false });
+  expect(await readsDuring(30 * 60_000) > 0).toBe(lowAlert);
+  panel.stop();
+});
+
+// #11277 review (hover re-requests the server), server-channel-review, unit: real
+// QuotaPanelController -> overview -> share reader and reader of the other computers. The card
+// opens when the pointer rests on the tray icon, and every opening refreshed all sources, so
+// sweeping the pointer along the taskbar set the request rate. Minimal input: five openings a
+// few seconds apart, then one a minute later. Openings inside a minute must reuse the readings.
+it('refreshes a hover card at most once a minute however often the pointer reopens it', async () => {
+  mocks.settings = { lowAlert: false };
+  overview = new QuotaOverviewService();
+  mocks.deviceLink = true;
+  mocks.listDevices.mockResolvedValue({ devices: [] });
+  mocks.collect.mockImplementation(async (deps: MenubarCollectDeps) => {
+    await deps.readRemoteSubscriptions?.();
+    return emptyMenubarInputs(Date.now(), 'Fixture');
+  });
+  const panel = new QuotaPanelController({ publish() {}, open() {} }, { openNewTask() {}, overview, hoverCard: true });
+  const sweep = async () => {
+    panel.handle({ type: 'panel', open: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    panel.handle({ type: 'panel', open: false });
+    await vi.advanceTimersByTimeAsync(2_000);
+  };
+  panel.start();
+  await vi.advanceTimersByTimeAsync(0);
+  await sweep();
+  const reads = () => [mocks.sharedRead.mock.calls.length, mocks.listDevices.mock.calls.length];
+  const afterFirstOpening = reads();
+  for (let again = 0; again < 4; again++) await sweep();
+  expect(reads()).toEqual(afterFirstOpening);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await sweep();
+  expect(reads()).toEqual(afterFirstOpening.map(count => count + 1));
+  panel.stop();
 });
 
 // 2026-11-16 user decision: received shares are a standard overview source, so the panel,

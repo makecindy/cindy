@@ -3583,6 +3583,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
           expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), // #11278: route-scoped tool audio recovery
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3593,6 +3594,7 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          expect.objectContaining({ id: 'responses_tool_audio', applyOnUnmatchedRetry: false, allowExtraRules: false }),
           // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
           expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
@@ -3844,12 +3846,15 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it.each(['shared', 'custom-context', 'control-plane'] as const)(
-    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+  // #9645: extend the real loopback recovery path beyond fc_ to saved msg_ tool IDs.
+  // The upstream rejects the original ID; HTTP replay/compact must repair it without touching peers.
+  it.each((['shared', 'custom-context', 'control-plane'] as const).flatMap(proxyKind =>
+    ['fc', 'msg'].map(prefix => ({ proxyKind, prefix })),
+  ))('repairs $prefix IDs after a WebSocket rejection on the $proxyKind proxy, preserving sibling connections', async ({ proxyKind, prefix }) => {
     const host = await freshCodexProxyHost();
-    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const errorMessage = `Invalid 'input[285].id': '${prefix}_legacy'. Expected an ID that begins with 'ctc'.`;
     const legacy = { model: 'gpt-6', input: [
-      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call', id: `${prefix}_legacy`, name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
       { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
     ] };
     const httpBodies: Array<{ input: typeof legacy.input }> = [];
@@ -4240,6 +4245,13 @@ describe('codex proxy host', () => {
   });
 
   it.each([
+    ...['fc', 'fco', 'ctc', 'ctco'].map((prefix): [string, string | null] => [
+      `Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with '${prefix}'.`, 'tool_item_id',
+    ]),
+    [JSON.stringify({ error: { message: 'Invalid "input[169].id": "msg_history". Expected an ID that begins with "ctc".' } }), 'tool_item_id'],
+    ["Invalid 'input[169].call_id': 'msg_history'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with 'msg'.", 'responses_item_id_prefix'],
+    ["Invalid 'input[169].id': 'MSG_history'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
     [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
@@ -6613,6 +6625,9 @@ describe('codex proxy host', () => {
       input: [
         { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
         { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+        // #11371 P2: native-custom compact must not expand a valid 64-char msg_ result to 65.
+        { type: 'custom_tool_call', id: `msg_${'x'.repeat(60)}`, name: 'exec', call_id: 'call_large', input: 'text(2)' },
+        { type: 'custom_tool_call_output', id: `msg_${'x'.repeat(60)}`, call_id: 'call_large', output: '2' },
       ],
     };
     let current: unknown = original;
@@ -6621,8 +6636,11 @@ describe('codex proxy host', () => {
     }
     expect(current).toMatchObject({ input: [
       { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+      { ...original.input[2], id: `ctc_${'x'.repeat(60)}` },
+      { ...original.input[3], id: expect.stringMatching(/^ctco_[a-f0-9]{59}$/) },
     ] });
     expect(original.input[0].id).toBe('fc_legacy');
+    expect(original.input[3].id).toBe(`msg_${'x'.repeat(60)}`);
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
@@ -8705,7 +8723,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(31); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort + tool audio recovery
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

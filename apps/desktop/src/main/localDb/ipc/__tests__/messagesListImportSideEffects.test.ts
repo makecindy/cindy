@@ -143,6 +143,20 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
     expect(Array.isArray(rows)).toBe(true);
   });
 
+  // The history view reads through the shared reader (localHistoryViewReader.ts); its first read takes the
+  // import only through the port the desktop binds (importBeforeList). Unbound, an imported task's first
+  // history page would open without its history.
+  it('device-link 旧 Codex 导入任务的历史视图首页 → 接入这一条', async () => {
+    createDb('codex-s1');
+    registerMessageIpc();
+    const channel = 'local-db:messages:view';
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'ctrl-1', channel },
+      () => h.handlers.get(channel)!({}, 'codex-s1', {}));
+
+    expect(adoptMock).toHaveBeenCalledTimes(1);
+    expect(adoptMock).toHaveBeenCalledWith('codex-s1');
+  });
+
   it('device-link 分页 invoke(带 beforeTs)→ 跳过接入(#318 性能语义)', async () => {
     createDb('codex-s1');
     registerMessageIpc();

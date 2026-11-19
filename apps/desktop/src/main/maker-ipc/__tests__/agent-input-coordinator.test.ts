@@ -9,6 +9,7 @@ import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
+import { telegramQuestionOrigin, stampTelegramQuestionAnswer, TELEGRAM_QUESTION_ORIGIN, hasTelegramQuestionRoute } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -38,7 +39,10 @@ import { createProviderGroupRouter } from '../../provider-group/router.js';
 import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import { createAutomaticContinueEligibility } from '../automaticContinueEligibility.js';
 import { createBotModelSelectionCoordinator } from '../botModelSelectionCoordinator.js';
-import { acquireSendToSessionLock } from '../sendToSessionLock.js';
+import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock.js';
+import * as dbCurrent from '../../localDb/client/current.js';
+import { prepareBotPermissionDispatch, retryBotWelcomePermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
+import { GitSnapshotCoordinator, type GitSnapshotCoordinatorDeps } from '../../git-snapshot/gitSnapshotCoordinator.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES } from '../usageLimitAutoResume.js';
 import { MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
@@ -839,9 +843,115 @@ describe('queued welcome dispatch receipts', () => {
     h.onUndispatchedUserTurn.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
     h.onDiscardedQueuedMessage.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
     const dispatch = (id: string) => receipts.dispatch('welcome-session', id, () =>
-      h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })));
+      h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })), true);
     return { h, receipts, dispatch };
   }
+
+  // #10021, unit: group chat-only inputs also carry toolsDisabled and an
+  // acceptance receipt. Neither is evidence that the invitation owns the input.
+  it('keeps ordinary chat-only receipts ineligible for welcome recovery', async () => {
+    const receipts = createQueuedDispatchReceipts();
+    const ordinary = receipts.dispatch('same-session', 'chat-only', () => {});
+    expect(receipts.hasWelcome('same-session', 'chat-only')).toBe(false);
+    const welcome = receipts.dispatch('same-session', 'welcome', () => {}, true);
+    expect(receipts.hasWelcome('same-session', 'welcome')).toBe(true);
+    expect(receipts.hasWelcome('other-session', 'welcome')).toBe(false);
+    receipts.settle('same-session', 'welcome', true);
+    receipts.settle('same-session', 'chat-only', true);
+    await expect(welcome).resolves.toBe(true);
+    await expect(ordinary).resolves.toBe(true);
+    expect(receipts.hasWelcome('same-session', 'welcome')).toBe(false);
+  });
+
+  // #10021, unit: persistence is not welcome acceptance. A host permission
+  // refusal must leave the same coordinator item/receipt pending until recovery;
+  // Stop during that wait must cancel it without a provider call.
+  it.each(['recover', 'stop'] as const)('keeps the welcome receipt correct when permissions race: %s', async action => {
+    const { h, receipts, dispatch } = setup();
+    const owner = { client: { query: async () => [{ botId: 'bot-1', mode: 'ask' }] } };
+    const snapshot = vi.spyOn(dbCurrent, 'getCurrentDbClientSnapshot').mockReturnValue(owner as never);
+    const writerGate = deferred<void>();
+    const recovering = deferred<void>();
+    let change: Promise<void> | undefined;
+    let attempts = 0;
+    const providerSend = vi.fn();
+    const inputIds: string[] = [];
+    let anchor = 'welcome';
+    let snapshotAttempt = 0;
+    const createSavepoint = vi.fn<GitSnapshotCoordinatorDeps['createShadowSavepoint']>(async (_repo, input) => ({
+      commit: `baseline-${input.meta?.attemptId}`, tree: 'tree', includedFiles: [], skippedFiles: [], skippedFingerprints: [],
+    }));
+    const snapshots = new GitSnapshotCoordinator({
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: async () => ({ workingDir: '/welcome-repo', agentKind: 'codex' }),
+      detectRepoRoot: async () => '/welcome-repo',
+      recordTurnAttempt: async () => ({ anchor, attemptId: `attempt-${++snapshotAttempt}` }),
+      createShadowSavepoint: createSavepoint,
+      createShadowMarker: async () => 'marker',
+      oneShot: async () => 'label',
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    // #10021, unit: the real snapshot FIFO must be settled between attempts,
+    // or the next ordinary turn consumes a leftover welcome baseline.
+    h.onRetryUndispatchedUserTurn.mockImplementation(sid => snapshots.onTurnAbort(sid));
+    h.onUndispatchedUserTurn.mockImplementation((sid, item) => {
+      snapshots.onTurnAbort(sid);
+      receipts.settle(sid, item.clientId, false);
+    });
+    const runtime = { id: 'welcome-session', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    h.beforeDispatchUserTurn.mockImplementation(async (sid, _item, signal) => {
+      await snapshots.onTurnStart(sid, signal);
+      if (attempts === 1) change = withBotPermissionChangeForBot('bot-1', () => writerGate.promise);
+    });
+    h.sendToAgent.mockImplementation(async (sid, message, _create, opts) =>
+      retryBotWelcomePermissionDispatch(sid, opts.signal, () => withSendToSessionLock(sid, async () => {
+        attempts++;
+        inputIds.push(opts.persistUserMessage!.clientId);
+        const guard = await prepareBotPermissionDispatch(runtime);
+        await persistQueuedUserMessage(sid, opts);
+        guard();
+        providerSend(message, opts);
+        return sendSuccess();
+      }), () => { recovering.resolve(); return receipts.hasWelcome(sid, opts.persistUserMessage!.clientId); }, opts.onUndispatchedRetry));
+    const settled = vi.fn();
+    const result = dispatch('welcome').then(value => { settled(value); return value; });
+    try {
+      await recovering.promise;
+      expect(providerSend).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection('welcome-session').error).toBeNull();
+      if (action === 'stop') h.coordinator.stop('welcome-session');
+      writerGate.resolve();
+      await change;
+      await expect(result).resolves.toBe(action === 'recover');
+      expect(settled).toHaveBeenCalledOnce();
+      if (action === 'recover') {
+        expect(providerSend).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: 'Say hello.' }, expect.objectContaining({ toolsDisabled: true }));
+        expect(inputIds).toEqual(['welcome', 'welcome']);
+        expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+        expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+        expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+        await snapshots.onTurnEnd('welcome-session');
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'welcome', attemptId: 'attempt-2', baselineCommit: 'baseline-attempt-2',
+        });
+        h.coordinator.onTurnEvent('welcome-session', 'done');
+        anchor = 'ordinary';
+        h.coordinator.enqueue('welcome-session', makeItem('ordinary', 'next turn'));
+        await vi.waitFor(() => expect(providerSend).toHaveBeenCalledTimes(2));
+        await snapshots.onTurnEnd('welcome-session');
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'ordinary', attemptId: 'attempt-3', baselineCommit: 'baseline-attempt-3',
+        });
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+      } else {
+        expect(providerSend).not.toHaveBeenCalled();
+        expect(attempts).toBe(1);
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+      }
+    } finally { writerGate.resolve(); await change; snapshots.onSessionClosed('welcome-session'); snapshot.mockRestore(); }
+  });
 
   it('does not acknowledge enqueue or persistence before vendor acceptance', async () => {
     const { h, dispatch } = setup();
@@ -995,8 +1105,22 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
   });
 
-  it('uses only the delivery grant after a control retry has already been accepted', async () => {
+  // Unit / shared Pi retry: distinguish an idle task from an admitted recovery.
+  it('does not enqueue or dispatch a Pi control retry without recoverable input', async () => {
+    const h = createHarness(), sid = 'pi-control-retry-noop';
+    h.setAgentKind('pi');
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toEqual({ ok: true, result: { executionPaused: false, queuePaused: false } });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('uses only the delivery grant after a Pi control retry has already been accepted', async () => {
     const h = createHarness(), sid = 'retry-admitted-then-plan';
+    h.setAgentKind('pi');
     h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
     h.setHasAssistantProgressAfter(async () => false); h.setRunning(true);
@@ -1986,6 +2110,7 @@ function createHarness(opts?: {
   const beforeDispatchUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>
   >(() => {});
+  const onRetryUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRetryUndispatchedUserTurn']>>();
   const onUndispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>
   >(() => {});
@@ -2136,6 +2261,7 @@ function createHarness(opts?: {
       ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
       : {}),
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
@@ -2188,6 +2314,7 @@ function createHarness(opts?: {
     getSdkSessionId,
     reconcileTurnIdle,
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
@@ -5358,6 +5485,24 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+  });
+
+  // Unit regression: host retry gets a new input id but must still reply to the question's channel.
+  it.each([false, true])('retains Telegram delivery on retry (progress=%s)', async (progress) => {
+    const h = createHarness();
+    const sid = 'telegram-question-retry';
+    h.setHasAssistantProgressAfter(async () => progress);
+    const item = makeItem('question-reply:answered:q1', 'answer');
+    stampTelegramQuestionAnswer(item, telegramQuestionOrigin(() => {}));
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(hasTelegramQuestionRoute(h.sendToAgent.mock.calls[1][3][TELEGRAM_QUESTION_ORIGIN])).toBe(true);
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {

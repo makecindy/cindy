@@ -14,6 +14,8 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import { closeChatInvite, getChatInviteIntent, openManualChatInvite, setManualChatInviteLink } from '@/chat/chatInviteIntent';
 import { closeGiftCard, getGiftCardIntent } from '@/gift-card/giftCardIntent';
 
@@ -165,6 +167,16 @@ describe('mobile native deep-link redirects', () => {
     invalidateMobileAuthOwnerForSwitch();
     expect(getPendingSharedTaskInvitationIntent()).toBeNull();
   });
+  // Unit through Expo's cold/warm entry. A copied guest link must open the scoped task screen.
+  it('opens an already joined task from the copied link without creating an invitation', () => {
+    const peer = sharedTaskHostPeer('share', 'host');
+    const link = buildMobileSessionDeepLink('task', { deviceId: peer });
+    const expected = '/sessions/task?deviceId=' + encodeURIComponent(peer);
+    expect(redirectSystemPath({ path: link, initial: true })).toBe(expected);
+    expect(redirectSystemPath({ path: link.replace('cindy:/', ''), initial: false })).toBe(expected);
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+
   it('handles a warm path and expires an unclaimed invitation', () => {
     redirectSystemPath({ path: incoming.replace('cindy:/', ''), initial: false });
     expect(getPendingSharedTaskInvitationIntent()).not.toBeNull();

@@ -30,7 +30,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -1281,6 +1281,9 @@ export interface AgentDeps {
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
 
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
    *
@@ -1710,14 +1713,24 @@ export class AgentStartupStoppedError extends Error {
   }
 }
 
-/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+/** A shared-process adapter confirmed release/transfer of all unpublished task resources. */
+export class AgentStartupResourcesReleasedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupResourcesReleasedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its task runtime is not confirmed quiescent. */
 export class AgentStartupCleanupPendingError extends Error {
   readonly whenStopped: Promise<void>;
+  readonly retryCleanup?: () => Promise<void>;
 
-  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void>; retryCleanup?: () => Promise<void> }) {
     super(message, { cause: options.cause });
     this.name = 'AgentStartupCleanupPendingError';
     this.whenStopped = options.whenStopped;
+    this.retryCleanup = options.retryCleanup;
   }
 }
 
@@ -2052,7 +2065,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2539,10 +2552,18 @@ export interface AgentSessionHandle {
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** An explicit Skill send may retry exhausted discovery on the existing process. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
@@ -2773,7 +2794,7 @@ export interface AgentSessionHandle {
    * 上报 —— pi 为 compaction_start/end → compact_boundary)。仅
    * Capabilities.manualCompact 支持的 agent(pi)实现;不支持的 agent 不实现。
    */
-  compactSession?(instructions?: string): Promise<ManualCompactResult>;
+  compactSession?(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult>;
 
   /** 读取 / 切换同一 SDK session 内的原生分支树。 */
   getSessionTree?(): Promise<SessionTreeSnapshot>;
@@ -2856,7 +2877,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**

@@ -48,6 +48,7 @@ import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
 import { discordChannelAccessStore } from './discord/channelAccessStore';
+import { discordFinalTextStorage } from './discord/finalTextStorage';
 import { telegramUiText } from './telegram/uiText';
 import {
   patchTelegramBehavior,
@@ -136,12 +137,13 @@ const host: IMHost = {
       // transport-owned boundary immediately before pinning so stale media is
       // not promoted without a message/session owner.
       if (options?.shouldReuse?.() === false) return null;
-      // 命中路径不走 cacheImage,但 IM 复用的可能是 MCP 侧 isCache=true 的缓存
+      // 背景附件复用保留 isCache 状态，由缓存回收管理生命周期。
+      // 普通入站命中不走 cacheImage,但 IM 复用的可能是 MCP 侧 isCache=true 的缓存
       // blob(feishu 两边有意共用 `feishu:<token>` 命名空间)——IM 语义是用户
       // 附件,同 cacheImage 口径降级为非 cache(review P1);降级失败只警告,
       // 不阻断附件复用(消息落库挂账钩子的 pinBlob 是第二道自愈)。
       try {
-        await pinBlob(hit.hash);
+        if (!options?.staging) await pinBlob(hit.hash);
       } catch (err) {
         log.warn('im getCachedImage: pinBlob failed', {
           integration,
@@ -215,6 +217,7 @@ export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
   });
 }
 export const discordIm = createDiscordIM(host, {
+  finalTextStorage: () => discordFinalTextStorage('personal', true),
   channelAccess: discordChannelAccessStore,
   ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
@@ -275,6 +278,7 @@ export function createBotDiscordIM(
   options: { channelAccess?: DiscordChannelAccessStore } = {},
 ): DiscordIM {
   return createDiscordIM(host, {
+    finalTextStorage: () => discordFinalTextStorage(secretKeyPrefix, false),
     // 服务器频道白名单按连接各一份、由连接记录提供（缺省 = 不开放任何频道）。
     ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
     ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),

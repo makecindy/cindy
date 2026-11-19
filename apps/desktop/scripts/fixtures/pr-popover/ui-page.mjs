@@ -96,6 +96,7 @@ export default {
     await ui.capture('not-following');
     await act('pr:follow').click();
     await frame.locator('[data-ghost-live-label]').waitFor();
+    assert.equal(await frame.locator('[data-ghost-live-label]').innerText(), await ui.t('ccAgent.gitContext.pr.following'));
     const waitForStopOpacity = (opacity) =>
       page.waitForFunction((value) => {
         const doc = document.querySelector('iframe')?.contentDocument;

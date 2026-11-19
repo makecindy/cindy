@@ -813,8 +813,8 @@ async function hydrateFromDatabase(): Promise<void> {
   }
 }
 
-trackHydration();
-
+// Do not read at module import: auth can precede LocalDbGate. AppWindowSync
+// mounts useBotUnreadSync after readiness; other consumers explicitly ensure.
 export function refreshBotProfiles(): void {
   ensureProfileOwner();
   emit();
@@ -829,9 +829,9 @@ export function refreshBotProfiles(): void {
 }
 
 /**
- * Wait for the current owner's profiles outside the Bots views. The module-level
- * hydration can run before sign-in, and an owner change clears the projection
- * without reloading it; `refresh` also re-reads a projection that is already loaded.
+ * Wait for the current owner's profiles outside the Bots views. An owner change
+ * clears the projection without reloading it; `refresh` also re-reads a projection
+ * that is already loaded.
  */
 export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfile[]> {
   ensureProfileOwner();
@@ -944,7 +944,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
         }),
   };
   const bot: BotProfile = {
-    id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `bot_${now}_${crypto.randomUUID()}`,
     templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),

@@ -1,5 +1,6 @@
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
+import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
@@ -228,6 +229,9 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [TELEGRAM_QUESTION_ORIGIN]?: import('@cindy/maker-core').SendOrigin;
+  /** Host-proven non-dispatch: retain this input while preparation is retried. */
+  onUndispatchedRetry?: () => void;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
@@ -559,6 +563,8 @@ export interface AgentInputCoordinatorDeps {
     item: AgentInputQueuedMessage,
     signal?: AbortSignal,
   ) => void | Promise<void>;
+  /** Release completed preparation before an internally proven undispatched retry; keep its receipt pending. */
+  onRetryUndispatchedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * Called when a user row crossed the persistence boundary but never reached
    * vendor dispatch. `cancelled` is an explicit user lifecycle boundary;
@@ -3894,6 +3900,7 @@ export class AgentInputCoordinator {
           },
         });
       }
+      inheritTelegramQuestionRetry(recovery.item, item);
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
@@ -5123,6 +5130,7 @@ export class AgentInputCoordinator {
     const projected = { ...item };
     Reflect.deleteProperty(projected, MCP_APP_MESSAGE_GUARD);
     Reflect.deleteProperty(projected, TASK_ACTION_INPUT_GUARD);
+    Reflect.deleteProperty(projected, TELEGRAM_QUESTION_ORIGIN);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.orcaReportDelivery;
@@ -5819,6 +5827,7 @@ export class AgentInputCoordinator {
           }
         } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
+        [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(head),
         [ASYNC_QUESTION_ANSWER]: head.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
         ...(verifiedOwnerRequestText(head.autoReviewUserText) !== undefined
@@ -5831,6 +5840,16 @@ export class AgentInputCoordinator {
         throwOnStartFailure: true,
         onVendorTurnReserved: (generation) =>
           this.captureReservedVendorGeneration(sessionId, active, generation),
+        onUndispatchedRetry: () => {
+          if (!this.isActiveTurnCurrent(sessionId, active)) return;
+          // A final guard can reject after onPersisted prepared file snapshots.
+          // Pair that attempt before another onPersisted reserves a baseline.
+          if (active.persisted) this.deps.onRetryUndispatchedUserTurn?.(sessionId, head);
+          // The old provider reservation has ended without dispatch. Stop must
+          // cancel this preparation even though persistence/hooks already ran.
+          active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+          active.vendorTurnGeneration = null;
+        },
         ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
           ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
           : {}),
@@ -7644,6 +7663,13 @@ export class AgentInputCoordinator {
         (state.recovery?.kind === 'active-turn' || (beforeDispatch && state.recovery?.kind === 'queue-head')) &&
         state.error !== null,
     );
+  }
+
+  resumeModelGroupQuotaWait(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void {
+    const state = this.states.get(sessionId);
+    if (state?.recovery?.kind !== 'active-turn' || state.recovery.item.clientId !== item.clientId ||
+        state.activeTurn || state.usageLimitWait || this.isExecutionPaused(sessionId)) return;
+    this.notifyUsageLimitedTurnError(sessionId, item, signals.message, signals);
   }
 
   private notifyUsageLimitedTurnError(

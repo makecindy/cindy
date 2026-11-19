@@ -2,6 +2,7 @@ import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRe
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
+  EngineKind,
   Effort,
   PermissionMode,
   SessionGracefulStopResult,
@@ -87,7 +88,7 @@ export type SessionRuntimeSetResult =
   | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   capabilities: {
     sameTurnSteer: { supported: boolean };
     permissionModes?: readonly { id: PermissionMode }[];
@@ -203,8 +204,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       try {
         return await deps.runSessionAction({ ...params, beforeMutation, beforeDelivery });
       } catch (error) {
-        const code = (error as { code?: unknown } | null)?.code;
-        if (typeof code === 'string' && ['UNSUPPORTED_CAPABILITY', 'PRECONDITION_FAILED', 'NOT_FOUND', 'SESSION_RUNNING'].includes(code))
+        const code = error instanceof Error && error.name === 'NotSupportedError' && params.action === 'compact'
+          ? 'UNSUPPORTED_CAPABILITY' : (error as { code?: unknown } | null)?.code;
+        if (typeof code === 'string' && ['UNSUPPORTED_CAPABILITY', 'PRECONDITION_FAILED', 'NOT_FOUND', 'SESSION_RUNNING', 'COMPACT_FAILED'].includes(code))
           return { ok: false, errorCode: code, message: error instanceof Error ? error.message : 'Session action is unavailable' };
         throw error;
       }

@@ -25,6 +25,8 @@ Host SSE v2 由 `protocol=2` 和 `x-cindy-event-protocol: 2` 双向确认，新�
 
 ## 后台 Host 与原生窗口平台合同（未发布）
 
+客户端模式追加可信窗口专用的 `maker:runtime-plugins`，映射到 `POST /api/runtime-plugins`，并转发插件拦截、改写、熔断三种既有窗口事件。旧窗口对新 Host 保持原调用和原事件处理，新窗口连旧 Host 时仅这条新通道收到沿用的 `404 not_found`，无需改动 Device Link 或中转。
+
 同机原生客户端新增 `/control/platform/socket`，复用 profile bearer，并要求
 `x-cindy-host-instance` 与 Host 当前实例一致。拒绝浏览器 Origin 连接，窗口身份绑定
 账号、客户端 ID 和 PID。HTTP/SSE 的实例头为可选增量；旧显式客户端不带头时继续原协议，

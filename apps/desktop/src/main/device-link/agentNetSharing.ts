@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import WebSocket from 'ws';
-import { DeviceLinkClient, parseSharedTaskPeer, parseProviderSharePeer, type DeviceLinkClientOptions, type RoutedDeviceLinkClient, type SharedTaskApi } from '@cindy/device-link';
+import { DeviceLinkClient, parseSharedTaskPeer, parseProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, type DeviceLinkClientOptions, type RoutedDeviceLinkClient, type SharedTaskApi } from '@cindy/device-link';
 import { AgentNetSharingClient, AgentNetSharingTransport, buildAgentNetSharingInvitation,
   parseAgentNetSharingInvitation,
   encodeAgentNetSharingInvitation, syncAgentNetSharingOrigins,
@@ -54,6 +54,7 @@ interface Session {
   committed: Map<string, { route: AgentNetSharingRoute; member: AgentNetClient }>;
   sockets: Map<string, { api: AgentNetClient; socket: import('@cindy/agent-net').AgentNetAppSocket }>;
   lists: Map<string, unknown[]>;
+  unavailableProviderOrigins: Set<string>;
   providerListReads: Set<ProviderListRead>;
   originSync?: Promise<void>;
   originDigest?: string;
@@ -134,7 +135,8 @@ function owner(): Session {
     if (!getAuthState().isAuthenticated || getCurrentUserId() !== account || activeOwnerScopeKey() !== key
       || isAppSessionBoundaryPending() || getClientEndpoint('authApiBaseUrl') !== auth) throw new Error('AGENT_NET_OWNER_CHANGED');
   };
-  session = { key, ...readVault(), guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map(), providerListReads: new Set() };
+  session = { key, ...readVault(), guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(),
+    lists: new Map(), unavailableProviderOrigins: new Set(), providerListReads: new Set() };
   return session;
 }
 /** Reads the current owner's sharing vault; never writes or publishes a session.
@@ -439,6 +441,51 @@ export async function checkAgentNetProviderExecutor(input: SharingExecutorInput,
   if (failure && !agentNetAllowsLegacy()) throw failure;
   return null;
 }
+
+/** The current worker directory already carries the relay-confirmed, owner-signed authority. */
+export function agentNetProviderExecutorProof(input: SharingExecutorInput, pinGeneration?: string) {
+  if (isAppSessionBoundaryPending() || !getAuthState().isAuthenticated
+    || !readDeviceLinkSettings().agentNetEnabled || input.executorDeviceId !== getDeviceId()) return null;
+  const peer = providerShareGuestPeer(input.shareId, input.memberId, input.guestDeviceId);
+  const route = agentNetSharingRoute('provider-share', input.shareId);
+  if (route?.retired || route?.memberId) return null;
+  const active = currentAgentNetClient();
+  const live = route ? owner().sockets.get(connectionKey(route)) : undefined;
+  const primary = active && (!route || route.rootPublicKey === active.rootPublicKey
+    && route.networkId === active.certificate.networkId) ? active : null;
+  const api = live?.api ?? primary;
+  if (!api || api.delegation) return null;
+  const target = live ? live.socket.scopedPeerTarget(peer) : currentAgentNetScopedTarget(peer);
+  const proof = target?.delegation;
+  if (!proof || proof.kind !== 'provider-share' || proof.networkId !== api.certificate.networkId
+    || proof.resourceId !== input.shareId || proof.scope?.memberId !== input.memberId
+    || proof.guestDeviceId !== input.guestDeviceId || (route && proof.hostDeviceId !== route.hostDeviceId)
+    || !verifyDelegation(api.rootPublicKey, proof)) return null;
+  const executor = proof.executors?.find(row => row.certificate.deviceId === input.executorDeviceId);
+  if (!executor || executor.expiresAt <= Date.now() || executor.certificate.subject !== api.certificate.subject
+    || executor.certificate.signingKey !== api.identity.signingKey || executor.certificate.transportKey !== api.identity.transportKey) return null;
+  if (!route && pinGeneration === executor.generation) {
+    const selected = selectedAgentNetSharingRoute('provider-share');
+    if (!selected || selected.networkId !== proof.networkId || selected.rootPublicKey !== api.rootPublicKey) return null;
+    rememberAgentNetSharingHost('provider-share', input.shareId, { ...selected, hostDeviceId: proof.hostDeviceId });
+  }
+  return { delegation: proof, generation: executor.generation, expiresAt: executor.expiresAt,
+    ownerDeviceId: proof.hostDeviceId, active: true as const };
+}
+
+/** The guest's authenticated relay directory can confirm an already joined share during a list outage. */
+export function hasAgentNetProviderGuestRoute(shareId: string, memberId: string, ownerDeviceId: string): boolean {
+  if (isAppSessionBoundaryPending() || !getAuthState().isAuthenticated || !getCurrentUserId()) return false;
+  const state = owner();
+  const route = state.vault.routes.find(row => row.kind === 'provider-share' && row.resourceId === shareId);
+  if (!route || route.retired || route.memberId !== memberId || route.hostDeviceId !== ownerDeviceId
+    || !state.unavailableProviderOrigins.has(providerListKey(true, route))) return false;
+  const live = state.sockets.get(connectionKey(route));
+  const proof = live?.socket.scopedPeerTarget(providerShareHostPeer(shareId, ownerDeviceId))?.delegation;
+  return !!proof && proof.kind === 'provider-share' && proof.networkId === route.networkId && proof.resourceId === shareId
+    && proof.scope?.memberId === memberId && proof.hostDeviceId === ownerDeviceId && proof.expiresAt > Date.now()
+    && proof.executors?.some(executor => executor.expiresAt > Date.now()) === true;
+}
 /** Close-only cleanup for an outgoing account. Credentials, endpoints and pins
  * are captured before the boundary; nothing refreshes into the next account.
  *
@@ -529,10 +576,25 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
     for (const source of sources) state.providerListReads.delete(source);
   }
   state.guard();
-  if (values.length === 0 || values.every(v => v.status === 'rejected')) throw new Error('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
+  const denied = new Set<string>();
+  if (received) for (const [i, result] of values.entries()) {
+    const key = sources[i].key;
+    const status = result.status === 'rejected' ? result.reason?.statusCode ?? result.reason?.status : undefined;
+    if (result.status === 'rejected' && (result.reason instanceof TypeError || result.reason?.name === 'TimeoutError'
+      || result.reason?.name === 'AbortError' || result.reason?.message === 'AGENT_NET_DIRECTORY_DEADLINE'
+      || status === 0 || status === 429 || status >= 500 && status < 600)) {
+      state.unavailableProviderOrigins.add(key);
+    } else state.unavailableProviderOrigins.delete(key);
+    if (status === 401 || status === 403) denied.add(key);
+  }
+  if (values.length === 0 || !denied.size && values.every(v => v.status === 'rejected')) throw new Error('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
   const rows = new Map<string, unknown>(), unavailable = new Set<string>();
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i], result = values[i];
+    if (denied.has(source.key)) {
+      state.lists.delete(source.key);
+      continue;
+    }
     const listed = result.status === 'fulfilled' ? result.value as unknown[] : state.lists.get(source.key) ?? [];
     const items = source.departedMembers.size
       ? listed.filter(row => !source.departedMembers.has((row as { memberId?: string })?.memberId ?? '')) : listed;

@@ -25,6 +25,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
@@ -1807,6 +1808,83 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(finalize).toHaveBeenCalledTimes(2);
+  });
+
+  // #11298 review P1: editors that rebuild model rows field by field dropped the
+  // upstream-listing marker, silently disabling withdrawal review. Main inherits it
+  // for an unchanged route/credential and drops it when the key or endpoint changes.
+  it('keeps the upstream listing marker across saves and drops it on a key or endpoint change', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(() => 'old-key'),
+      storeCustomProviderKey: vi.fn(() => true),
+    }));
+    const config = (listed: boolean, baseUrl = 'https://gw.example.test/v1'): CustomProviderConfig => ({
+      id: 'listed-gw', name: 'Gateway', runtimes: { codex: { baseUrl, models: [
+        { id: 'listed', name: 'Listed', discoveredMetadata: {}, ...(listed ? { listedUpstream: true as const } : {}) },
+        { id: 'manual', name: 'Manual' },
+      ] } },
+    });
+    const marked = async () => (await getCustomProvider('listed-gw'))?.runtimes.codex?.models
+      .filter(model => model.listedUpstream).map(model => model.id);
+    const receipt = async () => ({ listingReceipts: { codex: (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', baseUrl: 'https://gw.example.test/v1', authMethod: 'apiKey', savedProviderId: 'listed-gw',
+    }) as { listingReceipt: string }).listingReceipt } });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config(false), { codex: 'old-key' });
+    // Without a listing receipt a save cannot introduce markers.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true));
+    expect(await marked()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true), {}, await receipt());
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false));
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false), { codex: 'new-key' });
+    expect(await marked()).toEqual([]);
+    // PR #11550 review P1: window A fetched with the old key; window B saves a new key
+    // before A's refresh save, so A's receipt no longer proves its listing.
+    const stale = await receipt();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false), { codex: 'newer-key' });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true), {}, stale);
+    expect(await marked()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true, 'https://other.example.test/v1'), {}, await receipt());
+    expect(await marked()).toEqual([]);
+  });
+
+  // PR #11550 review P1: a confirmed review must be applied to the latest saved
+  // connection, never to the page snapshot: models added since are kept, rows that
+  // lost the marker (another window changed the key/endpoint) are not removed, and a
+  // row relisted by a newer refresh (no current absence receipt) is not removed.
+  it('applies confirmed withdrawals to the latest saved connection only', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ readCustomProviderKeyForMutation: vi.fn(() => 'key') }));
+    const row = (id: string, listed = true, missing = false) => ({ id, name: id, discoveredMetadata: {},
+      ...(listed ? { listedUpstream: true as const } : {}), ...(missing ? { missingUpstream: true as const } : {}) });
+    const base = (models: ReturnType<typeof row>[]): CustomProviderConfig => ({ id: 'withdraw-gw', name: 'Gateway',
+      runtimes: { codex: { baseUrl: 'https://gw.example.test/v1', models } } });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, base([row('gone', false)]), { codex: 'key' });
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', baseUrl: 'https://gw.example.test/v1', authMethod: 'apiKey', savedProviderId: 'withdraw-gw',
+    }) as { listingReceipt: string };
+    // Latest saved: 'gone' is still absent, 'old' was relisted by a newer refresh,
+    // 'fresh' was just added, 'kept' lost its marker.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, base([row('gone', true, true), row('old'), row('fresh'), row('kept', false)]),
+      {}, { listingReceipts: { codex: fetched.listingReceipt } });
+    const stalePage = base([row('gone', true, true), row('old', true, true), row('kept')]);
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
+      removeWithdrawnModels: ['gone', 'old', 'kept'].map(modelId => ({ agent: 'codex' as const, modelId })),
+    });
+    expect(result).toEqual({ ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'gone' }], withdrawnGoneIds: ['gone'] });
+    expect((await getCustomProvider('withdraw-gw'))?.runtimes.codex?.models.map(model => model.id))
+      .toEqual(['old', 'fresh', 'kept']);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, { codex: 'other' }, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'old' }],
+    })).rejects.toThrow(/INVALID_PARAMS/);
+    // PR #11550 review P2: any persisted ID (the store has no length cap) stays removable.
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'x'.repeat(600) }],
+    })).resolves.toMatchObject({ ok: true, withdrawnRemoved: [] });
   });
 
   it('hard-cuts config and credential changes, but skips display-only edits', async () => {
@@ -4111,7 +4189,62 @@ describe('provider:test-connection handler', () => {
   });
 });
 
+// #9619: exercise the real IPC + fetch classification. Existing cases did not inspect
+// failure diagnostics. Synthetic upstream text contains secrets to catch accidental
+// logging of detail, headers, connection IDs, or URL parameters. Unit tier, no socket.
+const modelRefreshDiagnostics = vi.hoisted(() => vi.fn());
+vi.mock('../../logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../logger.js')>();
+  return { ...actual, createLogger: (scope: string) => ({
+    ...actual.createLogger(scope), warn: (...args: unknown[]) => modelRefreshDiagnostics(scope, ...args),
+  }) };
+});
+
 describe('provider:models-fetch handler', () => {
+  it.each([401, 503])('records safe saved-refresh diagnostics for HTTP %s', async status => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(
+        'synthetic-secret-response', { status })),
+    }));
+    modelRefreshDiagnostics.mockClear();
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'synthetic-secret-connection',
+      baseUrl: 'https://provider.example/v1?key=synthetic-secret-query',
+      modelsUrl: 'https://provider.example/models?key=synthetic-secret-query',
+      authMethod: 'oauth', apiKey: 'synthetic-secret-token',
+      headers: { 'X-Secret': 'synthetic-secret-header' },
+    });
+    expect(result).toMatchObject({ ok: false, status, code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR' });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed',
+      { agent: 'codex', code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR', status },
+    ]]);
+    expect(JSON.stringify(modelRefreshDiagnostics.mock.calls)).not.toContain('synthetic-secret');
+  });
+
+  it('records a local authentication failure without inventing an HTTP status', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ fetchModels: async () => ({ ok: false, code: 'AUTH_INVALID' }) }));
+    modelRefreshDiagnostics.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'pi', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'oauth',
+    });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed', { agent: 'pi', code: 'AUTH_INVALID' },
+    ]]);
+  });
+
+  it('does not report successful discovery as a failure', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    modelRefreshDiagnostics.mockClear();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'apiKey',
+    })).toMatchObject({ ok: true, models: [{ id: 'm1' }] });
+    expect(modelRefreshDiagnostics).not.toHaveBeenCalled();
+  });
+
   it('rejects an untrusted sender before issuing a credentialed model request', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -6211,6 +6344,26 @@ describe('Agent API connection configuration', () => {
     await actions.connections.fetch(config, 'pi');
     expect(deps.fetchModels).toHaveBeenCalledTimes(1);
     expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://new.test/v1', apiKey: 'new-key' }));
+  });
+});
+
+// Orca review 2026-11-18: a merged connection follows its pool's switch, so a write to its own hidden key
+// from a page opened before the merge must fail visibly instead of reporting success with no effect.
+describe('remote provider access writes', () => {
+  it('refuses a merged connection and accepts the pool', async () => {
+    const harness = new IpcHarness();
+    const setRemoteProviderInvocationEnabled = vi.fn();
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('openai', {}), { ...catalogView('old-openai', {}), subscriptionPoolAlias: true }],
+      getRemoteProviderInvocationEnabled: () => false,
+      setRemoteProviderInvocationEnabled,
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'old-openai', enabled: false }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'openai', enabled: true });
+    expect(setRemoteProviderInvocationEnabled).toHaveBeenCalledExactlyOnceWith('openai', true);
   });
 });
 

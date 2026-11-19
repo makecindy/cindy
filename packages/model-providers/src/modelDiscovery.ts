@@ -33,6 +33,34 @@ export function isOpenHubsModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** OpenCode Go documents MIME entries as accepted types, unlike generic relays
+ * which can list formats even when image input is disabled (#11446).
+ */
+function isOpenCodeGoModelsUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://opencode.ai' &&
+      ['/zen/go/v1/models', '/inference/go/v1/models'].includes(url.pathname.replace(/\/+$/, ''));
+  } catch { return false; }
+}
+
+/** Keep internal coarse modalities; document MIME types do not imply vision. */
+function openCodeModalities(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const normalize = (list: unknown) => {
+    if (!Array.isArray(list) || list.length > 16 || !list.every(item => typeof item === 'string')) return list;
+    return [...new Set(list.flatMap((item: string) => {
+      const mime = /^(image|audio|video)\/[a-z0-9.+-]+$/.exec(item);
+      if (mime) return [mime[1]];
+      // Non-media MIME (e.g. application/pdf) has no internal modality.
+      return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(item) ? [] : [item];
+    }))];
+  };
+  const record = value as Record<string, unknown>;
+  return { ...record, input: normalize(record.input), output: normalize(record.output) };
+}
+
 /** Token strings are decimal counts, not abbreviations, units or JS numeric expressions. */
 function contextTokens(value: unknown, truncate = false): number | undefined {
   if (typeof value === 'string') {
@@ -93,6 +121,7 @@ export function parseModelsListResponse(
   if (!list) return null;
   const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
+  const openCodeGo = isOpenCodeGoModelsUrl(sourceUrl);
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -186,9 +215,10 @@ export function parseModelsListResponse(
             : record.default_reasoning_level !== undefined
               ? record.default_reasoning_level
               : record.reasoningEffort;
-    const modalities = record.modalities ??
+    const rawModalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
+    const modalities = openCodeGo ? openCodeModalities(rawModalities) : rawModalities;
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
     const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;

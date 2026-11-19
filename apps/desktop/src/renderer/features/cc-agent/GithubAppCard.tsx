@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { GithubAppConnectionState } from '../../../shared/githubSetup';
 
 /** Trusted account controls alongside the plugin's existing GitHub login card. */
-export function GithubAppCard({ automation = false, repositories }: { automation?: boolean; repositories?: string[] }) {
+export function GithubAppCard({ automation = false, repositories, timedPrCheck }: { automation?: boolean; repositories?: string[]; timedPrCheck?: boolean }) {
   const { t } = useTranslation();
   const [state, setState] = useState<GithubAppConnectionState>();
   const [busy, setBusy] = useState(false);
@@ -57,7 +57,7 @@ export function GithubAppCard({ automation = false, repositories }: { automation
     finally { acting.current = false; setBusy(false); }
   };
   if (!failed && state?.available === false) return automation
-    ? <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.editor.webhook.appUnavailable')}</p> : null;
+    ? <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.editor.webhook.appUnavailable')} {timedPrCheck && t('scheduler.prTrigger.fallback')}</p> : null;
   const disabled = busy || checking;
   const unavailable = state?.unavailable?.filter(repo => !repositories || repositories.some(selected => selected.toLowerCase() === repo.toLowerCase()));
   return (
@@ -69,6 +69,8 @@ export function GithubAppCard({ automation = false, repositories }: { automation
           : t(automation ? 'scheduler.editor.webhook.accountDisconnected' : key + 'description')}
       </p>
       {!checking && !awaitingBrowser && Boolean(unavailable?.length) && <p className="break-words text-12 text-[var(--text-secondary)]">{t(key + 'missing', { repositories: unavailable?.join(', ') })}</p>}
+      {timedPrCheck && !checking && !failed && (!state?.login || Boolean(unavailable?.length)) &&
+        <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.prTrigger.fallback')}</p>}
       {checking && <p role="status" className="flex items-center gap-2 text-12 text-[var(--text-secondary)]">
         <Spinner size={14} />{t(state?.login ? key + 'syncing' : 'ccAgent.gitContext.pr.setup.account.checking')}
       </p>}

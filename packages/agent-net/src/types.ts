@@ -53,6 +53,14 @@ export interface SessionWire {
  * (`SOCKET_DATA_LOW_WATER_BYTES` in packages/device-link/src/client.ts): at or below it, any frame may be written.
  */
 export const DRAIN_LOW_WATER_BYTES = 128 * 1024;
+/**
+ * How datagrams relayed for this computer travel right now: over the relay's UDP port (relayUdp.ts) or its WebSocket,
+ * and the last round trip on that path in ms (null until measured). The remote connection page shows both on the relay.
+ */
+export interface RelayRoute {
+  via: 'udp' | 'websocket';
+  rttMs: number | null;
+}
 export interface Transport {
   readonly id: string;
   readonly dial: unknown;
@@ -60,6 +68,11 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /**
+   * See RelayRoute; null without a relay. Only the UDP round trip is known here (`rttMs` is null for the WebSocket):
+   * the WebSocket itself is opened and pinged by the host (workerSocket.ts).
+   */
+  relayRoute?(): RelayRoute | null;
 }
 export interface TransportOptions {
   admit(remoteId: string): boolean;
