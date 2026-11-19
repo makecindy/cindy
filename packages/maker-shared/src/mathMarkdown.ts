@@ -4,7 +4,9 @@ import {
   COMPLETE_MARKDOWN_HTML_TAG_LINE,
   MARKDOWN_BLOCK_HTML_LINE,
   markdownRawHtmlEnd,
+  type MarkdownRawMarkupState,
 } from './markdownBlocks';
+export type { MarkdownRawMarkupState } from './markdownBlocks';
 export {
   parseMarkdownTableBlock,
   advanceMarkdownHtmlCommentState,
@@ -129,6 +131,7 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
   let html = false;
   let comment = false;
   let rawHtmlEnd: RegExp | undefined;
+  const referenceRawState: MarkdownRawMarkupState = {};
   const lines = text.split('\n');
   let lineIndex = 0;
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
@@ -150,6 +153,7 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
         fence = marker;
         html = false;
         rawHtmlEnd = undefined;
+        referenceRawState.raw = undefined;
         paragraph = false;
         continue;
       }
@@ -158,12 +162,17 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
         paragraph = false;
         continue;
       }
+      if (referenceRawState.raw) {
+        comment = advanceMarkdownHtmlCommentState(line, comment, referenceRawState);
+        paragraph = false;
+        continue;
+      }
       if (!paragraph && !comment && COMPLETE_MARKDOWN_HTML_TAG_LINE.test(line)) html = true;
       const table = !html && !comment && !/^(?:#{1,6}\s|\s*>)/.test(line)
         ? parseMarkdownTableBlock(lines, currentLine) : null;
       if (table) {
         for (let row = currentLine; row <= table.endIndex; row++) {
-          comment = advanceMarkdownHtmlCommentState(lines[row], comment);
+          comment = advanceMarkdownHtmlCommentState(lines[row], comment, referenceRawState);
           if (row > currentLine) lineCursor += lines[row].length + 1;
         }
         lineIndex = table.endIndex + 1;
@@ -171,19 +180,19 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
         continue;
       }
       const startsInComment = comment;
-      comment = advanceMarkdownHtmlCommentState(line, comment);
+      comment = advanceMarkdownHtmlCommentState(line, comment, referenceRawState);
+      const rawEnd = !startsInComment ? markdownRawHtmlEnd(line) : null;
+      if (rawEnd) {
+        if (!referenceRawState.raw && !rawEnd.test(line)) rawHtmlEnd = rawEnd;
+        paragraph = false;
+        continue;
+      }
       if (startsInComment || comment || line.includes('<!--')) {
         if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line)) paragraph = false;
         else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
         continue;
       }
       if (!line.trim()) { html = false; paragraph = false; continue; }
-      const rawEnd = markdownRawHtmlEnd(line);
-      if (rawEnd) {
-        if (!rawEnd.test(line)) rawHtmlEnd = rawEnd;
-        paragraph = false;
-        continue;
-      }
       if (MARKDOWN_BLOCK_HTML_LINE.test(line)) html = true;
       if (html) continue;
       paragraph = !/^(?: {0,3}#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s| {0,3}(?:[-*_]\s*){3,}$)/.test(line);
@@ -196,7 +205,7 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
     // Invalid definitions must not suppress math on the following line.
     const headerEnd = match.index + match[0].length;
     const destinationStart = lineEnd !== -1 && !text.slice(headerEnd, lineEnd).trim() ? lineEnd + 1 : headerEnd;
-    const destinationEnd = !paragraph && !fence && !html && !comment && !rawHtmlEnd ? continuationDefinitionEnd(text, destinationStart) : null;
+    const destinationEnd = !paragraph && !fence && !html && !comment && !rawHtmlEnd && !referenceRawState.raw ? continuationDefinitionEnd(text, destinationStart) : null;
     // Coarse header shielding can protect URL-shaped text, but only complete
     // definitions may take precedence over real code spans or fence lines.
     if (completeOnly && destinationEnd === null) continue;

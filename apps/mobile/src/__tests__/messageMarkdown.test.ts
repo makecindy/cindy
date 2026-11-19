@@ -2971,6 +2971,17 @@ describe('unresolved references and raw declaration regressions', () => {
     expect(inlines.filter(inline => inline.type === 'code')).toHaveLength(200);
     expect(inlines.filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'ok', url: 'https://example.com/' }]);
     expect(scans).toBeLessThan(2000);
+    // Raw-context propagation must not reintroduce prefix rescans for emphasis.
+    let markupWork = 0;
+    const markupSpy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source === '<!--|<!\\[CDATA\\[|<!(?!--)|<\\?') markupWork += input.length;
+      return original.call(this, input);
+    });
+    try { blocks = parseMobileMarkdown('[s]: https://example.com/\n\n<!DOCTYPE html> ' + '**x** '.repeat(200) + '[site][s]'); } finally { markupSpy.mockRestore(); }
+    const marked = blocks.flatMap(block => 'inlines' in block ? block.inlines : []);
+    expect(marked.filter(inline => inline.type === 'strong')).toHaveLength(200);
+    expect(marked.filter(inline => inline.type === 'link')).toHaveLength(1);
+    expect(markupWork).toBeLessThan(30000);
   });
 
   it('keeps references inside raw declarations, processing instructions and CDATA literal', () => {
@@ -2979,9 +2990,16 @@ describe('unresolved references and raw declaration regressions', () => {
       const links = parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
       expect(links).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
     }
-    for (const markup of ['<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">']) {
+    for (const markup of ['<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">', '<![CDATA[\n<!--\n]]>', '<![CDATA[\n\n<!--\n]]>', '<![CDATA[\n\n**[site][s]**\n<!--\n]]>', '<?xml\n<!--\n?>', '<!DOCTYPE x "a\n<!--\nb">', '<!DOCTYPE x "a >\n<!--\nb">', '<![CDATA[\n```\n]]>\n```', '<?xml\n$$\n?>\n$$']) {
       for (const source of ['[s]: https://example.com/\n\n' + markup + '\n\n[site][s]', markup + '\n\n[s]: https://example.com/\n\n[site][s]']) {
         expect(parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
+        let streamed = parseMobileMarkdownIncremental('');
+        let prefix = '';
+        for (const line of source.split('\n')) {
+          prefix += line + '\n';
+          streamed = parseMobileMarkdownIncremental(prefix, streamed);
+          expect(streamed.blocks).toEqual(parseMobileMarkdown(prefix));
+        }
       }
     }
     const literal = '[s]: https://example.com/\n\n`<?` [site][s] <!-- <? --> [site][s]';
