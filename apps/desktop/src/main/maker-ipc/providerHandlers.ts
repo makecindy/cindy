@@ -351,6 +351,7 @@ export interface ProviderHandlerDeps {
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
   /** Main's native file picker; no renderer-supplied paths or file contents. */
   selectProviderImportFile?(event: unknown): Promise<string | null>;
+  confirmLocalProviderDestination?(event: unknown, destination: string): Promise<boolean>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
@@ -1551,13 +1552,27 @@ export function registerProviderHandlers(
         }
         const providers = await deps.listProviders({ allowSideEffects: false });
         assertProviderMutationOwner(ownerAtIngress);
-        const { draft, resolution } = beginProviderImportConfirm(
+        const { draft, resolution, destinationToConfirm } = beginProviderImportConfirm(
           importId,
           ownerAtIngress,
           providers,
           target,
         );
         started = true;
+        if (destinationToConfirm) {
+          if (!deps.confirmLocalProviderDestination ||
+              !await deps.confirmLocalProviderDestination(event, destinationToConfirm))
+            throwIpcError('MUTATION_CANCELLED', 'Saved credential use was not approved');
+          assertTrustedProviderMutationSender(event);
+          assertProviderMutationOwner(ownerAtIngress);
+          try { await checkLocalProviderImportSource(importId, ownerAtIngress, true); }
+          catch {
+            assertProviderMutationOwner(ownerAtIngress);
+            throwIpcError('PRECONDITION_FAILED', 'saved API source changed; scan again');
+          }
+          assertTrustedProviderMutationSender(event);
+          assertProviderMutationOwner(ownerAtIngress);
+        }
         if (draft.kind === 'builtin') {
           if (!deps.builtinApiKeyDeps)
             throwIpcError('INTERNAL', 'built-in API-key bridge unavailable');

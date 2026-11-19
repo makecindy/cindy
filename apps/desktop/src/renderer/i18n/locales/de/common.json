@@ -3716,6 +3716,8 @@
           "edit": "Bearbeiten",
           "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
           "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "useSavedCredential": "Gespeicherte Zugangsdaten verwenden",
+          "confirmDestination": "Gespeicherte Claude Code-Zugangsdaten für diese Adresse verwenden?",
           "name": "Anzeigename",
           "baseUrl": "Basis-URL",
           "protocol": "API-Protokoll",

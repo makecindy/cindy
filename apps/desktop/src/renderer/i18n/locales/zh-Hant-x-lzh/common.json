@@ -3675,6 +3675,8 @@
           "edit": "修",
           "editFailed": "請核網址、協定與金鑰，再試。",
           "editNote": "金鑰留空則沿用已讀憑證；改網址或協定，須另填金鑰。",
+          "useSavedCredential": "用所存憑證",
+          "confirmDestination": "於此位址用所存 Claude Code 憑證乎？",
           "name": "顯示名稱",
           "baseUrl": "基礎 URL",
           "protocol": "API 協定",

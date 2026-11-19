@@ -3675,6 +3675,8 @@
           "edit": "編集",
           "editFailed": "URL、プロトコル、キーを確認して再試行してください。",
           "editNote": "キーを空欄にすると読み取り済みの認証情報を保持します。URL やプロトコルを変更すると新しいキーが必要です。",
+          "useSavedCredential": "保存済みの認証情報を使用",
+          "confirmDestination": "この URL で保存済みの Claude Code 認証情報を使用しますか？",
           "name": "表示名",
           "baseUrl": "ベース URL",
           "protocol": "API プロトコル",

@@ -7380,6 +7380,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       return selected.canceled ? null : selected.filePaths[0] ?? null;
     },
+    confirmLocalProviderDestination: async (event, destination) => {
+      const win = BrowserWindow.fromWebContents((event as IpcMainInvokeEvent).sender);
+      if (!win || win.isDestroyed()) return false;
+      const url = new URL(destination);
+      const result = await dialog.showMessageBox(win, {
+        type: 'question',
+        message: t('settings.providers.import.local.confirmDestination'),
+        detail: url.pathname === '/' ? url.origin : `${url.origin}\n\n${url.href}`,
+        buttons: [t('common.cancel'), t('settings.providers.import.local.useSavedCredential')],
+        cancelId: 0,
+        defaultId: 0,
+        noLink: true,
+      });
+      return result.response === 1;
+    },
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),

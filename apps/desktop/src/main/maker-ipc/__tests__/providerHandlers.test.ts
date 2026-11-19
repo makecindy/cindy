@@ -367,6 +367,8 @@ describe('local API configuration import IPC', () => {
     const { harness, deps } = await setup({
       env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN' },
     });
+    const approveDestination = vi.fn(async () => false);
+    deps.confirmLocalProviderDestination = approveDestination;
     const item = (await scan(harness)).items[0];
     expect(item).toMatchObject({
       issue: 'needsInput',
@@ -381,7 +383,12 @@ describe('local API configuration import IPC', () => {
     expect(edited).not.toHaveProperty('issue');
     const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
     expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    expect(approveDestination).toHaveBeenCalledWith(expect.anything(), baseUrl);
     expect(deps.fetchModels).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+    approveDestination.mockResolvedValueOnce(true);
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
       ok: true,
       providerId: preview.providerId,
