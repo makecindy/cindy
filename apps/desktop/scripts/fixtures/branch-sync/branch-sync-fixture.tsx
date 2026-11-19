@@ -1,16 +1,20 @@
 import { useState } from 'react';
 import { BranchWorktreeChip } from '../../../src/renderer/components/new-chat/WorktreeChipsRow';
+import { ExistingWorktreePicker } from '../../../src/renderer/components/new-chat/ExistingWorktreePicker';
+import type { WorktreeMeta } from '../../../src/renderer/lib/worktree.types';
 import { mountPage, type UiPageContext } from '../../ui-page/harness';
 import type { BranchSyncRequest, BranchSyncStatus } from '../../../src/shared/worktreeBranchSync';
 const branches = ['main', 'feature/search', 'origin/main'];
 function Fixture({ ctx }: { ctx: UiPageContext }) {
   const [branch, setBranch] = useState('main');
   const [checked, setChecked] = useState(ctx.case !== 'unchecked');
+  const [selected, setSelected] = useState<WorktreeMeta | null>(null);
   return (
     <main className="p-6 pt-16">
       <BranchWorktreeChip
         baseRepo="/projects/cindy"
-        branchLabel={branch}
+        branchLabel={selected?.branch ?? branch}
+        reuseWorktree={!!selected}
         deviceId={ctx.case === 'old-host' ? 'old-pc' : undefined}
         remoteDefaultBranch={ctx.case === 'old-host' ? undefined : 'refs/remotes/origin/main'}
         branches={branches}
@@ -18,8 +22,9 @@ function Fixture({ ctx }: { ctx: UiPageContext }) {
         branchesFailed={false}
         onRetryBranches={() => {}}
         checked={checked}
+        worktreePicker={ctx.case === 'reuse' && checked ? <ExistingWorktreePicker baseRepo="/projects/cindy" selected={selected} onSelect={setSelected} /> : undefined}
         branchSourceSelected
-        branchInteractive
+        branchInteractive={!selected}
         onPick={setBranch}
         onOpenRequested={() => {}}
         onToggle={setChecked}
@@ -49,6 +54,8 @@ mountPage({
         },
       },
       worktreeBranchSyncStatus: async (req: BranchSyncRequest) => read(req),
+      worktreeListAll: async () => [{ sessionId: 'owner', name: 'merry-edison', baseRepo: '/projects/cindy',
+        path: '/projects/cindy/.cindy-worktrees/merry-edison', branch: 'cindy/merry-edison', sourceBranch: 'main', createdAt: '2026-11-17' }],
       worktreeSyncBranch: async (req: BranchSyncRequest) => ({
         status: { ...read(req), behind: 0 },
         updated: ctx.case === 'ahead' ? 0 : ctx.case === 'worker' ? 1 : 3,

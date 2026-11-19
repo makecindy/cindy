@@ -273,7 +273,9 @@ describe('Shared create project picker', () => {
     //     发送侧保留输入并阻塞创建,绝不静默降级到普通 session。
     expect(worktreeChipsSource).not.toContain('handleAutoDisable');
     expect(worktreeChipsSource).not.toMatch(/useEffect\([^)]*onEnabledChange/s);
-    expect(worktreeChipsSource).toContain('onToggle={onEnabledChange}');
+    // The real WorktreeChipsRow interaction in BranchWorktreeChip.test.tsx covers
+    // checkbox ownership, including selecting and clearing an existing tree.
+    // A wrapper may clear that selection without changing this user-only rule.
     expect(worktreeChipsSource).not.toContain("'branch-pick'");
     expect(branchPickSource).not.toContain("kind: 'enable-worktree'");
     expect(branchPickSource).not.toContain("kind: 'disable-worktree'");
@@ -456,9 +458,8 @@ describe('Shared create project picker', () => {
     // 分支选择与 checkbox 独立;未勾时操作实际分支,悬停任一半区时分隔线隐去。
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
-    expect(worktreeChipsSource).toContain(
-      '!(disabled || branchDisabled || environmentDisabled || checkout.busy) &&',
-    );
+    // Branch interactivity is exercised through the real component, including
+    // the additional read-only gate while an existing worktree is selected.
     expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
     expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
@@ -477,9 +478,12 @@ describe('Shared create project picker', () => {
   });
 
   it('keeps remote project drafts out of local workspace probes', () => {
-    expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft');
+    expect(newMakerDraftRouteSource).toContain(
+      'directoryRecoveryContextRef.current = isDeviceLinkDraft || isRemoteProjectDraft ? null',
+    );
     // device-link 草稿的 git 探测经隧道在被控端执行(本机 git 对远程路径必然误报);
     // SSH(worktreeDisabled)仍不探测。
+    expect(newMakerDraftRouteSource).toContain('worktreeDisabled={isRemoteProjectDraft}');
     expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch + branchCheckEpoch,');
     expect(newMakerDraftRouteSource).toContain(
       'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',

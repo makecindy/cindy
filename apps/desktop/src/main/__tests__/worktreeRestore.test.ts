@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 
 import { withWorktreeRestoreMutation } from '../worktree/restoreLock';
 
@@ -56,14 +57,18 @@ vi.mock('../worktree/WorktreeManager', () => ({
   copyClaudeSiviDirs: (...args: unknown[]) => copyClaudeSiviDirsMock(...args),
 }));
 
-vi.mock('../localDb/client/current', () => ({
-  getDbClient: () => ({
+vi.mock('../localDb/client/current', () => {
+  const client = {
     drizzle: {
       select: (selection: Record<string, unknown>) => ({
         from: () => ({
-          where: () => {
+          where: (condition: Parameters<SQLiteSyncDialect['sqlToQuery']>[0]) => {
             if (dbFailure) throw new Error('database temporarily unavailable');
             if ('id' in selection) return dbOwnerRows;
+            if ('status' in selection) {
+              const [id] = new SQLiteSyncDialect().sqlToQuery(condition).params;
+              return dbOwnerRows.filter((row) => row.id === id);
+            }
             if (dbBindingRows.length > 0) return [dbBindingRows.shift()!];
             return dbWorktreePath === undefined
               ? []
@@ -77,8 +82,10 @@ vi.mock('../localDb/client/current', () => ({
         }),
       }),
     },
-  }),
-}));
+  };
+  const snapshot = { client, userId: 'fixture-user', clientEpoch: 1 };
+  return { getDbClient: () => client, getCurrentDbClientSnapshot: () => snapshot };
+});
 
 const SHA = 'c'.repeat(40);
 const AUTO_STASH = `${SHA}\tOn xdt/wt1: xdt-auto-stash: session s1 worktree=wt1`;
@@ -687,6 +694,51 @@ describe('worktree restore', () => {
     );
   });
 
+  // Unit regression for PR #11152: a borrower persists the same worktree_path as
+  // the registered owner. Existing tests only exercised borrowing via working_dir.
+  // Sending and manual recovery must apply the owner's snapshot without creating
+  // another registry entry that would prevent the shared directory from recycling.
+  // Manual recovery also publishes that owner to the UI so the borrower regains
+  // its badge and open-folder action through the shared registry.
+  it.each(['send', 'manual recovery', 'manual recovery with failed notification'])('uses the registered owner for a borrower during %s', async (entry) => {
+    fsSync.mkdirSync(wtPath, { recursive: true });
+    const owner = { sessionId: 'owner', path: wtPath };
+    storeGetMock.mockImplementation((sessionId: string) => sessionId === 'owner' ? owner : null);
+    storeGetAllMock.mockReturnValue([owner]);
+    dbOwnerRows = [
+      { id: 'borrower', worktreePath: wtPath, status: 'active' },
+      { id: 'owner', worktreePath: wtPath, status: 'archived' },
+    ];
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/cindy/wt1\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/owner')) {
+        return { stdout: `${SHA}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    if (entry === 'send') {
+      await expect(mod.getManagedWorktreeReadinessForSession('borrower', wtPath)).resolves.toBe('ready');
+    } else {
+      await expect(mod.getWorktreeRestoreStatus('borrower')).resolves.toEqual({
+        state: 'present', worktreePath: wtPath, hasSnapshot: true,
+      });
+      const notifyChanged = vi.fn();
+      if (entry === 'manual recovery with failed notification') {
+        notifyChanged.mockImplementation(() => { throw new Error('window closed'); });
+      }
+      await expect(mod.restoreWorktreeForSession('borrower', notifyChanged)).resolves.toEqual({
+        ok: true, snapshotApplied: true,
+      });
+      expect(notifyChanged).toHaveBeenCalledExactlyOnceWith('owner');
+    }
+
+    expect(gitExecMock.mock.calls.map(argsOf)).toContainEqual(['stash', 'apply', SHA]);
+    expect(storeSetMock).not.toHaveBeenCalled();
+  });
+
   it('send-time check does not rebuild a missing managed worktree for a non-owner', async () => {
     dbWorktreePath = null;
 
@@ -696,15 +748,18 @@ describe('worktree restore', () => {
     expect(storeSetMock).not.toHaveBeenCalled();
   });
 
-  it('send-time check ignores deleted historical owners for a reused managed path', async () => {
+  it.each([false, true])('send-time check ignores deleted historical owners (persisted path: %s)', async (hasWorktreePath) => {
     fsSync.mkdirSync(wtPath, { recursive: true });
-    dbWorktreePath = null;
+    dbWorktreePath = hasWorktreePath ? wtPath : null;
     const deletedMeta = { sessionId: 'deleted-owner', path: wtPath };
     storeGetMock.mockImplementation((sessionId: string) =>
       sessionId === 'deleted-owner' ? deletedMeta : null,
     );
     storeGetAllMock.mockReturnValue([deletedMeta]);
-    dbOwnerRows = [{ id: 'deleted-owner', worktreePath: wtPath, status: 'deleted' }];
+    dbOwnerRows = [
+      { id: 'deleted-owner', worktreePath: wtPath, status: 'deleted' },
+      { id: 's1', worktreePath: dbWorktreePath, status: 'active' },
+    ];
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/deleted-owner')) {
         return { stdout: `${SHA}\n`, stderr: '' };

@@ -33,7 +33,7 @@ import type {
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS, prStatusKey } from '@/lib/prStatus';
+import { MAX_STATUS_QUERIES, prStatusKey } from '@/lib/prStatus';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useSessionGitContext');
@@ -99,7 +99,12 @@ export function useSessionGitContext(session: Session): SessionGitContext {
   // walk 到主仓 .git,显示主仓分支冒充 worktree 分支(Codex review P2;
   // ADR-WT-FE-4)。远程 session 没有控制端 WorktreeContext,其 path 会在真实执行端
   // 重新 probe,因此可以使用远端 session snapshot 作为候选。
-  const worktreeMeta = useWorktreeForSession(sessionId);
+  const worktreeMeta = useWorktreeForSession(sessionId, {
+    // A borrower can resolve its snapshot only against a still-registered live
+    // owner; the historical path alone never supplies a local Git directory.
+    resourcePath: session.deviceLinkDeviceId || getStickySessionDeviceId(sessionId) || session.remoteHostId
+      ? null : session.worktreePath,
+  });
   const deviceLinkDeviceId =
     session.deviceLinkDeviceId ?? getStickySessionDeviceId(sessionId) ?? null;
   const remoteHostId = session.remoteHostId ?? null;

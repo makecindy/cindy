@@ -70,21 +70,46 @@ function ActiveProbe() {
   return <span data-testid="active">{info?.path ?? ''}</span>;
 }
 
+// PR #11152, unit: the borrower stores the owner path without its own registry row.
+// Recycling removes its badge; an owner notification after restore brings back the
+// badge and folder action. Owner-only tests cannot catch the borrowed-path gap.
+it('refreshes the borrower badge and folder action when its owner recycles and restores the worktree', async () => {
+  const owner = { sessionId: 'owner', name: 'login', baseRepo: '/repo', path: '/repo/.cindy-worktrees/login',
+    branch: 'cindy/login', sourceBranch: 'main', createdAt: '2026-11-17' };
+  mocks.worktreeListAll.mockResolvedValue([owner]);
+  const view = render(<WorktreeProvider><SidebarProbe id="borrower" worktreePath={owner.path} /></WorktreeProvider>);
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(owner.path));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).not.toBeNull();
+  mocks.worktreeGetForSession.mockResolvedValue(null);
+  await act(async () => emitWorktreeChanged('owner'));
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(''));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).toBeNull();
+
+  mocks.worktreeGetForSession.mockResolvedValue(owner);
+  await act(async () => emitWorktreeChanged('owner'));
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(owner.path));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).not.toBeNull();
+  expect(mocks.worktreeGetForSession.mock.calls).toEqual([['owner'], ['owner']]);
+  expect(mocks.worktreeListAll).toHaveBeenCalledTimes(1);
+});
+
 function SidebarProbe({
   id = 'open',
   remoteHostId,
   deviceLinkDeviceId,
+  worktreePath,
   enabled = true,
   onRender,
 }: {
   id?: string;
   remoteHostId?: string;
   deviceLinkDeviceId?: string;
+  worktreePath?: string;
   enabled?: boolean;
   onRender?: () => void;
 }) {
   const info = useTaskInfoWorktree(
-    { id, workingDir: '/repo', remoteHostId, deviceLinkDeviceId },
+    { id, workingDir: '/repo', remoteHostId, deviceLinkDeviceId, worktreePath },
     enabled,
   );
   onRender?.();

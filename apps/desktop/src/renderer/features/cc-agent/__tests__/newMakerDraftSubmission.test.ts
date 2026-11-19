@@ -34,6 +34,7 @@ import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 const remoteProjectsStore = vi.hoisted(() => ({
@@ -174,7 +175,9 @@ async function submit(options: {
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  projectDir?: string;
   worktree?: {
+    existingWorktree?: { sessionId: string; path: string };
     enabled: boolean;
     sourceBranch: string;
     confirmedIneligible?: boolean | null;
@@ -184,6 +187,7 @@ async function submit(options: {
   currentBranch?: string | null;
   displayedBranch?: string;
   detectFailure?: boolean;
+  detectCrossAgentMigration?: typeof crossAgentConvertService.detect;
   modelNaming?: boolean;
   switchOwnerDuringNaming?: boolean;
   /** 首条 / 目标文案推导出的标题预览；默认算不出预览。 */
@@ -235,7 +239,7 @@ async function submit(options: {
   // Synthetic IPC paths; no filesystem is touched by these renderer fixtures.
   const baseRepo = '/fixture/repo';
   const worktreePath = '/fixture/repo/.cindy-worktrees/creator';
-  const hasWorktree = options.worktree?.enabled ?? options.worktreeSkills !== undefined;
+  const hasWorktree = !options.worktree?.existingWorktree && (options.worktree?.enabled ?? options.worktreeSkills !== undefined);
   const detectCwd = vi.fn(async () => {
     if (options.detectFailure) throw new Error('fixture probe failed');
     return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false,
@@ -264,6 +268,8 @@ async function submit(options: {
     worktreeSkills = options.worktreeSkillsAfterCollab;
     return { workerSessionId: 'worker' };
   });
+  const detectCrossAgentMigration = vi.fn(options.detectCrossAgentMigration ?? (async () => ({ items: [] })));
+  const runMigrationFlow = vi.fn(async (_items: CrossAgentMigrationItem[]) => {});
   const createWorktree = vi.fn(async () => ({ ok: true as const, meta: { path: worktreePath, branch: 'cindy/creator' } }));
   vi.stubGlobal('window', { electronAPI: {
     worktreeDetectCwd: detectCwd,
@@ -272,6 +278,7 @@ async function submit(options: {
     ghosts: { routeNewTask: options.pluginRoute },
     localDb: { sessions: { create: ipcCreate }, messages: { list: async () => [{ role: 'user', createdAt: '2026-10-31T00:00:00.000Z' }], create: createNote } }, maker: {
     enableOrca,
+    crossAgent: { detect: detectCrossAgentMigration },
     setGoal, listAgentSkills,
     listDesktopCommands: async () => ({ success: true, commands: [] }),
     listAgentCommands: async () => ({ success: true, commands: [] }),
@@ -334,7 +341,7 @@ async function submit(options: {
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
-    effectiveWorkingDir: hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
+    effectiveWorkingDir: options.projectDir ?? (hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null),
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
@@ -384,12 +391,12 @@ async function submit(options: {
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: vi.fn(),
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
-    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
-    crossAgentConvertService: { detect: async () => ({ items: [] }) },
+    sessionService: { touchUserSend: vi.fn(async () => {}), get: async () => ({ status: 'active' }), update: async () => {} },
+    crossAgentConvertService, crossAgentDialog: { runMigrationFlow },
     refreshWorktreeForSession: async () => {},
-    worktreeCreationStore: { clear: finishWorktree, set: (_id: string, state: { status: string }) => {
+    worktreeCreationStore: { clear: finishWorktree, set: vi.fn((_id: string, state: { status: string }) => {
       if (state.status === 'failed') finishWorktree();
-    } },
+    }) },
     saveComposerDraft: vi.fn(),
     draftEnableOrcaOptions: () => ({}), createDeferredUiAssignment: () => undefined,
     rememberDeferredUiAssignment: () => {}, getCurrentRoutePath: () => '/elsewhere',
@@ -406,7 +413,7 @@ async function submit(options: {
   };
   if (options.defaultSourceBranch) {
     environment.wtRef.current = runInNewContext(worktreeSnapshotCode, {
-      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo,
+      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo, wtExistingWorktree: null,
       wtSourceBranch: options.sourceBranch ?? '', wtBranchPreferenceReady: true,
       wtBranchPreferenceSaving: false, wtPreferenceSaving: false,
       wtSupportsRecoveryKeyDiscard: true, wtConfirmedIneligible: false,
@@ -450,11 +457,28 @@ async function submit(options: {
     }
     if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore };
+    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore, detectCrossAgentMigration, runMigrationFlow };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #11152 / unit: execute Send rather than scan the exact worktree if gate.
+  // A single local new tree must expose a real task and its creating state before
+  // starting Git. Previously only source positions guarded this ordering.
+  it('enters a real session before creating its worktree in the background', async () => {
+    const navigate = vi.fn();
+    const result = await submit({ navigate, worktree: { enabled: true, sourceBranch: 'main' } });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledOnce();
+    const { sessionService, worktreeCreationStore } = result.environment;
+    expect(sessionService.touchUserSend).toHaveBeenCalledWith('created', expect.any(Number));
+    expect(worktreeCreationStore.set).toHaveBeenCalledWith('created', expect.objectContaining({ status: 'creating' }));
+    expect(navigate).toHaveBeenCalledWith('/cc-agent/created', { replace: true });
+    expect(result.createWorktree).toHaveBeenCalledOnce();
+    const order = [result.createSession, sessionService.touchUserSend, worktreeCreationStore.set,
+      navigate, result.createWorktree].map(mock => mock.mock.invocationCallOrder[0]);
+    expect(order.every((at, index) => index === 0 || order[index - 1] < at)).toBe(true);
+  });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
   it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
@@ -633,6 +657,43 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.clearDraft).not.toHaveBeenCalled();
     if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
     else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
+  });
+  // Unit: Send and Goal must open an empty borrower rather than enter the new-
+  // tree pipeline. Existing tests only exercised the new-tree/unchecked modes.
+  it.each(['send', 'goal'] as const)('reuses the selected worktree for %s without creating another tree', async entry => {
+    const result = await submit({ entry, projectDir: '/fixture/repo/app', worktree: { enabled: true, sourceBranch: 'main',
+      existingWorktree: { sessionId: 'owner', path: '/fixture/repo/.cindy-worktrees/login' } } });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: '/fixture/repo/app', reuseWorktreePath: '/fixture/repo/.cindy-worktrees/login', reuseWorktreeSessionId: 'owner',
+    }));
+    expect(result.environment.window.electronAPI.worktreeCreate).not.toHaveBeenCalled();
+  });
+  // PR #11152 / unit: the actual Send path offers conversion of a configuration
+  // only present in the selected checkout before creating its task. The reuse
+  // cases above use Pi, which skips the conversion dialog entirely.
+  it('offers conversion for the reused checkout before creating and sending the task there', async () => {
+    const p = provider();
+    p.models.codex = [{ ...p.models.pi![0], efforts: ['medium'], defaultEffort: 'medium' }];
+    const path = '/fixture/repo/.cindy-worktrees/login';
+    const item: CrossAgentMigrationItem = {
+      id: 'agents-md:0', kind: 'agents-md', direction: 'to-codex', label: 'CLAUDE.md → AGENTS.md',
+      source: `${path}/CLAUDE.md`, target: `${path}/AGENTS.md`,
+    };
+    const result = await submit({
+      agentKind: 'codex', providers: [p],
+      worktree: { enabled: true, sourceBranch: 'main', existingWorktree: { sessionId: 'owner', path } },
+      detectCrossAgentMigration: async (workingDir) => ({ items: workingDir === path ? [item] : [] }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.detectCrossAgentMigration.mock.calls).toEqual([[path, 'codex']]);
+    expect(result.runMigrationFlow).toHaveBeenCalledExactlyOnceWith([item]);
+    expect(result.runMigrationFlow).toHaveBeenCalledBefore(result.createSession);
+    expect(result.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: '/fixture/repo', reuseWorktreePath: path, reuseWorktreeSessionId: 'owner',
+    }));
+    expect(result.sendMessage).toHaveBeenCalledWith('created', 'hello', modelId,
+      expect.any(String), 'default', path, [], [], expect.any(Object));
   });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],

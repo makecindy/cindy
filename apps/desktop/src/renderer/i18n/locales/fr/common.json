@@ -14303,6 +14303,12 @@
       "elapsed": "En attente depuis {{duration}}"
     },
     "worktree": {
+      "choose": "Choisir un worktree",
+      "createNew": "Nouveau worktree",
+      "existing": "Worktrees existants",
+      "noExisting": "Aucun worktree existant",
+      "loadExistingFailed": "Impossible de charger les worktrees. Réessayer",
+      "sharedHint": "Nouveau contexte ; les fichiers et la branche sont partagés avec les autres tâches de ce worktree",
       "detecting": "Détection de l'environnement…",
       "detectFailed": "Échec de la détection de l'environnement ; worktree indisponible pour le moment",
       "gitMissing": "git introuvable, veuillez d'abord l'installer",

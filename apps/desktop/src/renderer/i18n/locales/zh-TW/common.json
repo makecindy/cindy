@@ -14134,6 +14134,12 @@
       "elapsed": "已等待 {{duration}}"
     },
     "worktree": {
+      "choose": "選擇 worktree",
+      "createNew": "新增 worktree",
+      "existing": "現有 worktree",
+      "noExisting": "尚無現有 worktree",
+      "loadExistingFailed": "無法讀取 worktree，點擊重試",
+      "sharedHint": "獨立上下文，與此 worktree 中的其他任務共用檔案和分支",
       "detecting": "偵測環境中…",
       "gitMissing": "未偵測到 git，請先安裝",
       "notGitRepo": "目前目錄不是 git 儲存庫",

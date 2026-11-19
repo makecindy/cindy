@@ -5169,6 +5169,8 @@ interface ElectronAPI {
         /** Only the Cindy Make purpose may be requested; Main validates the checkout. */
         source?: 'cindy-make';
         provisional?: boolean;
+        reuseWorktreePath?: string;
+        reuseWorktreeSessionId?: string;
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       getMany: (ids: string[]) => Promise<import('@/lib/ccAgent.types').Session[]>;

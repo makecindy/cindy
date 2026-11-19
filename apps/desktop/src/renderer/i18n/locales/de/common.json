@@ -14188,6 +14188,12 @@
       "elapsed": "Wartet seit {{duration}}"
     },
     "worktree": {
+      "choose": "Worktree auswählen",
+      "createNew": "Neuer Worktree",
+      "existing": "Vorhandene Worktrees",
+      "noExisting": "Keine vorhandenen Worktrees",
+      "loadExistingFailed": "Worktrees konnten nicht geladen werden. Erneut versuchen",
+      "sharedHint": "Neuer Kontext; Dateien und Branch werden mit anderen Aufgaben in diesem Worktree geteilt",
       "detecting": "Umgebung wird erkannt…",
       "detectFailed": "Umgebungserkennung fehlgeschlagen; Worktree derzeit nicht verfügbar",
       "gitMissing": "git nicht erkannt, bitte installiere es zuerst",

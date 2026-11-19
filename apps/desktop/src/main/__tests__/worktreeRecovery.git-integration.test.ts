@@ -9,10 +9,12 @@ import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 
+import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import type { WorktreeMeta } from '../worktree/types';
 
-const state = vi.hoisted(() => ({ root: '', refs: [] as unknown[], registry: new Map<string, WorktreeMeta>() }));
+const state = vi.hoisted(() => ({ root: '', refs: [] as LocalWorktreeReference[], registry: new Map<string, WorktreeMeta>() }));
 const managerMocks = vi.hoisted(() => ({ copy: vi.fn(), create: vi.fn() }));
 vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.root, getAppDataDir: () => state.root }));
 vi.mock('../worktree/WorktreeManager', () => ({
@@ -30,7 +32,23 @@ vi.mock('../worktree/worktreeStore', () => ({
   set: async (id: string, meta: WorktreeMeta) => { state.registry.set(id, meta); },
   del: async (id: string) => { state.registry.delete(id); },
 }));
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ readLocalWorktreeReferences: async () => state.refs }) }));
+vi.mock('../localDb/client/current', () => {
+  const client = {
+    readLocalWorktreeReferences: async () => state.refs,
+    drizzle: {
+      select: () => ({
+        from: () => ({
+          where: (condition: Parameters<SQLiteSyncDialect['sqlToQuery']>[0]) => {
+            const [id] = new SQLiteSyncDialect().sqlToQuery(condition).params;
+            return state.refs.filter((row) => row.currentDatabase && row.id === id);
+          },
+        }),
+      }),
+    },
+  };
+  const snapshot = { client, userId: 'fixture-user', clientEpoch: 1 };
+  return { getDbClient: () => client, getCurrentDbClientSnapshot: () => snapshot };
+});
 vi.mock('../worktree/runtimeLeases', async (original) => ({
   ...await original<typeof import('../worktree/runtimeLeases')>(),
   // Model an old owner profile that cannot see the borrower's shared leases.
@@ -64,6 +82,7 @@ vi.mock('../worktree/gitExec', async (original) => {
 });
 
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
+import { getManagedWorktreeReadinessForSession, getWorktreeRestoreStatus } from '../worktree/restore';
 import { restoreRecordedWorktree } from '../worktree/restoreRecovery';
 import { newRecycleRecord, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
 import { releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
@@ -105,6 +124,41 @@ describe('worktree recovery with real Git', () => {
     return meta;
   };
 
+  // PR #11152: recycling unregisters an archived owner but leaves its journal and
+  // the borrower's saved path. Exercise the production send preflight with real
+  // Git so a clean rebuild cannot pass without the recovered untracked file.
+  it('recovers the journal owner when a borrower reopens a recycled worktree', async () => {
+    const owner = await createFixture('journal-borrower-owner');
+    const borrower = {
+      id: 'journal-borrower', status: 'archived', source: 'desktop', currentDatabase: true,
+      workingDir: owner.path, worktreePath: owner.path,
+    };
+    state.refs.push(borrower);
+    try {
+      expect(await recycleManagedWorktree(owner, { canRemove: async () => true })).toBe(true);
+      expect(state.registry.has(owner.sessionId)).toBe(false);
+      borrower.status = 'active';
+      await expect(getWorktreeRestoreStatus(borrower.id)).resolves.toEqual({
+        state: 'restorable', worktreePath: owner.path, hasSnapshot: true,
+      });
+
+      const otherProfile = { ...borrower, currentDatabase: false };
+      state.refs.push(otherProfile);
+      try {
+        await expect(getManagedWorktreeReadinessForSession(borrower.id, owner.path)).resolves.toBe('retry');
+        expect(await readRecycleRecord(owner.path)).toMatchObject({ phase: 'removed', meta: { sessionId: owner.sessionId } });
+      } finally {
+        state.refs = state.refs.filter((row) => row !== otherProfile);
+      }
+
+      await expect(getManagedWorktreeReadinessForSession(borrower.id, owner.path)).resolves.toBe('ready');
+      expect(await fs.readFile(path.join(owner.path, 'draft.txt'), 'utf8')).toBe('journal-borrower-owner contents\n');
+      expect(state.registry.get(owner.sessionId)?.path).toBe(owner.path);
+      expect(state.registry.has(borrower.id)).toBe(false);
+    } finally {
+      state.refs = state.refs.filter((row) => row !== borrower);
+    }
+  }, 30_000);
   // A discard choice covers only the confirmed checkout contents. Existing recovery
   // tests exercise automatic snapshots, not the discard journal flag or later edits.
   it.each(['unchanged', 'later-edits', 'archive-again'] as const)(

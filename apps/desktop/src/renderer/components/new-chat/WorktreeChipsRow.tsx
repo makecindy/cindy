@@ -22,6 +22,8 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
  * 两种状态的区分经 onConfirmedIneligibleChange 上报(null = 尚未确认)。
  *
  * worktree 名称 **自动生成**（不暴露 UI），由 useSuggestName 拉取后透传给上层。
+ * 本机新建页勾选后可在右侧菜单选择已有 worktree；收起时名称不外显。
+ * 选择已有目录时分支只读，发送走 borrower 创建；不复制消息、不新增 owner 登记。
  */
 
 import {
@@ -70,6 +72,8 @@ import {
 import type { ReactNode } from 'react';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
+import { ExistingWorktreePicker } from './ExistingWorktreePicker';
+import type { WorktreeMeta } from '@/lib/worktree.types';
 
 export type FolderPickerMode = 'folder' | 'project';
 
@@ -89,6 +93,8 @@ export interface CheckoutBranchView {
 }
 
 export interface WorktreeChipsRowProps {
+  existingWorktree?: WorktreeMeta | null;
+  onExistingWorktreeChange?: (meta: WorktreeMeta | null) => void;
   cwd: string | null;
   // 接受 null:当 picker 选了"对话(不在项目中)"时,上游需要清掉 workingDir
   // 让 send 流程按 workspaceKind='dialogue' 走。
@@ -153,6 +159,8 @@ export interface WorktreeChipsRowProps {
 }
 
 export function WorktreeChipsRow({
+  existingWorktree = null,
+  onExistingWorktreeChange,
   cwd,
   onSelectFolder,
   folderPickerOpen,
@@ -245,6 +253,11 @@ export function WorktreeChipsRow({
   // 资格不满足时 OFF 不能开启；已 ON 必须仍能显式关闭，发送侧同时保留输入并阻塞创建。
 
   const effectiveWorktreeEnabled = enabled && !advancedHidden && !worktreeDisabled;
+  const reusedWorktree = effectiveWorktreeEnabled ? existingWorktree : null;
+  // A project/device change always starts with New worktree. Never persist a borrower choice.
+  useLayoutEffect(() => {
+    onExistingWorktreeChange?.(null);
+  }, [cwd, deviceLinkDeviceId, worktreeDisabled, onExistingWorktreeChange]);
   // 分支列表懒加载 latch:worktree 未开时不预拉,首次点开分支 chip 菜单才拉,
   // 之后保持订阅(baseRepo 变化由 hook 自身依赖触发重拉)。
   const [branchListWanted, setBranchListWanted] = useState(false);
@@ -330,7 +343,10 @@ export function WorktreeChipsRow({
       sourceBranch: baseRepo ? defaultSourceBranch : '',
     });
   }, [baseRepo, deviceLinkDeviceId, defaultSourceBranch, onDefaultSourceBranchChange]);
-  const branchLabel = effectiveWorktreeEnabled
+  const reusedBranches = useBranches(reusedWorktree?.path ?? null);
+  const branchLabel = reusedWorktree
+    ? reusedBranches.current || reusedWorktree.branch
+    : effectiveWorktreeEnabled
     ? sourceBranch || defaultSourceBranch || actualBranch
     : actualBranch;
   // 确认不合格(2026-08-07 裁决)→ 整条控件隐藏,勾选记忆保留、发送侧放行普通会话;
@@ -339,7 +355,7 @@ export function WorktreeChipsRow({
     !advancedHidden && confirmedIneligible !== true && (enabled || !!detect.data?.isGitRepo);
   // 分支选择与 checkbox 是两条独立轴；仅环境不具备 worktree 资格或创建在途时禁用。
   const branchInteractive =
-    !(disabled || branchDisabled || environmentDisabled || checkout.busy) &&
+    !(disabled || branchDisabled || environmentDisabled || checkout.busy || reusedWorktree) &&
     baseRepo !== null &&
     (effectiveWorktreeEnabled || detect.data?.supportsCheckout === true);
 
@@ -376,6 +392,11 @@ export function WorktreeChipsRow({
           branchesFailed={branches.failed}
           onRetryBranches={branches.refetch}
           checked={enabled}
+          worktreePicker={effectiveWorktreeEnabled && !deviceLinkDeviceId && baseRepo && onExistingWorktreeChange ? (
+            <ExistingWorktreePicker key={baseRepo} baseRepo={baseRepo} selected={reusedWorktree}
+              disabled={disabled || switchDisabled} onSelect={onExistingWorktreeChange} />
+          ) : undefined}
+          reuseWorktree={!!reusedWorktree}
           branchSourceSelected={effectiveWorktreeEnabled && !!sourceBranch}
           branchInteractive={branchInteractive}
           checkoutBusy={checkout.busy}
@@ -389,7 +410,7 @@ export function WorktreeChipsRow({
             // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
             if (branches.failed && !branches.loading) branches.refetch();
           }}
-          onToggle={onEnabledChange}
+          onToggle={(value) => { onExistingWorktreeChange?.(null); onEnabledChange(value); }}
           optionDisabledReason={
             effectiveWorktreeEnabled
               ? undefined
@@ -587,6 +608,8 @@ function FolderChipBig({
 // ── [分支 │ ☑ worktree] 联合控件(对齐 Claude Code,2026-07-29 用户裁决) ──────
 
 export function BranchWorktreeChip({
+  worktreePicker,
+  reuseWorktree = false,
   baseRepo,
   deviceId,
   remoteDefaultBranch,
@@ -611,6 +634,8 @@ export function BranchWorktreeChip({
   currentBranchRunning,
   optionDisabledReason,
 }: {
+  worktreePicker?: ReactNode;
+  reuseWorktree?: boolean;
   menuHeader?: ReactNode;
   currentBranchRunning?: boolean;
   optionDisabledReason?: (branch: string) => string | undefined;
@@ -645,7 +670,7 @@ export function BranchWorktreeChip({
 }) {
   const { t } = useTranslation();
 
-  const sync = useBranchSync(baseRepo, branchLabel, deviceId);
+  const sync = useBranchSync(reuseWorktree ? undefined : baseRepo, branchLabel, deviceId);
   const allBranches = useMemo(
     () => (remoteDefaultBranch ? [remoteDefaultBranch, ...branches] : branches),
     [checked, branchOnly, remoteDefaultBranch, branches],
@@ -827,7 +852,7 @@ export function BranchWorktreeChip({
   const branchTipped = (
     <Tip
       text={
-        checked || branchSourceSelected
+        !reuseWorktree && (checked || branchSourceSelected)
           ? t('newChat.branchChip.sourceTooltip')
           : t('newChat.branchChip.currentTooltip')
       }
@@ -1062,7 +1087,7 @@ export function BranchWorktreeChip({
       checkboxSegment
     ) : (
       <Tip
-        text={t('newChat.worktree.chipTooltip')}
+        text={t(reuseWorktree ? 'newChat.worktree.sharedHint' : 'newChat.worktree.chipTooltip')}
         contentClassName="max-w-[min(360px,calc(100vw-32px))] break-words"
       >
         {checkboxSegment}
@@ -1137,6 +1162,7 @@ export function BranchWorktreeChip({
             )}
           />
           {checkboxArea}
+          {worktreePicker}
         </>
       )}
     </div>

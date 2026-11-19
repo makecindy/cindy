@@ -35,6 +35,8 @@ const log = createLogger('provisional-draft-task');
 
 /** 建任务的参数：与新建页发送时传给 createSession 的同一组字段。 */
 export interface ProvisionalDraftCreateArgs {
+  reuseWorktreePath?: string;
+  reuseWorktreeSessionId?: string;
   id: string;
   agentKind: 'cc' | 'codex' | 'pi';
   model: string;
@@ -92,6 +94,8 @@ export function provisionalDraftArgsKey(args: ProvisionalDraftCreateArgs): strin
     args.remoteHostId || '',
     args.agentDeviceId || '',
     args.providerId ?? null,
+    args.reuseWorktreePath ?? null,
+    args.reuseWorktreeSessionId ?? null,
   ]);
 }
 
@@ -99,6 +103,7 @@ export function provisionalDraftArgsKey(args: ProvisionalDraftCreateArgs): strin
 export function canOpenProvisionalDraftTask(args: ProvisionalDraftCreateArgs): boolean {
   return (
     !!args.model &&
+    !args.reuseWorktreePath &&
     !args.remoteHostId &&
     !args.agentDeviceId &&
     (args.writableDirs?.length ?? 0) === 0 &&

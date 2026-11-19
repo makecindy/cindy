@@ -16,6 +16,8 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BranchWorktreeChip, WorktreeChipsRow, type CheckoutBranchView } from '../WorktreeChipsRow';
+import { ExistingWorktreePicker } from '../ExistingWorktreePicker';
+import type { WorktreeMeta } from '@/lib/worktree.types';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
@@ -122,6 +124,34 @@ afterEach(() => {
 });
 const branchButton = () => screen.getByRole('button', { name: 'newChat.branchChip.label' });
 const refreshButton = () => screen.getByRole('button', { name: /newChat.branchSync.action/ });
+// User's compact reuse selector: the real menu owns selection, while the closed
+// capsule retains its fixed label. Previously only branch selection was covered.
+// Unit, minimum input: one matching tree and an unrelated/ephemeral tree.
+it('selects an existing worktree inside the menu and can return to New worktree', async () => {
+  const tree: WorktreeMeta = { sessionId: 'owner', name: 'merry-edison', path: '/repo/.cindy-worktrees/merry-edison',
+    baseRepo: '/repo', branch: 'cindy/merry-edison', sourceBranch: 'main', createdAt: '2026-11-17' };
+  window.electronAPI.worktreeListAll = vi.fn(async () => [tree, { ...tree, sessionId: 'foreign', baseRepo: '/other' },
+    { ...tree, sessionId: 'pool', name: 'pool', ephemeral: true }]);
+  function Fixture() {
+    const [selected, setSelected] = React.useState<WorktreeMeta | null>(null);
+    return <BranchWorktreeChip {...props} worktreePicker={
+      <ExistingWorktreePicker baseRepo="/repo" selected={selected} onSelect={setSelected} />
+    } />;
+  }
+  render(<Fixture />);
+  const chooser = screen.getByRole('button', { name: 'newChat.worktree.choose' });
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: 'newChat.worktree.createNew', checked: true })).toBeTruthy();
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /merry-edison/ }));
+  expect(chooser.textContent).toBe('');
+  expect(screen.queryByText('merry-edison')).toBeNull();
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: /merry-edison/, checked: true })).toBeTruthy();
+  expect(screen.getAllByRole('menuitemradio')).toHaveLength(2);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'newChat.worktree.createNew' }));
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: 'newChat.worktree.createNew', checked: true })).toBeTruthy();
+});
 // Regression: remote Git continues after the old 90s request budget; follow the
 // operation handle rather than repeating the mutation. Unit tier, real hook/UI.
 it('continues waiting for the same remote fetch and shows its final result', async () => {
@@ -563,6 +593,52 @@ function CheckoutRow({
     />
   );
 }
+// PR #11152 / unit: replace the old callback/predicate source guards with the
+// real row. One eligible tree is enough to expose unwanted checkbox writes or
+// an editable reused branch; the previous menu-only fixture could not see them.
+it('keeps worktree changes user-owned and its reused branch read-only', async () => {
+  const checkout = setupCheckout();
+  const tree: WorktreeMeta = {
+    sessionId: 'owner', name: 'reused', path: '/repo/.cindy-worktrees/reused',
+    baseRepo: '/repo', branch: 'cindy/reused', sourceBranch: 'main', createdAt: '2026-11-17',
+  };
+  window.electronAPI.worktreeListAll = vi.fn(async () => [tree]);
+  vi.mocked(window.electronAPI.worktreeListBranches).mockImplementation(async ({ baseRepo }) => ({
+    current: baseRepo === tree.path ? tree.branch : 'main',
+    branches: ['main', 'feature'], remoteDefaultBranch: 'refs/remotes/origin/main',
+  }));
+  const enabledChanged = vi.fn();
+  function Fixture() {
+    const [enabled, setEnabled] = React.useState(true);
+    const [selected, setSelected] = React.useState<WorktreeMeta | null>(null);
+    const [branch, setBranch] = React.useState('main');
+    return <WorktreeChipsRow cwd="/repo" variant="advancedOnly"
+      enabled={enabled} onEnabledChange={value => { enabledChanged(value); setEnabled(value); }}
+      existingWorktree={selected} onExistingWorktreeChange={setSelected}
+      sourceBranch={branch} onSourceBranchChange={setBranch} />;
+  }
+  render(<Fixture />);
+  const chooser = await screen.findByRole('button', { name: 'newChat.worktree.choose' });
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /reused/ }));
+  await waitFor(() => expect(branchButton().textContent).toBe(tree.branch));
+  const checkbox = () => screen.getByRole('checkbox', { name: 'newChat.worktree.toggleAria' }) as HTMLInputElement;
+  expect(checkbox().checked).toBe(true);
+  expect(enabledChanged).not.toHaveBeenCalled();
+  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(branchButton());
+  expect(screen.queryByRole('listbox')).toBeNull();
+  expect(screen.queryByRole('button', { name: /newChat.branchSync.action/ })).toBeNull();
+  fireEvent.click(checkbox());
+  expect(enabledChanged.mock.calls).toEqual([[false]]);
+  expect(screen.queryByRole('button', { name: 'newChat.worktree.choose' })).toBeNull();
+  fireEvent.click(checkbox());
+  expect(enabledChanged.mock.calls).toEqual([[false], [true]]);
+  await waitFor(() => expect(branchButton().getAttribute('aria-disabled')).toBe('false'));
+  fireEvent.keyDown(screen.getByRole('button', { name: 'newChat.worktree.choose' }), { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: 'newChat.worktree.createNew', checked: true })).toBeTruthy();
+  expect(checkout.mock.calls.every(([request]) => request.action === 'status')).toBe(true);
+});
 // A pending checkout now occupies the former chevron slot. Verify the real row
 // announces pending work and prevents another pick until the IPC completes;
 // the checkout UI fixture measures its width and right-aligned position.
