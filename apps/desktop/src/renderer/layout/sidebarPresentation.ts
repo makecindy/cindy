@@ -96,9 +96,14 @@ export function useSidebarPresentation(
       window.addEventListener('resize', onResize);
       frame.current = requestAnimationFrame(finish);
     }).catch(() => {
-      releaseResize.current?.();
-      releaseResize.current = null;
-      if (id === generation.current) setPresentation({ collapsed, instant: false });
+      // Only the current generation may release here: a superseded invocation
+      // rejecting late would otherwise detach the listener the newer transition
+      // just armed (falling it back to the delayed rAF path).
+      if (id === generation.current) {
+        releaseResize.current?.();
+        releaseResize.current = null;
+        setPresentation({ collapsed, instant: false });
+      }
     });
   }, [collapsed, ready, root]);
 
