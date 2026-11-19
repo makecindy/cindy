@@ -65,12 +65,30 @@ async function check(name, run) {
 const childRunning = child => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
 
 function trackChild(child) {
+  const ipc = child.channel != null;
+  let exit = null;
+  let stdioClosed = false;
+  let stderrClosed = !child.stderr;
+  let cleanupComplete = false;
   const exited = new Promise(resolve => {
-    child.once('exit', resolve);
-    child.on('error', resolve);
+    child.once('exit', (code, signal) => {
+      exit = { code, signal, at: performance.now() };
+      resolve();
+    });
+    child.on('error', () => { if (child.pid === undefined) resolve(); });
   });
-  const closed = new Promise(resolve => child.once('close', resolve));
-  return { child, exited, closed };
+  const closed = new Promise(resolve => child.once('close', () => {
+    stdioClosed = true;
+    resolve();
+  }));
+  const stderrDone = child.stderr && new Promise(resolve => child.stderr.once('close', () => {
+    stderrClosed = true;
+    resolve();
+  }));
+  // Node can omit ChildProcess 'close' after a parent-side IPC disconnect even after the child and
+  // its streams close (nodejs/node#65646). For IPC, any stderr pipe must close on its own after exit.
+  const cleanedUp = (ipc ? Promise.all([exited, stderrDone]) : closed).then(() => { cleanupComplete = true; });
+  return { child, exited, cleanedUp, observation: () => ({ exit, stdioClosed, stderrClosed, cleanupComplete }) };
 }
 
 async function within(promise, timeoutMs, message) {
@@ -82,10 +100,10 @@ async function within(promise, timeoutMs, message) {
   } finally { clearTimeout(timer); }
 }
 
-async function stopTestChild({ child, closed }) {
+async function stopTestChild({ child, cleanedUp }) {
   if (childRunning(child)) child.kill('SIGKILL');
   try {
-    await within(closed, 3000, `child ${child.pid} did not close`);
+    await within(cleanedUp, 3000, `child ${child.pid} did not finish cleanup`);
   } finally {
     if (child.connected) child.disconnect();
     child.stdin?.destroy();
@@ -122,14 +140,13 @@ async function checkStartupRound(run) {
   const started = performance.now();
   const child = spawn(electron, [script, ...TEST_ARGS, '--enable-logging=file', `--log-file=${logFile}`],
     { stdio: chromiumProxyWorkerStdio(process.platform, STDERR_MODE), env });
+  const tracked = trackChild(child);
   const transport = createChromiumProxyWorkerTransport(child, process.platform);
-  let exit = null;
-  let closed = false;
+  let closeRequestedAt = null;
   let streamError = null;
+  let cleanupTimedOut = false;
   let forcedStop = false;
   const stderr = [];
-  child.once('exit', (code, signal) => { exit = { code, signal, elapsedMs: Math.round(performance.now() - started) }; });
-  child.once('close', () => { closed = true; });
   const onError = error => { streamError ??= error; };
   child.on('error', onError);
   const errors = createInterface({ input: child.stderr });
@@ -156,15 +173,20 @@ async function checkStartupRound(run) {
       error => { if (error) onError(error); });
   }, 20);
   try {
-    await waitForRound(() => exit || closed || streamError ||
-      (readyAt !== null && answers.slice(readyAt).some(a => a.result)), 15_000);
+    await waitForRound(() => {
+      const { exit, cleanupComplete } = tracked.observation();
+      return exit || cleanupComplete || streamError || (readyAt !== null && answers.slice(readyAt).some(a => a.result));
+    }, 15_000);
   } finally {
     clearInterval(ask);
-    if (transport.canWrite()) transport.close();
-    if (!await waitForRound(() => closed, 1500)) {
-      forcedStop = true;
-      if (childRunning(child)) child.kill('SIGKILL');
-      if (!await waitForRound(() => closed, 1500)) {
+    if (transport.canWrite()) {
+      closeRequestedAt = performance.now();
+      transport.close();
+    }
+    if (!await waitForRound(() => tracked.observation().cleanupComplete, 1500)) {
+      cleanupTimedOut = true;
+      if (childRunning(child)) forcedStop = child.kill('SIGKILL');
+      if (!await waitForRound(() => tracked.observation().cleanupComplete, 1500)) {
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr.destroy();
@@ -174,9 +196,12 @@ async function checkStartupRound(run) {
     }
   }
 
+  const { exit, stdioClosed, stderrClosed, cleanupComplete } = tracked.observation();
   const summary = { run, pid: child.pid ?? null, stderrMode: STDERR_MODE,
-    exitCode: exit?.code ?? null, signal: exit?.signal ?? null, elapsedMs: exit?.elapsedMs ?? null,
-    stdioClosed: closed, forcedStop, streamError: streamError?.code ?? streamError?.message ?? null };
+    exitCode: exit?.code ?? null, signal: exit?.signal ?? null, elapsedMs: exit && Math.round(exit.at - started),
+    closeToExitMs: exit && closeRequestedAt !== null && exit.at >= closeRequestedAt ? Math.round(exit.at - closeRequestedAt) : null,
+    stdioClosed, stderrClosed, cleanupComplete, cleanupTimedOut, forcedStop,
+    streamError: streamError?.code ?? streamError?.message ?? null };
   console.log(`Chromium proxy helper ${JSON.stringify(summary)}`);
   fs.appendFileSync(path.join(diagnostics, 'rounds.jsonl'), `${JSON.stringify(summary)}\n`);
   fs.writeFileSync(path.join(diagnostics, `${name}.stderr.log`), stderr.join('\n'));
@@ -189,7 +214,8 @@ async function checkStartupRound(run) {
     assert.ok(!answers.some(a => typeof a.result === 'string' && /DIRECT/.test(a.result)), `run ${run}: never DIRECT`);
     assert.ok(answers.some(a => a.result === 'PROXY 127.0.0.1:9'), `run ${run}: the PAC result`);
     if (streamError) throw streamError;
-    if (forcedStop) throw new Error('helper did not close after its transport closed');
+    if (forcedStop || exit?.signal === 'SIGKILL') throw new Error('helper was forcibly stopped instead of exiting after its transport closed');
+    if (cleanupTimedOut) throw new Error('helper cleanup timed out after its transport closed');
   } catch (error) {
     const logTail = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trimEnd().split(/\r?\n/).slice(-TAIL_LINES).join('\n') : '';
     console.error(`Chromium proxy helper run ${run} failed (stderr=${STDERR_MODE}): ${error.message}\n` +
