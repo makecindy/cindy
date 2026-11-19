@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Tooltip } from '@/components/ui/tooltip';
 import type { BotGroupAttachment } from '../../../../shared/botGroupChat';
@@ -52,6 +52,19 @@ describe('BotGroupMessageAttachments order', () => {
       rerender(view(attachments));
       expect(sequence(names)).toEqual(names);
     }
+  });
+
+  // 测试价值：群聊图片画廊只提供 src 与 galleryId；跨条目翻页时标题必须保留附件原名，
+  // 不能退回媒体仓的哈希文件名。
+  // 最小失败输入 = 两张 id 与文件名不同的图片，打开第一张后翻到第二张。
+  it('keeps attachment names when switching between group pictures', () => {
+    render(view([image('hash-a', 'first.png'), image('hash-b', 'second.png')]));
+    fireEvent.click(screen.getByAltText('first.png'));
+    expect(screen.getByText('first.png')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.media.nextImage' }));
+    expect(screen.getByText('second.png')).toBeTruthy();
+    expect(screen.queryByText('hash-b.png')).toBeNull();
   });
 
   it('mixes pictures and file chips in the sent order', () => {

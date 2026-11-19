@@ -724,6 +724,7 @@ function ImageLightboxContent({
   // 初始笔迹(编辑模式)与初始视口本来就是正确状态,首帧清空会把
   // initialStrokes 抹掉。
   const indexEffectRanRef = useRef(false);
+  const renderedSrcRef = useRef(currentSrc);
   useEffect(() => {
     if (!indexEffectRanRef.current) {
       indexEffectRanRef.current = true;
@@ -740,9 +741,14 @@ function ImageLightboxContent({
     resetDraftStroke();
     setRedoStack([]);
     replaceStrokes([...baselineStrokesRef.current]);
-    setNaturalSize(null);
+    // 同一 URL 的不同条目不会重新触发 <img> 的 onLoad;尺寸只在来源变化时清空,
+    // 否则翻到重复图片后标注/原始尺寸会一直不可用。
+    if (renderedSrcRef.current !== currentSrc) {
+      renderedSrcRef.current = currentSrc;
+      setNaturalSize(null);
+    }
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
-  }, [index, resetViewport]);
+  }, [currentSrc, index, resetViewport]);
 
   // 滚轮 / 触控板。native listener + passive:false 才能 preventDefault,阻止事件穿透
   // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。路由见
@@ -1047,8 +1053,11 @@ function ImageLightboxContent({
   async function materializeAnnotatedImage(
     outMimeOverride?: 'image/png' | 'image/jpeg',
   ): Promise<{ blob: Blob; mimeType: string }> {
-    const source = await loadImageSourceBase64(currentSrc);
-    return burnInAnnotations(source, strokesRef.current, outMimeOverride);
+    // 读图 IPC 期间用户可能继续翻页或改笔迹;导出必须固定点击那一刻的图与笔迹。
+    const src = currentSrc;
+    const strokes = strokesRef.current.map((stroke) => ({ ...stroke, points: [...stroke.points] }));
+    const source = await loadImageSourceBase64(src);
+    return burnInAnnotations(source, strokes, outMimeOverride);
   }
 
   // 挂载后触发淡入。
