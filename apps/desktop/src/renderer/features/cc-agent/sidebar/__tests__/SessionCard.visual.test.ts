@@ -1018,6 +1018,7 @@ describe('SessionCard visual cases', () => {
     });
     const listArchive = within(listContainer).getByRole('button', { name: '归档' });
     for (const action of [listMore, listArchive]) {
+      expect(action.className).toContain('cindy-button-frame');
       expect(action.className).toContain('size-5');
       expect(action.className).toContain('rounded-md');
       expect(action.className).toContain('text-sidebar-action-icon');
@@ -1043,7 +1044,7 @@ describe('SessionCard visual cases', () => {
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
     expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
-      'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
+      'hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
     cleanup();
 
@@ -1052,8 +1053,8 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(cardMore.className).toContain('size-6');
-    expect(cardMore.className).toContain('bg-[var(--cmd-palette-bg)]');
-    expect(cardMore.className).toContain('border-sidebar-border');
+    expect(cardMore.className).toContain('[--button-face-bg:var(--cmd-palette-bg)]');
+    expect(cardMore.className).toContain('[--button-face-border:hsl(var(--sidebar-border))]');
     expect(cardMore.className).not.toContain('size-5');
     expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
   });
