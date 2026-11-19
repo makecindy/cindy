@@ -20,6 +20,7 @@ import {
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DL_SUBSCRIBE_CHANNEL,
   isProviderSharePeer,
+  isScopedPeer,
   isSharedTaskPeer,
   parseSharedTaskPeer,
   PROTOCOL_VERSION,
@@ -40,6 +41,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
 import { requiresSessionLink } from '../device-link/linkRecovery';
+import { createTransportTimeoutReopenLoop } from '../device-link/transportTimeoutReopen';
 import { createSubscriptionReplayScheduler } from '../device-link/subscriptionReplayScheduler';
 import type * as SubscriptionRegistry from '../device-link/subscriptions';
 
@@ -310,6 +312,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     acceptedRegistration.runInNewContext({
       client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
       isProviderSharePeer,
+      isScopedPeer,
+      transportTimeoutReopen: { isActive: () => false },
       parseSharedTaskPeer,
       shortDeviceRef,
       replayActiveSubscriptions,
@@ -323,7 +327,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     callbacks[0](peer, 'accepted-stream');
     // #11120: even the same stream can have a gap with a tokenless completion.
     // Run the actual acceptance callback and verify notification precedes replay.
-    if (parseSharedTaskPeer(peer)?.role === 'host') {
+    if (!isScopedPeer(peer) || parseSharedTaskPeer(peer)?.role === 'host') {
       expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
       expect(broadcast.mock.invocationCallOrder[0]).toBeLessThan(replayActiveSubscriptions.mock.invocationCallOrder[0]);
     } else expect(broadcast).not.toHaveBeenCalled();
@@ -334,6 +338,73 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     expect(replayActiveSubscriptions.mock.calls).toEqual(
       replay ? [[`link-accepted:${peer.slice(0, 8)}`, peer]] : [],
     );
+  });
+
+  // #8962: execute the real accept registration with the production timeout loop.
+  // One accepted recovery must invalidate one target once, including old Hosts
+  // without a reliable-stream callback. Existing replay-only tests missed this.
+  it.each([false, true])('projects one ordinary timeout recovery (stream callback=%s)', async reliable => {
+    const broadcasts = vi.fn();
+    let accepted!: (peer: string, stream: string) => void;
+    let resolveOpen!: () => void;
+    const opened = new Promise<void>(resolve => { resolveOpen = resolve; });
+    const loop = createTransportTimeoutReopenLoop({
+      onReopened: deviceId => broadcasts(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId }),
+      reopen: () => opened,
+      shouldAbort: () => false,
+    });
+    acceptedRegistration.runInNewContext({
+      client: { onPeerStreamAccepted: (callback: typeof accepted) => { accepted = callback; } },
+      isProviderSharePeer, isScopedPeer, parseSharedTaskPeer, shortDeviceRef,
+      replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      transportTimeoutReopen: loop, broadcast: broadcasts, DEVICE_LINK_PUSH,
+    });
+    try {
+      loop.trigger('remote-device');
+      if (reliable) accepted('remote-device', 'retained-stream');
+      resolveOpen();
+      await opened;
+      await Promise.resolve();
+      expect(broadcasts.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+      // A later genuine recovery can keep its transport stream: stream-ID-only
+      // deduplication would incorrectly retain a snapshot across this new gap.
+      broadcasts.mockClear();
+      accepted('remote-device', 'retained-stream');
+      expect(broadcasts.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+    } finally { loop.dispose(); }
+  });
+
+  // #8962: duplicate wire replies are consumed by the production client's
+  // pending-request pairing, rather than suppressing later real same-stream gaps.
+  it.each([false, true])('duplicate link-accept does not repeat renderer invalidation (confirmation=%s)', async confirm => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(confirm);
+    const a = recoveryDesktop(relay, 'desktop-a');
+    const b = recoveryDesktop(relay, 'desktop-b');
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false },
+      replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      broadcast, DEVICE_LINK_PUSH,
+    });
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start();
+      await relay.flush();
+      const opened = a.client.openLink('desktop-b', {
+        controllerName: 'A', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', capabilities: [],
+      });
+      await relay.flush(); await opened;
+      const reply = relay.sent.find(({ sender, envelope }) => sender === 'desktop-b' && envelope.kind === 'link-accept')!;
+      expect(reply).toBeDefined();
+      for (let i = 0; i < 3; i++) relay.sockets.get('desktop-a')!.push({ ...reply.envelope, src: 'desktop-b' });
+      await relay.flush();
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+      expect(a.diagnostic.error).not.toHaveBeenCalled();
+    } finally {
+      for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
+      vi.useRealTimers();
+    }
   });
 
   it.each([false, true])('互控设备 B 先反向重连时恢复 A→B 订阅，不扰动健康 C（确认能力=%s）', async (confirm) => {
@@ -391,7 +462,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
 
       Object.assign(a.context, {
         replayActiveSubscriptions: scheduler.replay, DEVICE_LINK_PUSH, broadcast: vi.fn(),
-        parseSharedTaskPeer, sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+        parseSharedTaskPeer, isScopedPeer, transportTimeoutReopen: { isActive: () => false },
+        sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       });
       inboundAcceptedRegistration.runInContext(a.context);
       acceptedRegistration.runInContext(a.context);

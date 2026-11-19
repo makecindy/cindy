@@ -1501,6 +1501,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   startBusyReporting();
 
   client.onPeerStreamAccepted((peer, streamId) => {
+    // Ordinary peers can recover without a relay/presence transition. The
+    // timeout loop already projects its own still-current successful recovery,
+    // including legacy Hosts without a stream callback; do not notify twice.
+    if (!isScopedPeer(peer) && !transportTimeoutReopen.isActive(peer)) {
+      broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
+    }
     // Shared routes can reconnect independently of the primary relay. Notify
     // views before replay can deliver a tokenless legacy completion snapshot.
     if (parseSharedTaskPeer(peer)?.role === 'host') {
