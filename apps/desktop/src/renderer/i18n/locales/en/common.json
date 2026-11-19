@@ -1859,6 +1859,14 @@
       "restored": "Restored default settings",
       "restoreFailed": "Could not restore defaults."
     },
+    "navGroups": {
+      "preferences": "Common settings",
+      "models": "Models & usage",
+      "interaction": "Desktop interaction",
+      "connections": "Connections & sharing",
+      "extensions": "Tools & plugins",
+      "data": "Tasks & storage"
+    },
     "tabs": {
       "storage": "Storage",
       "general": "General",

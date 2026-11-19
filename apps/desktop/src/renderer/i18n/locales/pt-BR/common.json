@@ -1897,6 +1897,14 @@
       "restored": "Configurações padrão restauradas",
       "restoreFailed": "Não foi possível restaurar os padrões."
     },
+    "navGroups": {
+      "preferences": "Configurações comuns",
+      "models": "Modelos e uso",
+      "interaction": "Interação no computador",
+      "connections": "Conexões e compartilhamento",
+      "extensions": "Ferramentas e plugins",
+      "data": "Tarefas e armazenamento"
+    },
     "tabs": {
       "storage": "Armazenamento",
       "general": "Geral",

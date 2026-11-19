@@ -1897,6 +1897,14 @@
       "restored": "Configuración predeterminada restaurada",
       "restoreFailed": "No se pudieron restaurar los valores predeterminados."
     },
+    "navGroups": {
+      "preferences": "Ajustes habituales",
+      "models": "Modelos y uso",
+      "interaction": "Uso del escritorio",
+      "connections": "Conectar y compartir",
+      "extensions": "Herramientas y complementos",
+      "data": "Tareas y almacenamiento"
+    },
     "tabs": {
       "storage": "Almacenamiento",
       "general": "General",

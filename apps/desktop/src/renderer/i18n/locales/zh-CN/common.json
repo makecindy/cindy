@@ -1829,6 +1829,14 @@
       "restored": "已恢复默认设置",
       "restoreFailed": "未能恢复默认设置"
     },
+    "navGroups": {
+      "preferences": "常用设置",
+      "models": "模型与用量",
+      "interaction": "桌面交互",
+      "connections": "连接与共享",
+      "extensions": "工具与插件",
+      "data": "任务与存储"
+    },
     "tabs": {
       "storage": "存储空间",
       "general": "通用",

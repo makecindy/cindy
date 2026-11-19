@@ -1829,6 +1829,14 @@
       "restored": "デフォルト設定に戻しました",
       "restoreFailed": "デフォルトに戻せませんでした。"
     },
+    "navGroups": {
+      "preferences": "よく使う設定",
+      "models": "モデルと使用量",
+      "interaction": "デスクトップ操作",
+      "connections": "接続と共有",
+      "extensions": "ツールとプラグイン",
+      "data": "タスクとストレージ"
+    },
     "tabs": {
       "storage": "ストレージ",
       "general": "一般",

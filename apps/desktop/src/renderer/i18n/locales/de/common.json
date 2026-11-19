@@ -1859,6 +1859,14 @@
       "restored": "Standardeinstellungen wiederhergestellt",
       "restoreFailed": "Standardeinstellungen konnten nicht wiederhergestellt werden."
     },
+    "navGroups": {
+      "preferences": "Häufige Einstellungen",
+      "models": "Modelle und Nutzung",
+      "interaction": "Desktop-Bedienung",
+      "connections": "Verbindungen und Freigaben",
+      "extensions": "Werkzeuge und Plugins",
+      "data": "Aufgaben und Speicher"
+    },
     "tabs": {
       "storage": "Speicher",
       "general": "Allgemein",

@@ -1897,6 +1897,14 @@
       "restored": "Paramètres par défaut rétablis",
       "restoreFailed": "Impossible de rétablir les valeurs par défaut."
     },
+    "navGroups": {
+      "preferences": "Réglages courants",
+      "models": "Modèles et utilisation",
+      "interaction": "Interface et saisie",
+      "connections": "Connexions et partage",
+      "extensions": "Outils et plugins",
+      "data": "Tâches et stockage"
+    },
     "tabs": {
       "storage": "Stockage",
       "general": "Général",

@@ -403,14 +403,14 @@ function SettingsViewContent() {
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
-          {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
-          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
+          {/* Align the arrow center and title with the navigation icon and label columns. */}
+          <div className="flex items-center gap-1 px-3 pb-[18px]">
             <Tip text={t('settings.back')} side="bottom">
               <button data-settings-search-action="Return from settings or close the extensions subpage"
                 type="button"
                 onClick={exitSettings}
                 aria-label={t('settings.back')}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
+                className="-ml-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
               >
                 <ArrowLeft size={20} />
               </button>

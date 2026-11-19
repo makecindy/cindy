@@ -1897,6 +1897,14 @@
       "restored": "Definições predefinidas restauradas",
       "restoreFailed": "Não foi possível restaurar as predefinições."
     },
+    "navGroups": {
+      "preferences": "Definições comuns",
+      "models": "Modelos e utilização",
+      "interaction": "Interação no computador",
+      "connections": "Ligações e partilha",
+      "extensions": "Ferramentas e plugins",
+      "data": "Tarefas e armazenamento"
+    },
     "tabs": {
       "storage": "Armazenamento",
       "general": "Geral",
