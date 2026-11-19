@@ -8359,6 +8359,8 @@
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentModelPreferences": "Lire et modifier vos modèles favoris, et lire vos modèles récemment utilisés",
         "agentModelPreferencesDetail": "Peut lire les modèles favoris et récemment utilisés sur cet ordinateur, y compris l’effort de raisonnement et Fast, et ajouter, modifier ou retirer des favoris. Les modifications apparaissent aussi dans le sélecteur de modèle de Cindy. Les modèles choisis dans le plugin ne sont pas ajoutés aux récents. Les modèles de vos autres ordinateurs ou partagés avec vous ne sont pas inclus, et aucun identifiant n’est transmis.",
+        "harnesses": "Fournit des moteurs d'exécution : {{names}}",
+        "harnessesDetail": "Dans vos tâches, peut lire et écrire dans le répertoire de travail, exécuter des commandes et utiliser les mêmes outils de Cindy que Pi intégré.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
@@ -14339,6 +14341,32 @@
             "label": "Accès complet",
             "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmer à chaque fois",
+            "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
+          },
+          "default": {
+            "label": "Par défaut",
+            "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
+          },
+          "acceptEdits": {
+            "label": "Accepter les modifications",
+            "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
+          },
+          "auto": {
+            "label": "Automatique",
+            "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
+          },
+          "plan": {
+            "label": "Planifier uniquement",
+            "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
+          },
+          "bypassPermissions": {
+            "label": "Tout autoriser",
+            "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
+          }
         }
       }
     },
@@ -14813,6 +14841,16 @@
       "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
       "switchToQueue": "File d'attente par défaut"
+    },
+    "pluginEngines": {
+      "group": "Moteurs de plugins",
+      "genericName": "Moteur de plugin",
+      "defaultModel": "Modèle par défaut",
+      "defaultModelHint": "Utilise le réglage par défaut du moteur",
+      "unavailable": "Indisponible",
+      "engineMissing": "Le plugin qui fournit ce moteur est désactivé ou désinstallé.",
+      "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer.",
+      "modelChangeFailed": "Impossible de changer de modèle"
     }
   },
   "onboarding": {
@@ -15980,6 +16018,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Cet Agent n'est pas disponible sur l'autre ordinateur. Installez-le ou connectez-vous-y sur cet ordinateur, ou choisissez un autre Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Cet ordinateur ne peut pas restaurer l’état précédent de la session. Choisissez un modèle d’un autre ordinateur ou fournisseur pour continuer avec un transfert de contexte. Les messages existants sont conservés.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Le moteur du plugin n’a pas pu restaurer la conversation précédente. Vos messages sont conservés. Choisissez un autre moteur ou démarrez une nouvelle tâche.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
@@ -17544,6 +17583,7 @@
       "promote": {
         "menu": "Convertir en automatisation de projet",
         "noWorkingDir": "Impossible de convertir une planification sans répertoire de travail",
+        "pluginEngine": "Les moteurs de plugin ne fonctionnent que sur cet ordinateur : impossible de convertir cette planification en automatisation de projet",
         "success": "Convertie en automatisation de projet"
       },
       "editProject": {
@@ -17820,6 +17860,7 @@
         "selectThread": "Sélectionnez une session cible",
         "selectProject": "Sélectionnez un répertoire de projet",
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
+        "pluginEngineUnavailable": "Le moteur de plugin sélectionné n’est pas disponible pour le moment. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
         "preRunPluginRequired": "Choisissez un plugin pour la vérification préalable",

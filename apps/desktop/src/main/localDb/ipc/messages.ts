@@ -1331,7 +1331,8 @@ export async function createMessage(
      * agentMeta 需要它;main 侧 SDK 事件落库路径必传,renderer pending echo 等
      * 无 SDK 元信息的行留空(null 回落 session.agentKind)。
      */
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    /** 'acp' = plugin engine task; its rows carry no vendor meta. */
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   opts?: {

@@ -768,7 +768,7 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain("allowFixedEffortPlaceholder: internalOptions.source === 'user'");
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
-    expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
+    expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId, patch)'));
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {

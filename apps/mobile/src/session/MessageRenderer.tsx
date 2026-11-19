@@ -5819,9 +5819,14 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
-  const from = agentSwitchEngineLabel(data?.fromAgentKind);
-  const to = agentSwitchEngineLabel(data?.toAgentKind);
-  const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  const engineFallback = t('models.pluginEngines.genericName');
+  const from = agentSwitchEngineLabel(data?.fromAgentKind, data?.fromEngineName, engineFallback);
+  const to = agentSwitchEngineLabel(data?.toAgentKind, data?.toEngineName, engineFallback);
+  const rawToModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 插件引擎的 'default' 是「让引擎自己选」，不把内部取值当模型名显示。
+  const toModel = data?.toAgentKind === 'acp' && rawToModel === 'default'
+    ? t('models.pluginEngines.defaultModel')
+    : rawToModel;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const coverageKey = handoffCoverageKey(data);
   const resumed = data?.resumed === true;

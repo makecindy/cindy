@@ -1516,9 +1516,10 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    // 'acp' = plugin engine (docs/plans/acp-plugin-bridge.md); TS-only enum, no CHECK constraint.
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }),
     /** NULL inherits a bound task; empty string explicitly selects the automation host. */
     modelAgentDeviceId: text('model_agent_device_id'),
     inheritedProjectDir: text('inherited_project_dir'),
