@@ -2999,6 +2999,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     wanted: ReadonlyArray<{ runId: string; cursor: number; hold?: true }>,
     waitMs: number,
     signal?: AbortSignal,
+    /** 控制端按回程速度要的上限（协议里已限在 POLL_MIN–POLL_MAX）；旧控制端不带，按 POLL_MAX。 */
+    maxBytes: number = REMOTE_AGENT_POLL_MAX_BYTES,
   ): Promise<RemoteAgentPollResult> {
     const touch = (updateHold: boolean) => {
       const t = now();
@@ -3024,7 +3026,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (!anyReady && waitMs > 0) await waitForAny(initial.map(({ run }) => run.log), waitMs, signal);
     touch(false);
     const out: RemoteAgentPollResult = { runs: [] };
-    let budget = REMOTE_AGENT_POLL_MAX_BYTES;
+    let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
     const start = wanted.length ? pollRotation++ % wanted.length : 0;
     for (let index = 0; index < wanted.length; index += 1) {
       const { runId, cursor } = wanted[(start + index) % wanted.length];
@@ -3895,7 +3897,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return {};
       }
       case 'poll':
-        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal);
+        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal, request.maxBytes);
       case 'reply': {
         const run = requireRun(controller, request.runId);
         const pending = run.pending.get(request.requestId);

@@ -273,6 +273,13 @@ describe('remote agent channel', () => {
       .toEqual({ op: 'open', runId, agentKind: 'pi', payload: { json: { a: 1 } } });
     expect(parseRemoteAgentRequest({ op: 'call', runId, callId: otherId, method: 'send', payload: { json: [1] } }))
       .toEqual({ op: 'call', runId, callId: otherId, method: 'send', payload: { json: [1] } });
+    // poll maxBytes (2026-11-19): optional; out-of-range sizes are clamped, never reject the poll.
+    expect(parseRemoteAgentRequest({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 128 * 1024 }))
+      .toEqual({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 128 * 1024 });
+    expect(parseRemoteAgentRequest({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 1 }))
+      .toEqual({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 64 * 1024 });
+    expect(parseRemoteAgentRequest({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 64 * 1024 * 1024 }))
+      .toEqual({ op: 'poll', runs: [{ runId, cursor: 0 }], maxBytes: 1536 * 1024 });
     expect(parseRemoteAgentRequest({ op: 'poll', runs: [{ runId, cursor: 7 }, { runId: otherId, cursor: 0 }] }))
       .toEqual({ op: 'poll', runs: [{ runId, cursor: 7 }, { runId: otherId, cursor: 0 }] });
     expect(parseRemoteAgentRequest({ op: 'reply', runId, requestId: otherId, payload: { uploadId: otherId, chunks: 2, bytes: 10 } }))

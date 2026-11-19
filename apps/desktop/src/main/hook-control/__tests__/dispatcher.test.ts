@@ -642,45 +642,16 @@ describe('isPathWithin', () => {
 });
 
 describe('buildHookSessionTitle', () => {
-  it('短消息原样进标题, 换行/连续空白压平成单空格', () => {
-    expect(buildHookSessionTitle('slack', '修一下登录页', 'C1:1.1')).toBe('[Slack] 修一下登录页');
-    expect(buildHookSessionTitle('slack', ' 修一下\n登录页  的样式 ', 'C1:1.1')).toBe(
-      '[Slack] 修一下 登录页 的样式',
-    );
+  it('uses the same channel, readable subject and optional context for every lane', () => {
+    expect(buildHookSessionTitle('Slack', ' 修一下\n登录页  的样式 ', 'Acme')).toBe('Slack · 修一下 登录页 的样式 · Acme');
+    expect(buildHookSessionTitle('Slack', '检查登录页')).toBe('Slack · 检查登录页');
+    expect(buildHookSessionTitle('Telegram', '继续发布', 'Release')).toBe('Telegram · 继续发布 · Release');
   });
 
-  it('超长消息截断到 24 字加省略号', () => {
-    const long = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十';
-    expect(buildHookSessionTitle('slack', long, 'C1:1.1')).toBe(`[Slack] ${long.slice(0, 24)}…`);
-  });
-
-  it('空消息(纯图片派发)回退渠道内标识', () => {
-    expect(buildHookSessionTitle('slack', '   \n ', 'C1:1.1')).toBe('[Slack] C1:1.1');
-  });
-
-  it('DM 会话(bareKey 带 dm: 前缀)标题前缀标 ·DM', () => {
-    expect(buildHookSessionTitle('slack', '帮我看看这个报错', 'dm:U1:g0')).toBe(
-      '[Slack·DM] 帮我看看这个报错',
-    );
-    // 空消息回退 bareKey 时 DM 标同样生效
-    expect(buildHookSessionTitle('slack', '', 'dm:U1:g0')).toBe('[Slack·DM] dm:U1:g0');
-  });
-
-  it('(multi-team)teamName 非空时并入方括号首段; 空/空白不加', () => {
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', 'acme')).toBe(
-      '[acme·Slack] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'dm:U1:g0', 'acme')).toBe(
-      '[acme·Slack·DM] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', null)).toBe('[Slack] 修登录页');
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', '  ')).toBe('[Slack] 修登录页');
-  });
-
-  it('Telegram group/topic 名称进入来源标题', () => {
-    expect(
-      buildHookSessionTitle('telegram', '继续发布', 'topic:bot:-1:77:user:g1', 'Release topic'),
-    ).toBe('[Release topic·Telegram] 继续发布');
+  it('keeps readable context with an empty subject or a long message containing emoji', () => {
+    expect(buildHookSessionTitle('Slack', '', 'Acme')).toBe('Slack · Acme');
+    expect(buildHookSessionTitle('X', '  ')).toBe('X');
+    expect(buildHookSessionTitle('Slack', '🐧'.repeat(80), 'Acme')).toBe('Slack · ' + '🐧'.repeat(25) + ' · Acme');
   });
 });
 
@@ -980,7 +951,7 @@ describe('dispatcher 核心语义', () => {
       prompt: '干活',
       // 标题带 provider 名(externalKey 前缀), 不用 desktop 侧连接名;
       // 后半段用首条消息摘要(可读), 不再用"频道 ID:时间戳"
-      title: '[Team-slack] 干活',
+      title: 'Team-slack · 干活',
     });
 
     fr.finish({ finalText: '搞定了' });
@@ -1057,12 +1028,12 @@ describe('dispatcher 核心语义', () => {
     );
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 你来解释下这个问题' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X · 你来解释下这个问题' });
     // prompt 本身照旧整份交给 agent —— 上下文不能因为标题的取舍被砍掉
     expect(fr.calls[0]?.prompt).toContain('<thread_context>');
   });
 
-  it('source.userText 缺失或为空时回退 prompt(老 server / 纯 @ 无正文)', async () => {
+  it('纯 @ 没有正文时只显示渠道', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -1070,7 +1041,7 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', dispatch({ source: { im: 'x', userText: '   ' } }), c.send);
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 干活' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X' });
   });
 
   it('同 key 第二次 dispatch 复用同一 session(铁律)', async () => {

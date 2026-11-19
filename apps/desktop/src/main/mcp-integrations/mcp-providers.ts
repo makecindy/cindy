@@ -1,3 +1,4 @@
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { createProjectToolCallbacks } from './projectToolCallbacks.js';
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscription-accounts/runtime.js';
@@ -14,6 +15,8 @@ import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { createDiscordMcpServer } from './discordMcpServer';
+import { DiscordOperationError } from '@cindy/im';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
 import { createFileToolExecutor } from '../cindy-brain/fileToolAccess.js';
 import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js';
@@ -98,7 +101,7 @@ import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
-import { feishuIm, wechatIm } from '../im';
+import { discordIm, feishuIm, wechatIm } from '../im';
 import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
@@ -1212,7 +1215,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 .from(sessions).where(eq(sessions.id, dispatcherSessionId)).limit(1);
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
-              return { title: title?.trim() || message.split('\n')[0].slice(0, 60), projectDir, workingDir,
+              return { title: title?.trim() || undefined, projectDir, workingDir,
                 useWorktree, agentKind, model, effort, fast, agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
@@ -1222,7 +1225,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
           const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
           // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
-          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: title?.trim() || message.split('\n')[0].slice(0, 60) });
+          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (recordCreation) {
             try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
             catch { return { ...accepted, responsibilityRecorded: false }; }
@@ -1262,7 +1265,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           });
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
-              title: title?.trim() || message.split('\n')[0].slice(0, 60) });
+              title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
@@ -1657,6 +1660,43 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
       instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+  });
+
+  gated.push({
+    name: 'cindy_discord',
+    capability: { title: 'Discord', description: 'Use the already configured Discord bot: allowed channels and threads, history, search, messages, reactions and attachments.', source: 'builtin', discovery: { tool: 'list_tools' } },
+    // Stable for all three harnesses; authorization is checked at every invocation.
+    isEnabled: () => true,
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_discord', instance: createDiscordMcpServer({
+      getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+      personalAccess: async context => {
+        const db = tryGetDbClient();
+        const owner = activeOwnerScopeKey();
+        const sessionId = context.sessionId;
+        if (!db || !sessionId || !context.sessionInstanceId) throw new DiscordOperationError('DISCORD_CALLER_UNAVAILABLE');
+        const input = getTaskActionInputState(sessionId);
+        const assertCurrent = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || db !== tryGetDbClient() ||
+              getTaskActionSession(sessionId)?.instanceId !== context.sessionInstanceId ||
+              getTaskActionInputState(sessionId).boundary !== input.boundary || !isActiveInputAccountScoped(sessionId)) {
+            throw new DiscordOperationError('DISCORD_CALLER_CHANGED');
+          }
+        };
+        assertCurrent();
+        const row = await db.queryOne<{ source: string; status: string; botId: string | null }>(
+          'SELECT s.source, s.status, b.bot_id AS botId FROM sessions s LEFT JOIN bot_session_links b ON b.session_id = s.id WHERE s.id = ? LIMIT 1', [sessionId]);
+        assertCurrent();
+        if (!row || row.botId || !['active', 'archived'].includes(row.status) || !['desktop', 'scheduler', 'plugin', 'cindy-make', 'learn'].includes(row.source)) {
+          throw new DiscordOperationError('DISCORD_TRIGGER_TRANSPORT_REQUIRED');
+        }
+        return { im: discordIm, assertCurrent };
+      },
+      authorizeFile: async (context, file) => (await authorizeDesktopSessionPath({
+        sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId,
+        workingDir: context.workingDir ?? '', remoteHostId: context.remoteHostId,
+        path: file, toolName: 'cindy_discord.send_file', operation: 'read',
+      }, deps.getLiveSessionGrantState)).allowed,
+    }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

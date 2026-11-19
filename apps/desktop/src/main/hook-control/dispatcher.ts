@@ -1,4 +1,6 @@
 import { withSessionRouteLock } from '../localDb/sessionRouteLock';
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
+import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 import { createHookQuestionPublisher } from './questionPublisher';
 /**
  * hook-control/dispatcher.ts
@@ -206,6 +208,8 @@ export interface HookContinuationWatchRequest {
 export interface HookRunRequest {
   /** Host-resolved companion channel lane; never accepted from the wire. */
   companionBotId?: string;
+  /** Only the execution host can prove that this input created the title it may replace. */
+  topicNaming?: { initialTitle: string; channel: string; context?: string | null };
   /**
    * 取消探针(dispatcher 侧 task.cancel 账本):runner 在回收/重建等长窗口后、
    * 发送前查询 —— 喊停若落在窗口内, 中止信号对旧实例无目标、对新实例未登记,
@@ -343,9 +347,10 @@ export type PrepareWorktreeResult =
   | { ok: false; message: string };
 
 export interface HookDispatcherDeps {
-  resolveCompanionTarget?: (botId: string, externalKey: string) => Promise<{
+  resolveCompanionTarget?: (botId: string, externalKey: string, subject?: string) => Promise<{
     sessionId: string;
     workingDir: string;
+    initialTopicTitle?: string;
   }>;
   getConnection: (id: string) => HookConnectionConfig | null;
   bindings: HookBindingStore;
@@ -566,8 +571,6 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
-/** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
-const TITLE_SNIPPET_MAX = 24;
 /** Server-controlled source metadata is persisted and rendered, so keep it bounded locally too. */
 const SOURCE_USER_TEXT_MAX = 20_000;
 const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
@@ -636,42 +639,9 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   };
 }
 
-/**
- * 新建 hook 会话的标题: `[<Provider>] <首条消息摘要>`(如 `[Slack] 修登录页`)。
- * 前缀保留 provider 名标明"谁驱动的"(首字母大写, 不再带 `Hook·` 实现细节);
- * 后半段用消息内容(压平空白后截断), 比"频道 ID + 时间戳"可读。消息为空
- * (如纯图片派发)时回退渠道内标识 bareKey。
- * 渠道内标识约定 `dm:` 前缀 = 私聊(见 slack-hook-server externalKeyFor),
- * 私聊会话前缀额外标 `·DM`(`[Slack·DM]`), 与频道驱动的会话在列表里一眼区分。
- * contextName: Slack workspace 或 Telegram group/topic 显示名，非空时并入方括号**首段**
- * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
- * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
- * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
- *
- * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
- * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
- * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
- * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
- * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
- * 老 server 不下发时回退 prompt, 行为与此前一致。
- */
-export function buildHookSessionTitle(
-  providerName: string,
-  prompt: string,
-  bareKey: string,
-  contextName?: string | null,
-): string {
-  const flat = prompt.replace(/\s+/g, ' ').trim();
-  const snippet =
-    flat.length === 0
-      ? bareKey
-      : flat.length > TITLE_SNIPPET_MAX
-        ? `${flat.slice(0, TITLE_SNIPPET_MAX)}…`
-        : flat;
-  const dmTag = bareKey.startsWith('dm:') ? '·DM' : '';
-  const displayProvider = providerName.charAt(0).toUpperCase() + providerName.slice(1);
-  const contextTag = contextName && contextName.trim().length > 0 ? `${contextName.trim()}·` : '';
-  return `[${contextTag}${displayProvider}${dmTag}] ${snippet}`;
+/** Assemble visible channel metadata locally, using the same character budget for the preview and the final title. */
+export function buildHookSessionTitle(channel: string, subject: string, context?: string | null): string {
+  return formatTaskTopicTitle(subject, channel, context ? { context } : undefined);
 }
 
 type ContextCursorReceipt = { rollback(): void | Promise<void> };
@@ -2412,7 +2382,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (!connectionId.endsWith(':x') || payload.source?.im !== 'x' || !deps.resolveCompanionTarget) {
         return { reject: 'disabled' };
       }
-      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey);
+      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText);
       if (!isCurrentGeneration(generation)
         || getConnection(connectionId)?.companionBotId !== config.companionBotId) {
         return { reject: 'disabled' };
@@ -2420,7 +2390,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       companionTargets.set(target.sessionId, { connectionId, botId: config.companionBotId, workingDir: target.workingDir });
       bindings.set(connectionId, payload.externalKey, target.sessionId);
       return { run: {
-        ...target, companionBotId: config.companionBotId, isNew: false,
+        sessionId: target.sessionId, workingDir: target.workingDir, companionBotId: config.companionBotId, isNew: false,
+        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: 'X' } } : {}),
         agentKind: null, model: null, effort: null, permissionMode: null,
         title: null, prompt: payload.prompt, attachments: payload.attachments, origin,
       } };
@@ -2846,12 +2817,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const colon = payload.externalKey.indexOf(':');
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
-    const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
-    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
-    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
-    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
-    const sourceUserText = payload.source?.userText ?? '';
-    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
+    const channel = imChannelDisplayName(providerName) ?? providerName.charAt(0).toUpperCase() + providerName.slice(1);
+    // Older relays sometimes supplied only a plain prompt. An enriched prompt is never title material.
+    const plainPrompt = payload.prompt.trim();
+    const legacyText = payload.source?.userText == null && !/^[<\[]|[\r\n]/.test(plainPrompt) ? plainPrompt : '';
+    const titleText = payload.source?.userText?.trim() || legacyText;
+    const context = payload.source?.teamName ||
+      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu'
+        ? payload.source.channelName : null);
+    const title = buildHookSessionTitle(channel, titleText, context);
     return {
       run: {
         sessionId,
@@ -2872,17 +2846,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             ? { workspaceAlias: effectiveWorkspace }
             : {}
           : { workspaceAlias: workspaceAliasFor(dir).workspaceAlias ?? (effectiveWorkspace as string) }),
-        title: buildHookSessionTitle(
-          providerName,
-          titleText,
-          bareKey,
-          payload.source?.teamName ??
-            (payload.source?.im === 'telegram' ||
-            payload.source?.im === 'x' ||
-            payload.source?.im === 'feishu'
-              ? payload.source.channelName
-              : null),
-        ),
+        title,
+        topicNaming: { initialTitle: title, channel, context },
         prompt: payload.prompt,
         attachments: payload.attachments,
         origin,

@@ -166,6 +166,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
+vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,

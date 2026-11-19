@@ -27,6 +27,8 @@
  * 正确。后续要精确区分时再与 maker-core 一起演进。
  */
 
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
+import { refineCreatedTaskTitle } from '../maker-ipc/createdTaskTitles.js';
 import { beginChannelToolScope } from '../im/shared/channelToolScope.js';
 import { getSessionRuntimeStartOverride } from '../maker-ipc/sessionRuntimeControl.js';
 
@@ -720,6 +722,14 @@ async function collectOutboundForFinalText(
   }
 }
 
+function refineHookTaskTitle(req: HookRunRequest, subject: string): void {
+  const naming = req.topicNaming;
+  void refineCreatedTaskTitle(req.sessionId, subject, naming && {
+    initialTitle: naming.initialTitle,
+    format: topic => formatTaskTopicTitle(topic, naming.channel, naming.context ? { context: naming.context } : undefined),
+  });
+}
+
 export function createMakerHookSessionRunner(deps: {
   log: { info(msg: string): void; warn(msg: string): void };
 }): HookSessionRunner {
@@ -1015,6 +1025,7 @@ export function createMakerHookSessionRunner(deps: {
           }
           assertAccount?.();
           broadcastSessionCreated(req.sessionId);
+          refineHookTaskTitle(req, '');
           return {
             status: 'ok',
             finalText: '',
@@ -1711,6 +1722,8 @@ export function createMakerHookSessionRunner(deps: {
             // accepted hook turn is headless; preparation and queue wait are
             // still part of the unrelated interactive turn.
             markHeadlessTurnDispatched();
+            assertAccount?.();
+            refineHookTaskTitle(req, req.userText?.trim() || req.source?.userText?.trim() || '');
             // send 被接受才落 user 消息(与 scheduler 同序: 不让 agent 在
             // "消息没存下"的情况下空跑); 失败即整体失败
             // agentMeta 形状受 CcMeta 约束, 只放 origin(scheduleId 已携带
