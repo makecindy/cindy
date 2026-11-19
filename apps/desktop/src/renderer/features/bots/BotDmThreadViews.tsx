@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { parseUserContent } from '@/lib/imageRef';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -58,20 +59,39 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
     let cancelled = false;
     const owner = getDataOwnerGeneration();
     setLoaded(null);
-    void aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).then(rows => {
-      if (cancelled || !isDataOwnerGenerationCurrent(owner)
-        || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
-      const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
-      if (row && (row.role === 'user' || row.role === 'assistant')) {
-        const parsed = row.role === 'user' ? parseUserContent(row.content) : {
-          text: typeof row.content === 'string' ? row.content : JSON.stringify(row.content),
-          images: [], files: [],
-        };
-        setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
-          content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner, historyEpoch });
-      }
-    }).catch(() => { /* Keep the existing unavailable-root presentation; never substitute another message. */ });
-    return () => { cancelled = true; };
+    let started = false;
+    let windowHidden = isWindowHidden();
+    // One read per root/history generation, deferred while hidden. A completed read
+    // (including an unavailable root) survives hide/show until the history changes.
+    const load = () => {
+      if (started || windowHidden || document.visibilityState === 'hidden'
+        || !isDataOwnerGenerationCurrent(owner)) return;
+      started = true;
+      void aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).then(rows => {
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)
+          || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
+        const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
+        if (row && (row.role === 'user' || row.role === 'assistant')) {
+          const parsed = row.role === 'user' ? parseUserContent(row.content) : {
+            text: typeof row.content === 'string' ? row.content : JSON.stringify(row.content),
+            images: [], files: [],
+          };
+          setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
+            content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner, historyEpoch });
+        }
+      }).catch(() => { /* Keep the existing unavailable-root presentation; never substitute another message. */ });
+    };
+    document.addEventListener('visibilitychange', load);
+    const offHidden = window.electronAPI?.onWindowHiddenChange?.(hidden => {
+      windowHidden = hidden;
+      load();
+    });
+    load();
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', load);
+      offHidden?.();
+    };
   }, [message, rootClientId, rootSessionId, historyEpoch]);
   if (message) return message.role === 'user' || message.role === 'assistant' ? message : null;
   return loaded?.sessionId === rootSessionId && loaded.clientId === rootClientId

@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -41,6 +41,11 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
 }) {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  // Router state identifies our own delayed commits without keeping a queue of URLs.
+  // A remount gets a new owner, so persisted URLs still restore their topic normally.
+  const [navigationOwner] = useState(() => crypto.randomUUID());
+  const ownNavigation = location.state?.botDmThreadNavigationOwner === navigationOwner;
   const profile = useBotProfiles().find((candidate) => candidate.id === bot.id);
   const topicProjections = useMemo(() => (profile?.sessions ?? []).filter((session) =>
     session.role === 'thread' && session.status !== 'deleted' && session.threadRoot?.rootSessionId === rootSessionId), [profile?.sessions, rootSessionId]);
@@ -76,13 +81,13 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
         const next = new URLSearchParams(params);
         next.set(BOT_DM_THREAD_PARAM, result.sessionId);
         return next;
-      }, { replace: true });
+      }, { replace: true, state: { botDmThreadNavigationOwner: navigationOwner } });
       reload();
     }).catch(() => {
       if (request !== attempt.current || !isDataOwnerGenerationCurrent(owner)) return;
       setOpen({ rootClientId, state: { kind: 'failed', message: t('bots.dmThread.openFailed') } });
     });
-  }, [bot.id, reload, rootSessionId, setSearchParams, t]);
+  }, [bot.id, navigationOwner, reload, rootSessionId, setSearchParams, t]);
 
   const close = useCallback(() => {
     attempt.current += 1;
@@ -92,24 +97,25 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
       const next = new URLSearchParams(params);
       next.delete(BOT_DM_THREAD_PARAM);
       return next;
-    }, { replace: true });
+    }, { replace: true, state: { botDmThreadNavigationOwner: navigationOwner } });
     reload();
-  }, [reload, setSearchParams]);
+  }, [navigationOwner, reload, setSearchParams]);
 
   // A link or notification names the topic's Session: open it, or switch to it from another open
   // topic, once its root is known. Each link value is followed once, so closing the panel (which
   // drops the parameter a render later) sticks; once the parameter is gone the same link works again.
   const linked = searchParams.get(BOT_DM_THREAD_PARAM);
-  const handledLink = useRef<string | null>(null);
+  const handledLink = useRef<{ linked: string; ownNavigation: boolean } | null>(null);
   const openSessionId = open?.state.kind === 'ready' ? open.state.sessionId : null;
   useEffect(() => {
     if (!linked) { handledLink.current = null; return; }
-    if (!enabled || handledLink.current === linked) return;
+    if (!enabled || (handledLink.current?.linked === linked
+      && handledLink.current.ownNavigation === ownNavigation)) return;
     const projection = topicProjections.find((session) => session.id === linked);
     if (!projection?.threadRoot) return;
-    handledLink.current = linked;
-    if (openSessionId !== linked) ensure(projection.threadRoot.rootClientId);
-  }, [enabled, ensure, linked, openSessionId, topicProjections]);
+    handledLink.current = { linked, ownNavigation };
+    if (!ownNavigation && openSessionId !== linked) ensure(projection.threadRoot.rootClientId);
+  }, [enabled, ensure, linked, openSessionId, ownNavigation, topicProjections]);
 
   const value = useMemo<BotDmThreadsValue | null>(() => enabled ? {
     botId: bot.id,

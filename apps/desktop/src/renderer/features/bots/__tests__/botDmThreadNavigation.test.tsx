@@ -12,13 +12,17 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   ensure: vi.fn(), reload: vi.fn(), send: vi.fn(), around: vi.fn(),
+  location: { state: null as unknown }, pendingState: null as unknown,
   params: new URLSearchParams(), pending: null as URLSearchParams | null,
   listeners: new Set<() => void>(), profiles: [] as unknown[],
+  hiddenListeners: new Set<(hidden: boolean) => void>(),
   historyEpoch: 0, historyListeners: new Set<() => void>(),
   snapshots: new Map<string, { messages: unknown[] }>(),
 }));
-const setParams = (update: (p: URLSearchParams) => URLSearchParams) => { h.pending = update(h.params); };
-vi.mock('react-router-dom', () => ({ useSearchParams: () => [
+const setParams = (update: (p: URLSearchParams) => URLSearchParams, options?: { state?: unknown }) => {
+  h.pending = update(h.params); h.pendingState = options?.state ?? null;
+};
+vi.mock('react-router-dom', () => ({ useLocation: () => h.location, useSearchParams: () => [
   useSyncExternalStore((fn) => { h.listeners.add(fn); return () => { h.listeners.delete(fn); }; }, () => h.params),
   setParams,
 ] }));
@@ -56,20 +60,24 @@ function Openers() {
 function Host() {
   return <BotDmThreadHost enabled bot={{ id: 'bot', name: 'Cindy' }} rootSessionId="chat" mentions={[]}><Openers /></BotDmThreadHost>;
 }
-function commitUrl(params = h.pending) {
+function commitUrl(params = h.pending, state = params === h.pending ? h.pendingState : null) {
   if (!params) throw new Error('No pending navigation');
-  act(() => { h.params = params; h.pending = null; h.listeners.forEach(fn => fn()); });
+  act(() => { h.location = { state }; h.params = params; h.pending = null; h.listeners.forEach(fn => fn()); });
 }
 async function click(id: string) { await act(async () => { fireEvent.click(screen.getByText('open ' + id)); }); }
 beforeEach(() => {
   setDataOwnerGeneration('test-owner');
+  h.location = { state: null }; h.pendingState = null;
+  h.hiddenListeners.clear();
+  document.documentElement.removeAttribute('data-app-hidden');
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
   h.historyEpoch = 0; h.historyListeners.clear();
   h.around.mockReset().mockResolvedValue([]);
   h.ensure.mockReset().mockImplementation(async ({ rootClientId }) => ({ ok: true, sessionId: rootClientId + '-topic', created: true }));
   h.send.mockReset(); h.reload.mockReset(); h.params = new URLSearchParams('thread=old-topic'); h.pending = null;
   h.profiles = [{ id: 'bot', sessions: ['old', 'new', 'third'].map(id => ({ id: id + '-topic', role: 'thread', status: 'active', threadRoot: { rootSessionId: 'chat', rootClientId: id } })) }];
   h.snapshots.set('chat', { messages: ['old', 'new', 'third'].map(id => ({ clientId: id, role: 'assistant', content: id + ' source' })) });
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { localDb: { bots: { dmThread: { ensure: h.ensure } } } } });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { onWindowHiddenChange: (fn: (hidden: boolean) => void) => { h.hiddenListeners.add(fn); return () => { h.hiddenListeners.delete(fn); }; }, localDb: { bots: { dmThread: { ensure: h.ensure } } } } });
 });
 afterEach(cleanup);
 
@@ -266,4 +274,94 @@ it('invalidates an off-window root and its attachments on history deletion/reset
   expect(h.around).toHaveBeenCalledTimes(3);
   view.unmount();
   expect(h.historyListeners.size).toBe(0);
+});
+
+// §8.3: real panel with native/document visibility signals; unit, no timers.
+it.each(['native', 'document'])('defers invalidated source reads while hidden via %s', async signal => {
+  const hide = (hidden: boolean) => act(() => {
+    if (signal === 'native') {
+      document.documentElement.toggleAttribute('data-app-hidden', hidden);
+      h.hiddenListeners.forEach(fn => fn(hidden));
+    } else {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: hidden ? 'hidden' : 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+  });
+  h.snapshots.set('chat', { messages: [] });
+  hide(true);
+  const view = await act(async () => render(<Host />));
+  expect(h.around).not.toHaveBeenCalled();
+  h.around.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'stored source' }]);
+  await act(async () => { hide(false); });
+  expect(screen.getByText('stored source')).toBeTruthy();
+  hide(true); await act(async () => { hide(false); });
+  expect(h.around).toHaveBeenCalledTimes(1);
+  hide(true);
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  expect(screen.queryByText('stored source')).toBeNull();
+  expect(h.around).toHaveBeenCalledTimes(1);
+  await act(async () => { hide(false); });
+  expect(h.around).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('stored source')).toBeNull();
+  view.unmount();
+  expect(h.hiddenListeners.size).toBe(0);
+  hide(true); await act(async () => { hide(false); });
+  expect(h.around).toHaveBeenCalledTimes(2);
+});
+
+it('keeps a newer selection when an intermediate own URL commits', async () => {
+  await act(async () => { render(<Host />); });
+  await click('new');
+  const intermediate = h.pending;
+  let finish!: (value: unknown) => void;
+  h.ensure.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await click('third');
+  commitUrl(intermediate);
+  await act(async () => { finish({ ok: true, sessionId: 'third-topic', created: true }); });
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('third-topic');
+  expect(screen.getByText('third source')).toBeTruthy();
+  expect(h.pending?.get('thread')).toBe('third-topic');
+});
+
+it('ignores queued navigation after close but follows an external link to that same topic', async () => {
+  await act(async () => { render(<Host />); });
+  await click('new');
+  const intermediate = h.pending;
+  const intermediateState = h.pendingState;
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  const closedUrl = h.pending;
+  const closedState = h.pendingState;
+  commitUrl(intermediate, intermediateState);
+  expect(screen.queryByRole('complementary')).toBeNull();
+  commitUrl(closedUrl, closedState);
+  await act(async () => { commitUrl(new URLSearchParams('thread=new-topic')); });
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('new-topic');
+});
+
+it('ignores an earlier own URL after the latest topic is ready and honors an external same-URL link', async () => {
+  await act(async () => { render(<Host />); });
+  await click('new');
+  const intermediate = h.pending;
+  const intermediateState = h.pendingState;
+  await click('third');
+  const latest = h.pending;
+  const latestState = h.pendingState;
+  commitUrl(intermediate, intermediateState);
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('third-topic');
+  await act(async () => { commitUrl(new URLSearchParams('thread=new-topic')); });
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('new-topic');
+  commitUrl(latest, latestState);
+  expect(screen.getByTestId('session').getAttribute('data-session-id')).toBe('new-topic');
+});
+
+it('does not start a hidden deferred read after its data owner changes or panel unmounts', async () => {
+  document.documentElement.setAttribute('data-app-hidden', '');
+  h.snapshots.set('chat', { messages: [] });
+  const view = await act(async () => render(<Host />));
+  setDataOwnerGeneration('different-owner');
+  await act(async () => { h.hiddenListeners.forEach(fn => fn(false)); });
+  expect(h.around).not.toHaveBeenCalled();
+  view.unmount();
+  expect(h.hiddenListeners.size).toBe(0);
 });
