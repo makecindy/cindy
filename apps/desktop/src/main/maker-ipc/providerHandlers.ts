@@ -109,6 +109,7 @@ import {
   createLocalProviderImport,
   editLocalProviderImport,
   isLocalProviderImport,
+  needsLocalProviderDestinationConsent,
   checkLocalProviderImportSource,
   localProviderImportDraft,
   equivalentLocalProvider,
@@ -137,6 +138,7 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 const log = createLogger('maker-ipc:provider');
 
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
+const LOCAL_DESTINATION_RETRY_DELAY_MS = 5_000;
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -1373,6 +1375,8 @@ export function registerProviderHandlers(
   // Different new IDs can describe the same connection. Only local-import final
   // comparisons/confirmation share this queue; scans and ordinary CRUD do not.
   let localImportTail: Promise<unknown> = Promise.resolve();
+  let destinationConfirmPending = false;
+  let retryDestinationAfter = 0;
   const serializeLocalImport = <T,>(task: () => Promise<T>): Promise<T> => {
     const run = localImportTail.then(task, task);
     localImportTail = run.catch(() => undefined);
@@ -1525,6 +1529,7 @@ export function registerProviderHandlers(
       importId: unknown,
       target?: unknown,
       interrupt?: unknown,
+      destinationPromptReserved = false,
     ): Promise<import('../../shared/providerImport.js').ProviderImportConfirmResult> => {
       assertTrustedProviderMutationSender(event);
       if (interrupt !== undefined && interrupt !== true)
@@ -1560,8 +1565,15 @@ export function registerProviderHandlers(
         );
         started = true;
         if (destinationToConfirm) {
-          if (!deps.confirmLocalProviderDestination ||
-              !await deps.confirmLocalProviderDestination(event, destinationToConfirm))
+          if (!destinationPromptReserved || !deps.confirmLocalProviderDestination)
+            throwIpcError('MUTATION_CANCELLED', 'Saved credential confirmation is unavailable');
+          let approved = false;
+          try {
+            approved = await deps.confirmLocalProviderDestination(event, destinationToConfirm);
+          } finally {
+            if (!approved) retryDestinationAfter = performance.now() + LOCAL_DESTINATION_RETRY_DELAY_MS;
+          }
+          if (!approved)
             throwIpcError('MUTATION_CANCELLED', 'Saved credential use was not approved');
           assertTrustedProviderMutationSender(event);
           assertProviderMutationOwner(ownerAtIngress);
@@ -1668,10 +1680,21 @@ export function registerProviderHandlers(
         );
       }
     };
-  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, (event, id, target, interrupt) =>
-    isLocalProviderImport(id)
-      ? serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt))
-      : confirmProviderImport(event, id, target, interrupt));
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, async (event, id, target, interrupt) => {
+    if (!isLocalProviderImport(id)) return confirmProviderImport(event, id, target, interrupt);
+    if (!needsLocalProviderDestinationConsent(id))
+      return serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt));
+    assertTrustedProviderMutationSender(event);
+    if (destinationConfirmPending || performance.now() < retryDestinationAfter)
+      throwIpcError('MUTATION_CANCELLED', 'Saved credential confirmation is busy');
+    // Reserve before enqueueing to prevent a burst from replaying after dismissal.
+    destinationConfirmPending = true;
+    try {
+      return await serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt, true));
+    } finally {
+      destinationConfirmPending = false;
+    }
+  });
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (event === MAIN_PROCESS_SENDER) return;

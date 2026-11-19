@@ -1167,6 +1167,10 @@ export function createLocalProviderImport(
 export function isLocalProviderImport(id: unknown): boolean {
   return typeof id === 'string' && !!drafts.get(id)?.local;
 }
+export function needsLocalProviderDestinationConsent(id: unknown): boolean {
+  const local = typeof id === 'string' ? drafts.get(id)?.local : undefined;
+  return local?.needsDestinationConsent === true && !local.completed;
+}
 /** Main-only access for comparing with owner-scoped persisted credentials. */
 export function localProviderImportDraft(
   id: string,

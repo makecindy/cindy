@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, writeFile, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, onTestFinished, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, DiscoveredModel, ModelRegistry, ProviderPreset, ProviderView } from '@cindy/model-providers';
 import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, storedCustomProviderId } from '@cindy/model-providers';
@@ -364,6 +364,8 @@ describe('local API configuration import IPC', () => {
     expect(await listCustomProviders()).toHaveLength(1);
   });
   it.each([undefined, 'FAKE-REPLACEMENT'])('imports saved Claude headers after destination consent (replacement: %s)', async (replacement) => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    onTestFinished(() => { now.mockRestore(); });
     const { harness, deps } = await setup({
       env: {
         ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN\nX-Tenant: FAKE-TENANT',
@@ -387,11 +389,24 @@ describe('local API configuration import IPC', () => {
     let preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
     expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
     expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-TENANT');
+    const opened = Promise.withResolvers<void>();
+    const decision = Promise.withResolvers<boolean>();
+    approveDestination.mockImplementationOnce(() => {
+      opened.resolve();
+      return decision.promise;
+    });
+    const first = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    await opened.promise;
+    const overlapping = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    decision.resolve(false);
+    await Promise.all([first, overlapping]);
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    expect(approveDestination).toHaveBeenCalledTimes(1);
     expect(approveDestination).toHaveBeenCalledWith(expect.anything(), baseUrl);
     expect(deps.fetchModels).not.toHaveBeenCalled();
     expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
     expect(await listCustomProviders()).toHaveLength(0);
+    now.mockReturnValue(15_000);
     if (replacement) {
       await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
         ...edit,
@@ -401,6 +416,7 @@ describe('local API configuration import IPC', () => {
       await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
       expect(deps.fetchModels).not.toHaveBeenCalled();
       expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+      now.mockReturnValue(20_000);
     }
     approveDestination.mockResolvedValueOnce(true);
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
