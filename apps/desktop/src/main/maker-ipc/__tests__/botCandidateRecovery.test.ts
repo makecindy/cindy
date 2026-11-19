@@ -6,7 +6,7 @@ import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResu
 
 
 /** Execute the production auto-resume hooks (interruptedTurnAutoResumeHooks.ts) without starting Electron or touching accounts. */
-function harness(bot = true) {
+function harness(bot = true, settlePausedResumeIntoHistory?: true) {
   const item = { clientId: 'input', createOpts: {} };
   let current = true;
   let scheduled: (() => Promise<void>) | undefined;
@@ -40,6 +40,7 @@ function harness(bot = true) {
   const botFallbackInputs = new WeakSet<object>();
   const hooks = createInterruptedTurnAutoResumeHooks({
     ...deps, botFallbackInputs,
+    ...(settlePausedResumeIntoHistory && { settlePausedResumeIntoHistory }),
     providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
     pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
     autoResumeAttemptToken: () => null,
@@ -72,7 +73,7 @@ describe('Bot candidate recovery', () => {
   });
 
   it.each(['before', 'during'])('finalizes once without a banner when paused %s route selection', async when => {
-    const h = harness();
+    const h = harness(true, true);
     h.onResumableTurnError('s', { errorStatus: 503 }, h.item);
     if (when === 'before') h.paused.mockReturnValue(true);
     else h.fallback.mockImplementationOnce(async () => {
@@ -87,7 +88,7 @@ describe('Bot candidate recovery', () => {
   });
 
   it.each(['attempt', 'startup'])('leaves an expired %s alone even when execution is paused', async kind => {
-    const h = harness();
+    const h = harness(true, true);
     h.onResumableTurnError('s', { reason: 'bot-subscription-startup-admission', errorStatus: 429 }, h.item);
     if (kind === 'attempt') h.cancel();
     else h.startupCurrent.mockReturnValue(false);
@@ -97,6 +98,26 @@ describe('Bot candidate recovery', () => {
     expect(h.resume).not.toHaveBeenCalled();
     expect(h.releaseGuard).not.toHaveBeenCalled();
     expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  // Production entry/result: createInterruptedTurnAutoResumeHooks runs the scheduled callback;
+  // Desktop leaves the held error alone and neither switches routes nor sends a retry.
+  // Basis: af8bd193a3 short-circuits on pause; 7f168d0212 applied Host settlement to Desktop too.
+  // Coverage gap: the paused-at-dispatch tests above exercise the Host opt-in only.
+  // Minimal input/tier: one current startup admission retry, paused after scheduling;
+  // unit tier with an in-memory scheduler and no database or running app.
+  // Standalone file wall clock: 3.65 s on Node 22.22.3.
+  it('leaves a current paused desktop retry and its held error alone', async () => {
+    const h = harness();
+    expect(h.onResumableTurnError('s', { reason: 'bot-subscription-startup-admission', errorStatus: 429 }, h.item))
+      .not.toBeNull();
+    h.paused.mockReturnValue(true);
+    await h.run();
+    expect(h.releaseGuard).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.startupCurrent).not.toHaveBeenCalled();
   });
 
   // #10802 / unit: the real recovery hook must carry its original cause with
