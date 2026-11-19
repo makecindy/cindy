@@ -19,6 +19,7 @@ export default {
   cases: {
     default: { about: 'Equal sources on other computers are listed once, identically in Settings and the picker' },
     'same-account-twice-here': { about: 'Two connections of one login on this computer: one entry in both surfaces' },
+    'hidden-provider': { about: 'A provider hidden from the picker: still listed in Settings, folded under 已隐藏 in the picker and found by search' },
   },
   async ready(page) {
     await page.locator('[data-listed-source]').first().waitFor();
@@ -31,6 +32,44 @@ export default {
       const key = node.getAttribute('data-rail-item');
       return key.startsWith('provider:') ? `local:${key.slice('provider:'.length)}` : key.slice('remote:'.length);
     }))).sort();
+    if (ui.case === 'hidden-provider') {
+      // Hidden and disabled providers are folded into two groups in Settings, so what stays in
+      // the regular list is exactly what the picker rail offers.
+      assert.deepEqual(pickerEntries, settingsEntries, 'the regular Settings list matches the picker rail');
+      assert.deepEqual(settingsEntries, ['local:openai', 'mini:xai']);
+      const toggle = page.locator('[data-hidden-models-toggle]');
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('option', { name: /Fable/ }).count(), 0, 'hidden models stay folded until asked for');
+      await toggle.scrollIntoViewIfNeeded();
+      await ui.capture('hidden-folded');
+      await toggle.click();
+      await page.getByRole('option', { name: /Fable/ }).waitFor();
+      await page.getByRole('option', { name: /Fable/ }).scrollIntoViewIfNeeded();
+      await ui.capture('hidden-expanded');
+      await toggle.click();
+      // Search reaches hidden providers without opening the fold first.
+      await page.getByRole('textbox', { name: await ui.t('newChat.modelSelector.search.placeholderAll') }).fill('fab');
+      await page.getByRole('option', { name: /Fable/ }).waitFor();
+      await ui.capture('hidden-found-by-search');
+      await page.keyboard.press('Escape');
+      // Settings: both groups start folded and carry their counts.
+      for (const group of ['hidden', 'suspended']) {
+        const header = page.locator(`[data-provider-rail-group="${group}"] > button`);
+        assert.equal(await header.getAttribute('aria-expanded'), 'false', `${group} group starts folded`);
+      }
+      assert.equal(await page.locator('[data-listed-source="local:anthropic"]').count(), 0);
+      await ui.capture('settings-groups-folded');
+      await page.locator('[data-provider-rail-group="hidden"] > button').click();
+      await page.locator('[data-listed-source="local:anthropic"]').click();
+      await page.getByText(await ui.t('settings.providers.detail.hiddenBanner')).waitFor();
+      await ui.capture('hidden-in-settings');
+      await page.locator('[data-provider-rail-group="suspended"] > button').click();
+      await page.locator('[data-listed-source="local:anthropic-work"]').click();
+      await page.getByText(await ui.t('settings.providers.detail.suspendedBanner')).waitFor();
+      await ui.capture('disabled-in-settings');
+      return;
+    }
     assert.deepEqual(pickerEntries, settingsEntries, 'Settings and the model picker must list the same sources');
     assert.deepEqual(settingsEntries, ['local:anthropic', 'local:openai', 'mini:openai', 'rog:xai']);
     await ui.capture('both-surfaces');

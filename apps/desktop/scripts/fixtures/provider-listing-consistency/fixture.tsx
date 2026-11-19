@@ -20,6 +20,14 @@ const catalogs = new Map([
   // A different OpenAI login stays; the same xAI as ROG is listed once.
   ['mini', { providers: [provider('openai', 'account-b'), provider('xai')], loading: false, error: null }],
 ]);
+// Hiding is a picker-only choice: Settings keeps the row, the picker folds it under 已隐藏.
+if (ctx.case === 'hidden-provider') {
+  local[1] = { ...anthropic(), hidden: true };
+  // A disabled provider too, so Settings shows both folded groups side by side.
+  local.push(provider('anthropic', 'account-d', { id: 'anthropic-work', name: 'Anthropic · Work', models: fable, suspended: true } as Partial<ProviderView>));
+  catalogs.clear();
+  catalogs.set('mini', { providers: [provider('xai')], loading: false, error: null });
+}
 if (ctx.case === 'same-account-twice-here') local.push(provider('openai', 'account-a', { id: 'openai-old', name: 'OpenAI · old connection' }));
 const devices = [{ deviceId: 'rog', name: 'ROG', platform: 'win32' }, { deviceId: 'mini', name: 'Mac mini', platform: 'darwin' }];
 const snapshot = { providers: local, providerOrder: local.map(item => item.id), ownerGeneration: 1, loading: false, error: null, refetch: async () => {} };

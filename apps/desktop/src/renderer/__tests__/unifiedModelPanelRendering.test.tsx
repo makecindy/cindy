@@ -5593,3 +5593,43 @@ it.each([
     providersRef.providers = originalProviders;
   }
 });
+
+// Rule (model-selector-unified.md「已隐藏区」): hiding a provider only folds it out of the regular
+// list; it must stay reachable. The gap: every existing case builds the list from visible
+// providers, so a regression that drops hidden providers from the panel's data (the obvious way
+// to implement hiding) leaves the user unable to pick them and loses their favorites. Minimal
+// failing input: one listed provider plus one with `hidden: true`. Tier: component (real
+// ModelSelectorContent + UnifiedModelPanel, catalog from the providers mock).
+describe('providers hidden from the picker stay reachable', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const source = (id: string, name: string, model: string, extra: Record<string, unknown> = {}) => ({
+    id, name, source: 'user', agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+    connected: true, models: { codex: [{ id: `${id}-model`, name: model, contextWindow: 200_000,
+      efforts: ['high'], defaultEffort: 'high' }] }, ...extra });
+  const memory = { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn() };
+
+  it('folds them under one disclosure that expands, and a click selects the hidden model', async () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', onProviderChange: change, modelMemory: memory });
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByText('Listed Model')).toBeTruthy();
+    expect(list.queryByText('Hidden Model')).toBeNull();
+    // The rail offers no entry for it either: hiding is about the picker's regular surface.
+    expect(document.querySelector('[data-rail-item="provider:tucked"]')).toBeNull();
+    const toggle = document.querySelector('[data-hidden-models-toggle]') as HTMLElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
+    expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  it('opens the fold by itself when the task is already using a hidden provider', () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });
+    expect(within(screen.getByRole('listbox')).getByText('Hidden Model')).toBeTruthy();
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+  });
+});

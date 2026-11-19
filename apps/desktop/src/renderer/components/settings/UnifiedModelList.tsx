@@ -798,8 +798,11 @@ export function UnifiedModelList({
             ),
           )
         : searched;
-    const active = matched.filter((r) => !rowDisabledEffective(r));
-    const disabled = matched.filter((r) => rowDisabledEffective(r));
+    // 功能型模型(图片 / 视频 / 语音 / 向量…)不进模型选择器,所以没有「隐藏」可言:
+    // 它们只有一个「启用」开关(停用轴),关掉后留在原来的类型分组里,不沉到底部两区。
+    const capabilityRow = (r: UnionModelRow) => isCapabilityRow(r, provider.source === 'user');
+    const active = matched.filter((r) => capabilityRow(r) || !rowDisabledEffective(r));
+    const disabled = matched.filter((r) => !capabilityRow(r) && rowDisabledEffective(r));
     /**
      * 未启用(显示轴关闭)的对话行沉到列表底部,与「已停用」并列成区。
      *
@@ -807,11 +810,11 @@ export function UnifiedModelList({
      * 里会把开着的那几个冲淡 —— 用户来这一页最常做的两件事是「看我开了哪些」和
      * 「再开一个」,前者需要开着的集中在上面。
      *
-     * 三种行不沉:
-     *   - **没有显示开关的能力行**(音频/向量)不参与这个判定;
+     * 两种行不沉:
+     *   - **功能型模型**只有启用开关,不参与显示轴(见上);
      *   - **付费锁定行**的开关本就不可动,沉底只会让用户以为是自己关的;
      */
-    const sinkHidden = (r: UnionModelRow) => rowState(r).hidden;
+    const sinkHidden = (r: UnionModelRow) => !capabilityRow(r) && rowState(r).hidden;
     const hidden = active.filter(sinkHidden);
     const shown = active.filter((r) => !sinkHidden(r));
     const repByRow = new Map<string, UnionModelRow>();
@@ -865,10 +868,27 @@ export function UnifiedModelList({
   }, [focusedRow, groups, hiddenRows, rowDisabledEffective]);
   const showGroupHeaders = groups.length > 1;
   const showSearch = unionRows.length > 8;
+  // 「已停用」区只列对话模型;功能型模型的停用就写在它自己的开关上。供应商视图给的
+  // override 总数含后者,扣掉后剩下的才是这个区(含指向已下架模型的陈旧条目)要负责的。
+  const disabledGroupOverrideCount = useMemo(() => {
+    const capabilityIds = new Set<string>();
+    const collect = (row: UnionModelRow) => {
+      if (row.aliasRows) return row.aliasRows.forEach(collect);
+      for (const agent of row.avail) {
+        const model = row.byAgent[agent];
+        if (model?.disabled === true) capabilityIds.add(model.id);
+      }
+    };
+    for (const row of unionRows) {
+      if (isCapabilityRow(row, provider.source === 'user')) collect(row);
+    }
+    return Math.max(0, (provider.disableOverrideCount ?? 0) - capabilityIds.size);
+  }, [unionRows, provider.disableOverrideCount, provider.source]);
 
+  // 批量「全部显示 / 全部隐藏」只作用于对话模型:功能型模型不在选择器里,它们的开关是启用。
   const selectableRows = unionRows.filter(
     (row) =>
-      rowHasVisibilitySwitch(row, provider.source === 'user') &&
+      !isCapabilityRow(row, provider.source === 'user') &&
       !isRowPaymentRequired(row) &&
       !rowDisabledEffective(row),
   );
@@ -912,6 +932,43 @@ export function UnifiedModelList({
       }
     },
     [provider, rowState, showVisibilityWriteFailure],
+  );
+
+  /**
+   * 功能型模型的单一「启用」开关。
+   *
+   * 读:没被停用,且没有被旧版的显示开关关掉(图片 / 视频 / 语音合成等曾复用显示轴,
+   * 那时「未显示」的效果就是功能里用不了 —— 升级后它们照旧显示为关,不悄悄变成可用)。
+   * 写:关 = 停用(准入轴,main 侧所有功能清单都认);开 = 取消停用,并把旧的显示开关
+   * 一并拨回开。此后这类模型只剩停用轴一处真源。
+   */
+  const capabilityRowOn = useCallback(
+    (row: UnionModelRow): boolean => {
+      const userProvider = provider.source === 'user';
+      if (rowDisabledEffective(row)) return false;
+      return rowHasVisibilitySwitch(row, userProvider)
+        ? rowAnyEnabled(provider.id, row, userProvider)
+        : true;
+    },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是 modelVisibilityPrefs 的外部刷新信号。
+    [provider.id, provider.source, rowDisabledEffective, visibilityVersion],
+  );
+  const toggleCapabilityRow = useCallback(
+    async (row: UnionModelRow) => {
+      const userProvider = provider.source === 'user';
+      if (capabilityRowOn(row)) {
+        await setRowDisabled(row, true);
+        return;
+      }
+      if (rowDisabledEffective(row) && !(await setRowDisabled(row, false))) return;
+      if (rowHasVisibilitySwitch(row, userProvider) && !rowAnyEnabled(provider.id, row, userProvider)) {
+        const targets = modelVisibilityTargets(provider, row, true);
+        if ((await setModelVisibilities(provider.id, targets, true)) === false) {
+          showVisibilityWriteFailure();
+        }
+      }
+    },
+    [capabilityRowOn, provider, rowDisabledEffective, setRowDisabled, showVisibilityWriteFailure],
   );
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
@@ -978,6 +1035,8 @@ export function UnifiedModelList({
             ? 'cindy'
             : brand?.logoKind;
     const paymentRequired = isRowPaymentRequired(row);
+    const capabilityOn = capability && capabilityRowOn(row);
+    const capabilityOff = capability && !capabilityOn && !paymentRequired;
     // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
     // 能力模型行不标(它们本来就不参与 agent 维度)。
     const missingAgents = provider.agents.filter((agent) => !row.avail.includes(agent));
@@ -996,7 +1055,8 @@ export function UnifiedModelList({
         className={cn(
           focusedRow?.id === row.id && 'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
           'group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          !state.ready && 'opacity-55',
+          // 被用户关掉的功能型模型不整行压暗:行名已用三级文字色表达「关」,开关要保持可点的观感。
+          !state.ready && !capabilityOff && 'opacity-55',
         )}
       >
         <span
@@ -1018,7 +1078,7 @@ export function UnifiedModelList({
           className="min-w-0 truncate text-14 font-medium"
           style={{
             color:
-              state.ready && (capability || anyOn)
+              (capability ? capabilityOn && state.ready : state.ready && anyOn)
                 ? 'var(--settings-section-title)'
                 : 'var(--text-tertiary)',
           }}
@@ -1085,11 +1145,21 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频、决策/重排复用显示轴。 */}
-        {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
-          <span className="w-9 shrink-0" />
-        )}
-        {rowHasVisibilitySwitch(row, provider.source === 'user') && (
+        {/* 功能型模型:单一「启用」开关(停用轴)。开着的随时能关;关着的要重新打开,
+            需要供应商可用(与逐行「启用此模型」同一条件),旧显示开关关掉的还要通道就绪。 */}
+        {capability ? (
+          <Switch
+            data-capability-enable-switch
+            disabled={
+              paymentRequired ||
+              (!capabilityOn &&
+                (!selectionAvailable || (!rowDisabledEffective(row) && !state.canSelect)))
+            }
+            checked={capabilityOn}
+            onCheckedChange={() => void toggleCapabilityRow(row)}
+            aria-label={localizedModelName(rep.name, t)}
+          />
+        ) : (
           <Switch
             disabled={!state.canSelect}
             checked={anyOn}
@@ -1371,7 +1441,7 @@ export function UnifiedModelList({
               下架模型的陈旧条目 —— 逐行启用清不掉它们;configuration-and-overrides.md §4)。
               渲染条件独立于当前渲染行:只剩陈旧条目(disabledRows 为空)或搜索过滤后
               无匹配行时,恢复入口都不能消失(PR #744 review 第二十六轮)。 */}
-          {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) &&
+          {(disabledRows.length > 0 || disabledGroupOverrideCount > 0) &&
             (() => {
               const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
               return (
@@ -1406,7 +1476,7 @@ export function UnifiedModelList({
                           让「还有 N 条停用配置」可感知。 */}
                         {disabledRows.length > 0
                           ? disabledRows.length
-                          : (provider.disableOverrideCount ?? 0)}
+                          : disabledGroupOverrideCount}
                       </span>
                     </button>
                     {!hasLockedDisabledRow && (

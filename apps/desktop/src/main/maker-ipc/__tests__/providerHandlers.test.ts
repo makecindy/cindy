@@ -6303,6 +6303,31 @@ describe('receiving-client remote provider disable', () => {
     expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
     expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
   });
+  // Rule (disableOverrides.ts): hiding a provider is presentation, disabling is access. The two
+  // share one channel, so the regression to guard is a hide that also stops the provider (or the
+  // reverse). Minimal input: one hide command for a local provider and one for a peer's.
+  // Tier: unit over the real handler; persistence is covered by model-disable-store.test.ts.
+  it('hides a provider from the picker without touching access, locally and per peer', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]),
+      listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('xd', true);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET,
+      { kind: 'provider-hidden', providerId: 'openai', remoteDeviceId: 'peer', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    // Un-hiding clears a stale entry even when the provider is gone from the catalog.
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: false });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('gone', false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: true }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+  });
   it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({ listRemoteProviders: async () => [] });

@@ -315,6 +315,9 @@ describe('ProvidersSection — 双栏管理', () => {
     expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
     view.unmount();
     const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    // A disabled provider is folded into the 已停用 group, which starts closed after reopening.
+    expect(screen.queryByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /settings\.providers\.pill\.suspended/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
     expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });

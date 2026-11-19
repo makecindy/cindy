@@ -19,7 +19,7 @@ import { toast } from '@/lib/toast';
 import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
-import { Check, Loader2, TriangleAlert } from 'lucide-react';
+import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -570,9 +570,8 @@ export function UnifiedModelPanel({
   const keepModelKey = keepModel
     ? `${keepModel.providerId ?? ''}::${keepModel.modelId}::${keepModel.agent}`
     : '';
-  const entries = useMemo(
-    () =>
-      unifiedModelEntries({
+  /** 联合列表的派生入参。「已隐藏」区复用同一份,只换掉可见性谓词(见 hiddenEntries)。 */
+  const entryOptions = (): Parameters<typeof unifiedModelEntries>[0] => ({
         providers,
         ...(!preferenceStore && (modelMemory?.editMany || configurationEnabled === false) ? { aliasPreferences: (providerId: string, agent: AgentKind, modelId: string) => ({
           engine: selectionPolicy === 'personalized' ? getEngineOverride(providerId, modelId) : undefined,
@@ -590,15 +589,55 @@ export function UnifiedModelPanel({
         excludeModel: (model, provider, agent) =>
           predicatesRef.current.excludeModel?.(model, provider, agent) ?? false,
         includePaymentRequired,
+        // 用户整家隐藏的供应商不从数据里剔掉:收藏 / 最近要继续解析到它们,面板自己把
+        // 它们从左栏与常规分组收进底部的「已隐藏」区(见 foldedProviderIds / hiddenEntries)。
+        includeHiddenProviders: true,
         scope,
         // 选中行豁免:会话正在用的那一条即便被停用或服务端下架,也必须留在列表里 ——
         // 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。豁免按 agent
         // 收窄(见上面 keepModel 的推导注释与该选项头注)。
         ...(keepModel ? { keepModel } : {}),
-      }),
+  });
+  const entries = useMemo(
+    () => unifiedModelEntries(entryOptions()),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
     [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired, enginePrefsVersion, memoryVersion, modelMemory, selectionPolicy, configurationEnabled, priceOf, preferenceStore, getEngineOverride],
   );
+
+  // ── 已隐藏区 ──────────────────────────────────────────────────────────────
+  // 两种来源并成一个可展开的区:整家隐藏的供应商(ProviderView.hidden)与逐个关掉显示
+  // 开关的模型。隐藏只是从常规列表收起,模型照常可选 —— 所以这里不做任何准入判断,
+  // 与常规行走同一条 unifiedModelEntries(只是不套可见性谓词)。
+  const userHiddenProviderIds = useMemo(
+    () => new Set(providers.filter((provider) => provider.hidden === true).map((provider) => provider.id)),
+    [providers],
+  );
+  const foldedProviderIds = useMemo<ReadonlySet<string> | undefined>(() => {
+    if (userHiddenProviderIds.size === 0) return listHiddenProviderIds;
+    return new Set([...(listHiddenProviderIds ?? []), ...userHiddenProviderIds]);
+  }, [listHiddenProviderIds, userHiddenProviderIds]);
+  const hiddenEntries = useMemo(
+    () => {
+      // 逐个成员比对:别名合并行(同一逻辑模型的新旧 id)在两次派生里可能选出不同的代表 id,
+      // 只比行 id 会把已经列出的模型当成「被隐藏」再列一遍。
+      const listed = new Set(entries.flatMap((entry) =>
+        entryModelIds(entry).map((modelId) => `${entry.providerId} ${modelId}`)));
+      return unifiedModelEntries({
+        ...entryOptions(),
+        // 与常规清单唯一的差别:不套逐模型可见性。
+        isVisible: () => true,
+      }).filter(
+        (entry) =>
+          // 「运行于」收起的那一份是重复项,不是用户隐藏的,不进这个区。
+          !listHiddenProviderIds?.has(entry.providerId) &&
+          (userHiddenProviderIds.has(entry.providerId) ||
+            !entryModelIds(entry).some((modelId) => listed.has(`${entry.providerId} ${modelId}`))),
+      );
+    },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: 与 entries 同一组派生入参(entryOptions 经 ref / key 表达身份),entries 变即重算。
+    [entries, listHiddenProviderIds, userHiddenProviderIds],
+  );
+  const [hiddenExpanded, setHiddenExpanded] = useState(false);
 
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
@@ -607,7 +646,7 @@ export function UnifiedModelPanel({
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
     const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(
-      entries.filter(entry => !listHiddenProviderIds?.has(entry.providerId)), undefined, providerOrder,
+      entries.filter(entry => !foldedProviderIds?.has(entry.providerId)), undefined, providerOrder,
     ) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
@@ -622,7 +661,7 @@ export function UnifiedModelPanel({
     // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
     return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
-  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, listHiddenProviderIds]);
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, foldedProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -891,7 +930,7 @@ export function UnifiedModelPanel({
     };
   }, [deviceFavoritesEnabled, favoritesHomeDeviceId, deviceFavoriteGroups, unavailableDeviceIds, sharedFavoriteSources]);
 
-  const sections = useMemo(
+  const listedSections = useMemo(
     () =>
       buildUnifiedListSections({
         entries,
@@ -905,12 +944,41 @@ export function UnifiedModelPanel({
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
-        ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
+        ...(foldedProviderIds?.size ? { listHiddenProviderIds: foldedProviderIds } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, listHiddenProviderIds],
+    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
+  );
+  // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
+  // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
+  const hiddenSections = useMemo(
+    () =>
+      effectiveRail.kind !== 'all' && effectiveRail.kind !== 'provider'
+        ? []
+        : buildUnifiedListSections({
+            entries: hiddenEntries,
+            favorites: [],
+            query,
+            matchesQuery: (entry, q) => matchesModelName({
+              id: entry.modelId, displayName: entry.displayName, description: entry.description,
+            }, q, t),
+            rail: effectiveRail,
+            effectiveEngineOf,
+            providerOrder,
+          }).map((section) => ({ ...section, key: `hidden:${section.key}`, hidden: true as const })),
+    [hiddenEntries, query, effectiveRail, effectiveEngineOf, providerOrder, t],
+  );
+  const hiddenRowCount = hiddenSections.reduce((count, section) => count + section.rows.length, 0);
+  // 当前选中的模型就在隐藏区里时直接展开:打开面板必须看得见自己正在用什么。
+  const selectedIsHidden = hiddenSections.some((section) =>
+    section.rows.some((row) =>
+      row.entry.providerId === selected.providerId && entryMatchesModelId(row.entry, selected.modelId)));
+  const hiddenShown = hiddenRowCount > 0 && (hiddenExpanded || selectedIsHidden || query.trim() !== '');
+  const sections = useMemo(
+    () => (hiddenShown ? [...listedSections, ...hiddenSections] : listedSections),
+    [hiddenShown, listedSections, hiddenSections],
   );
 
   // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
@@ -1230,6 +1298,32 @@ export function UnifiedModelPanel({
   };
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
+  /**
+   * 「已隐藏」区的入口:折叠时排在列表末尾,展开后变成该区的标题。搜索词或当前选中项
+   * 把它强制展开时仍可点,只是收不起来(aria-expanded 如实反映)。
+   */
+  const hiddenDisclosure = hiddenRowCount > 0 ? (
+    <button
+      type="button"
+      data-hidden-models-toggle
+      aria-expanded={hiddenShown}
+      title={t('newChat.modelSelector.unified.hiddenGroupHint')}
+      onClick={() => setHiddenExpanded((open) => !open)}
+      className={cn(
+        'mt-1 flex w-full items-center gap-1 rounded-[8px] px-2.5 py-1.5 text-left text-12 font-medium leading-[1.33]',
+        'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-[var(--surface-hover)]',
+      )}
+    >
+      <ChevronRight
+        size={12}
+        aria-hidden
+        className={cn('shrink-0 transition-transform motion-reduce:transition-none', hiddenShown && 'rotate-90')}
+      />
+      <span className="truncate">
+        {t('newChat.modelSelector.unified.hiddenGroup', { count: hiddenRowCount })}
+      </span>
+    </button>
+  ) : null;
 
   /**
    * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
@@ -1555,7 +1649,7 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all')
+          ) : !hasRows && hiddenRowCount === 0 && !(pinnedTopHasRows && effectiveRail.kind === 'all')
             && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
             emptyCatalogNotice ?? (
               // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
@@ -1569,8 +1663,10 @@ export function UnifiedModelPanel({
               </div>
             )
           ) : (
-            sections.map((section) => (
+            <>
+            {sections.map((section, sectionIndex) => (
               <div key={section.key} role="group" aria-label={sectionLabel(section)}>
+                {section.hidden && !sections[sectionIndex - 1]?.hidden ? hiddenDisclosure : null}
                 <div
                   data-group-label={sectionLabel(section)}
                   {...(section.group?.type === 'provider'
@@ -1695,7 +1791,9 @@ export function UnifiedModelPanel({
                   );
                 })}
               </div>
-            ))
+            ))}
+            {hiddenShown ? null : hiddenDisclosure}
+            </>
           )}
         </div>
         {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,

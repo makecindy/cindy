@@ -3750,6 +3750,7 @@
         "connecting": "Verbindung wird hergestellt…",
         "rename": "Umbenennen",
         "suspended": "Deaktiviert",
+        "hidden": "Ausgeblendet",
         "unconfigured": "Nicht konfiguriert"
       },
       "button": {
@@ -3760,7 +3761,9 @@
         "cancel": "Abbrechen",
         "retry": "Modellsuche erneut versuchen",
         "retrying": "Modellsuche wird erneut versucht…",
-        "enableProvider": "Anbieter aktivieren"
+        "enableProvider": "Anbieter aktivieren",
+        "showProvider": "Anzeigen",
+        "hideInstead": "Stattdessen ausblenden"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4122,7 +4125,7 @@
         "paymentRequired": "Kostenpflichtig",
         "paymentUnlock": "Kostenpflichtig freischalten",
         "enableModel": "Dieses Modell aktivieren",
-        "capabilityGroupHint": "Wird in der Chat-Modellauswahl nicht angezeigt. Der Schalter steuert die Sichtbarkeit in der entsprechenden Funktion.",
+        "capabilityGroupHint": "Wird in der Modellauswahl nicht angezeigt. Der Schalter legt fest, ob die entsprechende Funktion das Modell verwenden kann.",
         "accessWriteFailed": "Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.",
         "visibilityWriteFailed": "Die Einstellung zur Modellsichtbarkeit konnte nicht gespeichert werden. Versuche es erneut oder starte Cindy neu, falls das Problem weiterhin besteht.",
         "disabledGroup": "Deaktiviert",
@@ -4266,22 +4269,22 @@
           "aria": "Nach Modelltyp filtern",
           "chat": "Chat"
         },
-        "hiddenGroup": "Nicht angezeigt",
+        "hiddenGroup": "Ausgeblendet",
         "management": {
           "brand": "Hersteller"
         },
         "manage": {
           "title": "Modelle",
-          "selected": "{{count}} ausgewählt",
-          "hint": "Wähle deine Chatmodelle mit den Schaltern aus.",
+          "selected": "{{count}} angezeigt",
+          "hint": "Die Schalter legen fest, welche Modelle in der Modellauswahl erscheinen. Ausschalten blendet ein Modell nur aus; du kannst es weiterhin unten in der Modellauswahl unter „Ausgeblendet“ wählen.",
           "menu": "Verwalten",
           "arrange": "Liste anordnen",
           "byBrand": "Nach Hersteller gruppieren",
           "byName": "Nach Modellname sortieren",
-          "selection": "Modellauswahl",
-          "showAll": "Alle Modelle auswählen",
-          "hideAll": "Auswahl leeren",
-          "reset": "Standardauswahl wiederherstellen",
+          "selection": "In der Modellauswahl anzeigen",
+          "showAll": "Alle Modelle anzeigen",
+          "hideAll": "Alle Modelle ausblenden",
+          "reset": "Standardanzeige wiederherstellen",
           "connectionRequired": "Verbinden, um diese Modelle zu nutzen. Deine Auswahl wird gespeichert."
         }
       },
@@ -4296,7 +4299,8 @@
         "groupBadge_other": "Anbietergruppe · {{count}} Computer",
         "groupNote": "{{device}} hat diesen Anbieter zu einer Anbietergruppe gemacht. Wenn du damit eine Aufgabe startest, weist {{device}} sie gemäß der Gruppenstrategie einem der unten aufgeführten Computer zu und verschiebt sie auf einen anderen, falls bei diesem Computer ein Problem auftritt. Solange {{device}} online ist, kannst du die Gruppe und ihre Freigaben hier unter „Fernzugriff & Freigabe“ verwalten.",
         "groupMembersTitle": "Computer in der Gruppe",
-        "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden."
+        "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden.",
+        "hiddenBanner": "In der Modellauswahl auf diesem Computer ausgeblendet. Favoriten und Sitzungen, die ihn verwenden, sind nicht betroffen."
       },
       "genericOAuth": {
         "subtitle": "Abonnementkonto",
@@ -4340,7 +4344,8 @@
           "rejected": "Dieser Anbieter hat die Anfrage abgelehnt. Die Liste unten stammt von der letzten erfolgreichen Aktualisierung. Versuche es später erneut oder verwende einen anderen Anbieter.",
           "empty": "Dieser Anbieter hat diesmal keine nutzbaren Modelle zurückgegeben. Die Liste unten stammt von der letzten erfolgreichen Aktualisierung. Prüfe die Zugriffsrechte deines Kontos und versuche es erneut."
         },
-        "suspendedBanner": "Dieser Anbieter ist deaktiviert. Anmeldeinformationen bleiben erhalten; aktiviere ihn, um seine Modelle wieder zu verwenden.",
+        "suspendedBanner": "Dieser Anbieter ist deaktiviert: Neue Sitzungen und Hintergrundfunktionen verwenden ihn nicht mehr. Anmeldeinformationen bleiben erhalten. Wenn er nur nicht in der Modellauswahl erscheinen soll, blende ihn stattdessen aus.",
+        "hiddenBanner": "In der Modellauswahl ausgeblendet. Sitzungen und Hintergrundfunktionen, die ihn verwenden, sind nicht betroffen, und du kannst ihn weiterhin unten in der Modellauswahl unter „Ausgeblendet“ wählen.",
         "remoteAccess": {
           "label": "Remote-Nutzung erlauben",
           "description": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent.",
@@ -4549,7 +4554,9 @@
       },
       "menu": {
         "disableProvider": "Diesen Anbieter deaktivieren",
-        "enableProvider": "Diesen Anbieter aktivieren"
+        "enableProvider": "Diesen Anbieter aktivieren",
+        "hideProvider": "In der Modellauswahl ausblenden",
+        "showProvider": "In der Modellauswahl anzeigen"
       },
       "builtinApiKey": {
         "subtitle": "Verbindung per API-Schlüssel",
@@ -14083,6 +14090,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Modelle dieses Computers können gerade nicht gelesen werden",
         "favoritesGroup": "Favoriten",
         "recentGroup": "Zuletzt verwendet",
+        "hiddenGroup": "Ausgeblendet ({{count}})",
+        "hiddenGroupHint": "Ausgeblendete Anbieter und Modelle können weiterhin gewählt werden",
         "recentEmpty": "Noch keine zuletzt verwendeten Modelle — wähle ein Modell, dann erscheint es hier",
         "favoritesSaveFailed": "Änderungen an Favoriten konnten nicht gespeichert werden",
         "favoritesCleanupFailed": "Favoriten für widerrufene Anbieterfreigaben konnten nicht entfernt werden",

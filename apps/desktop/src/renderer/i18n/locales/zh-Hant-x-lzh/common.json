@@ -3709,6 +3709,7 @@
         "connecting": "方連…",
         "rename": "易名",
         "suspended": "已停",
+        "hidden": "已隱",
         "unconfigured": "未設"
       },
       "button": {
@@ -3719,7 +3720,9 @@
         "cancel": "罷",
         "retry": "重取模型清單",
         "retrying": "方重取…",
-        "enableProvider": "啟供方"
+        "enableProvider": "啟供方",
+        "showProvider": "顯之",
+        "hideInstead": "改為隱"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4080,7 +4083,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟此模型",
-        "capabilityGroupHint": "不見於言談模型之選；開關定其於相應功能中列否",
+        "capabilityGroupHint": "不見於模型之選；開關定相應功能可用此模型否",
         "accessWriteFailed": "停用之設未能存，請再試",
         "visibilityWriteFailed": "模型顯示之設未能存，請再試；若仍未成，請重啟 Cindy。",
         "disabledGroup": "已停",
@@ -4224,22 +4227,22 @@
           "aria": "依模型之類篩之",
           "chat": "言談"
         },
-        "hiddenGroup": "未顯",
+        "hiddenGroup": "已隱",
         "management": {
           "brand": "製者"
         },
         "manage": {
           "title": "模型",
-          "selected": "已擇 {{count}} 個",
-          "hint": "以開關擇常用之言談模型。",
+          "selected": "顯 {{count}} 個",
+          "hint": "開關定模型見於模型之選否。關之但隱，仍可於選單之末「已隱」中擇之。",
           "menu": "理",
           "arrange": "清單排列",
           "byBrand": "依製者分組",
           "byName": "依模型名排列",
-          "selection": "常用模型",
-          "showAll": "盡選模型",
-          "hideAll": "盡罷所選",
-          "reset": "復預設之選",
+          "selection": "顯於模型之選",
+          "showAll": "盡顯",
+          "hideAll": "盡隱",
+          "reset": "復預設之顯",
           "connectionRequired": "連線後可用，已擇模型仍留。"
         }
       },
@@ -4253,7 +4256,8 @@
         "groupBadge_other": "供方組 · {{count}} 台機",
         "groupNote": "{{device}} 已將此供方立為供方組。於模型清單中擇之以新開差事，{{device}} 將依組策略分差事予下列一機執行；彼機有恙，自換一機續之。{{device}} 在線時，君可自此處之「遠端與分享」理此組及分享。",
         "groupMembersTitle": "組內之機",
-        "groupMembersFailed": "暫不能讀組內諸機之狀態。"
+        "groupMembersFailed": "暫不能讀組內諸機之狀態。",
+        "hiddenBanner": "已隱於此機模型之選。所藏與方用之差事皆不受其擾。"
       },
       "genericOAuth": {
         "subtitle": "訂閱名籍",
@@ -4297,7 +4301,8 @@
           "rejected": "此供方拒此番請求，下為前次所得之模型清單。請稍後再試，或改用他供方。",
           "empty": "此供方此番未返任何可用模型，下為前次所得之清單。請確認名籍權柄後再試。"
         },
-        "suspendedBanner": "此供方已停，憑證仍留；啟之，其模型方復可用",
+        "suspendedBanner": "此供方已停，新差事與幕後諸功皆不復用之，憑證仍留。若但不欲見於模型之選，可改為隱。",
+        "hiddenBanner": "已隱於模型之選。方用之差事與幕後諸功皆不受其擾；欲用時，仍可於選單之末「已隱」中擇之。",
         "remoteAccess": {
           "label": "許遠端呼叫",
           "description": "啟之，則君之他機與君所分享之人，可用此供方之模型；Agent 行於此機，用此機之登門與限額。",
@@ -4506,7 +4511,9 @@
       },
       "menu": {
         "disableProvider": "停此供方",
-        "enableProvider": "啟此供方"
+        "enableProvider": "啟此供方",
+        "hideProvider": "隱於模型之選",
+        "showProvider": "顯於模型之選"
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
@@ -14028,6 +14035,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暫讀不得彼機之模型",
         "favoritesGroup": "珍藏",
         "recentGroup": "近用",
+        "hiddenGroup": "已隱（{{count}}）",
+        "hiddenGroupHint": "已隱之供方與模型，仍可擇用",
         "recentEmpty": "尚無近用——擇一模型，自會來此相候",
         "favoritesSaveFailed": "珍藏之變未能存",
         "favoritesCleanupFailed": "未能清已失效之分享模型珍藏",
