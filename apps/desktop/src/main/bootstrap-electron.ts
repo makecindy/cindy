@@ -2146,7 +2146,10 @@ const lifecycleDbClientManager = createLifecycleDbClientManager({
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
   createInprocClient: () => createInprocDbClient(),
-  setCurrentDbClient,
+  setCurrentDbClient(client, userId) {
+    setCurrentDbClient(client, userId);
+    usageReporting.prepareTokenReporting();
+  },
   clearCurrentDbClient,
   log: dbClientLog,
 });
@@ -10776,8 +10779,7 @@ app.on('ready', async () => {
   // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
   // 的用户会一直不上报,直到手动去设置里拨一下开关。
   initAnalyticsSettingsService({
-    enabled: usageReporting.tokenReportingEnabled,
-    set: usageReporting.setTokenReporting,
+    prepare: usageReporting.prepareTokenReporting,
     interrupt: usageReporting.interruptTokenReporting,
     revokeAll: usageReporting.revokeAllTokenReporting,
     report: usageReporting.reportTokenUsage,

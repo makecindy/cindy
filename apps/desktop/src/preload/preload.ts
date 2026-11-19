@@ -2587,8 +2587,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
   getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-get'),
-  setProductTokensEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
-    ipcRenderer.invoke('analytics:product-tokens-set', enabled === true),
   setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
   /** 恢复默认:删掉开关 override,同意事实保留。 */
