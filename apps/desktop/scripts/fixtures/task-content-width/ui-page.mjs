@@ -3,10 +3,12 @@ import composer from '../companion-composer/ui-page.mjs';
 
 export default {
   name: 'task-content-width', entry: './fixture.tsx', viewport: { width: 1920, height: 1080 },
-  real: 'MessageStream, AssistantMessage, MarkdownRenderer, ChatInput, useProportionalWidth, LayoutRoot and its production draggable divider; AppFrame header, fonts and themes',
-  notCovered: 'Full session routing, new-task transition, native OS scaling/window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Viewports are effective CSS widths at100% page zoom; scaling cases model1920/125% or150% without changing the OS display. Group and companion bubble widths are unchanged.',
+  real: 'MessageStream, AssistantMessage, MarkdownRenderer, ChatInput, useProportionalWidth, LayoutRoot, SplitGroup and their production draggable dividers; AppFrame header, fonts and themes',
+  notCovered: 'Full session routing, new-task transition, native OS scaling/window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Viewports are effective CSS widths at100% page zoom; scaling cases model1920/125% or150% without changing the OS display. Group and companion bubble widths are unchanged. SplitGroup uses a synthetic session catalog and replaces CCAgentSessionView with the same real MessageStream/ChatInput test body; complete session routing is not mounted.',
   stubs: {
     ...composer.stubs,
+    'src/renderer/features/cc-agent/CCAgentSessionView': 'export { Task as CCAgentSessionView } from "./scripts/fixtures/task-content-width/fixture";',
+    'src/renderer/hooks/useCCSessions': { partial: `const sessions = ['width-a', 'width-b'].map(id => ({ id, title: id, name: id, agentKind: 'codex', status: 'idle', createdAt: 1 })); export const useCCSessions = () => ({ sessions, isLoading: false, error: null, refreshSessions: async () => {}, patchLocal: () => {} });` },
     'src/renderer/components/chat/GhostToolCard': 'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";',
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
     'src/renderer/cindy-brain/ghostDevTools': 'export const installGhostDevTools = () => {};',
@@ -14,6 +16,11 @@ export default {
     'src/renderer/layout/layoutDevTools': 'export const installLayoutDevTools = () => {};',
   },
   cases: {
+    ...Object.fromEntries([280, 320, 360, 400].map(width => [`width-split-${width}`, {
+      about: 'Real task splitter at a narrow pane width within the supported800px window',
+      viewport: { width: 800, height: 900 }, data: { splitWidth: width, collapsed: true },
+    }])),
+    'width-min-window': { about: 'Native minimum800px window with the expanded260px sidebar', viewport: { width: 800, height: 700 } },
     default: { about: 'Large desktop, sidebar expanded' },
     'width-normal': { about: 'Ordinary laptop, sidebar expanded', viewport: { width: 1280, height: 900 } },
     'width-large': { about: 'Large desktop, sidebar expanded' },
@@ -33,9 +40,9 @@ export default {
     'text-width-scale150': { about: 'Plain paragraphs at1280px effective scaled width', data: { textOnly: true }, viewport: { width: 1280, height: 720 } },
   },
   async ready(page) {
-    await page.locator('.ProseMirror').waitFor();
-    await page.locator('[data-message-client-id="answer"] .msg-markdown').waitFor();
-    await page.locator('[data-scroll-container]').evaluate(el => { el.scrollTop = 0; });
+    await page.locator('.ProseMirror').first().waitFor();
+    await page.locator('[data-message-client-id="answer"] .msg-markdown').first().waitFor();
+    await page.locator('[data-scroll-container]').evaluateAll(elements => elements.forEach(el => { el.scrollTop = 0; }));
   },
   async check(page, ui) {
     // UI tier. Feedback #12: a 1920px desktop was still capped at 914px.
@@ -86,6 +93,21 @@ export default {
       }
       console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, ...m }));
     };
+    if (ui.data.splitWidth) {
+      // User requested extremely narrow views. Top-level task panes stop at400,
+      // but the real inner task splitter permits280. Exercise its actual gutter
+      // instead of shrinking an impossible native desktop window to280px.
+      const gutter = page.locator('[data-split-branch] > [role="separator"]').first();
+      const canvas = await page.locator('[data-split-canvas]').boundingBox();
+      const box = await gutter.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + 100);
+      await page.mouse.down();
+      await page.mouse.move(canvas.x + ui.data.splitWidth + box.width / 2, box.y + 100, { steps: 12 });
+      await page.mouse.up();
+      await page.waitForFunction(width => Math.abs(document.querySelector('[data-task-pane]').getBoundingClientRect().width - width) < 1, ui.data.splitWidth);
+      await verify();
+      await ui.capture('narrow-split');
+    }
     await verify();
     const process = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
     if (await process.count()) {
@@ -108,7 +130,7 @@ export default {
       await verify();
       await ui.capture('sidebar-collapsed');
     }
-    const scroll = page.locator('[data-scroll-container]');
+    const scroll = page.locator('[data-scroll-container]').first();
     await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; });
     await ui.capture('code-and-composer');
     await scroll.evaluate(el => { el.scrollTop = 0; });
