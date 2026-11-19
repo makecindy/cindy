@@ -105,7 +105,7 @@ function continuationDefinitionEnd(text: string, start: number): number | null {
 }
 
 /** Read complete literal definitions before inline-code or fence segmentation. */
-function findReferenceDefinitionRanges(text: string): Array<[number, number]> {
+function findReferenceDefinitionRanges(text: string, completeOnly = false): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
     if (!match[1].trim() || (ranges.length && match.index < ranges[ranges.length - 1][1])) continue;
@@ -116,6 +116,9 @@ function findReferenceDefinitionRanges(text: string): Array<[number, number]> {
     const headerEnd = match.index + match[0].length;
     const destinationStart = lineEnd !== -1 && !text.slice(headerEnd, lineEnd).trim() ? lineEnd + 1 : headerEnd;
     const destinationEnd = continuationDefinitionEnd(text, destinationStart);
+    // Coarse header shielding can protect URL-shaped text, but only complete
+    // definitions may take precedence over real code spans or fence lines.
+    if (completeOnly && destinationEnd === null) continue;
     if (destinationEnd !== null) lineEnd = Math.max(lineEnd, destinationEnd);
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
   }
@@ -246,7 +249,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
   if (!segment.includes('`')) return transformMathInText(segment, preserveLineCount);
   let out = '';
   let cursor = 0;
-  const definitions = findReferenceDefinitionRanges(segment);
+  const definitions = findReferenceDefinitionRanges(segment, true);
   let definitionIndex = 0;
   // 等长闭合缺席记忆化:某长度的闭合运行在位置 p 之后不存在,则更靠后也不
   // 存在(与 transformMathInText 的 closer 记忆化同理,防对抗性输入二次扫描)。
@@ -314,7 +317,7 @@ export function normalizeMathDelimiters(
   const out: string[] = [];
   let textBuf: string[] = [];
   let fenceMarker: string | null = null; // 开 fence 的字符序列,如 "```"
-  const definitions = findReferenceDefinitionRanges(markdown);
+  const definitions = findReferenceDefinitionRanges(markdown, true);
   let definitionIndex = 0;
   let definitionEnd = 0;
   let sourceOffset = 0;

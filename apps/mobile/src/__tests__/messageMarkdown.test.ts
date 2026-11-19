@@ -2912,3 +2912,12 @@ describe('reference title code-marker boundaries', () => {
     });
   }
 });
+
+
+// #9440 final reviewer: invalid reference text does not override real code.
+it('keeps cross-line code math literal after an invalid reference header', () => {
+  const source = '[f]: invalid `code\n\\(x\\)`\n\n\\(z\\)';
+  for (const srcLines of [false, true]) {
+    expect(parseMobileMarkdownDocument(source, { srcLines }).source).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
+  }
+});

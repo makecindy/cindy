@@ -443,3 +443,11 @@ it('keeps real code literal around reference-looking lines and complete titled d
     expect(normalizeMathDelimiters(source)).toBe(source.slice(0, -5) + '$z$');
   }
 });
+
+
+// #9440 reviewer: an invalid definition-shaped line cannot consume a real
+// cross-line code opener. Assert the shared production normalizer's output.
+it('keeps code spans literal after invalid reference-shaped headers', () => {
+  const source = '[f]: invalid `code\n\\(x\\)`\n\n\\(z\\)';
+  expect(normalizeMathDelimiters(source)).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
+});
