@@ -32,6 +32,7 @@ import type {
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
 import { formatGiftCardCode, normalizeGiftCardCode } from '@cindy/maker-shared/gift-card';
+import { BILLING_CURRENCY } from '../../shared/billingCurrency.js';
 
 import { isAllowedBillingRedirectUrl, isAllowedStripeBillingPortalUrl } from './paymentRedirect.js';
 
@@ -144,8 +145,9 @@ function sameDecimal(left: string, right: string): boolean {
  * 精度一致。更细的值购买弹窗无法按分比较，必须在读响应时挡掉，不能让界面跳过范围校验。
  */
 function isGiftCardMoney(value: string): boolean {
-  const fraction = value.split('.')[1] ?? '';
-  return trimTrailingZeros(fraction).length <= 2;
+  const [whole = '', fraction = ''] = value.split('.');
+  // 整数部分最多 12 位：与购买弹窗按分换算（cents）、下单请求的面额校验同一范围。
+  return whole.length <= 12 && trimTrailingZeros(fraction).length <= 2;
 }
 
 /** 读礼品卡金额字段：合法十进制且满足 isGiftCardMoney，否则为 null。 */
@@ -920,7 +922,10 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
       : null;
   // 面额印在卡面上：比分更细的金额卡面与文字会对不上，按坏响应处理。
   const amount = giftCardMoney(value.amount);
-  const cardCurrency = giftCardCurrency(value.currency);
+  // 卡按本区域余额币种发与入账；兑换、取码等界面也按本区域币种展示。其它币种按坏响应处理，
+  // 免得同一张卡在列表与兑换之间换了币种。
+  const listedCurrency = giftCardCurrency(value.currency);
+  const cardCurrency = listedCurrency === BILLING_CURRENCY ? listedCurrency : null;
   const senderName = boundedString(value.senderName, MAX_GIFT_SENDER_LENGTH);
   const message = nullable(value.message, (input) =>
     typeof input === 'string' && input.length <= MAX_GIFT_MESSAGE_LENGTH ? input : null,

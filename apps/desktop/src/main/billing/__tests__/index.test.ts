@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { BILLING_CURRENCY } from '../../../shared/billingCurrency.js';
 import type { BrowserWindow } from 'electron';
 
 import { BILLING_INVOKE } from '../../../shared/billing.js';
@@ -871,7 +872,7 @@ describe('gift card purchase IPC', () => {
   describe('send a purchased gift card by email', () => {
     const cardId = '1f0c2a4e-5b6d-4e7f-8a9b-0c1d2e3f4a5b';
     const sentCard = {
-      cardId, orderId: 'order_9', faceCode: 'cat', amount: '100', currency: 'CNY', senderName: '小鱼',
+      cardId, orderId: 'order_9', faceCode: 'cat', amount: '100', currency: BILLING_CURRENCY.toUpperCase(), senderName: '小鱼',
       message: null, codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null, claimedByName: null,
       purchasedAt: '2026-11-19T08:00:00.000Z',
       email: {

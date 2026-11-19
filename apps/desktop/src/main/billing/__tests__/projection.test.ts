@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BILLING_CURRENCY } from '../../../shared/billingCurrency.js';
 
 import {
   projectBillingCatalog,
@@ -1075,6 +1076,8 @@ describe('gift card purchase projection', () => {
         giftOffer({ code: 'gift_card_sub_cent', amount: '20.001', creditAmount: '20.001' }),
         giftOffer({ code: 'gift_card_custom_sub_cent', amount: null, creditAmount: null, minAmount: '1.005', maxAmount: '500' }),
         giftOffer({ code: 'gift_card_custom_long', amount: null, creditAmount: null, minAmount: '100.500000000', maxAmount: '500' }),
+        // 整数部分超过 12 位的面额界面无法按分换算，不卖。
+        giftOffer({ code: 'gift_card_huge', amount: '1234567890123', creditAmount: '1234567890123' }),
       ])],
     });
     expect(catalog.products).toHaveLength(1);
@@ -1121,6 +1124,7 @@ describe('gift card purchase projection', () => {
     };
     for (const malformed of [
       { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { maxOrderAmount: '1000.001' },
+      { maxOrderAmount: '1234567890123' },
       { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
     ]) {
       expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
@@ -1134,7 +1138,7 @@ describe('gift card purchase projection', () => {
   });
 
   const purchasedCard = (overrides: Record<string, unknown> = {}) => ({
-    cardId: 'card_1', orderId: 'order_9', faceCode: 'cat', amount: '100', currency: 'CNY',
+    cardId: 'card_1', orderId: 'order_9', faceCode: 'cat', amount: '100', currency: BILLING_CURRENCY.toUpperCase(),
     senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED',
     claimedAt: null, claimedByName: null, purchasedAt: now, ...overrides,
   });
@@ -1150,8 +1154,8 @@ describe('gift card purchase projection', () => {
       nextCursor: 'next.page_1',
     });
     expect(list.cards.map((card) => [card.cardId, card.claimedByName, card.currency])).toEqual([
-      ['card_1', '阿杰', 'cny'],
-      ['card_2', null, 'cny'],
+      ['card_1', '阿杰', BILLING_CURRENCY],
+      ['card_2', null, BILLING_CURRENCY],
     ]);
     expect(list.nextCursor).toBe('next.page_1');
     // 读进来的游标要能原样发回「加载更多」（与 IPC 参数校验同一条规则）；服务端发的是 base64url。
@@ -1163,6 +1167,10 @@ describe('gift card purchase projection', () => {
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
     // 面额印在卡面上：比分更细的金额按坏响应处理；只是小数位写得更长的照常读出。
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1.005' })], nextCursor: null })).toThrow();
+    // 卡按本区域余额币种发与入账，兑换时也按它展示：其它币种的卡按坏响应处理，不在列表与兑换之间换币种。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ currency: 'EUR' })], nextCursor: null })).toThrow();
+    // 整数部分最多 12 位，与购买弹窗按分换算、下单请求的面额校验同一范围。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1234567890123' })], nextCursor: null })).toThrow();
     // 读进来的卡号一定能用来取码和发信（与两个 IPC 请求同一条规则）；不是卡号的按坏响应处理。
     expect(isPurchasedGiftCardId('card_1') && isPurchasedGiftCardId('3f2b8c1e-0a4d-4c55-9f1e-2b7d9c0e6a11')).toBe(true);
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ cardId: '../card_1' })], nextCursor: null })).toThrow();
