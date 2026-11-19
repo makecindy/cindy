@@ -80,6 +80,7 @@ let _drizzle: BetterSQLite3Database<typeof schema> | null = null;
 let _currentUserId: string | null = null;
 let _currentDbPath: string | null = null;
 let _optimizeTimer: NodeJS.Timeout | null = null;
+let _runtimeCorrupt = false;
 const schemaMigrationReaderLeaseLifecycle = new SchemaMigrationReaderLeaseLifecycle();
 
 // PRAGMA optimize 周期 (SQLite 官方对长连接的推荐: 启动一次 + 周期一次 + 关闭前一次)
@@ -516,7 +517,7 @@ function openWithPragmas(filePath: string): Database.Database {
  * 失败仅记日志, 不影响业务。
  */
 function runOptimize(mask?: number): void {
-  if (!_db) return;
+  if (!_db || _runtimeCorrupt) return;
   const t0 = performance.now();
   try {
     _db.pragma(mask !== undefined ? `optimize=${mask}` : 'optimize');
@@ -546,6 +547,13 @@ function stopOptimizeSchedule(): void {
   }
 }
 
+/** Stop main-owned maintenance as soon as its live client reports corruption. */
+export function markRuntimeDbCorrupt(): void {
+  if (!_db) return;
+  _runtimeCorrupt = true;
+  stopOptimizeSchedule();
+}
+
 export interface CloseDbOptions {
   /** worker takeover 只关闭 main 连接；schema reader lease 仍由本 app 生命周期持有。 */
   preserveSchemaMigrationLease?: boolean;
@@ -565,6 +573,7 @@ export function closeDb(options: CloseDbOptions = {}): void {
     if (options.skipOptimize) throw error;
   }
   _db = null;
+  _runtimeCorrupt = false;
   _drizzle = null;
   _currentUserId = null;
   _currentDbPath = null;

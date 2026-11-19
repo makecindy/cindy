@@ -35,6 +35,7 @@ describe('explicit lifecycle recovery', () => {
       }
     };
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       getCurrentDbPath: () => file,
       createWorkerClient: mode === 'env' ? createDbClient : async () => { throw new Error('missing worker bundle'); },
       createInprocClient: createInprocDbClient,

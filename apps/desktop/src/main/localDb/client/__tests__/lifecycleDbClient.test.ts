@@ -14,6 +14,7 @@ describe('lifecycle DbClient manager', () => {
     if (mode === 'inproc-fallback') worker.query.mockRejectedValueOnce(new Error('worker unavailable'));
     const clearCurrent = vi.fn();
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       closeMainDb: vi.fn(), getCurrentDbPath: () => '/tmp/owner-a.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(async () => fallback),
@@ -46,6 +47,7 @@ describe('lifecycle DbClient manager', () => {
     const setCurrent = vi.fn();
 
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(async () => fallback),
@@ -80,6 +82,7 @@ describe('lifecycle DbClient manager', () => {
     const setCurrent = vi.fn();
 
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(),
@@ -105,6 +108,7 @@ describe('lifecycle DbClient manager', () => {
     const createWorkerClient = vi.fn(async () => worker);
 
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient,
       createInprocClient: vi.fn(),
@@ -135,6 +139,7 @@ describe('lifecycle DbClient manager', () => {
     const createWorkerClient = vi.fn(async () => worker);
 
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient,
       createInprocClient: vi.fn(async () => fallback),
@@ -161,8 +166,10 @@ describe('lifecycle DbClient manager', () => {
     const clients = [makeClient('a'), makeClient('retry'), makeClient('b')];
     const callbacks: Array<() => void> = [];
     const report = vi.fn();
+    const quarantine = vi.fn();
     let index = 0;
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: quarantine,
       closeMainDb: vi.fn(), getCurrentDbPath: () => 'synthetic.db',
       createWorkerClient: vi.fn(async (options) => {
         callbacks.push(() => options.onCorruption?.(Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' })));
@@ -172,6 +179,7 @@ describe('lifecycle DbClient manager', () => {
     });
     await manager.ensure('owner-a', { onCorruption: report });
     callbacks[0]();
+    expect(quarantine).toHaveBeenCalledWith('owner-a');
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ code: 'SQLITE_CORRUPT' }));
     const currentGenerationReport = vi.fn();
     await manager.ensure('owner-a', { onCorruption: currentGenerationReport });
@@ -185,10 +193,13 @@ describe('lifecycle DbClient manager', () => {
     await manager.ensure('owner-a', {});
     expect(clients[0].dispose).toHaveBeenCalledOnce();
     report.mockClear();
+    quarantine.mockClear();
     callbacks[0]();
+    expect(quarantine).not.toHaveBeenCalled();
     expect(report).not.toHaveBeenCalled();
     await manager.ensure('owner-b', {});
     callbacks[1]();
+    expect(quarantine).not.toHaveBeenCalled();
     expect(report).not.toHaveBeenCalled();
     await manager.dispose('test-end');
   });
@@ -199,6 +210,7 @@ describe('lifecycle DbClient manager', () => {
     const corruption = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
     const closeMainDb = vi.fn(() => { throw new Error('native close failed'); });
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       getCurrentDbPath: () => 'synthetic.db', closeMainDb,
       createWorkerClient: async () => worker, createInprocClient: vi.fn(),
       setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog(),
@@ -219,6 +231,7 @@ describe('lifecycle DbClient manager', () => {
     const worker = makeClient('corrupt');
     const closeMainDb = vi.fn();
     const manager = createLifecycleDbClientManager({
+      quarantineMainDb: vi.fn(),
       getCurrentDbPath: () => 'synthetic.db', closeMainDb,
       createWorkerClient: async () => worker, createInprocClient: vi.fn(),
       setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog(),
@@ -244,10 +257,12 @@ describe('lifecycle DbClient manager', () => {
     Object.defineProperty(worker, 'corruptionError', { value: corruption });
     worker.query.mockRejectedValue(corruption);
     const fallback = vi.fn();
-    const manager = createLifecycleDbClientManager({ closeMainDb: vi.fn(), getCurrentDbPath: () => 'synthetic.db',
+    const report = vi.fn();
+    const manager = createLifecycleDbClientManager({ quarantineMainDb: vi.fn(), closeMainDb: vi.fn(), getCurrentDbPath: () => 'synthetic.db',
       createWorkerClient: vi.fn(async () => worker), createInprocClient: fallback,
       setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog() });
-    await expect(manager.ensure('owner-a', {})).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });
+    await expect(manager.ensure('owner-a', { onCorruption: report })).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });
+    expect(report).toHaveBeenCalledWith(corruption);
     expect(fallback).not.toHaveBeenCalled();
     expect(worker.dispose).not.toHaveBeenCalled();
     await expect(manager.ensure('owner-a', {})).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });

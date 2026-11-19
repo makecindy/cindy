@@ -3,7 +3,7 @@ import type { IpcMainInvokeEvent } from 'electron';
 
 import { clearIssuedClipboardText, copyTextToClipboard } from '../../textClipboard';
 import { localDbFatalDetailsText } from '../../../shared/localDbFatalDetails';
-import { issueLocalDbFatalDetails } from '../fatalDetailsClipboard';
+import { issueLocalDbFatalDetails, notifyRuntimeDbCorruption } from '../fatalDetailsClipboard';
 import { replyToEnsureReady } from '../ensureReadyReply';
 
 /**
@@ -49,6 +49,19 @@ describe('local-db fatal details clipboard', () => {
 
     await replyToEnsureReady(undefined, { run: async () => ({ ready: true }), record, log });
     await copyable('DB_INIT_FAILED\ninvalid userId');
+  });
+
+  // #11401 review / unit: the actual runtime notification entry must issue
+  // code-only details before a renderer can copy them; startup-only tests missed it.
+  it('makes runtime-push details copyable before notifying without allowing other text', async () => {
+    const stamp = { dataOwnerId: 'u1', ownerGeneration: 1 };
+    let copied: Promise<void> | undefined;
+    notifyRuntimeDbCorruption(stamp, received => {
+      expect(received).toBe(stamp);
+      copied = copyTextToClipboard(event, { text: 'DB_RUNTIME_CORRUPT' }, deps());
+    });
+    await expect(copied).resolves.toBeUndefined();
+    await expect(copyTextToClipboard(event, { text: 'arbitrary text' }, deps())).rejects.toThrow('not issued by Main');
   });
 
   it('issues nothing for a ready result', async () => {

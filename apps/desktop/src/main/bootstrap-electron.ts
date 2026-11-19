@@ -514,8 +514,10 @@ import {
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
   getCurrentUserId as localDbGetCurrentUserId,
+  markRuntimeDbCorrupt as localDbMarkRuntimeDbCorrupt,
   getDbPathForUser,
 } from './localDb/index';
+import { notifyRuntimeDbCorruption } from './localDb/fatalDetailsClipboard';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { deliverPendingAgentAppUpdateResult } from './agent-app-update/index';
@@ -2139,6 +2141,9 @@ const lifecycleDbClientManager = createLifecycleDbClientManager({
   closeMainDb: (userId) => {
     if (localDbGetCurrentUserId() === userId) localDbCloseDb({ skipOptimize: true });
   },
+  quarantineMainDb: (userId) => {
+    if (localDbGetCurrentUserId() === userId) localDbMarkRuntimeDbCorrupt();
+  },
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
   createInprocClient: (options) => createInprocDbClient(options),
@@ -2154,7 +2159,7 @@ async function ensureLifecycleDbClient(userId: string) {
       const current = getActiveDataOwnerPushStamp();
       if (ownerStamp.dataOwnerId !== userId || current.dataOwnerId !== userId
         || current.ownerGeneration !== ownerStamp.ownerGeneration) return;
-      localDbHostUi().broadcast('local-db:runtime-corruption', ownerStamp);
+      notifyRuntimeDbCorruption(ownerStamp, (stamp) => localDbHostUi().broadcast('local-db:runtime-corruption', stamp));
     },
     drizzleDir: getDrizzleDir(),
     sqliteVecExtPath: resolveSqliteVecExtPath(),
