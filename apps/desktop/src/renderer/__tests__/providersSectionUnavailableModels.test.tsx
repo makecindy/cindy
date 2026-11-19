@@ -430,6 +430,55 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(toast.info).not.toHaveBeenCalled();
   });
 
+  // PR #11550 review P1: a stale absence receipt must not survive a refresh whose
+  // catalog was incomplete on any runtime, or an old review could delete a model that
+  // merely sits on an unread page. Receipts are written only for a fully complete batch.
+  it.each([
+    ['single runtime incomplete', false],
+    ['one of two runtimes incomplete', true],
+  ] as const)('clears absence receipts when the refresh is partial: %s', async (_name, twoRuntimes) => {
+    const config = withdrawnConfig();
+    config.runtimes.codex!.models = config.runtimes.codex!.models.map(model =>
+      model.id === 'old-a' ? { ...model, missingUpstream: true as const } : model);
+    if (twoRuntimes) config.runtimes.pi = structuredClone(config.runtimes.codex!);
+    const provider = buildUserProvider(config, {});
+    providerSnapshotState.customOverride = { ...provider, connected: true };
+    providerSnapshotState.order = [provider.id, 'xd'];
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { agent: string }) => ({
+      ok: true, models: current, complete: twoRuntimes && input.agent === 'codex',
+    }));
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+    expect(Object.values(saved.runtimes).flatMap(runtime => runtime!.models)
+      .filter(model => model.missingUpstream)).toEqual([]);
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  // PR #11550 review P1: preference cleanup belongs to the account that removed the
+  // models; after a switch, the new account's same-ID choices must stay untouched.
+  it('skips preference cleanup when the account changes before it starts', async () => {
+    selectWithdrawnProvider();
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: current, complete: true }));
+    const disable = vi.fn<typeof window.electronAPI.maker.setModelDisable>(async () => ({ ok: true as const }));
+    window.electronAPI.maker.setModelDisable = disable;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    await waitFor(() => expect(toast.info).toHaveBeenCalledOnce());
+    await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
+    const dialog = await screen.findByRole('alertdialog');
+    vi.mocked(updateCustomProvider).mockImplementation(async (_config, _keys, options) => {
+      if (!options?.removeWithdrawnModels) return { ok: true };
+      setDataOwnerGeneration('owner-2');
+      return { ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'old-a' }], withdrawnGoneIds: ['old-a'] };
+    });
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' })); });
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(2));
+    expect(resetModelVisibilities).not.toHaveBeenCalled();
+    expect(disable).not.toHaveBeenCalled();
+  });
+
   // OAuth discovery stays additions-only even with a complete catalog (review P2);
   // cleanup is scoped to API key connections, so local no-auth ones are excluded too.
   it.each(['oauth', 'none'] as const)('does not offer removal for a %s connection', async (method) => {

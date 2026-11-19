@@ -84,6 +84,7 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { resetModelVisibilities } from '@/state/modelVisibilityPrefs';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnModelsDialog';
 import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -3217,6 +3218,7 @@ export function ProvidersSection() {
         let catalogsComplete = p.auth.method === 'apiKey';
         let withdrawnSuspicious = false;
         const withdrawn = new Map<string, { id: string; name: string; agents: AgentKind[] }>();
+        const absentByAgent = new Map<AgentKind, Set<string>>();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -3263,17 +3265,23 @@ export function ProvidersSection() {
           } else {
             const result = findWithdrawnCustomProviderModels(merged.models, r.models);
             withdrawnSuspicious ||= result.suspicious;
-            // Persist this complete refresh's absence receipt; Main removes only rows
-            // still carrying it, so a later refresh that relists the model voids the review.
-            const absent = new Set(result.withdrawn.map((model) => model.id));
-            rt.models = rt.models.map((model) =>
-              absent.has(model.id) ? { ...model, missingUpstream: true as const } : model);
+            absentByAgent.set(agent, new Set(result.withdrawn.map((model) => model.id)));
             for (const model of result.withdrawn) {
               const entry = withdrawn.get(model.id);
               if (entry) entry.agents.push(agent);
               else withdrawn.set(model.id, { id: model.id, name: model.name || model.id, agents: [agent] });
             }
           }
+        }
+        // Absence receipts (#11298): Main removes only rows still carrying one. Write them
+        // only when every runtime returned a complete catalog; any failed or partial
+        // runtime voids all existing receipts, since a model may sit on an unread page.
+        for (const agent of Object.keys(config.runtimes) as AgentKind[]) {
+          const runtime = config.runtimes[agent];
+          if (!runtime) continue;
+          const absent = catalogsComplete ? absentByAgent.get(agent) : undefined;
+          runtime.models = runtime.models.map(({ missingUpstream: _missing, ...model }) =>
+            absent?.has(model.id) ? { ...model, missingUpstream: true as const } : model);
         }
         if (!refreshedAgents.size) {
           toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
@@ -3355,6 +3363,8 @@ export function ProvidersSection() {
         return;
       }
       setRemovingWithdrawn(true);
+      // Preference cleanup must stay with the account that performed the removal.
+      const owner = getDataOwnerGeneration();
       try {
         const chosen = new Set(modelIds);
         const targets = review.models.filter((model) => chosen.has(model.id))
@@ -3375,6 +3385,10 @@ export function ProvidersSection() {
         });
         if (!saved) return;
         setWithdrawnReview(null);
+        if (!isDataOwnerGenerationCurrent(owner)) {
+          withdrawnLog.warn('withdrawn model cleanup skipped after account change', { count: removed.length });
+          return;
+        }
         refetch();
         if (removed.length === 0) {
           toast.info(t('settings.providers.models.withdrawn.stale'));
