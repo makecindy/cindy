@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sessionToCamel, setSessionRuntimeProjector, type SessionRowWithCount } from '../mapper';
 import { setSessionInterruptionBootAtForTests } from '../sessionInterruptionBoot';
 import { projectSessionActivity } from '@cindy/maker-shared/session-activity';
-import { createSessionRowRuntimeProjector, createSessionRuntimeProjection } from '../../maker-ipc/sessionRuntimeProjection';
+import { createSessionRuntimeProjector, createSessionRuntimeProjection } from '../../maker-ipc/sessionRuntimeProjection';
 
 afterEach(() => {
   setSessionRuntimeProjector(null);
@@ -232,7 +232,7 @@ describe('sessionToCamel runtime projection', () => {
   // mapped agent_kind 'acp' to Claude Code, so the open task showed the built-in picker as disconnected.
   it('keeps a plugin-engine task as stored while built-in tasks still get the runtime route', () => {
     const { projectScheduledPreferences } = createSessionRuntimeProjection({ broadcastSessionPatched: vi.fn() });
-    setSessionRuntimeProjector(createSessionRowRuntimeProjector({
+    setSessionRuntimeProjector(createSessionRuntimeProjector({
       projectScheduledPreferences,
       runtimePluginsSelected: () => false,
     }));
