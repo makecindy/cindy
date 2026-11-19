@@ -62,6 +62,8 @@ export type FileContent =
 
 export interface UseFileContentReturn {
   content: FileContent;
+  /** A retained editor may autosave again after its visible copy is verified. */
+  autosaveReady: boolean;
   /** Force a refetch of the current (workdir, relPath). Used after save. */
   refresh: (options?: { preserveEditor?: boolean }) => void;
   /**
@@ -140,6 +142,7 @@ export function useFileContent(
   // refresh 计数器:bump 一次触发下面 effect 重跑(包含 IPC 重读)。
   const [refreshTick, setRefreshTick] = useState(0);
   const readEpoch = useRef(0);
+  const [awaitingResumeRead, setAwaitingResumeRead] = useState(false);
 
   // 内容缓存的作用域键:远程会话必须把传输端点编进 key——不同 SSH 主机 /
   // 被控设备可能暴露相同绝对路径 workdir,仅按 workdir|relPath 会串缓存
@@ -154,6 +157,7 @@ export function useFileContent(
   useEffect(() => {
     const epoch = ++readEpoch.current;
     if (!visible) {
+      setAwaitingResumeRead(true);
       preserveViewOnRead.current = true;
       // A read-only external file may not have a tree watcher of its own.
       if (relPath && !hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateCachedFile(contentCacheScope, relPath);
@@ -172,6 +176,7 @@ export function useFileContent(
     const cached = getCachedFileContent(contentCacheScope, relPath);
     if (cached) {
       setState({ workdir, relPath, content: cached });
+      setAwaitingResumeRead(cached.kind !== 'text' || cached.truncated);
       return;
     }
 
@@ -298,6 +303,7 @@ export function useFileContent(
               resolvedPath: result.data.resolvedPath,
             },
           });
+          setAwaitingResumeRead(result.data.truncated);
           return;
         }
         if (result.code === 'OVERSIZE' && result.stat) {
@@ -438,6 +444,7 @@ export function useFileContent(
             const data = { ...result.data, kind: 'text' as const };
             setCachedFileContent(contentCacheScope, data);
             setState({ workdir, relPath: targetRelPath, content: data });
+            setAwaitingResumeRead(data.truncated);
           } catch (err) {
             log.warn('silent re-read on change failed', err);
             if (!disposed && epoch === readEpoch.current
@@ -528,6 +535,7 @@ export function useFileContent(
 
   return {
     content: getVisibleFileContentState(state, workdir, relPath),
+    autosaveReady: visible && !awaitingResumeRead,
     refresh,
     setLocal,
   };

@@ -6662,7 +6662,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  - onPin / onUnpin:main → renderer 推 automation pin 状态
    */
   rsbBrowserBridge: {
-    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbBrowserBridgeReportPayload): Promise<unknown> =>
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;

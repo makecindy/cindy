@@ -676,6 +676,7 @@ function FileBrowserBodyWithWorkdir({
             /> : <FileBodyView
               key={externalFile?.absPath ?? 'project-file-browser'}
               visible={visible}
+              autosaveReady={fileContent.autosaveReady}
               workdir={activeWorkdir}
               remoteHostId={externalFile ? null : remoteHostId}
               deviceId={externalFile ? null : deviceId}

@@ -485,7 +485,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 鈹€鈹€ RSB browser bridge(WebView 鎵胯浇) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   rsbBrowserBridge: {
-    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbBrowserBridgeReportPayload): Promise<unknown> =>
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;

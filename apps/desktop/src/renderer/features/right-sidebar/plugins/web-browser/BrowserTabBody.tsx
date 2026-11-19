@@ -1,5 +1,3 @@
-import { Button } from '@/components/ui/button';
-import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * BrowserTabBody —— web-browser tab 的 TabBody。
  *
@@ -31,7 +29,6 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
@@ -40,12 +37,11 @@ import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
-import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
+import { setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
@@ -53,6 +49,7 @@ import { useNativePopupSurface } from '../../hooks/useNativePopupSurface';
 import type { TabKindHostContext } from '../../types';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
+import { BrowserResourceNotices } from './BrowserResourceNotices';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
 import { useBrowserComment } from './useBrowserComment';
 import { useHiddenPageAudioMute } from './useHiddenPageAudioMute';
@@ -516,55 +513,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         className="relative min-h-0 flex-1 overflow-hidden"
         data-browser-tab-slot={tabId}
       >
-        {browser.crash && (
-          <BrowserCrashBanner
-            reason={browser.crash.reason}
-            cause={browser.crash.cause}
-            onRecover={handleRecover}
-            onForceKill={
-              browser.crash.reason === 'unresponsive'
-                ? () => void forceKillBrowserTab(tabId)
-                : undefined
-            }
-          />
-        )}
-        {/* 资源看门狗 cpu-alert 提示条:非阻断,固定在 slot 顶部居中。用户可
-            「强制终止」失控页面,或「忽略」继续(可能是正经的重页面)。 */}
-        {!browser.crash && browser.resourceAlert && (
-          <div
-            className={cn(
-              'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
-              'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
-            )}
-          >
-            <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
-            <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
-            <Button
-              variant="secondary"
-              size="xxs"
-              compact
-              tone="danger"
-              type="button"
-              onClick={() => {
-                browser.dismissResourceAlert();
-                void forceKillBrowserTab(tabId);
-              }}
-            >
-              {t('rightSidebar.browser.resourceAlert.terminate')}
-            </Button>
-            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom" disabled={!tabVisible}>
-              <button
-                type="button"
-                aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
-                onClick={browser.dismissResourceAlert}
-                className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              >
-                <X size={12} strokeWidth={2} />
-              </button>
-            </Tip>
-          </div>
-        )}
+        <BrowserResourceNotices tabId={tabId} tabVisible={tabVisible} crash={browser.crash}
+          resourceAlert={browser.resourceAlert} dismissResourceAlert={browser.dismissResourceAlert} onRecover={handleRecover} />
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
         {comment.mode === 'selecting' && (
           <div
@@ -595,63 +545,6 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             />
           )}
       </div>
-    </div>
-  );
-}
-
-/**
- * 崩溃 banner —— absolute 覆盖整个 webview slot,半透明黑底 + 中心一个卡片。
- * Codex 也对崩溃做 UI 反馈(`render-process-gone` 事件链),Chrome 在 tab 内显示
- * "Aw, Snap!" 页。我们做精简版:图标 + 原因 + 重载按钮。
- *
- * `cause === 'resource-memory'`:资源看门狗因内存超限主动终止(不是页面自己崩),
- * 换专属文案让用户明白"是保护机制在工作"。`onForceKill` 只在 unresponsive 时传:
- * 卡死的 guest 进程还在烧 CPU,「强制终止」给用户一个立即止损的出口(终止后
- * 走 render-process-gone → 本 banner 切到 crashed 文案 → 重新加载恢复)。
- */
-function BrowserCrashBanner({
-  reason,
-  cause,
-  onRecover,
-  onForceKill,
-}: {
-  reason: string;
-  cause?: 'resource-memory';
-  onRecover: () => void;
-  onForceKill?: () => void;
-}) {
-  const { t } = useTranslation();
-  // 区分资源终止、导航熔断、unresponsive 与进程崩溃。沿用同一个克制的恢复
-  // banner,不新增布局或视觉分支。
-  const titleKey =
-    cause === 'resource-memory'
-      ? 'rightSidebar.browser.crash.resourceKilledTitle'
-      : reason === 'navigation-loop'
-        ? 'rightSidebar.browser.crash.navigationLoopTitle'
-        : reason === 'unresponsive'
-          ? 'rightSidebar.browser.crash.unresponsiveTitle'
-          : 'rightSidebar.browser.crash.crashedTitle';
-  const descKey =
-    cause === 'resource-memory'
-      ? 'rightSidebar.browser.crash.resourceKilledDesc'
-      : reason === 'navigation-loop'
-        ? 'rightSidebar.browser.crash.navigationLoopDesc'
-        : reason === 'unresponsive'
-          ? 'rightSidebar.browser.crash.unresponsiveDesc'
-          : 'rightSidebar.browser.crash.crashedDesc';
-  return (
-    <div className="modal-scrim absolute inset-0 flex items-center justify-center">
-      <ErrorNotice className="modal-panel max-w-xs" message={t(titleKey)} description={t(descKey)} actions={<>
-          <Button size="sm" compact type="button" onClick={onRecover}>
-            <RotateCw size={12} strokeWidth={2.5} />
-            {t('rightSidebar.browser.crash.reload')}
-          </Button>
-          {onForceKill && (
-            <Button variant="secondary" size="sm" compact tone="danger" type="button" onClick={onForceKill}>
-              {t('rightSidebar.browser.crash.forceKill')}
-            </Button>
-          )}
-        </>} />
     </div>
   );
 }

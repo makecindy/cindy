@@ -161,3 +161,18 @@ it('mutes the same page while hidden and restores its previous audio state', () 
   expect(muted).toBe(true);
   expect(view.container.querySelector('webview')).toBe(guest);
 });
+
+// #11392, unit: file previews use the same recoverable resource/crash surface
+// as browser tabs. Drive the actual guest event and click the displayed action.
+it('reopens the selected HTML after its renderer is terminated', async () => {
+  vi.stubGlobal('electronAPI', { onRsbBrowserCommand: () => () => {} });
+  const view = render(<InlineHtmlPreview {...tab} workdir="/docs" relPath="index.html" deviceId={null} />);
+  const guest = view.container.querySelector<HTMLElement>('webview')!;
+  const loadURL = vi.fn();
+  Object.assign(guest, { loadURL });
+  await waitFor(() => expect(guest.getAttribute('src')).toContain('index.html'));
+  fireEvent(guest, Object.assign(new Event('render-process-gone'), { details: { reason: 'killed' } }));
+  const retry = view.getByRole('button', { name: 'rightSidebar.browser.crash.reload' });
+  fireEvent.click(retry);
+  expect(loadURL).toHaveBeenCalledExactlyOnceWith(guest.getAttribute('src'));
+});

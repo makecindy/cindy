@@ -495,14 +495,16 @@ describe('RightSidebarShell empty state', () => {
       const entry = browserWebviewPool.peek('form')!;
       Object.assign(entry.webview, { getWebContentsId: () => 78 });
       fireEvent(entry.webview, new Event('did-attach'));
-      expect(report).toHaveBeenCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78 });
+      expect(report).toHaveBeenCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
       const slot = entry.wrapper.parentElement;
       const observer = new MutationObserver(() => {});
       observer.observe(view.container, { childList: true, subtree: true });
       view.rerender(shell('task-b'));
       expect([...observer.takeRecords()].flatMap(record => [...record.removedNodes]).some(node => node.contains(entry.webview))).toBe(false);
       expect(entry.wrapper.isConnected).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: false });
       view.rerender(shell('task-a'));
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
       expect(view.container.querySelector('webview')).toBe(entry.webview);
       expect(entry.wrapper.parentElement).toBe(slot);
       observer.disconnect();

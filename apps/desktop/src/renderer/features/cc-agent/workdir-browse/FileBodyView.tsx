@@ -144,6 +144,8 @@ export interface FileBodyViewProps {
   workdir: string;
   /** A retained sidebar page can stay mounted while its player is hidden. */
   visible?: boolean;
+  /** A resumed editor has checked its current contents before saving a draft. */
+  autosaveReady?: boolean;
   /**
    * 非空 = SSH remote 会话:保存(writeFile)经 main 路由到远端 file-service;
    * 图片 / PDF 预览与"在系统中打开"依赖本机文件路径,remote 下降级为占位卡。
@@ -206,6 +208,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     onSaved,
     allowEdit = true,
     visible = true,
+    autosaveReady = true,
     jumpQuery,
     jumpLine,
     onSearchJumpConsumed,
@@ -269,6 +272,9 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     });
   }
   const autosave = autosaveRef.current;
+  useLayoutEffect(() => {
+    autosave.setPaused(!visible || !autosaveReady);
+  }, [autosave, autosaveReady, visible]);
 
   // ── Search state ────────────────────────────────────────────────────────
   // barVisible 控制 DocSearchBar 的可见性(Ctrl+F 用户开 / Esc 关)。

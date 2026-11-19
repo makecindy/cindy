@@ -5,6 +5,7 @@ import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { pathToFileUrl } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { toOsAbsolutePath } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
+import { BrowserResourceNotices } from '../web-browser/BrowserResourceNotices';
 import { useLocalHtmlAutoReload } from '../web-browser/useLocalHtmlAutoReload';
 import { useHiddenPageAudioMute } from '../web-browser/useHiddenPageAudioMute';
 import { closeTab } from '../../store';
@@ -26,8 +27,9 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
   const absPath = toOsAbsolutePath(workdir, relPath);
   const localUrl = origin?.kind === 'local' ? pathToFileUrl(absPath) : '';
   // File guests share the browser's bounded lifetime. Only their popup owner
-  // is reported to main; they do not register as browser automation targets.
-  const { wrapper, webview } = useBrowserWebview(tabId, undefined, active, !!origin);
+  // and visibility are reported to main, outside the browser automation registry.
+  const browser = useBrowserWebview(tabId, undefined, active, !!origin);
+  const { wrapper, webview } = browser;
   useLayoutEffect(() => {
     if (!host.current || !wrapper) return;
     host.current.appendChild(wrapper);
@@ -71,21 +73,16 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
     });
   }, [active, sessionId, tabId, webview]);
   useEffect(() => {
-    setStatus('loading');
-    if (!webview || !origin) return;
-    const requestId = crypto.randomUUID();
-    let disposed = false;
-    const guest = webview;
-    guest.setAttribute('title', relPath);
+    if (!webview) return;
     let reportedId: number | undefined;
     const reportOpener = () => {
       const bridge = window.electronAPI.rsbBrowserBridge;
       if (!bridge?.reportPreviewOpener) return;
       try {
-        const webContentsId = guest.getWebContentsId();
+        const webContentsId = webview.getWebContentsId();
         if (reportedId === webContentsId) return;
         reportedId = webContentsId;
-        void bridge.reportPreviewOpener({ sessionId, tabId, webContentsId }).catch(error => {
+        void bridge.reportPreviewOpener({ sessionId, tabId, webContentsId, visible: active }).catch(error => {
           if (reportedId === webContentsId) reportedId = undefined;
           log.warn('File preview opener report failed', error);
         });
@@ -93,9 +90,21 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
         // The id is available after attachment. dom-ready retries early reports.
       }
     };
-    guest.addEventListener('did-attach', reportOpener);
-    guest.addEventListener('dom-ready', reportOpener);
+    webview.addEventListener('did-attach', reportOpener);
+    webview.addEventListener('dom-ready', reportOpener);
     reportOpener();
+    return () => {
+      webview.removeEventListener('did-attach', reportOpener);
+      webview.removeEventListener('dom-ready', reportOpener);
+    };
+  }, [webview, sessionId, tabId, active]);
+  useEffect(() => {
+    setStatus('loading');
+    if (!webview || !origin) return;
+    const requestId = crypto.randomUUID();
+    let disposed = false;
+    const guest = webview;
+    guest.setAttribute('title', relPath);
     let canReload = false;
     let pendingReload = false;
     reloadGuest.current = () => {
@@ -129,15 +138,20 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
       reloadGuest.current = null;
       guest.removeEventListener('did-finish-load', ready);
       guest.removeEventListener('did-fail-load', failed);
-      guest.removeEventListener('did-attach', reportOpener);
-      guest.removeEventListener('dom-ready', reportOpener);
       if (origin.kind !== 'local') void window.electronAPI.fileBrowser.cancelHtmlPreview(requestId).catch(() => {});
     };
   }, [absPath, localUrl, origin, relPath, sessionId, tabId, webview, workdir]);
   return <div className="relative min-h-0 flex-1">
     <div ref={host} className="absolute inset-0" />
-    {status !== 'ready' && <div role="status" className="absolute inset-0 grid place-items-center bg-content-area p-3 text-sm text-muted-foreground">
+    {!browser.crash && status !== 'ready' && <div role="status" className="absolute inset-0 grid place-items-center bg-content-area p-3 text-sm text-muted-foreground">
       {t(status === 'failed' ? 'ccAgent.common.openFailed' : 'ccAgent.workdirBrowse.treeLoading')}
     </div>}
+    <BrowserResourceNotices tabId={tabId} tabVisible={active} crash={browser.crash}
+      resourceAlert={browser.resourceAlert} dismissResourceAlert={browser.dismissResourceAlert}
+      onRecover={() => {
+        const src = webview?.getAttribute('src');
+        if (browser.crash?.reason === 'unresponsive' || browser.crash?.reason === 'navigation-loop') browser.reload();
+        else if (src) browser.navigate(src);
+      }} />
   </div>;
 }

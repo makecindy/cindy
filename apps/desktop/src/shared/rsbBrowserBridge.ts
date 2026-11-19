@@ -19,7 +19,7 @@
 
 /** Channel name for renderer → main "I have just attached webContents X to RSB tab Y". */
 export const RSB_BROWSER_BRIDGE_REPORT_CHANNEL = 'rsb-browser-bridge:report';
-/** File previews report only which task owns links opened by this guest. */
+/** File previews report their owner and visibility for popup routing and resource limits. */
 export const RSB_FILE_PREVIEW_OPENER_CHANNEL = 'rsb-browser-bridge:report-file-preview-opener';
 /** Channel name for renderer → main "RSB tab Y's webview is being torn down". */
 export const RSB_BROWSER_BRIDGE_RELEASE_CHANNEL = 'rsb-browser-bridge:release';
@@ -156,6 +156,10 @@ export interface RsbBrowserBridgeReportPayload {
   sessionId: string;
   tabId: string;
   webContentsId: number;
+}
+
+export interface RsbFilePreviewReportPayload extends RsbBrowserBridgeReportPayload {
+  visible: boolean;
 }
 
 /**

@@ -332,3 +332,40 @@ it.each([false, true])('rechecks a hidden document and keeps its editor (dirty=%
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(preloadMocks.writeFile).not.toHaveBeenCalled();
 });
+
+// #11392, unit: a Markdown debounce can expire while reads are paused or the
+// resume read is still pending. Use the real editor, file hook and timer.
+it.each(['changed', 'unchanged', 'unreadable'])('resumes Markdown autosave only after checking the disk (%s)', async outcome => {
+  const relPath = 'draft.md';
+  const response = (text: string) => ({ ok: true, data: { relPath, content: text, size: text.length, mtimeMs: 1, truncated: false } });
+  const recheck = Promise.withResolvers<unknown>();
+  preloadMocks.readFile.mockReset().mockResolvedValueOnce(response('A')).mockReturnValueOnce(recheck.promise);
+  preloadMocks.writeFile.mockReset().mockResolvedValue({ ok: true, size: 7, mtimeMs: 2 });
+  function Preview({ visible }: { visible: boolean }) {
+    const file = useFileContent(workdir, relPath, null, null, visible);
+    return createElement(FileBodyView, { workdir, relPath, content: file.content, visible, autosaveReady: file.autosaveReady, onSaved: file.setLocal });
+  }
+  const view = render(createElement(Preview, { visible: true }));
+  await act(async () => {});
+  const editor = EditorView.findFromDOM(view.container.querySelector<HTMLElement>('.cm-editor')!)!;
+  act(() => { editor.dispatch({ changes: { from: 1, insert: ' draft' } }); });
+  view.rerender(createElement(Preview, { visible: false }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(preloadMocks.writeFile).not.toHaveBeenCalled();
+  view.rerender(createElement(Preview, { visible: true }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(preloadMocks.readFile).toHaveBeenCalledTimes(2);
+  expect(preloadMocks.writeFile).not.toHaveBeenCalled();
+  await act(async () => {
+    recheck.resolve(outcome === 'unreadable' ? { ok: false, code: 'NOT_FOUND' } : response(outcome === 'changed' ? 'B' : 'A'));
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(editor.state.doc.toString()).toBe('A draft');
+  if (outcome === 'unchanged') {
+    expect(preloadMocks.writeFile).toHaveBeenCalledTimes(1);
+    expect(preloadMocks.writeFile).toHaveBeenCalledWith(expect.objectContaining({ relPath, content: 'A draft' }));
+  } else {
+    expect(preloadMocks.writeFile).not.toHaveBeenCalled();
+    if (outcome === 'changed') expect(screen.getByRole('alert').textContent).toContain('externalChangeBlocked');
+  }
+});
