@@ -27,7 +27,6 @@ export interface BlueBubblesMessage {
   associatedMessageGuid?: string;
   associatedMessageType?: number;
   replyToGuid?: string | null;
-  threadOriginatorGuid?: string | null;
   attributedBody?: unknown;
 }
 

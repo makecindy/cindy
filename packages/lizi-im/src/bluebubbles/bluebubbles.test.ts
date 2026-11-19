@@ -175,19 +175,28 @@ describe('BlueBubbles local ingress', () => {
     const mention = (address: string) => [{ runs: [] }, { runs: [null, { attributes: {} }, {
       attributes: { __kIMMentionConfirmedMention: address },
     }] }];
+    f.message('unconfigured-address', { attributedBody: mention('partner@example.test') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'unconfigured-address', ambient: true });
+    expect(account).not.toHaveBeenCalled();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: 'Partner@example.test' });
     f.message('right-address', { text: 'Partner help', attributedBody: mention('partner@example.test') });
-    f.message('right-phone', { attributedBody: mention('+15551234567') });
+    f.message('unbound-alias', { attributedBody: mention('+15551234567') });
     f.message('wrong-person', { text: 'Partner help', attributedBody: mention('another@example.test') });
     f.message('wrong-phone', { attributedBody: mention('+15551234568') });
     f.message('configured-owner', { attributedBody: mention('owner@example.test') });
     f.message('display-name', { attributedBody: mention('Display Name') });
     f.message('bold-text', { text: 'Partner help', attributedBody: [{ runs: [{ attributes: { bold: true } }] }] });
     await f.im.reconcile();
-    expect(f.received.filter(event => event.invoked).map(event => event.messageId)).toEqual(['right-address', 'right-phone']);
-    expect(f.received.filter(event => event.ambient)).toHaveLength(5);
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId)).toEqual(['right-address']);
+    expect(f.received.filter(event => event.ambient)).toHaveLength(7);
 
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: '+15551234567' });
+    f.message('bound-phone', { attributedBody: mention('+15551234567') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'bound-phone', invoked: true });
     account.mockRejectedValue(new Error('helper unavailable'));
-    f.message('unverified-address', { attributedBody: mention('partner@example.test') });
+    f.message('unverified-address', { attributedBody: mention('+15551234567') });
     f.message('text-still-works', { text: '@Cindy help' });
     await f.im.reconcile();
     expect(f.received.at(-2)).toMatchObject({ messageId: 'unverified-address', ambient: true, invoked: false });
