@@ -1,3 +1,5 @@
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { setSessionRouteLockImplementation, withSessionRouteLock } from '../../localDb/sessionRouteLock';
 /**
  * dispatcher 单测: 注入假 runner / bindings / store, 覆盖协议语义的全部分支 ——
  * 幂等回放、别名白名单、binding 复用(同 key 同 session)、接管(sessionId 路径
@@ -276,7 +278,7 @@ function makeDispatcher(overrides?: {
 
 // 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
 beforeEach(() => setMainLocale('zh-CN'));
-afterEach(() => setMainLocale('en'));
+afterEach(() => { setMainLocale('en'); setSessionRouteLockImplementation(null); });
 
 describe('任务失败原因进主日志(issue #5912)', () => {
   it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
@@ -1624,6 +1626,39 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', message, c.send);
     await tick();
     expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  // Unit regression: Done owns the existing route lock while cleanup removes the directory.
+  // The next Telegram message must bind a fresh task, without reactivating the removed directory.
+  it('Done 回收与新消息同时到达时，在恢复锁内重新检查目录', async () => {
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    const bindings = memoryBindings();
+    const message = telegramDispatch();
+    bindings.set('conn-1', message.externalKey, 'archiving');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { archiving: previous } });
+    const restoreArchivedSession = vi.fn(async () => { previous.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    let finishCleanup!: () => void;
+    let cleanupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { cleanupStarted = resolve; });
+    const cleanup = withSessionRouteLock('archiving', async () => {
+      cleanupStarted();
+      await new Promise<void>((resolve) => { finishCleanup = resolve; });
+      previous.resumableArchive = false;
+    });
+    await started;
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    finishCleanup();
+    await cleanup;
+    await tick(30);
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(c.last('task.ack')!.payload.sessionId).not.toBe('archiving');
     expect(fr.calls[0]).toMatchObject({ isNew: true });
     fr.finish();
     await tick();

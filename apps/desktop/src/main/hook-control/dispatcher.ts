@@ -1,3 +1,4 @@
+import { withSessionRouteLock } from '../localDb/sessionRouteLock';
 import { createHookQuestionPublisher } from './questionPublisher';
 /**
  * hook-control/dispatcher.ts
@@ -399,7 +400,7 @@ export interface HookDispatcherDeps {
    * patchSessionMetaInDb, 自带 sidebar 广播)。未注入时 archive 只清绑定。
    */
   archiveSessionRow?: (sessionId: string) => Promise<void>;
-  restoreArchivedSession?: (sessionId: string) => Promise<void>;
+  restoreArchivedSession?: (sessionId: string, options: { routeLockHeld: true }) => Promise<void>;
   /**
    * 可选: 按钮决策回流的配对出口(interaction.decision 用; 生产为
    * interactions.ts 的 resolveHookInteraction)。未注入时决策帧被忽略,
@@ -2473,10 +2474,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (sessionId !== namespacedBound || !deps.restoreArchivedSession) return runner.inspect(sessionId);
       const canRestoreIn = (dir: string | null) =>
         isCurrentGeneration(generation) && getConnection(connectionId)?.enabled === true && dirAllowed(dir);
-      const info = await runner.inspect(sessionId, canRestoreIn);
-      if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
-      await deps.restoreArchivedSession(sessionId);
-      return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
+      // Done cleanup holds this same lock until its directory reclamation finishes.
+      // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
+      return withSessionRouteLock(sessionId, async () => {
+        const info = await runner.inspect(sessionId, canRestoreIn);
+        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
+        return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
+      });
     };
     const trackedReplacement = staleTakeoverReplacements.get(laneKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
