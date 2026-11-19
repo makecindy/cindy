@@ -162,7 +162,15 @@ export function invalidateKimiAccountUsage(): void {
   kimiIdentities.clear();
   for (const key of cache.keys()) if (key.includes(':kimi-coding-quota-v1:')) cache.delete(key);
 }
-const quotaInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
+enum QuotaReadFreshness {
+  Cached,
+  Manual,
+  AfterGoLimit,
+}
+const quotaInFlight = new Map<string, {
+  freshness: QuotaReadFreshness;
+  result: Promise<ProviderAccountUsageResult>;
+}>();
 
 class AccountUsageRequestError extends Error {
   constructor(
@@ -456,13 +464,14 @@ export async function readProviderAccountUsage(
 ): Promise<ProviderAccountUsageResult> {
   const ownerStamp = ownerStampReader();
   const provider = providerReader(request.providerId);
-  const kimi = isKimiCodingProvider(provider, request.agent);
-  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`;
+  const hasKimiRoute = isKimiCodingProvider(provider, request.agent);
+  const providerScope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}`;
+  const scope = `${providerScope}:${request.agent ?? ''}`;
   const epoch = kimiMutationEpoch;
   const config = JSON.stringify(provider);
   const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
     && JSON.stringify(providerReader(request.providerId)) === config;
-  if (kimi && provider?.auth.method === 'oauth') {
+  if (hasKimiRoute && provider?.auth.method === 'oauth') {
     try { await prepareOAuth(request.providerId); }
     catch {
       kimiIdentities.delete(scope);
@@ -471,8 +480,10 @@ export async function readProviderAccountUsage(
     if (!ownerCurrent() || epoch !== kimiMutationEpoch) return { status: 'unavailable', error: 'updating' };
   }
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
-  const afterGoLimit = reason === 'after-limit' && resolution?.integrationId === 'opencode-go-quota-v1';
-  const shareRead = kimi || afterGoLimit;
+  const go = resolution?.integrationId === 'opencode-go-quota-v1';
+  const kimi = hasKimiRoute && !go;
+  const afterGoLimit = go && reason === 'after-limit';
+  const shareRead = kimi || go;
   const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
   if (kimi && kimiIdentities.get(scope)?.identity !== identity) {
     kimiIdentities.set(scope, { identity, revision: ++kimiRevision });
@@ -487,14 +498,29 @@ export async function readProviderAccountUsage(
     }
     return { status: 'unsupported' };
   }
-  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, kimi ? String(generation?.revision) : '', afterGoLimit);
-  const flightKey = `${scope}:${identity}:${generation?.revision}`;
-  let pending = shareRead ? quotaInFlight.get(flightKey) : undefined;
-  if (!pending) {
+  const revision = kimi ? String(generation?.revision) : '';
+  // The resolved identity includes the actual engine and credential, including when the panel omitted agent.
+  const flightKey = `${providerScope}:${identity}:${revision}`;
+  const previous = shareRead ? quotaInFlight.get(flightKey) : undefined;
+  const freshness = afterGoLimit ? QuotaReadFreshness.AfterGoLimit
+    : go && request.forceRefresh ? QuotaReadFreshness.Manual : QuotaReadFreshness.Cached;
+  let pending: Promise<ProviderAccountUsageResult>;
+  if (previous && previous.freshness >= freshness) {
+    pending = previous.result;
+  } else {
+    const run = async (): Promise<ProviderAccountUsageResult> => {
+      // Let the earlier read settle before refreshing. Its response cannot then overwrite the post-limit cache.
+      if (previous) {
+        await previous.result.catch(() => undefined);
+        if (!current()) return { status: 'unavailable', error: 'updating' };
+      }
+      return readResolvedAccountUsage(request, resolution, ownerStamp, current, revision, afterGoLimit);
+    };
     pending = run();
     if (shareRead) {
-      quotaInFlight.set(flightKey, pending);
-      const clear = () => { if (quotaInFlight.get(flightKey) === pending) quotaInFlight.delete(flightKey); };
+      const entry = { freshness, result: pending };
+      quotaInFlight.set(flightKey, entry);
+      const clear = () => { if (quotaInFlight.get(flightKey) === entry) quotaInFlight.delete(flightKey); };
       void pending.then(clear, clear);
     }
   }
