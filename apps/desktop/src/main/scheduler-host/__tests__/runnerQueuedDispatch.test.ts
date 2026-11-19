@@ -453,6 +453,11 @@ function createRunnerHarness(
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
     bootstrapSession?: MakerScheduleRunnerDeps['bootstrapSession'];
     applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
+    /**
+     * 模拟受控关闭后的 cold resume：closeSession 之后 createSession 返回的新实例。
+     * 未提供时维持旧行为(直接返回当前 live session)。
+     */
+    coldResume?: () => Session;
   } = {},
 ) {
   const logger = createLogger();
@@ -460,9 +465,16 @@ function createRunnerHarness(
     notify: vi.fn(async () => undefined),
   };
   let liveSession = session;
+  let closed = false;
   const makerListeners = new Set<MakerEventListener>();
   const maker = {
-    createSession: vi.fn(async () => liveSession),
+    createSession: vi.fn(async () => {
+      if (closed && opts.coldResume) {
+        liveSession = opts.coldResume();
+        closed = false;
+      }
+      return liveSession;
+    }),
     getSession: vi.fn(() => liveSession),
     getSessionMeta: vi.fn(async () => ({
       id: SESSION_ID,
@@ -474,7 +486,11 @@ function createRunnerHarness(
       sdkSessionId: 'sdk-1',
     })),
     isSessionAlive: vi.fn(() => true),
-    closeSession: vi.fn(async () => undefined),
+    closeSession: vi.fn(async () => {
+      closed = true;
+    }),
+    // 受控关闭走 prepareLocalSessionCredentialModeSwitch 的活跃会话判定。
+    listActiveSessions: vi.fn(() => (closed ? [] : [liveSession])),
     on: vi.fn((listener: MakerEventListener) => {
       makerListeners.add(listener);
       return () => makerListeners.delete(listener);
@@ -507,6 +523,7 @@ function createRunnerHarness(
     maker,
     replaceLiveSession(nextSession: Session) {
       liveSession = nextSession;
+      closed = false;
       for (const listener of [...makerListeners]) {
         listener({ type: 'session:created', session: nextSession });
       }
@@ -2329,13 +2346,14 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
 
-  it('排队 Codex 的 thread/store 身份错配时在 vendor dispatch 前 fail-closed', async () => {
+  it('运行中会话的 Codex thread 身份错配时保持 fail-closed，不关闭旧线程', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,
       providerId: 'deepseek',
     });
     mocks.getSessionProvider.mockReturnValue('deepseek');
+    mocks.isSessionInTurn.mockReturnValue(true);
     const harness = createSessionHarness(async () => ({ accepted: true }));
     Object.defineProperties(harness.session, {
       agentKind: { value: 'codex' },
@@ -2344,7 +2362,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       codexThreadModelProviderId: { value: 'cindy_openai' },
     });
     const queue = createQueueHarness({ busy: true });
-    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps, {
       metaModel: 'deepseek/deepseek-v4-pro',
     });
 
@@ -2363,10 +2381,155 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await queue.accept();
 
     await fireRejected;
+    expect(maker.closeSession).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
     expect(harness.session.abort).not.toHaveBeenCalled();
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.setEffort).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+  });
+
+  it('空闲会话的 Codex thread 身份错配时受控关闭并按新路由 cold-resume 后成功派发', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'deepseek',
+    });
+    mocks.getSessionProvider.mockReturnValue('deepseek');
+    const stale = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(stale.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'deepseek/deepseek-v4-pro', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: 'cindy_openai' },
+    });
+    const resumed = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(resumed.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'deepseek/deepseek-v4-pro', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: 'cindy_gateway' },
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker, notifier } = createRunnerHarness(stale.session, queue.deps, {
+      metaModel: 'deepseek/deepseek-v4-pro',
+      coldResume: () => resumed.session,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'deepseek/deepseek-v4-pro',
+        providerId: 'deepseek',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    expect(maker.closeSession).toHaveBeenCalledWith(SESSION_ID, 'runtime-refresh');
+    expect(vi.mocked(maker.createSession).mock.calls.at(-1)?.[0]).toMatchObject({
+      id: SESSION_ID,
+      agentKind: 'codex',
+      workingDir: '/tmp/bound',
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'deepseek',
+      resumeSessionId: 'sdk-1',
+    });
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'deepseek');
+    await vi.waitFor(() => expect(resumed.listenerCount()).toBe(1));
+    expect(stale.listenerCount()).toBe(0);
+
+    resumed.emit({ type: 'done', data: {}, source: 'codex' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+  });
+
+  it('cold-resume 失败时保持 fail-closed，不把排队心跳派发到旧线程', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'deepseek',
+    });
+    mocks.getSessionProvider.mockReturnValue('deepseek');
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(harness.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'deepseek/deepseek-v4-pro', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: 'cindy_openai' },
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'deepseek/deepseek-v4-pro',
+      coldResume: () => {
+        throw new Error('cold resume failed');
+      },
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'deepseek/deepseek-v4-pro',
+        providerId: 'deepseek',
+      }),
+      createFireContext(),
+    );
+    const fireRejected = expect(firePromise).rejects.toThrow('cold resume failed');
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    await fireRejected;
+    expect(maker.closeSession).toHaveBeenCalledWith(SESSION_ID, 'runtime-refresh');
+    expect(maker.createSession).toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.listenerCount()).toBe(0);
+  });
+
+  it('重建前的空闲检查后恰好起了新 turn 时不关闭旧线程，保持 fail-closed', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'deepseek',
+    });
+    mocks.getSessionProvider.mockReturnValue('deepseek');
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(harness.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'deepseek/deepseek-v4-pro', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: 'cindy_openai' },
+    });
+    // runner 的空闲检查与关闭前的复核先看到空闲，随后复核看到新 turn 已启动。
+    mocks.isSessionInTurn
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'deepseek/deepseek-v4-pro',
+      coldResume: () => harness.session,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'deepseek/deepseek-v4-pro',
+        providerId: 'deepseek',
+      }),
+      createFireContext(),
+    );
+    const fireRejected = expect(firePromise).rejects.toThrow(
+      'queued heartbeat Codex thread provider identity does not match the current session route',
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    await fireRejected;
+    expect(maker.closeSession).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.listenerCount()).toBe(0);
   });
 
   it('排队 Codex 需要重建 context Host 时在 vendor dispatch 前 fail-closed', async () => {
@@ -2590,6 +2753,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   it('排队期间目标变为另一个 dynamic Provider 时在 vendor dispatch 前 fail-closed', async () => {
     const [routeA, routeB] = queuedImageGenerationRoutes;
     setCodexAppliedCustomProviderRoutes(queuedImageGenerationRoutes);
+    // 目标在排队期间被改到另一个 dynamic Provider；会话仍在跑 turn 时不得强杀，
+    // 必须保持 accepted 边界的 fail-closed(空闲自愈由上面的 cold-resume 用例覆盖)。
+    mocks.isSessionInTurn.mockReturnValue(true);
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,

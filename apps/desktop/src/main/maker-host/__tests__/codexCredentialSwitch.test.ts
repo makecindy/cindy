@@ -601,6 +601,31 @@ describe('prepareLocalSessionCredentialModeSwitch', () => {
     expect(closeSession).not.toHaveBeenCalled();
   });
 
+  it('does not close a session that starts a turn after the idle check', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    let idleChecks = 0;
+    const maker: PrepareLocalCodexCredentialModeSwitchInput['maker'] = {
+      listActiveSessions: () => [{
+        id: 'racing-claude',
+        agentKind: 'claude-code',
+        remoteHostId: null,
+        // 第一次空闲检查通过，真正 close 前的复核看到新 turn 已启动。
+        isTurnRunning: () => {
+          idleChecks += 1;
+          return idleChecks > 1;
+        },
+      }],
+      closeSession,
+    };
+
+    await expect(prepareLocalSessionCredentialModeSwitch({
+      maker,
+      sessionId: 'racing-claude',
+    })).rejects.toThrow(/racing-claude/);
+    expect(idleChecks).toBeGreaterThan(1);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
   it('does not close the target session when the switch is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
