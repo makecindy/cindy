@@ -1710,14 +1710,24 @@ export class AgentStartupStoppedError extends Error {
   }
 }
 
-/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+/** A shared-process adapter confirmed release/transfer of all unpublished task resources. */
+export class AgentStartupResourcesReleasedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupResourcesReleasedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its task runtime is not confirmed quiescent. */
 export class AgentStartupCleanupPendingError extends Error {
   readonly whenStopped: Promise<void>;
+  readonly retryCleanup?: () => Promise<void>;
 
-  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void>; retryCleanup?: () => Promise<void> }) {
     super(message, { cause: options.cause });
     this.name = 'AgentStartupCleanupPendingError';
     this.whenStopped = options.whenStopped;
+    this.retryCleanup = options.retryCleanup;
   }
 }
 

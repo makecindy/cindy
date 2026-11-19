@@ -65,6 +65,7 @@
     "noCredentials": "Não é possível usar {{agent}} porque o login não foi feito no computador. Entre por {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
     "noEncryption": "Não é possível usar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Acesso às Chaves no macOS ou a criptografia da conta no Windows e reinicie {{appName}} no computador.",
     "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se isso continuar, reinicie {{appName}} no computador.",
+    "sharedLinkUnavailable": "Não é possível usar {{agent}} agora: o Codex está conectado no computador, mas o {{appName}} não consegue usar esse login (não é possível criar o vínculo com esse login; com uma conta padrão do Windows, normalmente não é possível). Verifique se o {{appName}} no computador tem permissão para criar esse vínculo (no Windows, execute-o uma vez como administrador ou ative o modo de desenvolvedor) e tente novamente.",
     "default": "Não é possível usar {{agent}} porque seu login no computador está indisponível. Entre novamente por {{appName}} no computador, em Configurações → Provedores de modelos. ({{reason}})"
   },
   "remoteError": {

@@ -31,7 +31,9 @@ export default {
       const send = await page.getByRole('button', { name: await ui.t('newChat.sendButton.send'), exact: true }).boundingBox();
       const leftSpacing = permission.x + permission.width / 2 - plus.x - plus.width / 2;
       const rightSpacing = send.x + send.width / 2 - mic.x - mic.width / 2;
-      assert.ok(Math.abs(leftSpacing - (rightSpacing - 4)) < 0.5, `Button spacing: left=${leftSpacing}, right=${rightSpacing}`);
+      // Send matches dictation at 30px since 2026-11-18 (DESIGN §14.4 composer send / stop):
+      // right centres sit 15 + 8 + 15 = 38px apart, 5px wider than the left pair.
+      assert.ok(Math.abs(leftSpacing - (rightSpacing - 5)) < 0.5, `Button spacing: left=${leftSpacing}, right=${rightSpacing}`);
     }
     await ui.capture('collapsed');
     if (ui.case !== 'new-task') {
