@@ -181,8 +181,12 @@ export function registerSessionHandoffIpc(
     if (!hasRemoteBotSessionLookup())
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     const request = requireObject(value, 'request');
-    if (request.action === 'task-action-capability') return { ...SESSION_HANDOFF_CAPABILITY,
-      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}), ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}) };
+    if (request.action === 'task-action-capability') return {
+      ...SESSION_HANDOFF_CAPABILITY,
+      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
+      ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
+    };
     if (request.action === 'list-projects') {
       if (!deps.listProjects) throwIpcError('UNSUPPORTED_CAPABILITY', 'Project catalog is unavailable');
       const options = z.object({ includeHidden: z.boolean().default(true), offset: z.number().int().min(0).default(0),
