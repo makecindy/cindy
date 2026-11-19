@@ -20102,6 +20102,7 @@
         "senderPlaceholder": "Your name",
         "message": "Message (optional)",
         "messagePlaceholder": "Add a note for them",
+        "tooLong": "Up to {{max}} characters",
         "paymentMethod": "Payment method"
       },
       "decrease": "One fewer card",

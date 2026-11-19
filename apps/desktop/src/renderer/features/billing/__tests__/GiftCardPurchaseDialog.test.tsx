@@ -274,6 +274,34 @@ describe('GiftCardPurchaseDialog', () => {
     expect(sender.value).toBe('阿杰');
   });
 
+  // 评审发现（PR #11412）：规则读到之前输入框按默认上限放行，读到的上限更小时已填内容不会被截断；
+  // 付款前要按读到的上限校验，超长时就地说明，不能提交给服务端才被拒。
+  it('checks the sender and message against the limits once they load', async () => {
+    let resolvePolicy: (value: BillingGiftCardPurchasePolicy) => void = () => undefined;
+    api.getGiftCardPurchasePolicy.mockImplementationOnce(
+      () => new Promise<BillingGiftCardPurchasePolicy>((resolve) => { resolvePolicy = resolve; }),
+    );
+    const { onSubmit } = open();
+    const sender = screen.getByPlaceholderText('billing.giftCardPurchase.fields.senderPlaceholder');
+    const message = screen.getByPlaceholderText('billing.giftCardPurchase.fields.messagePlaceholder');
+    fireEvent.change(sender, { target: { value: '一二三四五六' } });
+    fireEvent.change(message, { target: { value: '生日快乐，天天开心' } });
+    resolvePolicy({ ...policy, maxSenderNameLength: 4, maxMessageLength: 6 });
+
+    await screen.findByText('billing.giftCardPurchase.fields.tooLong:{"max":4}');
+    expect(screen.getByText('billing.giftCardPurchase.fields.tooLong:{"max":6}')).toBeTruthy();
+    expect(sender.getAttribute('aria-invalid')).toBe('true');
+    const pay = button('billing.giftCardPurchase.pay');
+    expect(pay.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(pay);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(sender, { target: { value: '一二三四' } });
+    fireEvent.change(message, { target: { value: '生日快乐' } });
+    await waitFor(() => expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(false));
+    expect(screen.queryByText(/billing\.giftCardPurchase\.fields\.tooLong/)).toBeNull();
+  });
+
   it('keeps payment unavailable and offers a retry when the limits cannot be read', async () => {
     api.getGiftCardPurchasePolicy.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(policy);
     open();

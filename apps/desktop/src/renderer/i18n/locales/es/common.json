@@ -20289,6 +20289,7 @@
         "senderPlaceholder": "Tu nombre",
         "message": "Mensaje (opcional)",
         "messagePlaceholder": "Unas palabras para quien la reciba",
+        "tooLong": "Máximo {{max}} caracteres",
         "paymentMethod": "Método de pago"
       },
       "decrease": "Una tarjeta menos",

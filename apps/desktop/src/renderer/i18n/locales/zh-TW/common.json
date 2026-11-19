@@ -20023,6 +20023,7 @@
         "senderPlaceholder": "你的名字",
         "message": "留言（選填）",
         "messagePlaceholder": "寫一句給對方的話",
+        "tooLong": "最多 {{max}} 個字",
         "paymentMethod": "付款方式"
       },
       "decrease": "少一張",

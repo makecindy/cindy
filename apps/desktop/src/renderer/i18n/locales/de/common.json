@@ -20102,6 +20102,7 @@
         "senderPlaceholder": "Dein Name",
         "message": "Grußbotschaft (optional)",
         "messagePlaceholder": "Ein paar Worte für die beschenkte Person",
+        "tooLong": "Höchstens {{max}} Zeichen",
         "paymentMethod": "Zahlungsmethode"
       },
       "decrease": "Eine Karte weniger",

@@ -20023,6 +20023,7 @@
         "senderPlaceholder": "あなたの名前",
         "message": "メッセージ（任意）",
         "messagePlaceholder": "相手へのひとこと",
+        "tooLong": "{{max}} 文字以内で入力してください",
         "paymentMethod": "支払い方法"
       },
       "decrease": "1 枚減らす",

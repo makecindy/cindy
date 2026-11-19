@@ -139,9 +139,12 @@ export function GiftCardPurchaseDialog({
   const unitAmount = selected ? unitOf(selected) : null;
   const total = unitAmount === null ? null : giftCardOrderTotal(unitAmount, effectiveQuantity);
   const amountOf = (value: string) => formatGiftCardAmount(value, BILLING_CURRENCY, locale);
+  // 规则读到之前输入框按默认上限放行；读到的上限更小时，已填的内容不会被截断，付款前按它校验。
+  const senderTooLong = policy !== null && senderName.length > policy.maxSenderNameLength;
+  const messageTooLong = policy !== null && message.trim().length > policy.maxMessageLength;
   const canPay = Boolean(
     policy && selected && option && senderName && unitAmount !== null && selectedFace !== null &&
-    maxQuantity >= effectiveQuantity && maxQuantity > 0,
+    maxQuantity >= effectiveQuantity && maxQuantity > 0 && !senderTooLong && !messageTooLong,
   );
   const customIssue =
     selected?.kind === 'custom' && customParsed && 'issue' in customParsed && customParsed.issue !== 'empty'
@@ -421,6 +424,9 @@ export function GiftCardPurchaseDialog({
 
               <FormField
                 label={t('billing.giftCardPurchase.fields.sender')}
+                error={senderTooLong
+                  ? t('billing.giftCardPurchase.fields.tooLong', { max: policy?.maxSenderNameLength })
+                  : undefined}
                 labelAction={
                   senderName ? (
                     <span className="truncate text-12 text-[var(--text-tertiary)]">
@@ -433,6 +439,7 @@ export function GiftCardPurchaseDialog({
                   <Input
                     id={control.id}
                     aria-describedby={control['aria-describedby']}
+                    aria-invalid={control['aria-invalid']}
                     value={sender}
                     onChange={(value) => {
                       senderEditedRef.current = true;
@@ -447,6 +454,9 @@ export function GiftCardPurchaseDialog({
 
               <FormField
                 label={t('billing.giftCardPurchase.fields.message')}
+                error={messageTooLong
+                  ? t('billing.giftCardPurchase.fields.tooLong', { max: policy?.maxMessageLength })
+                  : undefined}
                 labelAction={
                   <span className="text-12 tabular-nums text-[var(--text-tertiary)]">
                     {message.length} / {policy?.maxMessageLength ?? 120}
@@ -457,6 +467,7 @@ export function GiftCardPurchaseDialog({
                   <Textarea
                     id={control.id}
                     aria-describedby={control['aria-describedby']}
+                    aria-invalid={control['aria-invalid']}
                     value={message}
                     onChange={setMessage}
                     rows={2}

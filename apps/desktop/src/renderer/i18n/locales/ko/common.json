@@ -20023,6 +20023,7 @@
         "senderPlaceholder": "이름",
         "message": "메시지(선택)",
         "messagePlaceholder": "받는 분께 한마디",
+        "tooLong": "최대 {{max}}자까지 입력할 수 있습니다",
         "paymentMethod": "결제 수단"
       },
       "decrease": "한 장 줄이기",
