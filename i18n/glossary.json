@@ -4070,6 +4070,18 @@
         "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
+      "forbidden": {
+        "en": ["teammate", "teammates", "Teammate", "Teammates"],
+        "ja": ["チームメイト"],
+        "ko": ["동료"],
+        "es": ["compañero", "compañera", "compañeros", "compañeras", "Compañero", "Compañera", "Compañeros", "Compañeras", "amigo de equipo", "amigos de equipo", "Amigo de equipo", "Amigos de equipo"],
+        "fr": ["coéquipier", "coéquipière", "coéquipiers", "coéquipières", "Coéquipier", "Coéquipière", "Coéquipiers", "Coéquipières"],
+        "de": ["Teammitglied", "Teammitglieds", "Teammitglieder", "Teammitgliedern"],
+        "pt-PT": ["colega", "colegas", "Colega", "Colegas"],
+        "pt-BR": ["colega", "colegas", "Colega", "Colegas"],
+        "zh-Hant-x-lzh": ["同僚"],
+        "zh-Hans-x-lzh": ["同僚"]
+      },
       "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
       "alsoAllowed": {
         "fr": [
@@ -4112,7 +4124,14 @@
             "when": "按语法使用复数形式。"
           }
         ]
-      }
+      },
+      "exempt": [
+        "desktop:imBot.conflictDialog.",
+        "desktop:logic.toasts.feishuBotConflict",
+        "desktop:settings.agentIsland.skins.boli.description",
+        "desktop:settings.agentIsland.skins.muffin.description",
+        "desktop:issueTracker."
+      ]
     },
     {
       "id": "teammate-core-skill",

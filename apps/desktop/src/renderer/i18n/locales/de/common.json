@@ -289,7 +289,7 @@
     "leaveShort": "Verlassen",
     "joinTab": "Geteilter Aufgabe beitreten",
     "joinedEmptyTitle": "Noch keinen geteilten Aufgaben beigetreten",
-    "joinedEmptyHint": "Öffne einen Einladungslink von einem Teammitglied, um einer geteilten Aufgabe beizutreten.",
+    "joinedEmptyHint": "Öffne einen Einladungslink von einem Freund, um einer geteilten Aufgabe beizutreten.",
     "joinedLoadFailed": "Die geteilten Aufgaben, denen du beigetreten bist, konnten nicht geladen werden. Versuche es erneut.",
     "joinedTab": "Meine Beitritte",
     "reconnecting": "Verbindung wird wiederhergestellt…",
@@ -305,7 +305,7 @@
     "joined": "Geteilter Aufgabe beigetreten",
     "joinedBody": "Du kannst frühere Nachrichten, Tool-Ergebnisse und Anhänge ansehen und demselben Agent schreiben.",
     "enterTask": "Aufgabe öffnen",
-    "inviteBoxTitle": "Einladungslink an deine Teammitglieder senden",
+    "inviteBoxTitle": "Einladungslink an deine Freunde senden",
     "roleGuest": "Gast",
     "removeShort": "Entfernen",
     "removeNamedTitle": "{{name}} entfernen?",
@@ -336,13 +336,13 @@
     "host": "Host",
     "remove": "Gast entfernen",
     "invite": "Einladung kopieren",
-    "invitationCopied": "Einladung kopiert. Füge sie in eine Nachricht an dein Teammitglied ein.",
+    "invitationCopied": "Einladung kopiert. Füge sie in eine Nachricht an deinen Freund ein.",
     "tabOwned": "Von mir geteilt",
     "startIntro": "Lade jemanden ein, alles in dieser Aufgabe zu lesen und mit demselben Agent zu arbeiten.",
     "runsOnThisDevice": "Läuft auf diesem Gerät",
     "inviteNotice": "Alle, die den Einladungslink haben, können nach der Anmeldung beitreten und erhalten denselben Agent-Zugriff wie der Host.",
     "offlineAutoClose": "Die Freigabe endet automatisch, wenn der Host-Computer offline bleibt.",
-    "inviteBoxHint": "Sende den Link an dein Teammitglied. Es kann ihn zum Beitreten öffnen oder in Cindy unter „Geteilter Aufgabe beitreten“ einfügen.",
+    "inviteBoxHint": "Sende den Link an deinen Freund. Er kann ihn zum Beitreten öffnen oder in Cindy unter „Geteilter Aufgabe beitreten“ einfügen.",
     "invitationMessage": "Du bist eingeladen, „{{title}}“ beizutreten\n{{link}}\nÖffne den Link, um beizutreten. Falls Cindy nicht geöffnet wird, wähle in Cindy „Geteilter Aufgabe beitreten“ und füge diesen Link ein.",
     "membersWithLimit": "Mitglieder · {{count}} (bis zu 2 Gäste)",
     "me": "Ich",
@@ -8215,9 +8215,9 @@
         "agentTasksRequest": "Aufgabenberechtigung prüfen",
         "agentTasks": "Kann eigene Cindy-Aufgaben erstellen und verwalten",
         "agentTasksDetail": "Das Plugin kann seinen eigenen Aufgaben Nachrichten senden, deren Ergebnisse lesen und sie stoppen. Die Aufgaben bleiben für dich sichtbar, nutzen die KI-Einstellungen des Plugins und können Modellkosten verursachen. Agents in diesen Aufgaben können verbundene Tools nutzen, einschließlich des Zugriffs auf andere Aufgaben und Kontodaten, sofern die Aufgabenberechtigungen und die Kontoinhaberschaft dies zulassen.",
-        "agentDelegation": "Kann klar abgegrenzte Aufgaben an Teammitglieder delegieren",
+        "agentDelegation": "Kann klar abgegrenzte Aufgaben an Freunde delegieren",
         "agentDelegationDetail": "Freunde dürfen die delegierte Aufgabe mit automatischer Prüfung ausführen. Dabei wird weder die Identität des Eigentümers angenommen noch werden die Berechtigungen der Freunde geändert.",
-        "agentTargets": "Kann Nachrichten an Projekte, bestehende Aufgaben und Teammitglieder senden",
+        "agentTargets": "Kann Nachrichten an Projekte, bestehende Aufgaben und Freunde senden",
         "agentTargetsDetail": "Kann lokale Projektverzeichnisse sowie Namen und IDs von Aufgaben und Freunden anzeigen, Aufgaben in Projekten erstellen und Text und Bilder an bestehende Aufgaben und Freunde senden. Dabei können KI-Ausführungen und Modellkosten entstehen. Diese Zustell-API selbst kann weder den Verlauf anderer Aufgaben lesen noch deren Einstellungen ändern oder sie stoppen.",
         "agentObserve": "Kann Liste und Status der Aufgaben lokaler Projekte sehen",
         "agentObserveDetail": "Kann Titel, Agent-Typ, Archivstatus und Status (läuft, Handlung nötig, letzte Aktivität) der Aufgaben registrierter lokaler Projekte sehen und eine Aufgabe im Hauptfenster öffnen. Kann keine Nachrichten, Pläne oder Dateien lesen und weder Nachrichten senden noch Aufgaben ändern.",
@@ -11426,7 +11426,7 @@
         "stepTimeout": "{{name}} hat zu lange gebraucht, daher wurde dieser Schritt gestoppt",
         "stepUnavailable": "{{name}} ist nicht verfügbar und kann diesen Schritt nicht ausführen",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.\nBitte den Besitzer des Teammitglieds zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht."
+          "unclaimed_timeout": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.\nBitte den Besitzer des Freundes zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht."
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} kann nicht antworten: Das Gerät des Freundes hat sein Limit für Remote-Sitzungen erreicht.\nBitte den Besitzer des Freundes, ungenutzte Sitzungen zu archivieren, oder den Besitzer des Remote-Computers, das Limit unter „Remote & Freigabe“ zu erhöhen.",
@@ -11489,7 +11489,7 @@
         "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
         "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
         "allowMentionAllBots": "@Alle Freunde erlauben",
-        "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Teammitglieder können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
+        "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Freunde können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
       },
       "errors": {
         "memberLimit": "Ein Gruppenchat braucht 2–6 Freunde",
@@ -11757,9 +11757,9 @@
           "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
           "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
           "removeOwn": "Aus Gruppe entfernen",
-          "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+          "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Freund bleibt in deinem Konto.",
           "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
-          "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+          "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
           "stopAndRemove": "Stoppen und entfernen",
           "leave": "Gruppe verlassen",
           "leaveHint": "Du und deine Freunde verlassen diese Gruppe. Du erhältst keine neuen Nachrichten mehr und verlierst den Zugriff auf den Verlauf.",
@@ -11980,7 +11980,7 @@
       },
       "learned": {
         "group": "Gelernte Skills",
-        "empty": "Noch keine gelernten Skills. Das nächtliche Lernen macht aus wiederkehrenden Vorgehensweisen Skills, oder du bittest das Teammitglied im Chat, sich eine zu merken.",
+        "empty": "Noch keine gelernten Skills. Das nächtliche Lernen macht aus wiederkehrenden Vorgehensweisen Skills, oder du bittest deinen Freund im Chat, sich eine zu merken.",
         "meta": "Gelernt · Aktualisiert am {{date}}",
         "metaUndated": "Gelernt",
         "missing": "Diesen Skill gibt es nicht mehr.",
@@ -12050,7 +12050,7 @@
         },
         "ideas": {
           "label": "Ideen erkunden",
-          "prompt": "Ein fantasievoller kreativer Partner mit eigener Meinung, der mir hilft, Schreib- und Produktideen zu konkreten Plänen auszuarbeiten."
+          "prompt": "Ein fantasievoller kreativer Freund mit eigener Meinung, der mir hilft, Schreib- und Produktideen zu konkreten Plänen auszuarbeiten."
         },
         "life": {
           "label": "Über das Leben reden",
@@ -12677,7 +12677,7 @@
           "detachedBySlash": "🚪 Fernsteuerung beendet – wir sind zurück in unseren Discord-DMs. Wenn du den Desktop wieder steuern willst, sende /ctr.",
           "detachedByRevoke": "⚠️ Du hast die Steuerung am Desktop zurückgenommen. Weitere Nachrichten gehen wieder in unsere Discord-DMs.",
           "notAttached": "🤷 Du steuerst gerade keine Sitzung, /exctr hat also nichts zu tun.",
-          "companionManagedCommand": "🧭 Dieser Bot wurde an ein Teammitglied übergeben – Modell, Berechtigungen und Arbeitsverzeichnis richten sich nach dessen Einstellungen. Ändern kannst du sie in Cindy in den Einstellungen des Teammitglieds."
+          "companionManagedCommand": "🧭 Dieser Bot wurde an einen Freund übergeben – Modell, Berechtigungen und Arbeitsverzeichnis richten sich nach dessen Einstellungen. Ändern kannst du sie in Cindy in den Einstellungen des Freundes."
         },
         "agent": {
           "completedNoText": "✅ Fertig (der Agent hat in dieser Runde nichts gesagt)",
@@ -12871,13 +12871,13 @@
           "help": "🤖 Das kann ich für dich tun:\n\n/new         Neue Sitzung erstellen (alte bleiben erhalten; in Gruppen pro aktuellem Gruppenthema)\n/project     In einem Projektordner arbeiten (läuft hier im Bot, übernimmt nicht den Desktop)\n/session     Letzte Desktop-Sitzungen anzeigen; tippe auf eine, um sie zu übernehmen und weiterzumachen\n/model       Ein anderes Modell einwechseln\n/permission  Berechtigungsmodus ändern (auto / bypass / ask usw.)\n/settings    Aktuelles Projekt, Agent, Modell, Denkintensität und Berechtigungen anzeigen\n/ctr         Ein Projekt auf dem Desktop fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zum Telegram-Chat zurückkehren\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende /stop (oder `!stop`) — ich breche die aktuelle Ausführung sofort ab und verwerfe auch die wartenden Nachrichten. Die Sitzung bleibt erhalten, du kannst also weitermachen.\n\nIm Direktchat schreibst du mir einfach. In Gruppen reagiere ich nur, wenn du mich mit @ erwähnst oder auf eine meiner Nachrichten antwortest — die letzten Gruppennachrichten merke ich mir als Kontext.",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Aktuelle Einstellungen\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nÄndern kannst du sie mit /project, /model oder /permission.",
-          "settingsCompanion": "⚙️ Aktuelle Einstellungen (Teammitglied)\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nModell, Berechtigungen und Arbeitsverzeichnis folgen den Einstellungen des Teammitglieds. Ändere sie in Cindy in den Einstellungen des Teammitglieds.",
+          "settingsCompanion": "⚙️ Aktuelle Einstellungen (Freund)\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nModell, Berechtigungen und Arbeitsverzeichnis folgen den Einstellungen des Freundes. Ändere sie in Cindy in den Einstellungen des Freundes.",
           "detachedBySlash": "🚪 Übernahme beendet — wir sind zurück im Telegram-Chat. Wenn du den Desktop wieder fernsteuern willst, sende /ctr",
           "detachedByRevoke": "⚠️ Du hast die Übernahme am Desktop beendet. Weitere Nachrichten gehen wieder in den Telegram-Chat.",
           "notAttached": "🤷 Du hast gerade keine Sitzung übernommen, /exctr hat also nichts zu tun.",
-          "companionDmNew": "🧭 Das ist die Hauptunterhaltung deines Teammitglieds — sie läuft einfach weiter, es wird keine neue Sitzung geöffnet. Willst du das Thema wechseln, sag es einfach; für eigenständige Aufgaben startet dein Teammitglied selbst Hintergrundaufgaben.",
+          "companionDmNew": "🧭 Das ist die Hauptunterhaltung deines Freundes — sie läuft einfach weiter, es wird keine neue Sitzung geöffnet. Willst du das Thema wechseln, sag es einfach; für eigenständige Aufgaben startet dein Freund selbst Hintergrundaufgaben.",
           "companionLaneNew": "🌱 Für diese Gruppe wurde eine neue Unterhaltung gestartet. Der bisherige Kontext ist weggeräumt — auf zu einem frischen Start!",
-          "companionManagedCommand": "🧭 Diese Verbindung wurde an ein Teammitglied übergeben, daher folgen Modell, Berechtigungen und Arbeitsverzeichnis dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Teammitglieds."
+          "companionManagedCommand": "🧭 Diese Verbindung wurde an einen Freund übergeben, daher folgen Modell, Berechtigungen und Arbeitsverzeichnis dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Freundes."
         },
         "agent": {
           "completedNoText": "✅ Fertig (der Agent hat in dieser Runde nichts gesagt)",
@@ -12896,7 +12896,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatisierung „{{name}}“",
           "unsupportedOnly": "🙏 Mit dieser Nachricht kann ich nichts anfangen:\n{{list}}\n\nDas kann ich verarbeiten: Text, Bilder (jpg/png/gif/webp), PDFs sowie Code- und Konfigurations-Textdateien.",
           "unsupportedNotice": "ℹ️ Folgendes kann ich nicht verarbeiten und habe es beiseitegelegt:\n{{list}}\n\nDen Rest habe ich erhalten und bearbeite ihn gerade.",
-          "companionUnavailable": "⏸ Dein Teammitglied kann gerade keine Nachrichten annehmen: {{reason}}",
+          "companionUnavailable": "⏸ Deinen Freund kann gerade keine Nachrichten annehmen: {{reason}}",
           "authMissing": {
             "currentProvider": "aktueller Anbieter",
             "reasonGatewayKey": "zuerst muss ein Cindy AI Key eingerichtet werden",
@@ -13091,7 +13091,7 @@
         },
         "slash": {
           "detachFailed": "❌ Übernahme konnte nicht beendet werden: {{error}}",
-          "companionManaged": "🧭 Diese Verbindung wurde an ein Teammitglied übergeben. Modell, Berechtigungen und Arbeitsverzeichnis folgen dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Teammitglieds."
+          "companionManaged": "🧭 Diese Verbindung wurde an einen Freund übergeben. Modell, Berechtigungen und Arbeitsverzeichnis folgen dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Freundes."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 Eine Aufgabe in einem Gruppenchat braucht deine Freigabe. Die Freigabekarte wird nicht in der Gruppe gepostet – bestätige sie hier.",
@@ -13164,7 +13164,7 @@
           "detachedBySlash": "🚪 Fernsteuerung beendet. Weitere Nachrichten gehen wieder an den WeCom-Chat.",
           "detachedByRevoke": "⚠️ Die Fernsteuerung wurde in Cindy Desktop widerrufen. Weitere Nachrichten gehen wieder an den WeCom-Chat.",
           "notAttached": "Du steuerst gerade keine Aufgabe fern.",
-          "companionManagedCommand": "🧭 Diese Verbindung gehört einem Teammitglied – Modell, Berechtigungen und Arbeitsverzeichnis richten sich nach dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Teammitglieds."
+          "companionManagedCommand": "🧭 Diese Verbindung gehört einem Freund – Modell, Berechtigungen und Arbeitsverzeichnis richten sich nach dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Freundes."
         },
         "agent": {
           "completedNoText": "✅ Aufgabe erledigt (keine Textausgabe in dieser Runde)",
@@ -13307,9 +13307,9 @@
           "detachedBySlash": "🚪 Fernsteuerung beendet – wir sind zurück in unserem Privatchat. Sende /ctr, wenn du die Desktop-App wieder steuern willst",
           "detachedByRevoke": "⚠️ Du hast die Fernsteuerung in der Desktop-App beendet. Neue Nachrichten landen wieder in unserem Privatchat.",
           "notAttached": "🤷 Du steuerst gerade keine Sitzung, /exctr hat also nichts zu tun.",
-          "companionDmNew": "🧭 Das ist die Hauptunterhaltung deines Teammitglieds. Sie läuft einfach weiter, es wird keine neue Sitzung gestartet. Willst du das Thema wechseln, sag es einfach; für separate Aufgaben startet dein Teammitglied selbst eine Hintergrundsitzung.",
+          "companionDmNew": "🧭 Das ist die Hauptunterhaltung deines Freundes. Sie läuft einfach weiter, es wird keine neue Sitzung gestartet. Willst du das Thema wechseln, sag es einfach; für separate Aufgaben startet dein Freund selbst eine Hintergrundsitzung.",
           "companionLaneNew": "🌱 Für diese Gruppe habe ich eine neue Unterhaltung begonnen und den bisherigen Kontext beiseitegelegt. Auf ein Neues!",
-          "companionManagedCommand": "🧭 Diese Verbindung gehört zu einem Teammitglied, daher richten sich Modell, Berechtigungen und Arbeitsverzeichnis nach dessen Einstellungen. Ändere sie in den Einstellungen des Teammitglieds in Cindy."
+          "companionManagedCommand": "🧭 Diese Verbindung gehört zu einem Freund, daher richten sich Modell, Berechtigungen und Arbeitsverzeichnis nach dessen Einstellungen. Ändere sie in den Einstellungen des Freundes in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Fertig (der Agent hat in dieser Runde nichts gesagt)",
@@ -13328,7 +13328,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatisierung „{{name}}“",
           "unsupportedOnly": "🙏 Mit dieser Nachricht kann ich nichts anfangen:\n{{items}}\n\nDas kann ich verarbeiten: Text, Bilder (jpg/png/gif/webp), PDFs sowie Code- und Konfigurationsdateien im Textformat.",
           "unsupportedNotice": "ℹ️ Folgendes kann ich nicht verarbeiten und lasse es erst mal beiseite:\n{{items}}\n\nDen Rest habe ich – ich bin dran~",
-          "companionUnavailable": "⏸ Dein Teammitglied kann gerade keine Nachrichten annehmen: {{reason}}",
+          "companionUnavailable": "⏸ Deinen Freund kann gerade keine Nachrichten annehmen: {{reason}}",
           "authMissing": {
             "defaultProvider": "aktueller Anbieter",
             "message": "⚠️ Diese Unterhaltung nutzt den Anbieter „{{provider}}“ ({{model}}): {{reason}}.",
@@ -13581,18 +13581,18 @@
           "unsupportedMedia": "Diese Version kann diese Art von WeChat-Medien noch nicht verarbeiten.",
           "stillProcessing": "Wird noch bearbeitet…",
           "ownerOnlyCommands": "Nur der Besitzer kann Bot-Befehle verwenden.",
-          "companionManagedCommand": "Öffne dieses Teammitglied in Cindy: Das Modell änderst du in den Einstellungen des Teammitglieds, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",
+          "companionManagedCommand": "Öffne diesen Freund in Cindy: Das Modell änderst du in den Einstellungen des Freundes, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",
           "help": "Verfügbare Befehle: /new neue Unterhaltung; /stop aktuelle Ausführung stoppen; /stop all alle Ausführungen stoppen; /status Status anzeigen; /help Hilfe anzeigen.",
           "status_one": "Die WeChat-Verbindung von Cindy funktioniert. {{count}} Nachricht in der Warteschlange.",
           "status_other": "Die WeChat-Verbindung von Cindy funktioniert. {{count}} Nachrichten in der Warteschlange.",
           "stopped": "Aufgabe gestoppt.",
-          "companionDmNew": "Hier teilst du dir eine langlebige Sitzung mit dem Teammitglied, Verlauf und Gedächtnis bleiben also erhalten. Um den Kontext aufzuräumen, starte das Teammitglied in Cindy neu.",
+          "companionDmNew": "Hier teilst du dir eine langlebige Sitzung mit dem Freund, Verlauf und Gedächtnis bleiben also erhalten. Um den Kontext aufzuräumen, starte den Freund in Cindy neu.",
           "newConversation": "Neue Unterhaltung gestartet.",
           "unknownCommand": "Unbekannter Befehl. Sende /help, um die verfügbaren Befehle zu sehen.",
           "overloaded": "Gerade sind viele WeChat-Aufgaben offen. Versuch es später noch einmal."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "Diese Nachricht braucht für jede Aktion eine Berechtigungsbestätigung, aber das aktuelle Modell oder der Berechtigungsmodus des Teammitglieds unterstützt das nicht. Die Nachricht kann daher nicht starten.\nDer Besitzer sollte dieses Teammitglied in Cindy öffnen, das Modell in den Einstellungen des Teammitglieds prüfen und unter dem Eingabefeld „Standardberechtigungen“ oder „Automatische Prüfung“ wählen.",
+          "companionPermissionUnsupported": "Diese Nachricht braucht für jede Aktion eine Berechtigungsbestätigung, aber das aktuelle Modell oder der Berechtigungsmodus des Freundes unterstützt das nicht. Die Nachricht kann daher nicht starten.\nDer Besitzer sollte diesen Freund in Cindy öffnen, das Modell in den Einstellungen des Freundes prüfen und unter dem Eingabefeld „Standardberechtigungen“ oder „Automatische Prüfung“ wählen.",
           "missingAuth": "Der aktuelle Agent ist noch nicht autorisiert. Verbinde zuerst einen Modelldienst in Cindy.",
           "generic": "Diese Nachricht kann gerade nicht starten. Versuch es später erneut."
         },
@@ -21611,9 +21611,9 @@
       "pick": "Einzeln auswählen",
       "started": "Der Import läuft im Hintergrund. Den Fortschritt findest du unter Einstellungen → Sitzungsimport.",
       "startFailed": "Der Import wurde nicht gestartet. Importiere erneut unter Einstellungen → Sitzungsimport.",
-      "teammatesHeading": "Teammitglieder",
-      "teammatesHint": "Importiere einen Agent aus einem anderen Werkzeug als Teammitglied, mit seinen Erinnerungen, Skills und Automatisierungen.",
-      "importTeammate": "Als Teammitglied importieren"
+      "teammatesHeading": "Freunde",
+      "teammatesHint": "Importiere einen Agent aus einem anderen Werkzeug als Freund, mit seinen Erinnerungen, Skills und Automatisierungen.",
+      "importTeammate": "Als Freund importieren"
     },
     "finish": {
       "title": "Alles bereit",

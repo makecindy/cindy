@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.",
-        "advice": "Peça ao proprietário do colega para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
+        "advice": "Peça ao proprietário do amigo para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
