@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy が作業中です",
-    "hint": "任意のキーまたは Touch ID キーでロックし、指紋またはパスワードで解除します",
+    "hint": "いずれかのキーを押すとロック解除画面が表示されます",
     "lockFailed": {
       "status": "Cindy はこの Mac をロックできませんでした",
       "hint": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Touch ID またはパスワードで確認すると外せます。蓋を閉じるか電源ボタンを押してロックすることもできます。",
       "hintWindows": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Windows Hello または PIN で確認すると外せます。Windows ロゴ キー + L でロックすることもできます。"
     },
-    "hintWindows": "任意のキーでロックし、Windows Hello またはパスワードで解除します",
-    "hintLinux": "任意のキーでロックし、パスワードで解除します",
+    "hintWindows": "いずれかのキーを押すとロック解除画面が表示されます",
+    "hintLinux": "いずれかのキーを押すとロック解除画面が表示されます",
     "verifyReason": "プライバシースクリーンを外す"
   },
   "appBadge": {
@@ -6032,7 +6032,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "タスクモデルの自動フォールバック",
-        "description": "接続または容量エラーが続くと、同じモデルの別の接続済みプロバイダー、次に現在の Agent で明示的に推奨されたモデルを試します。Agent や保存済みの選択は変更しません。デフォルトはオフです。"
+        "description": "障害時にはグループ内の別の利用可能なモデルを試します。エージェントが変わる場合はタスクを引き継ぎ、新しい選択を保存します。通常のタスクは失敗が続くと同じエージェント内で別の提供元や推奨モデルを試します。初期設定はオフです。"
       },
       "toggleAria": "タスクモデルの自動フォールバックを切り替え",
       "toast": {
@@ -11438,7 +11438,7 @@
         "projectDirChoose": "フォルダを選択",
         "projectDirChange": "フォルダを変更",
         "projectDirClear": "クリア",
-        "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
+        "projectDirNote": "このコンピュータにある既存のプロジェクトを選べます。未選択の場合はリポジトリに対応するプロジェクト、次に担当する仲間のプロジェクトを使います。Git での分担には専用のワークツリーを使います。",
         "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください",
         "allowMemberInvites": "全メンバーによる友達の招待を許可",
@@ -11777,15 +11777,15 @@
           "replyModeAssistant": "Cindy が返信",
           "replyModeAssistantNote": "グループの Cindy が返信します。",
           "work": "役割分担",
-          "ownFolder": "グループ専用フォルダ",
+          "ownFolder": "自動選択",
           "projectDirHint": "このコンピュータでのみ有効です。",
-          "projectDirClearHint": "グループ専用フォルダに戻します",
+          "projectDirClearHint": "プロジェクトを自動選択に戻す",
           "project": "プロジェクト",
           "projectCaption": "仲間はグループでの返信も役割分担もこのプロジェクトで行います。リポジトリはグループで共有され、フォルダはこのコンピュータにだけ保存されます。",
           "githubRepo": "GitHub リポジトリ",
-          "githubRepoHint": "owner/name の形式で入力します。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "リポジトリ",
-          "repositoryHint": "GitHub は owner/name、GitLab（自社運用を含む）や CNB などはリポジトリのリンクを貼り付けます。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "repositoryHint": "GitHub の場合は owner/name、それ以外はリポジトリの URL を入力してください。このコンピュータ上で一致するプロジェクトが 1 件あれば使用します。",
           "repositoryPlaceholder": "owner/name またはリポジトリのリンク",
           "githubRepoSaveFailed": "リポジトリを保存できませんでした。確認してもう一度お試しください。",
           "folderRepoFilled": "このフォルダからリポジトリ {{repo}} を設定しました。グループのほかのメンバーのパソコンもこれを使います。",
@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
     },
-    "followUpHint": {
-      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
-      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+    "sendDelivery": {
+      "menuAria": "このメッセージの送信方法",
+      "queueHint": "この返信の完了後",
+      "steerHint": "次のステップで処理",
+      "setDefault": "デフォルトにする",
+      "nowDefault": "デフォルトにしました",
       "switchToSteer": "デフォルトを割り込みにする",
-      "switchToQueue": "デフォルトをキューに追加にする",
-      "dismiss": "ヒントを閉じる"
+      "switchToQueue": "デフォルトをキューに追加にする"
     }
   },
   "onboarding": {
@@ -16661,6 +16663,7 @@
         "thisEvening": "今夜",
         "tomorrow": "明日",
         "nextWeek": "来週",
+        "indefinite": "無期限",
         "custom": "カスタム…",
         "wakeAt": "再表示する日時",
         "timeZone": "現地時間（{{zone}}）",
@@ -19403,6 +19406,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "このターンの実行に失敗しました。",
+    "blockedReasonUnknown": "停止した具体的な理由は示されていません。",
+    "blockedNextStep": "このタスクで情報を補足できます。原因に対処した後、「{{action}}」で続行できます。",
     "status": {
       "active": "目標を推進中",
       "paused": "一時停止",

@@ -230,7 +230,11 @@ it('binds inbound src and enforces target remote-control preference without trus
 
 // Real existing scoped DeviceLinkClient contract over encrypted V2 streams.
 // Transport grants must not become full-device control or another resource.
-it.each(['shared-task', 'provider-share'] as const)('carries %s requests with host-signed member scope and revokes only that guest', async kind => {
+it.each([
+  { kind: 'shared-task', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: true, purpose: 'connects to the executor after the owner disconnects' },
+] as const)('carries $kind requests with host-signed member scope and $purpose', async ({ kind, ownerOffline }) => {
   const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const issuer = 'https://auth.example.test';
   const keys = createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'unit-auth', alg: 'RS256' }] });
@@ -286,6 +290,29 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
   let visitor = f.make(api, false);
   await visitor.waitUntilOnline(3000);
+  if (ownerOffline) {
+    // A separate outage fixture keeps the owner and its unrelated link intact
+    // in the member-revocation cases.
+    serve(f.controller);
+    const input = { shareId: resourceId, memberId, guestDeviceId: guest.deviceId, executorDeviceId: f.b.identity.deviceId };
+    const prepared = await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
+    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
+    const guestPeer = providerShareGuestPeer(resourceId, memberId, guest.deviceId);
+    const guestSocket = f.sockets.find(socket => socket.deviceId === guest.deviceId)!;
+    const executorSocket = f.sockets.find(socket => socket.deviceId === input.executorDeviceId)!;
+    const grant = expect.objectContaining({ generation: prepared.generation });
+    await vi.waitFor(() => {
+      expect(guestSocket.scopedPeerTarget(executorPeer)?.delegation.executors).toContainEqual(grant);
+      expect(executorSocket.scopedPeerTarget(guestPeer)?.delegation.executors).toContainEqual(grant);
+    }, { timeout: 5_000 });
+    f.host.stop();
+    await vi.waitFor(() => expect(f.directories.get(input.executorDeviceId)
+      ?.some(view => view.certificate.deviceId === f.a.identity.deviceId && view.online)).toBe(false), { timeout: 5_000 });
+    await visitor.openLink(executorPeer, openPayload);
+    await expect(visitor.invoke(executorPeer, { channel: 'test:echo', args: ['executor starts while owner is offline'] }))
+      .resolves.toMatchObject({ ok: true, result: 'executor starts while owner is offline' });
+    return;
+  }
   const peer = kind === 'shared-task' ? sharedTaskHostPeer(resourceId, 'a-host') : providerShareHostPeer(resourceId, 'a-host');
   await visitor.openLink(peer, openPayload);
   expect(await visitor.invoke(peer, { channel: 'test:echo', args: ['scoped confidential value'] })).toMatchObject({

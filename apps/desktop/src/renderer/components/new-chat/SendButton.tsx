@@ -1,12 +1,13 @@
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AudioLines, Check } from 'lucide-react';
+import { ArrowUp, AudioLines, Check, Clock } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
 interface SendButtonProps {
   disabled: boolean;
-  onClick: () => void;
+  /** The event lets callers read modifier keys (modifier+click sends the other way). */
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   /** When true, renders the streaming Stop variant. */
   isStreaming?: boolean;
   /** Highlighted while voice long-press is hovering over this button as a release target. */
@@ -19,6 +20,11 @@ interface SendButtonProps {
   companionVoice?: boolean;
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
+  /**
+   * 发送键上的投递提示（SendDeliveryTip）指向「另一种方式」时，纸飞机换成那种方式的图标：
+   * steer 用 ↑（与排队消息上的「插话」同一个图标），queue 用时钟。
+   */
+  alternateGlyph?: 'steer' | 'queue' | null;
 }
 
 export function CreateAgentSendIcon() {
@@ -53,6 +59,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
     ariaLabel,
     action = 'send',
     companionVoice = false,
+    alternateGlyph = null,
   },
   ref,
 ) {
@@ -60,6 +67,10 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
   const isVoice = action === 'voice' && !isStreaming;
   const currentAction = isStreaming ? 'stop' : action;
   const pressedAction = useRef<typeof currentAction | null>(null);
+  const showAlternate = Boolean(alternateGlyph) && action === 'send' && !isStreaming;
+  // Keep the last glyph while its layer fades out, so it does not flip mid-transition.
+  const lastAlternateGlyph = useRef<'steer' | 'queue'>('steer');
+  if (alternateGlyph) lastAlternateGlyph.current = alternateGlyph;
   // Derived during render so data-settling lands in the same commit that clears
   // streaming: the glow's animation must not detach for a frame and jump.
   const [prevStreaming, setPrevStreaming] = useState(isStreaming);
@@ -85,6 +96,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       data-companion={companionVoice ? 'true' : undefined}
       data-settling={settling ? 'true' : undefined}
       data-release={highlighted && !disabled && !isStreaming ? 'true' : undefined}
+      data-send-alternate={showAlternate ? 'true' : undefined}
       // A draft can change between press and release (ASR, attachments, keyboard or
       // the turn ending). Never turn that press into a different action, such as
       // Stop -> Send or Send -> Start call.
@@ -109,11 +121,11 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       onBlur={() => {
         pressedAction.current = null;
       }}
-      onClick={() => {
+      onClick={(event) => {
         const initialAction = pressedAction.current;
         pressedAction.current = null;
         if (initialAction !== null && initialAction !== currentAction) return;
-        onClick();
+        onClick(event);
       }}
       className={cn(
         'composer-send relative flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full',
@@ -188,6 +200,16 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
             <Check className="h-4 w-4" strokeWidth={2.4} />
           ) : (
             <CreateAgentSendIcon />
+          )}
+        </span>
+        <span
+          data-send-icon="alternate"
+          className="col-start-1 row-start-1 flex items-center justify-center text-[var(--send-btn-icon)]"
+        >
+          {lastAlternateGlyph.current === 'queue' ? (
+            <Clock className="h-4 w-4" strokeWidth={2.4} />
+          ) : (
+            <ArrowUp className="h-4 w-4" strokeWidth={2.4} />
           )}
         </span>
         <span

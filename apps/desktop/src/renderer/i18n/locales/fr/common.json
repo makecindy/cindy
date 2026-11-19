@@ -1149,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Appuyez sur une touche ou sur la touche Touch ID pour verrouiller, puis déverrouillez avec votre empreinte ou votre mot de passe",
+    "hint": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "lockFailed": {
       "status": "Cindy n'a pas pu verrouiller ce Mac",
       "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Touch ID ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
       "hintWindows": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Windows Hello ou votre code PIN pour retirer l'écran. Vous pouvez aussi appuyer sur la touche du logo Windows + L."
     },
-    "hintWindows": "Appuyez sur une touche pour verrouiller ; déverrouillez avec Windows Hello ou votre mot de passe",
-    "hintLinux": "Appuyez sur une touche pour verrouiller ; déverrouillez avec votre mot de passe",
+    "hintWindows": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
+    "hintLinux": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "verifyReason": "retirer l'écran de confidentialité"
   },
   "appBadge": {
@@ -6133,7 +6133,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modèle de secours automatique pour les tâches",
-        "description": "Après des échecs répétés de connexion ou de capacité, essaie une autre source connectée pour le même modèle, puis un modèle explicitement recommandé pour l'Agent actuel. Ne change jamais d'Agent et ne modifie pas votre sélection enregistrée. Désactivé par défaut."
+        "description": "En cas d’échec, un groupe essaie ses autres modèles disponibles. Un changement d’Agent transfère la tâche et enregistre le nouveau choix. Après plusieurs échecs, les autres tâches essaient une autre source ou un modèle recommandé du même Agent. Désactivé par défaut."
       },
       "toggleAria": "Activer/désactiver le modèle de secours automatique pour les tâches",
       "toast": {
@@ -11572,7 +11572,7 @@
         "projectDirChoose": "Choisir un dossier",
         "projectDirChange": "Changer de dossier",
         "projectDirClear": "Effacer le dossier",
-        "projectDirNote": "Les amis travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
+        "projectDirNote": "Choisissez un projet existant sur cet ordinateur. Sans sélection, le projet associé au dépôt est utilisé, puis celui du compagnon chargé du travail. Les tâches réparties dans Git utilisent un arbre de travail distinct.",
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
@@ -11906,15 +11906,15 @@
           "replyModeAssistant": "Cindy répond",
           "replyModeAssistantNote": "La Cindy du groupe répond.",
           "work": "Répartitions du travail",
-          "ownFolder": "Dossier propre au groupe",
+          "ownFolder": "Automatique",
           "projectDirHint": "S’applique uniquement sur cet ordinateur.",
-          "projectDirClearHint": "Utiliser plutôt le dossier propre au groupe",
+          "projectDirClearHint": "Revenir au choix automatique du projet",
           "project": "Projet",
           "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
           "githubRepo": "Dépôt GitHub",
-          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Dépôt",
-          "repositoryHint": "GitHub : saisissez owner/name. GitLab (y compris auto-hébergé), CNB et autres : collez le lien du dépôt. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet, ou en téléchargent une.",
+          "repositoryHint": "Pour GitHub, saisissez owner/name ou collez l’URL du dépôt. Cindy cherche un projet correspondant sans ambiguïté sur cet ordinateur.",
           "repositoryPlaceholder": "owner/name ou lien du dépôt",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
           "folderRepoFilled": "Le dépôt {{repo}} a été renseigné à partir de ce dossier. Les ordinateurs des autres membres l’utiliseront aussi.",
@@ -14749,12 +14749,14 @@
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
     },
-    "followUpHint": {
-      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
-      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+    "sendDelivery": {
+      "menuAria": "Comment envoyer ce message",
+      "queueHint": "Après cette réponse",
+      "steerHint": "À la prochaine étape",
+      "setDefault": "Définir par défaut",
+      "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
-      "switchToQueue": "File d'attente par défaut",
-      "dismiss": "Fermer l'astuce"
+      "switchToQueue": "File d'attente par défaut"
     }
   },
   "onboarding": {
@@ -16897,6 +16899,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",
@@ -19663,6 +19666,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "L’exécution de ce tour a échoué.",
+    "blockedReasonUnknown": "Aucune raison précise du blocage n’a été fournie.",
+    "blockedNextStep": "Vous pouvez ajouter des informations dans cette tâche. Une fois la cause résolue, cliquez sur « {{action}} » pour continuer.",
     "status": {
       "active": "Objectif en cours",
       "paused": "En pause",

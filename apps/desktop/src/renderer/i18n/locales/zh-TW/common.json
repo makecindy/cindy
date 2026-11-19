@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意鍵或 Touch ID 鍵鎖定，再用指紋或密碼解鎖",
+    "hint": "按任意鍵進入解鎖畫面",
     "lockFailed": {
       "status": "Cindy 沒能鎖定這台電腦",
       "hint": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Touch ID 或密碼驗證後即可撤下。也可以闔上螢幕或按電源鍵鎖定。",
       "hintWindows": "碰一下電腦會再試一次鎖定；仍鎖不上時，用 Windows Hello 或 PIN 驗證後即可撤下。也可以按 Windows 標誌鍵 + L 鎖定。"
     },
-    "hintWindows": "按任意鍵鎖定，用 Windows Hello 或密碼解鎖",
-    "hintLinux": "按任意鍵鎖定，用密碼解鎖",
+    "hintWindows": "按任意鍵進入解鎖畫面",
+    "hintLinux": "按任意鍵進入解鎖畫面",
     "verifyReason": "撤下隱私畫面"
   },
   "appBadge": {
@@ -6032,7 +6032,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任務模型自動降級",
-        "description": "連線或容量故障連續發生時，先切換到同名模型的其他已連線來源，再嘗試目前 Agent 明確推薦的模型；不會切換 Agent，也不會改掉你儲存的選擇。預設關閉。"
+        "description": "模型組遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
       },
       "toggleAria": "切換任務模型自動降級",
       "toast": {
@@ -11438,7 +11438,7 @@
         "projectDirChoose": "選擇",
         "projectDirChange": "更換",
         "projectDirClear": "清除",
-        "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+        "projectDirNote": "可選擇這台電腦上現有的專案。留空時，優先使用儲存庫對應的專案，其次使用執行夥伴自己的專案。Git 專案分工使用獨立 worktree。",
         "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
@@ -11777,15 +11777,15 @@
           "replyModeAssistant": "Cindy 回答",
           "replyModeAssistantNote": "由群裡的 Cindy 回答。",
           "work": "分工",
-          "ownFolder": "群組自己的資料夾",
+          "ownFolder": "自動選擇",
           "projectDirHint": "只在這台電腦上生效。",
-          "projectDirClearHint": "改用群組自己的資料夾",
+          "projectDirClearHint": "恢復自動選擇專案",
           "project": "專案",
           "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
           "githubRepo": "GitHub 儲存庫",
-          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "程式碼儲存庫",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等貼上儲存庫連結。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repositoryHint": "GitHub 可填 owner/name，其他儲存庫可貼上連結。Cindy 會在這台電腦上尋找唯一相符的既有專案。",
           "repositoryPlaceholder": "owner/name 或儲存庫連結",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
           "folderRepoFilled": "已依這個資料夾填好儲存庫 {{repo}}，群裡其他人的電腦也會使用它。",
@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
     },
-    "followUpHint": {
-      "queueDefault": "任務執行中傳送的訊息預設排隊。",
-      "steerDefault": "任務執行中傳送的訊息預設插話到當前任務。",
+    "sendDelivery": {
+      "menuAria": "這條訊息的傳送方式",
+      "queueHint": "等這一輪結束",
+      "steerHint": "下一步就處理",
+      "setDefault": "設為預設",
+      "nowDefault": "已設為預設",
       "switchToSteer": "預設改為插話",
-      "switchToQueue": "預設改為排隊",
-      "dismiss": "關閉提示"
+      "switchToQueue": "預設改為排隊"
     }
   },
   "onboarding": {
@@ -16661,6 +16663,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下週",
+        "indefinite": "無限期",
         "custom": "自訂…",
         "wakeAt": "喚回日期與時間",
         "timeZone": "本地時間（{{zone}}）",
@@ -19403,6 +19406,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本輪執行失敗。",
+    "blockedReasonUnknown": "未提供具體受阻原因。",
+    "blockedNextStep": "可在目前任務中補充資訊；處理受阻原因後，點擊「{{action}}」繼續。",
     "status": {
       "active": "目標推進中",
       "paused": "已暫停",

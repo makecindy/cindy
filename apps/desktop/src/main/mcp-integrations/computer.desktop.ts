@@ -21,8 +21,6 @@ export const {
   installComputerDriver,
   extractDriverSemver,
   compareSemver,
-  pickLatestCuaDriverRelease,
-  pickLatestCuaDriverVersion,
   resolveCuaDriverHostArch,
   getCuaDriverReleaseAssetName,
   resetComputerDriverUpdateStateForTests,

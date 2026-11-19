@@ -315,8 +315,10 @@ import {
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
-import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
+import { touchRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
+import { projectForNewTask, registeredTaskProject, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
+import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
@@ -734,10 +736,7 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
-import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { botGroups as localBotGroups } from '../localDb/schema.js';
-import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
-import { botGroupFolderPath } from './botGroupWorkDir.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
 import { modelDisplayNames, usageModelKey } from '../menubar/collect.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
@@ -745,16 +744,13 @@ import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResource
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
 import { readSessionTitle } from '../im/shared/controlProjects.js';
 import { readSessionNotificationPreview } from '../localDb/sessionNotificationPreview.js';
-import { createBotGroupWorkDir } from './botGroupWorkDir.js';
+import { botGroupFolderPath, createBotGroupWorkDir } from './botGroupWorkDir.js';
 import { createBotGroupAttachmentStore } from './botGroupAttachments.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
-import { validateExistingLocalProjectDirectory } from '../mcp-integrations/createProject.js';
 import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
-import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { runGit } from '../git-review/gitRunner.js';
-import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.desktop.js';
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
 import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
@@ -1410,6 +1406,11 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
+import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { modelGroupRouteFor } from '../model-groups/routeFor.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -1469,6 +1470,7 @@ import {
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
+  recordFailedSessionRuntimeFallbackCandidate,
   clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
@@ -10453,6 +10455,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertSessionCreationCurrent();
       await ensureRemoteReadyForSessionStart({ createOpts: co });
       assertSessionCreationCurrent();
+      if (!co.remoteHostId && !co.resumeSessionId && co.workspaceKind !== 'dialogue' && co.orcaRole !== 'worker') {
+        const base = co.id ? worktreeStore.get(co.id)?.baseRepo : undefined;
+        Object.assign(co, await projectForNewTask(base ?? co.workingDir, co.projectDir));
+        if (!co.workingDir && co.projectDir) co.workingDir = co.projectDir;
+        assertSessionCreationCurrent();
+      }
       const result = await bootstrapSession(co, assertSessionCreationCurrent);
       assertSessionCreationCurrent();
       // maker:create-session 是手机 / device-link 的创建入口，不经过
@@ -10466,11 +10474,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !co.remoteHostId &&
         isRetainableProjectSession({ source: 'desktop', orcaRole: co.orcaRole })
       ) {
-        const recentProjectDir =
+        const recentProjectDir = co.projectDir ??
           worktreeStore.get(result.session.id)?.baseRepo ??
           getManagedWorktreeBasePath(co.workingDir) ??
           co.workingDir;
-        await upsertRecentWorkdir(recentProjectDir);
+        await touchRecentWorkdir(recentProjectDir);
       }
       return result;
     },
@@ -13532,30 +13540,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
   });
   botGroupChatServiceHolder?.dispose();
-  // 分工 steps run in the group's folder, the 项目文件夹, or one worktree per plan (bot-group-chat.md §7.5).
+  // Messages and attachments stay with the group. Workspaces belong to the selected project.
   const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath(), log });
-  const localGroupFolders = createGroupProjectFolders({
-    chosen: () => null, workspaceRoot: readDialogueWorkspaceSettings,
-    validate: async dir => { try { return (await statWorkingDirectory(dir)).isDirectory() ? { ok: true as const, dir } : { ok: false as const }; } catch { return { ok: false as const }; } },
-  });
-  const localGroupFolder = async (groupId: string) => {
+  const isLegacyGroupFolder = (groupId: string, dir: string) =>
+    dir === botGroupFolderPath(ownerScopedUserDataPath(), groupId)
+    || (path.basename(dir).endsWith('-' + encodeURIComponent(groupId))
+      && dialogueWorkspaceRoots().some(root => path.resolve(root) === path.dirname(path.resolve(dir))));
+  const executorProject = (botId: string) => registeredTaskProject(teammateWorkspaceDir(ownerScopedUserDataPath(), botId));
+  const localExecutionProject = async (groupId: string, botId: string) => {
     const scope = captureDataOwnerBroadcastScope();
-    const current = () => isDataOwnerBroadcastScopeCurrent(scope);
-    const db = getDbClient().drizzle;
-    const [group] = await db.select().from(localBotGroups).where(eq(localBotGroups.id, groupId)).limit(1);
-    if (!group) throw new Error('WORKDIR_UNAVAILABLE');
-    if (group.projectDir) return group.projectDir;
-    const legacy = botGroupFolderPath(ownerScopedUserDataPath(), groupId);
-    const existing = await statWorkingDirectory(legacy).then(s => s.isDirectory(), () => false);
-    const dir = existing ? legacy : (await localGroupFolders.forWork({ id: groupId, name: group.name }, { signIn: false, isCurrent: current })).dir;
-    if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
-    if (!current()) throw new Error('OWNER_CHANGED');
-    await db.update(localBotGroups).set({ projectDir: dir }).where(eq(localBotGroups.id, groupId));
-    return dir;
+    const [group] = await getDbClient().drizzle.select({ dir: localBotGroups.projectDir })
+      .from(localBotGroups).where(eq(localBotGroups.id, groupId)).limit(1);
+    // Earlier releases stored an auto-created group folder in the same column as a user choice.
+    const chosen = group?.dir && !isLegacyGroupFolder(groupId, group.dir) ? group.dir : null;
+    const dir = chosen ? await registeredTaskProject(chosen) : null;
+    if (chosen && !dir) throw new Error('WORKDIR_UNAVAILABLE');
+    if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('OWNER_CHANGED');
+    return dir ?? executorProject(botId);
   };
   const botGroupWorkDir = createBotGroupWorkDir({
     ownerRoot: () => ownerScopedUserDataPath(),
-    defaultFolder: localGroupFolder,
+    defaultFolder: async () => ensureDialogueWorkspaceDir(randomUUID(), Date.now()),
     detectRepo: async (dir) => {
       const detected = await worktreeManager.detectCwd(dir);
       return { gitInstalled: detected.gitInstalled, isGitRepo: detected.isGitRepo };
@@ -13621,9 +13626,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
         getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
     },
+    executorProject, localExecutionProject, isLegacyGroupFolder,
+    projectOfWorkDir: async dir => (await projectForNewTask(dir)).projectDir,
     ensureLane: async (input) => {
       try {
-        return await ensureBotGroupLaneSession({ ...input, projectDir: input.projectDir ?? (input.chatAccess ? undefined : await localGroupFolder(input.groupId)) });
+        let projectDir = input.projectDir;
+        if (!projectDir && !input.chatAccess) {
+          const resolved = input.plan?.workDir ? (await projectForNewTask(input.plan.workDir)).projectDir
+            : await localExecutionProject(input.groupId, input.botId);
+          projectDir = resolved ?? undefined;
+        }
+        return await ensureBotGroupLaneSession({ ...input, projectDir }, registeredTaskProject);
       } catch (error) {
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
@@ -13673,9 +13686,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workDir: botGroupWorkDir,
     validateProjectDir: async (dir) => {
       try {
-        const checked = await validateExistingLocalProjectDirectory(dir);
-        return checked.ok
-          ? { ok: true as const, dir: checked.workingDir }
+        const checked = await registeredTaskProject(dir);
+        return checked
+          ? { ok: true as const, dir: checked }
           : { ok: false as const, message: '这个文件夹不能用作项目文件夹' };
       } catch {
         return { ok: false as const, message: '项目文件夹不存在' };
@@ -13684,15 +13697,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
     // like a new task of this user's (new-task model and permission), titled with the group's name.
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
+      const assertOwner = captureSessionOwner();
       try {
         if (sessionId) {
-          const [row] = await getDbClient().drizzle.select({ status: sessions.status })
+          const [row] = await getDbClient().drizzle.select({ status: sessions.status, projectDir: sessions.projectDir,
+            workspaceKind: sessions.workspaceKind, workingDir: sessions.workingDir })
             .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-          if (row?.status === 'active') return { ok: true as const, sessionId, created: false };
+          assertOwner();
+          const stored = row?.workspaceKind === 'project' ? row.projectDir ?? row.workingDir : null;
+          if (row?.status === 'active' && stored === projectDir) return { ok: true as const, sessionId, created: false };
         }
         const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
-        const { row } = await openSession({ body: {
+        const { row } = await openSession({ assertCurrent: assertOwner, body: {
           title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
           ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
             providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
@@ -13720,15 +13737,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const state = botGroupLiveTaskStateOfPhase(phase);
       return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}), ...(model ? { model } : {}) };
     },
-    // A group's GitHub repository without a registered checkout gets Cindy's own.
-    groupCheckouts: createDesktopGroupProjectCheckouts(log),
+
     // A group's GitHub repository picks this computer's checkout among the registered projects.
-    findProjectDirsForRepo: async (repo) => findRepositoryFolders(
-      (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {
+    findProjectDirsForRepo: async (repo) => {
+      const listed = await listVisibleRegisteredProjectPaths();
+      if (!listed.ok) throw new Error(listed.message);
+      return findRepositoryFolders(listed.paths, repo, {
         remotes: async (dir) => (await runGit(['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 1, 128] })).stdout
           .split('\n').map(line => line.trim().split(/\s+/)[1] ?? '').filter(Boolean),
         isMainCheckout: async (dir) => (await fsp.stat(path.join(dir, '.git'))).isDirectory(),
-      }),
+      });
+    },
     // A folder chosen in group management fills in the group's repository when it has none.
     repositoriesOfFolder: async (dir) => folderRepositories(
       (await runGit(['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 1, 128] })).stdout
@@ -17611,12 +17630,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({ getDesktopProviderService, log });
 
+  async function activeModelGroupBinding(sessionId: string, row: {
+    agentKind?: string | null; model?: string | null; providerId?: string | null;
+  }) {
+    const binding = await readModelGroupBindingForDispatch(sessionId);
+    if (!binding || !row.providerId || !row.model ||
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+    if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
+    return modelGroupRouteFor(readModelGroupsConfig(), binding.selection, Date.now()).outcome === 'missing' ? null : binding;
+  }
+
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
   const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
     maker,
     readSessionRuntimeProfiles: (sessionId) => readSessionRuntimeProfiles(sessionId),
     canApplyAutomaticRuntimeSelection: (sessionId, generation) => canApplyAutomaticRuntimeSelection(sessionId, generation),
     readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
+    readModelGroupFallbackCandidate: async (sessionId, current, visited, recovery, generation) => {
+      const row = await getSessionRowSnapshot(sessionId);
+      const binding = row && await activeModelGroupBinding(sessionId, row);
+      if (!binding || !current.providerId || current.agentDeviceId) return null;
+      const excluded = new Set(visited.map(key => key.replace(/^claude-code\u0000/, 'cc\u0000')));
+
+      const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, ...recovery,
+        recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
+          ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
+        }),
+        current: { agentKind: makerToDbAgentKind(current.agentKind), providerId: current.providerId, model: current.model },
+      });
+      if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
+        offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
+      return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
+        providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: false },
+        bindCommittedRoute: profile => {
+          if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
+            agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
+          }));
+        } };
+    },
     readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),
     readSessionRuntimeFallbackSettings, getDesktopProviderService, pendingSessionRuntimeFallbackRebuilds,
     applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
@@ -18780,6 +18831,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
+  const modelGroupInputs = new WeakSet<object>();
   const scheduledQuotaInputs = new WeakSet<object>();
   // The coordinator and the stable-session lookup are assembled below; both are read when a hook runs.
   const interruptedTurnAutoResumeHooks = createInterruptedTurnAutoResumeHooks<Session>({
@@ -18788,7 +18840,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
+    resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18817,6 +18870,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          agentKind: sessions.agentKind, providerId: sessions.providerId, model: sessions.model,
           orcaRole: sessions.orcaRole,
           orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
@@ -18848,6 +18902,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           && ((origin?.kind === 'scheduler' && origin.runId) || ownsQuotaRoute())) {
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
+        const groupFallback = origin?.kind !== 'scheduler' && !ownsQuotaRoute() && botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
+          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
+        if (groupFallback) modelGroupInputs.add(args[2]);
+        else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
           botFallbackInputs.add(args[2]);
         } else {

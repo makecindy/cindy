@@ -40,6 +40,9 @@ export type FallbackRuntimeSelection = (
   deferred: boolean;
   superseded: boolean;
   generation?: number;
+  persistedRoute?: true;
+  effectiveModelId?: string;
+  effectiveProviderId?: string | null;
   contextWindowConfirmationRequired?: number;
   contextTokensForConfirmation?: number;
 }>;
@@ -60,6 +63,10 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: SessionRuntimeProfile | null;
     routeLocked?: boolean;
   }>;
+  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: { accountUnavailable: boolean; hasImages: boolean }, generation: number): Promise<{
+    candidate: SessionRuntimeProfile | null;
+    bindCommittedRoute?(profile: SessionRuntimeProfile): void;
+  } | null>;
   readSessionAgentDeviceId(sessionId: string): Promise<string | null | undefined>;
   readSessionRuntimeFallbackSettings(): { enabled: boolean };
   getDesktopProviderService: typeof getProviderServiceType;
@@ -86,7 +93,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
  */
 export function createSessionRuntimeFallback<RuntimeSession extends { agentKind: string; remoteHostId?: string | null }>({
   maker, readSessionRuntimeProfiles, canApplyAutomaticRuntimeSelection, readBotFallbackCandidate,
-  readSessionAgentDeviceId, readSessionRuntimeFallbackSettings, getDesktopProviderService,
+  readModelGroupFallbackCandidate, readSessionAgentDeviceId, readSessionRuntimeFallbackSettings, getDesktopProviderService,
   pendingSessionRuntimeFallbackRebuilds, applySessionRuntimeSelection, getPendingCredentialSwitchTarget,
   clearPendingCredentialSwitchForSession, broadcastSessionRuntimeProjection, agentSwitchDeps, performSessionAgentSwitch,
   runtimeSelectionRequiresModelWindowConfirmation, log,
@@ -97,6 +104,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
+    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -120,7 +128,12 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
-      if (!botFallback.isBot) {
+      const group = groupRecovery && !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
+        ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
+        : null;
+      if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (group) candidate = group.candidate;
+      if (!botFallback.isBot && !group) {
         if (await readSessionAgentDeviceId(sessionId)) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
         if (requireRouteChange) return { session: null, outcome: 'exhausted' };
         if (episodeAttempt < 2 || !readSessionRuntimeFallbackSettings().enabled) return { session: null, outcome: 'unchanged' };
@@ -185,10 +198,20 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         }
         return recorded;
       };
-      const advanceConfiguredBotRoute = async (
+      const advanceConfiguredRoute = async (
         failed: SessionRuntimeProfile,
       ): Promise<boolean> => {
-        if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
+        if (!await recordFailedCandidate(failed) || !isCurrent()) return false;
+        if (group && groupRecovery) {
+          const latest = await readSessionRuntimeProfiles(sessionId);
+          if (!latest || latest.control.pending || latest.control.generation !== profiles.control.generation ||
+              !canApplyAutomaticRuntimeSelection(sessionId, latest.control.generation)) return false;
+          const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
+            latest.control.visitedRoutes, groupRecovery, latest.control.generation);
+          candidate = next?.candidate ?? null;
+          return candidate !== null;
+        }
+        if (!botFallback.isBot) return false;
         const next = await readBotFallbackCandidate(sessionId, currentForFallback);
         candidate = next.candidate;
         return candidate !== null;
@@ -220,6 +243,16 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
               fastExplicit: false,
             },
           );
+          // A live override can leave the saved session on its original route.
+          // Move the durable group binding only when the session row moved too.
+          if (result.persistedRoute && !result.deferred && !result.superseded &&
+              sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+            group?.bindCommittedRoute?.({
+              ...selected,
+              model: result.effectiveModelId ?? selected.model,
+              providerId: result.effectiveProviderId === undefined ? selected.providerId : result.effectiveProviderId,
+            });
+          }
           if (requireRouteChange && result.deferred && result.generation !== undefined &&
               cancelPendingSessionRuntimeMutation(sessionId, result.generation)) {
             const pendingCredential = getPendingCredentialSwitchTarget(sessionId);
@@ -248,6 +281,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 applyNow: true,
               });
               if (switched.switched) {
+                group?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',
@@ -260,7 +294,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             });
             if (!result) return { session: runtimeSession, outcome: 'superseded' };
             if (!result.switched) {
-              if (await advanceConfiguredBotRoute(selected)) continue;
+              if (await advanceConfiguredRoute(selected)) continue;
               return { session: runtimeSession, outcome: 'exhausted' };
             }
             // The route transaction has already committed, including a new
@@ -268,7 +302,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             // candidates using the pre-switch profile/generation captured above.
             if (!result.engineReady) return { session: runtimeSession, outcome: 'failed' };
           } catch (error) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw error;
           }
           log.info('automatic Bot runtime fallback switched harness', {
@@ -290,7 +324,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             !runtimeSession.remoteHostId ||
             !isRemoteModelSwitchRouteChangeError(error)
           ) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw error;
           }
           // SSH Claude daemons freeze endpoint/credential env at spawn. The old
@@ -309,7 +343,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           try {
             result = await applyCandidate();
           } catch (retryError) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw retryError;
           }
         }

@@ -57,21 +57,46 @@ export function onUsageWidgetBackgroundRefresh(refresh: () => Promise<boolean>):
   return () => subscription.remove();
 }
 
+// Stable snapshot for React subscribers. Older app binaries can still show the same
+// foreground data even when their native home-screen widget module is unavailable.
+let currentStore: UsageWidgetStore | null | undefined;
+const listeners = new Set<() => void>();
+
+function publishStore(store: UsageWidgetStore | null) {
+  currentStore = store;
+  for (const listener of listeners) listener();
+}
+
+export function subscribeUsageWidgetStore(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function writeUsageWidgetStore(store: UsageWidgetStore): boolean {
-  return native?.writeSnapshot(JSON.stringify(store)) ?? false;
+  const persisted = native?.writeSnapshot(JSON.stringify(store)) ?? false;
+  publishStore(store);
+  return persisted;
 }
 
 export function readUsageWidgetStore(): UsageWidgetStore | null {
+  if (currentStore !== undefined) return currentStore;
   try {
     const store = JSON.parse(native?.readSnapshot() ?? 'null') as Partial<UsageWidgetStore> | null;
-    return store?.version === 2 && store.states && Array.isArray(store.computers) ? store as UsageWidgetStore : null;
+    currentStore = store?.version === 2 && store.states && Array.isArray(store.computers) ? store as UsageWidgetStore : null;
   } catch {
-    return null;
+    currentStore = null;
   }
+  return currentStore;
 }
 
 export function clearUsageWidgetState(): void {
   native?.clearSnapshot();
+  publishStore(null);
+}
+
+export function automaticUsageState(store: UsageWidgetStore | null, userId?: string) {
+  if (!userId || store?.accountId !== userId || !store.autoDeviceId) return null;
+  return store.states[store.autoDeviceId] ?? null;
 }
 
 /** Computers that home-screen widgets are set to; the widgets record them when they draw. */

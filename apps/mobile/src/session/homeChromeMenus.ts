@@ -1,3 +1,4 @@
+import { ListChecks } from "lucide-react-native";
 import type {
   ChromeActionMenuItem,
   NativePullDownAction,
@@ -316,11 +317,14 @@ export function buildHomeDisplayPullDownActions(input: {
     ],
   );
 
+  const nextMode = state.taskListMode === 'inbox' ? 'tasks' : 'inbox';
   return [
-    section("mode", [submenu("taskListMode", t(`${MENU}.taskListMode.heading`),
-      t(`${MENU}.taskListMode.${state.taskListMode ?? 'tasks'}`), "tray",
-      (['tasks', 'inbox'] as const).map(mode => checkable(`taskListMode.${mode}`,
-        t(`${MENU}.taskListMode.${mode}`), (state.taskListMode ?? 'tasks') === mode)))]),
+    section("mode", [{
+      id: `taskListMode.${nextMode}`,
+      title: t(nextMode === 'inbox' ? `${MENU}.taskListMode.enterInbox` : `${MENU}.taskListMode.leaveInbox`),
+      image: "checklist",
+      icon: ListChecks,
+    }]),
     section("organize", organize),
     section("narrow", [
       {

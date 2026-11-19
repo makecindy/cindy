@@ -1132,14 +1132,14 @@
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine beliebige Taste oder die Touch ID-Taste zum Sperren und entsperre dann mit Fingerabdruck oder Passwort",
+    "hint": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
       "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
       "hintWindows": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Windows Hello oder deiner PIN, um den Sichtschutz zu entfernen. Du kannst auch Windows-Logo-Taste + L drücken."
     },
-    "hintWindows": "Zum Sperren eine beliebige Taste drücken; entsperren mit Windows Hello oder deinem Passwort",
-    "hintLinux": "Zum Sperren eine beliebige Taste drücken; entsperren mit deinem Passwort",
+    "hintWindows": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
+    "hintLinux": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "verifyReason": "den Sichtschutz entfernen"
   },
   "appBadge": {
@@ -6075,7 +6075,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatischer Modellwechsel für Aufgaben",
-        "description": "Nach wiederholten Verbindungs- oder Kapazitätsfehlern wird zunächst eine andere verbundene Quelle für dasselbe Modell versucht, dann ein ausdrücklich für den aktuellen Agent empfohlenes Modell. Dabei wird weder der Agent gewechselt noch deine gespeicherte Auswahl geändert. Standardmäßig deaktiviert."
+        "description": "Bei einem Fehler versucht eine Modellgruppe andere verfügbare Modelle der Gruppe. Bei einem Agentenwechsel wird die Aufgabe übergeben und die neue Auswahl gespeichert. Andere Aufgaben versuchen nach wiederholten Fehlern eine andere Quelle oder ein empfohlenes Modell desselben Agenten. Standardmäßig aus."
       },
       "toggleAria": "Automatischen Modellwechsel für Aufgaben umschalten",
       "toast": {
@@ -11483,7 +11483,7 @@
         "projectDirChoose": "Ordner auswählen",
         "projectDirChange": "Ordner ändern",
         "projectDirClear": "Ordner entfernen",
-        "projectDirNote": "Hier arbeiten Freunde bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
+        "projectDirNote": "Wähle ein vorhandenes Projekt auf diesem Computer. Ohne Auswahl wird das passende Repository-Projekt oder das Projekt des ausführenden Begleiters verwendet. Für die Arbeitsteilung mit Git wird ein eigener Worktree angelegt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
         "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
@@ -11811,15 +11811,15 @@
           "replyModeAssistant": "Cindy antwortet",
           "replyModeAssistantNote": "Die Gruppen-Cindy antwortet.",
           "work": "Arbeitsaufteilung",
-          "ownFolder": "Gruppeneigener Ordner",
+          "ownFolder": "Automatisch",
           "projectDirHint": "Gilt nur auf diesem Computer.",
-          "projectDirClearHint": "Stattdessen den gruppeneigenen Ordner verwenden",
+          "projectDirClearHint": "Projekt wieder automatisch auswählen",
           "project": "Projekt",
           "projectCaption": "Freunde antworten und arbeiten bei Arbeitsteilungen in diesem Projekt. Das Repository teilt die ganze Gruppe; der Ordner bleibt auf diesem Computer.",
           "githubRepo": "GitHub-Repository",
-          "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repository",
-          "repositoryHint": "GitHub: owner/name eingeben. GitLab (auch selbst gehostet), CNB und andere: den Repository-Link einfügen. Computer ohne gewählten Ordner nutzen ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repositoryHint": "Für GitHub owner/name eingeben oder die Repository-URL einfügen. Cindy sucht auf diesem Computer nach einem eindeutig passenden Projekt.",
           "repositoryPlaceholder": "owner/name oder Repository-Link",
           "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
           "folderRepoFilled": "Das Repository {{repo}} wurde aus diesem Ordner übernommen. Die Computer der anderen Mitglieder verwenden es ebenfalls.",
@@ -14627,12 +14627,14 @@
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
     },
-    "followUpHint": {
-      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
-      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+    "sendDelivery": {
+      "menuAria": "So wird diese Nachricht gesendet",
+      "queueHint": "Nach dieser Antwort",
+      "steerHint": "Beim nächsten Schritt",
+      "setDefault": "Als Standard setzen",
+      "nowDefault": "Jetzt Standard",
       "switchToSteer": "Standardmäßig steuern",
-      "switchToQueue": "Standardmäßig einreihen",
-      "dismiss": "Hinweis schließen"
+      "switchToQueue": "Standardmäßig einreihen"
     }
   },
   "onboarding": {
@@ -16735,6 +16737,7 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
         "timeZone": "Ortszeit ({{zone}})",
@@ -19479,6 +19482,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Diese Runde ist fehlgeschlagen.",
+    "blockedReasonUnknown": "Es wurde kein konkreter Grund für die Blockierung angegeben.",
+    "blockedNextStep": "Du kannst in dieser Aufgabe Informationen ergänzen. Sobald die Ursache behoben ist, klicke auf „{{action}}“, um fortzufahren.",
     "status": {
       "active": "Ziel wird weiterverfolgt",
       "paused": "Pausiert",

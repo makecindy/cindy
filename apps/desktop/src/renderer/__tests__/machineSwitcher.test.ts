@@ -107,11 +107,11 @@ describe('selectVisibleSessions', () => {
     },
   );
 
-  it('includes local routine and remote channel tasks with exact ownership, excluding private lanes', () => {
+  it('includes projectless group tasks with routine and channel tasks while excluding private lanes', () => {
     const lane = (role: string, device?: string): Session => ({ ...mkSession(role, device), source: 'bot', companion: { id: 'owner', role } });
     expect(selectVisibleSessions([lane('routine'), lane('canonical')],
-      [lane('channel', 'dev-a'), lane('group', 'dev-a'), lane('thread', 'dev-a')], MACHINE_ALL)
-      .map(row => row.id)).toEqual(['routine', 'channel']);
+      [lane('channel', 'dev-a'), { ...lane('group', 'dev-a'), workspaceKind: 'dialogue', projectDir: null }, lane('thread', 'dev-a')], MACHINE_ALL)
+      .map(row => row.id)).toEqual(['routine', 'channel', 'group']);
   });
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
