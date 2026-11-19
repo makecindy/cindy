@@ -55,7 +55,7 @@ export function AppPreferenceControl() {
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
     const applyOtherFields = () => {
       if (patch.followUpBehavior !== undefined) followUp.setPreference(patch.followUpBehavior);
-      if (patch.language !== undefined) locale.setLocale(patch.language);
+      if (patch.language !== undefined && !locale.setLocale(patch.language)) throw new Error('PERSISTENCE_NOT_CONFIRMED');
       if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
       if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
       if (patch.localLinks !== undefined) local.setPreference(patch.localLinks);
@@ -113,6 +113,7 @@ export function AppPreferenceControl() {
             () => isDataOwnerPushStampCurrent(request.ownerStamp) && Date.now() <= request.expiresAt); });
           if (pending) await pending;
           for (const [key, expected] of Object.entries(patch)) {
+            if (key === 'language' && window.electronAPI.saveDisplayLanguage) continue; // Confirmed by the profile store.
             const storage = persisted[key as keyof AppPreferencePatch];
             const raw = localStorage.getItem(storage.key);
             const actual = raw === null ? storage.absent : typeof expected === 'boolean' ? raw === 'true' : raw;

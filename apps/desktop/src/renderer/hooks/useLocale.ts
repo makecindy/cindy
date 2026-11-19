@@ -2,7 +2,7 @@
  * useLocale —— 显示语言偏好 + 实际生效语言。
  *
  * 设计上和 useTheme 镜像：
- *   - 偏好持久化在 localStorage (key='language')，不经 server。
+ *   - 偏好保存在本机桌面资料目录，并同步旧版 localStorage。
  *   - 'system' = 运行时跟 OS 走，由 main 进程读取 OS 首选语言列表并解析。
  *   - 切换语言时同步 i18next.changeLanguage 触发 react-i18next 重渲染，
  *     同步 <html lang="...">，并通知 main 刷新 macOS 原生菜单文案。
@@ -46,8 +46,10 @@ interface LocaleContextValue {
   locale: LocalePreference;
   /** 实际生效的语言 ('system' 已解析为 OS 语言)。 */
   effectiveLocale: SupportedLocale;
-  /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
-  setLocale: (next: LocalePreference) => void;
+  /** 用户主动选择并保存偏好。 */
+  setLocale: (next: LocalePreference) => boolean;
+  /** 主进程广播只更新当前窗口的显示。 */
+  setDisplayLocale: (next: SupportedLocale) => void;
   /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
   classicalStyle: ClassicalReplyStyleId;
   setClassicalStyle: (next: ClassicalReplyStyleId) => void;
@@ -75,7 +77,6 @@ function applyLocale(loc: SupportedLocale): void {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = loc;
   }
-  syncApplicationMenuLocale(loc);
 }
 
 /**
@@ -92,7 +93,7 @@ export function bootstrapInitialLocale(): SupportedLocale {
   return effectiveLocale;
 }
 
-export function LocaleProvider({ children }: { children: ReactNode }) {
+export function LocaleProvider({ children, syncHostOnMount = false }: { children: ReactNode; syncHostOnMount?: boolean }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
   // 文言界面与简体 / 繁體中文界面的文风分开记忆:在文言界面选的唐诗不带进现代中文界面，
@@ -118,22 +119,27 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, [classicalStyle]);
 
   const setLocale = useCallback((next: LocalePreference) => {
-    setLocaleState(next);
-    writeStoredLocale(next);
-    const eff = effectiveOf(next);
-    setEffectiveLocale(eff);
-    applyLocale(eff);
+    const saved = writeStoredLocale(next);
+    if (saved || !window.electronAPI?.saveDisplayLanguage) {
+      setLocaleState(next);
+      const effective = effectiveOf(next);
+      setEffectiveLocale(effective);
+      syncApplicationMenuLocale(effective);
+    }
+    return saved;
   }, []);
 
-  // 首次 mount 时确保 i18next + <html lang> 与 state 一致 (state 来自 localStorage,
-  // 而 i18n.init 默认用的是 DEFAULT_LOCALE，两者可能不同)。
-  // 仅 mount 一次：locale 后续变化都走 setLocale 路径。
   useEffect(() => {
     applyLocale(effectiveLocale);
   }, [effectiveLocale]);
 
+  // The primary window initializes the host. A prewarmed window only follows it.
+  useEffect(() => {
+    if (syncHostOnMount) syncApplicationMenuLocale(getEffectiveLocale());
+  }, [syncHostOnMount]);
+
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    () => ({ locale, effectiveLocale, setLocale, setDisplayLocale: setEffectiveLocale, classicalStyle, setClassicalStyle }),
     [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 

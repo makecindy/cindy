@@ -24,7 +24,7 @@ import enAiRename from './locales/en/aiRename.json';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE, type SupportedLocale } from '../../shared/locale';
 import { createLogger } from '../lib/logger';
-import { getEffectiveLocale, LOCALE_STORAGE_KEY } from '../lib/localePreference';
+import { getEffectiveLocale, LOCALE_STORAGE_KEY, restoreStoredLocale } from '../lib/localePreference';
 
 const log = createLogger('i18n');
 
@@ -136,6 +136,8 @@ const lazyLocaleBackend: BackendModule = {
     );
   },
 };
+
+restoreStoredLocale();
 
 const initialized = i18n
   .use(lazyLocaleBackend)

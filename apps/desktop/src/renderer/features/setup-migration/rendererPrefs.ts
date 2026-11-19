@@ -3,6 +3,8 @@
  * (theme, language, notifications, chat preferences…) is read for another computer or
  * written from one; window layout, device pickers and model memories never move.
  */
+import { isLocalePreference, LOCALE_STORAGE_KEY } from '../../../shared/locale';
+import { writeStoredLocale } from '@/lib/localePreference';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { isPortableRendererPrefKey } from '../../../shared/setupMigration';
 
@@ -46,7 +48,12 @@ export function applyPortableRendererPrefs(
   for (const [key, value] of Object.entries(values)) {
     if (!isMovablePrefKey(key, ownerId) || typeof value !== 'string' || value.length > MAX_VALUE_LENGTH) continue;
     if (storage.getItem(key) !== null) continue;
-    storage.setItem(key, value);
+    if (key === LOCALE_STORAGE_KEY) {
+      if (!isLocalePreference(value)) continue;
+      if (!writeStoredLocale(value, storage)) throw new Error('PERSISTENCE_NOT_CONFIRMED');
+    } else {
+      storage.setItem(key, value);
+    }
     changed += 1;
   }
   return changed;
