@@ -1455,6 +1455,10 @@
     "details": "Detalles del error"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de datos local dañada",
+      "description": "Se detectaron daños en la base de datos. Se ha detenido el acceso para proteger tus datos. Puedes intentar volver a abrir los datos locales. Si falla, copia los detalles técnicos y contacta con soporte. No sobrescribas ni elimines los archivos de la base de datos."
+    },
     "schemaLease": {
       "title": "Los datos locales aún no se pueden abrir",
       "retry": "Reabrir datos locales",

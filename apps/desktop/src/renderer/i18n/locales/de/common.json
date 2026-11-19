@@ -1437,6 +1437,10 @@
     "details": "Fehlerdetails"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Lokale Datenbank beschädigt",
+      "description": "Eine Beschädigung der Datenbank wurde erkannt. Der Zugriff wurde zum Schutz deiner Daten gestoppt. Du kannst versuchen, die lokalen Daten erneut zu öffnen. Falls das fehlschlägt, kopiere die technischen Details und kontaktiere den Support. Überschreibe oder lösche keine Datenbankdateien."
+    },
     "schemaLease": {
       "title": "Lokale Daten können noch nicht geöffnet werden",
       "retry": "Lokale Daten erneut öffnen",

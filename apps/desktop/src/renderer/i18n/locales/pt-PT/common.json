@@ -1455,6 +1455,10 @@
     "details": "Detalhes do erro"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de dados local danificada",
+      "description": "Foi detetada uma corrupção na base de dados. O acesso foi interrompido para proteger os seus dados. Pode tentar reabrir os dados locais. Se falhar, copie os detalhes técnicos e contacte o suporte. Não substitua nem elimine os ficheiros da base de dados."
+    },
     "schemaLease": {
       "title": "Ainda não é possível abrir os dados locais",
       "retry": "Reabrir dados locais",

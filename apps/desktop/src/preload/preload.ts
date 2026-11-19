@@ -619,6 +619,7 @@ function createIpcFanOut(channel: string): FanOut {
 
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
+const fanOutLocalDbRuntimeCorruption = createIpcFanOut('local-db:runtime-corruption');
 const fanOutUpdateStatus = createIpcFanOut('update-status');
 const fanOutHostBotReadStateChanged = createIpcFanOut('local-db:bots:read-state:changed');
 const fanOutSkillhubLocalStateChanged = createIpcFanOut('skillhub:local-state-changed');
@@ -6206,10 +6207,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── chat-data-localization (M-FE2)：本地 SQLite IPC 桥接 ──
   // 所有 db 操作 main 独占；renderer 仅通过这里间接访问。
   localDb: {
+    onRuntimeCorruption: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) =>
+      fanOutLocalDbRuntimeCorruption((data) => {
+        if (isDataOwnerPushStamp(data)) callback(data);
+      }),
     ensureReady: (
       userId: string,
+      recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
-      ipcRenderer.invoke('local-db:ensure-ready', userId),
+      ipcRenderer.invoke('local-db:ensure-ready', userId, recovery),
     databaseSizeWarning: {
       // Settings and the startup capacity snapshot are local to this device's
       // shared Electron userData profile; they are not synced across devices
