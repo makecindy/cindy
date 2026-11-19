@@ -48,7 +48,8 @@
 [hidden] { display: none !important; }
 body { margin:0; background:var(--background); color:var(--text-primary); font:15px/1.55 Inter, "Microsoft YaHei", system-ui, sans-serif; }
 button, textarea { font: inherit; color:inherit; }
-button { font-size:13px; font-weight:500; border:1px solid var(--border-default); background:var(--surface-elevated); border-radius:100px; padding:8px 15px; cursor:pointer; min-height:40px; }
+button { font-size:13px; font-weight:500; border:1px solid var(--border-default); background:var(--surface-elevated); border-radius:100px; padding:0 15px; cursor:pointer; min-height:32px; }
+.catalog-toolbar button, .intro button { min-height:36px; }
 button:hover { background:var(--surface-chip); }
 button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--focus-ring); }
 .primary { background:var(--confirm-btn-primary-bg); color:var(--confirm-btn-primary-text); border-color:transparent; font-weight:500; }
@@ -66,8 +67,8 @@ button:disabled { color:var(--text-secondary); cursor:default; }
 .small { font-size:13px; }
 main { min-width:0; padding-block:42px 48px; }
 .pill { display:inline-flex; gap:2px; border-radius:100px; padding:3px; background:var(--segmented-track); }
-.pill button { background:transparent; border:1px solid transparent; min-height:32px; padding:3px 15px; white-space:nowrap; }
-.pill button[aria-pressed="true"] { background:var(--segmented-selected-bg); border-color:var(--segmented-selected-border); font-weight:500; }
+.pill button { background:transparent; border:1px solid transparent; min-height:28px; padding:0 15px; white-space:nowrap; }
+.pill button[aria-selected="true"] { background:var(--segmented-selected-bg); border-color:var(--segmented-selected-border); }
 .catalog-title { margin-bottom:32px; }
 .catalog-title p { margin-top:10px; }
 .catalog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
@@ -143,19 +144,19 @@ textarea { display:block; font-size:14px; font-weight:400; width:100%; min-heigh
           <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">▣</div><strong>设备模拟器</strong></div><p class="small">查看并操作运行中的设备模拟器。</p></article>
         </div>
       </div>
-      <nav class="catalog-tabs" aria-label="插件列表">
-        <div class="pill">
-          <button type="button" data-catalog="installed" aria-pressed="true">已安装</button>
-          <button type="button" data-catalog="store" aria-pressed="false">插件市场</button>
+      <nav class="catalog-tabs">
+        <div class="pill" role="tablist" aria-label="插件列表">
+          <button type="button" id="tab-installed" data-catalog="installed" role="tab" aria-controls="installed" aria-selected="true" tabindex="0">已安装</button>
+          <button type="button" id="tab-store" data-catalog="store" role="tab" aria-controls="store" aria-selected="false" tabindex="-1">插件市场</button>
         </div>
       </nav>
-      <div id="installed" class="catalog-grid catalog-list" aria-label="已安装插件">
+      <div id="installed" class="catalog-grid catalog-list" role="tabpanel" aria-labelledby="tab-installed" tabindex="0">
         <article class="card" data-plugin="Art"><div class="card-head"><div class="tile" aria-hidden="true">A</div><strong>Art</strong></div><p class="small">生成和编辑图片。</p></article>
         <article class="card" data-plugin="GitHub"><div class="card-head"><div class="tile" aria-hidden="true">GH</div><strong>GitHub</strong></div><p class="small">管理 GitHub 仓库、Issues 和 PR。</p></article>
         <article class="card" data-plugin="Mermaid"><div class="card-head"><div class="tile" aria-hidden="true">M</div><strong>Mermaid</strong></div><p class="small">绘制流程图和时序图。</p></article>
         <article class="card" data-plugin="Web Search"><div class="card-head"><div class="tile" aria-hidden="true">W</div><strong>Web Search</strong></div><p class="small">搜索公开网页和资料。</p></article>
       </div>
-      <div id="store" class="catalog-grid catalog-list" aria-label="市场插件" hidden>
+      <div id="store" class="catalog-grid catalog-list" role="tabpanel" aria-labelledby="tab-store" tabindex="0" hidden>
         <button type="button" id="open-plugin" class="link-card" data-plugin="桌面伙伴">
           <span class="card-head"><span class="tile" aria-hidden="true">桌</span><span><strong>桌面伙伴</strong><small class="small">社区插件 · v1.3.11</small></span></span>
           <span class="small">桌面上的像素伙伴，随时向 Cindy 提问。</span>
@@ -182,17 +183,17 @@ textarea { display:block; font-size:14px; font-weight:400; width:100%; min-heigh
         <h1 id="author-title" tabindex="-1">我的插件</h1>
         <button type="button" disabled title="预览未接入发布">发布插件</button>
       </div>
-      <nav class="catalog-tabs" aria-label="作者管理">
-        <div class="pill">
-          <button type="button" data-author="published" aria-pressed="true">已发布</button>
-          <button type="button" data-author="inbox" aria-pressed="false">收到的反馈</button>
+      <nav class="catalog-tabs">
+        <div class="pill" role="tablist" aria-label="作者管理">
+          <button type="button" id="tab-published" data-author="published" role="tab" aria-controls="published" aria-selected="true" tabindex="0">已发布</button>
+          <button type="button" id="tab-inbox" data-author="inbox" role="tab" aria-controls="inbox" aria-selected="false" tabindex="-1">收到的反馈</button>
         </div>
       </nav>
-      <div id="published" class="card spread">
+      <div id="published" class="card spread" role="tabpanel" aria-labelledby="tab-published" tabindex="0">
         <div class="card-head"><div class="tile" aria-hidden="true">桌</div><div><h2>桌面伙伴</h2><p class="small">v1.3.11 · 公开市场</p></div></div>
         <span class="small">已发布</span>
       </div>
-      <div id="inbox" hidden>
+      <div id="inbox" role="tabpanel" aria-labelledby="tab-inbox" tabindex="0" hidden>
         <div class="card stack">
           <div class="spread"><h2>桌面伙伴</h2><span class="small" id="inbox-summary"></span></div>
           <div class="stack" id="feedback-list"></div>
@@ -253,10 +254,36 @@ function selectPanel(buttons, attribute, panel) {
   for (const button of buttons) {
     const id = button.dataset[attribute];
     const active = id === panel;
-    button.setAttribute('aria-pressed', active);
+    button.setAttribute('aria-selected', active);
+    button.tabIndex = active ? 0 : -1;
     byId(id).hidden = !active;
   }
 }
+
+function addTabKeyboardNavigation(buttons) {
+  const tablist = buttons[0].parentElement;
+  tablist.addEventListener('keydown', event => {
+    if (!buttons.includes(event.target)) return;
+    const enabled = buttons.filter(button => !button.disabled);
+    const index = enabled.indexOf(event.target);
+    if (index === -1) return;
+    const direction = getComputedStyle(tablist).direction === 'rtl' ? -1 : 1;
+    let next;
+    switch (event.key) {
+      case 'ArrowLeft': next = (index - direction + enabled.length) % enabled.length; break;
+      case 'ArrowRight': next = (index + direction + enabled.length) % enabled.length; break;
+      case 'Home': next = 0; break;
+      case 'End': next = enabled.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    enabled[next].click();
+    enabled[next].focus();
+  });
+}
+
+addTabKeyboardNavigation(catalogButtons);
+addTabKeyboardNavigation(authorButtons);
 
 function filterCatalog() {
   const query = search.value.trim().toLowerCase();
