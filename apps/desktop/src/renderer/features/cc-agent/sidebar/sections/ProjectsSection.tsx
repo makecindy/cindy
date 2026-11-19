@@ -1,3 +1,4 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
@@ -383,7 +384,7 @@ export function ProjectsSection({
   const orderScope = (section: string) => JSON.stringify([Array.isArray(selectedMachineForOrder) ? [...selectedMachineForOrder].sort() : selectedMachineForOrder, section]);
 
   const handleReorder = useCallback(
-    (visibleNewOrder: string[]) => {
+    (visibleNewOrder: string[], onApplied?: () => void) => {
       // SortableList 给我们的是当前 **可见** projects 的新顺序。机器 / vendor / 项目过滤态下,
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
@@ -405,53 +406,32 @@ export function ProjectsSection({
         filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
         if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
       };
-      if (
-        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
-        scope.kind === 'host' &&
-        scope.deviceId === null
-      ) {
-        const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
-        const fullOrder = normalizeManualProjectOrder(
-          localHostProjectOrder.snapshot.manualProjectOrder,
-          localKeys,
-          localPlatform,
-        );
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void localHostProjectOrder
-          .apply({
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
+      if (scope.kind === 'viewer' || projectOrderWriteLedger(scope, hostSnapshot) === 'viewer') {
+        persistViewer(visibleNewOrder);
+        onApplied?.();
         return;
       }
-      if (
-        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
-        scope.kind === 'host' &&
-        scope.deviceId
-      ) {
-        const deviceId = scope.deviceId;
-        const remoteKeys = projectKeysForOrderBaseline.filter((key) =>
-          key.startsWith(`device:${encodeURIComponent(deviceId)}:`),
-        );
-        const current =
-          controllerManualOrderForDevice(deviceId, remoteHostProjectOrders.orders.get(deviceId)) ??
-          [];
-        const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void remoteHostProjectOrders
-          .apply(deviceId, {
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
-        return;
-      }
-      persistViewer(visibleNewOrder);
+
+      const owner = getDataOwnerGeneration();
+      const deviceId = scope.deviceId;
+      const prefix = deviceId === null ? 'local:' : `device:${encodeURIComponent(deviceId)}:`;
+      const hostKeys = projectKeysForOrderBaseline.filter(key => key.startsWith(prefix));
+      const current = deviceId === null
+        ? localHostProjectOrder.snapshot.manualProjectOrder
+        : controllerManualOrderForDevice(deviceId, hostSnapshot) ?? [];
+      const fullOrder = normalizeManualProjectOrder(current, hostKeys, localPlatform);
+      const request = {
+        manualProjectOrder: mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey),
+        projectOrder: 'custom' as const,
+      };
+      const applied = deviceId === null
+        ? localHostProjectOrder.apply(request)
+        : remoteHostProjectOrders.apply(deviceId, request);
+      void applied.then(result => {
+        if (!isDataOwnerGenerationCurrent(owner) || result.kind === 'transient') return;
+        if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        onApplied?.();
+      });
     },
     [
       filter,
@@ -1154,8 +1134,10 @@ export function ProjectsSection({
         if (ordered.every((id, i) => id === sortableIds[i])) return;
         const projectIds = ordered.filter(id => id !== DIALOGUE_SORT_ID);
         const priorProjectIds = sortableIds.filter(id => id !== DIALOGUE_SORT_ID);
-        dialogueOrder.remember(orderScope(groupKey), sortableIds, ordered, projectComparisonKey);
-        if (projectIds.some((id, i) => id !== priorProjectIds[i])) handleReorder(projectIds);
+        const projectsChanged = projectIds.some((id, i) => id !== priorProjectIds[i]);
+        const savePlacement = dialogueOrder.preparePlacement(orderScope(groupKey), sortableIds, ordered, projectComparisonKey, !projectsChanged);
+        if (projectsChanged) handleReorder(projectIds, savePlacement);
+        else savePlacement?.();
       }}
       disabled={!projectDragEnabled || overflow}
       reducedMotion={reducedMotion}

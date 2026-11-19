@@ -25,6 +25,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
+const remoteOrder = vi.hoisted(() => ({
+  snapshot: { authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/A', 'local:/B', 'local:/C'] },
+  apply: vi.fn(),
+}));
 const machine = vi.hoisted(() => ({ selection: 'all' as 'all' | string[] }));
 vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => machine.selection }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -35,7 +39,7 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', async (importOr
   useLocalHostProjectOrder: () => ({ snapshot: {
     authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/B', 'local:/A'],
   } }),
-  useRemoteHostProjectOrders: () => ({ orders: new Map() }),
+  useRemoteHostProjectOrders: () => ({ orders: new Map([['remote', remoteOrder.snapshot]]), apply: remoteOrder.apply }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
 // main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
@@ -392,6 +396,17 @@ function manualProjects(names: string[]) {
   }));
 }
 
+function dropBefore(container: HTMLElement, id: string, before: string) {
+  const row = container.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
+  const list = row.parentElement!;
+  const oldIndex = Array.from(list.children).indexOf(row);
+  list.insertBefore(row, list.querySelector(`[data-sortable-id="${before}"]`));
+  const sortable = Sortable.get(list)!;
+  act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+    item: row, from: list, oldIndex, newIndex: Array.from(list.children).indexOf(row),
+  }) as SortableEvent));
+}
+
 describe('Manual project sorting', () => {
   it.each([false, true])('drags the dialogue header and restores its position (collapsed=%s)', collapsed => {
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
@@ -473,29 +488,71 @@ describe('Manual project sorting', () => {
       p.filter.manualProjectOrder = [...p.allProjectKeysForOrder];
       p.filter.projectOrder = 'custom';
       const view = render(<ProjectsSection {...p} />);
-      function dropBefore(id: string, before: string) {
-        const row = view.container.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
-        const list = row.parentElement!;
-        const oldIndex = Array.from(list.children).indexOf(row);
-        list.insertBefore(row, list.querySelector(`[data-sortable-id="${before}"]`));
-        const sortable = Sortable.get(list)!;
-        act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
-          item: row, from: list, oldIndex, newIndex: Array.from(list.children).indexOf(row),
-        }) as SortableEvent));
-      }
-      dropBefore('dialogue-group', p.allProjectKeysForOrder[dialogueIndex]);
+      dropBefore(view.container, 'dialogue-group', p.allProjectKeysForOrder[dialogueIndex]);
       const visible = p.allProjectKeysForOrder.filter(key => key !== 'local:/' + hidden);
       view.rerender(<ProjectsSection {...p}
         projects={projects.filter(project => visible.includes(project.projectKey))}
         dialogues={hidden === 'dialogue-group' ? [] : p.dialogues} />);
       const [first, second] = visible.slice(-2);
-      dropBefore(second, first);
+      dropBefore(view.container, second, first);
       const saved = vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0];
       view.unmount();
       render(<ProjectsSection {...p} filter={{ ...p.filter, manualProjectOrder: [...saved] }} />);
       const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
       expect(Array.from(list.children, row => row.getAttribute('data-sortable-id')?.replace('local:/', ''))).toEqual(expected);
     } finally {
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
+  it.each([
+    { kind: 'transient' }, { kind: 'unavailable' }, { kind: 'ok' },
+    { kind: 'ok', later: 'repeat' }, { kind: 'ok', later: 'move group' },
+  ])('keeps the dialogue placement on remote $kind (next gesture: $later)', async ({ kind, later }) => {
+    machine.selection = ['remote'];
+    setDataOwnerGeneration('remote-reorder');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    const original = remoteOrder.snapshot;
+    try {
+      const p = groupProps(false);
+      p.projects = manualProjects(['A', 'B', 'C']).map(project => ({
+        ...project, projectKey: 'device:remote:' + project.workingDir, deviceLinkDeviceId: 'remote',
+      }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+      const [a, b, c] = p.allProjectKeysForOrder;
+      p.filter.projectOrder = 'custom';
+      const acknowledgements: Array<() => void> = [];
+      remoteOrder.apply.mockImplementation(() => new Promise(resolve => {
+        acknowledgements.push(() => {
+          if (kind === 'ok') remoteOrder.snapshot = { ...original, manualProjectOrder: ['local:/A', 'local:/C', 'local:/B'] };
+          if (kind === 'unavailable') remoteOrder.snapshot = { ...original, available: false };
+          resolve({ kind, snapshot: remoteOrder.snapshot });
+        });
+      }));
+      const view = render(<ProjectsSection {...p} />);
+      const order = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-sortable-id]'), row => row.getAttribute('data-sortable-id'));
+      dropBefore(view.container, 'dialogue-group', b);
+      dropBefore(view.container, c, b);
+      expect(remoteOrder.apply).toHaveBeenCalledWith('remote', { manualProjectOrder: [a, c, b], projectOrder: 'custom' });
+      expect(order(view.container)).toEqual([a, 'dialogue-group', b, c]);
+      if (later === 'repeat') dropBefore(view.container, c, b);
+      if (later === 'move group') dropBefore(view.container, 'dialogue-group', a);
+      for (const acknowledge of acknowledgements) await act(async () => acknowledge());
+      if (kind === 'unavailable') {
+        p.filter.manualProjectOrder = [...vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0]];
+      } else {
+        expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
+      }
+      view.unmount();
+      const reopened = render(<ProjectsSection {...p} />);
+      const expected = later === 'move group' ? ['dialogue-group', a, c, b] : [a, 'dialogue-group', c, b];
+      expect(order(reopened.container)).toEqual(kind === 'transient' ? [a, 'dialogue-group', b, c] : expected);
+    } finally {
+      remoteOrder.snapshot = original;
+      remoteOrder.apply.mockReset();
       ownerStorage.setOwnerAuthorityReader(null);
       setDataOwnerGeneration(null);
     }

@@ -1,6 +1,6 @@
 // The dialogue group is a viewer-side section. Keep its neighbours separate from
 // host project order, whose keys must identify real working directories.
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 import type { MainListEntry } from '../lib/mainListModel';
@@ -39,11 +39,17 @@ export function useDialogueGroupOrder(enabled: boolean) {
   const owner = getDataOwnerGeneration().dataOwnerId;
   const [revision, setRevision] = useState(0);
   const positions = useMemo(() => enabled ? readPositions(owner) : new Map<string, Position>(), [enabled, owner, revision]);
-  function remember(scope: string, before: readonly string[], after: readonly string[], comparisonKey: (key: string) => string) {
-    const index = after.indexOf(DIALOGUE_SORT_ID);
+  const lastGroupDrag = useRef(new Map<string, number>());
+  function preparePlacement(
+    scope: string, before: readonly string[], after: readonly string[],
+    comparisonKey: (key: string) => string, groupOnly: boolean,
+  ) {
     if (getDataOwnerGeneration().dataOwnerId !== owner) return;
-    const next = new Map(readPositions(owner));
-    const saved = next.get(scope);
+    // A delayed project acknowledgement must not overwrite a newer explicit group drag.
+    if (groupOnly) lastGroupDrag.current.set(scope, (lastGroupDrag.current.get(scope) ?? 0) + 1);
+    const groupDrag = lastGroupDrag.current.get(scope);
+    const index = after.indexOf(DIALOGUE_SORT_ID);
+    const saved = readPositions(owner).get(scope);
     let position: Position;
     const dialogueMoved = index >= 0 && index !== before.indexOf(DIALOGUE_SORT_ID);
     if (!dialogueMoved) {
@@ -60,13 +66,20 @@ export function useDialogueGroupOrder(enabled: boolean) {
     } else {
       position = { previous: after[index - 1] ?? null, next: after[index + 1] ?? null };
     }
-    if (position.previous === saved?.previous && position.next === saved?.next) return;
-    next.set(scope, position);
-    if (writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
-      setRevision(value => value + 1);
-    }
+    // Capture the absolute destination at drop time. Two drops from the same
+    // visible order can both succeed; replaying a relative swap would undo it.
+    return () => {
+      if (getDataOwnerGeneration().dataOwnerId !== owner || lastGroupDrag.current.get(scope) !== groupDrag) return;
+      const next = new Map(readPositions(owner));
+      const current = next.get(scope);
+      if (position.previous === current?.previous && position.next === current?.next) return;
+      next.set(scope, position);
+      if (writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
+        setRevision(value => value + 1);
+      }
+    };
   }
-  return { positions, remember };
+  return { positions, preparePlacement };
 }
 
 /** Place before truncation so a group moved to the top stays there in a short list. */
