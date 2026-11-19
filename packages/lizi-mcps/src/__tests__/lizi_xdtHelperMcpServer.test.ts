@@ -547,6 +547,13 @@ describe("cindy_helper MCP server", () => {
     try {
       const owner = (await client.listTools()).tools.find((tool) => tool.name === 'request_input_handoff')!;
       expect(owner.description).toContain('password');
+      // #11508: tools/list must disclose the host restriction before any call.
+      // Existing discovery coverage only checked purpose/schema. Minimal input:
+      // a fresh client's tools/list (unit, in-memory transport; all three harnesses).
+      expect(owner.description).toContain('only on a macOS host');
+      expect(owner.description).toContain('Windows and Linux hosts are unsupported');
+      expect(owner.description).toContain('both window targets and screenshot QR codes');
+      expect(owner.description).toContain('phone or another computer');
       expect(owner.inputSchema).toMatchObject({
         required: ['purpose'],
         properties: {
