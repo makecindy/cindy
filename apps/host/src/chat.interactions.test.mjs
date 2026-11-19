@@ -126,3 +126,55 @@ test('chat uses the durable queue and approvals reach the client once', async (t
     'a settled request cannot be answered twice');
 
 });
+
+// §3.2 integration through the real handler over HTTP. Entry: POST /chat (createChatHandler), observed through
+// the response and the create call. Rule: while a desktop holds the profile, an entry outside the service gate
+// writes nothing the desktop shares; /chat used to create the task row (and a dialogue folder) before the queue
+// refused the input. Gap: the queue's own refusal was covered, the row created before it was not. Minimal failing
+// input: drop the profileHold check before createSession in chat.mjs. Tier: integration (in-process HTTP, fake
+// task store and queue). Measured standalone with the whole file.
+test('a held profile refuses /chat before creating a task, and input to an existing task as before', async (t) => {
+  const held = { message: null };
+  const holdError = () => Object.assign(new Error(`[PRECONDITION_FAILED] ${held.message}`), { code: 'PRECONDITION_FAILED' });
+  const tasks = new Map([['existing', { id: 'existing', status: 'active' }]]);
+  const created = [];
+  const handler = createChatHandler({
+    readSession: async id => tasks.get(id),
+    createSession: async body => { created.push(body.id); tasks.set(body.id, { id: body.id, status: 'active' }); return tasks.get(body.id); },
+    // The real queue refuses new input while held (input-queue.mjs refuseWhileHeld) with the same answer.
+    enqueue: async () => { if (held.message) throw holdError(); return { items: [] }; },
+    inputStatus: async () => 'recorded',
+    events: createEventHub(),
+    profileHold: () => held.message,
+  });
+  const server = createServer((request, response) => { void handler(request, response); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const chat = async sessionId => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, prompt: 'hello', workDir: os.tmpdir() }),
+    });
+    return { status: response.status, body: await response.text() };
+  };
+
+  held.message = 'HOST_PROFILE_IN_USE_BY_DESKTOP: a desktop is using this profile.';
+  const refusedNew = await chat('new-task');
+  const refusedExisting = await chat('existing');
+  assert.deepEqual(created, [], 'no task is created while held');
+  assert.equal(tasks.has('new-task'), false);
+  // Both end with the same chat_failed event naming PRECONDITION_FAILED. The status differs as other failures
+  // do: a new task is refused before the stream opens (500, like an unknown task), input to an existing task
+  // after it opened (200, unchanged).
+  assert.equal(refusedNew.status, 500);
+  assert.equal(refusedExisting.status, 200);
+  for (const refused of [refusedNew, refusedExisting]) {
+    assert.match(refused.body, /"reason":"chat_failed"/);
+    assert.match(refused.body, /PRECONDITION_FAILED/);
+  }
+
+  held.message = null;
+  const accepted = await chat('new-task');
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(created, ['new-task']);
+});

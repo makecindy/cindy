@@ -1894,6 +1894,7 @@ const serverDeps = {
   },
   chat: createChatHandler({
     readSession: (id: string) => sessionStorage?.get(id),
+    profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
     createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
     enqueue: enqueueUserInput,
     inputStatus: (id: string, clientId: string) => inputQueue.inputStatus(id, clientId),

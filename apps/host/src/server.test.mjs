@@ -737,7 +737,7 @@ test('every path server.mjs answers itself is classified for a desktop hold', ()
     '/api/auth/logout': 'exception: sign-out updates the shared account vault under its cross-process lock',
     '/logout': 'exception: same sign-out as /api/auth/logout',
     'startsWith:HOST_IPC_PATH_PREFIX': 'none: the bound IPC channels read only (ipc-bindings)',
-    '/chat': 'refused: a new task is refused before its row; input to an existing task is refused by the queue',
+    '/chat': 'refused: a new task at the entry check before it is created; input to an existing task by the queue',
     '/control/remote': 'refused for enable and Agent-Net on/off; exception for disable and revoke; status reads',
     '/control/stop': 'exception: stopping finishes accepted work (queue drain, usage, error rows)',
     '/control/attachment': 'none', HOST_IPC_MANIFEST_PATH: 'none', '/control/platform': 'none',

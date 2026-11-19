@@ -84,6 +84,13 @@ export function createChatHandler(deps) {
     };
     try {
       const stored = await deps.readSession(sessionId);
+      // /chat answers outside the service gate. A task it creates is a row in the database a desktop shares,
+      // so a held profile refuses it here, synchronously before the create call, with the answer the queue
+      // gives input while held; input to an existing task is refused by the queue as before.
+      if (!stored) {
+        const held = deps.profileHold?.();
+        if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+      }
       if (!stored) await deps.createSession({ id: sessionId,
         ...(payload.workDir ? { workingDir: payload.workDir, workspaceKind: 'project' } : { workspaceKind: 'dialogue' }),
         model: payload.model ?? deps.defaultModel,
