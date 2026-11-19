@@ -4,31 +4,45 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi } from 'vitest';
 import type { MobileUsageWidgetSnapshot as Snapshot, MobileUsageWidgetSource as Source } from '@cindy/maker-shared/device-link-contract';
 import { UsageQuotaColumns } from '@/widgets/UsageQuotaColumns';
-import { UsageDashboard } from '@/widgets/UsageDashboard';
+import { DrawerUsage, UsageDashboard } from '@/widgets/UsageDashboard';
 
 const auth = vi.hoisted(() => ({ user: { membershipKind: 'personal' } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
-vi.mock('@/widgets/usageWidgetSync', () => ({}));
+const sync = vi.hoisted(() => ({ state: null as unknown }));
+vi.mock('@/widgets/usageWidgetSync', () => ({
+  automaticUsageState: () => sync.state, readUsageWidgetStore: () => null, subscribeUsageWidgetStore: () => () => {},
+}));
 vi.mock('@/session/MobileProviderMark', () => ({ MobileProviderMark: () => null }));
 vi.mock('react-native-svg', () => ({
-  default: () => null, Defs: () => null, ClipPath: () => null, Rect: () => null, Path: () => null,
+  default: ({ opacity }: { opacity?: number }) => <i data-tube-opacity={opacity} />, Defs: () => null, ClipPath: () => null, Rect: () => null, Path: () => null,
   LinearGradient: () => null, G: () => null, Stop: () => null,
 }));
 vi.mock('lucide-react-native', () => ({ ChevronRight: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: { children?: ReactNode }) => <span>{children}</span> }));
-vi.mock('react-native', () => ({ View: ({ children }: { children?: ReactNode }) => <div>{children}</div>, StyleSheet: { create: (styles: unknown) => styles } }));
-vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('react-native', () => ({
+  // Chart segments carry their series color as an inline background.
+  View: ({ children, style }: { children?: ReactNode; style?: { backgroundColor?: string } }) =>
+    <div data-fill={style?.backgroundColor}>{children}</div>,
+  Pressable: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
+  StyleSheet: { create: (styles: unknown) => styles },
+}));
+// Every theme color resolves to its own token name, so assertions can name colors.
+vi.mock('@/theme', () => ({
+  useTheme: () => ({ colors: new Proxy({}, { get: (_, token) => token }) }), useThemedStyles: () => ({}),
+}));
 
 const subscription: Source = { id: 'plan', kind: 'subscription', name: 'Claude Pro', logo: null,
   monogram: 'C', value: '68', unit: '%', label: null, level: 'normal', fill: 0.68, reserve: false,
   emphasized: false, when: '', resetsAtMs: null };
 const wallet: Source = { ...subscription, id: 'money', kind: 'balance', name: 'Cindy balance', value: '$0.00', unit: null };
+function snapshotOf(sources: Source[], extra: Partial<Snapshot> = {}): Snapshot {
+  return { version: 1, generatedAtMs: Date.now(), updatedAtMs: null, locale: 'en', moneySymbol: '$',
+    sources, usage: { scope: 'local', days: [], daily: [] }, strings: { today: 'Today' }, ...extra };
+}
 function render(membershipKind: string, sources: Source[]) {
   auth.user.membershipKind = membershipKind;
-  const snapshot: Snapshot = { version: 1, generatedAtMs: 0, updatedAtMs: null, locale: 'en', moneySymbol: '$',
-    sources, usage: { scope: 'local', days: [], daily: [] }, strings: { today: 'Today' } };
-  return renderToStaticMarkup(<UsageDashboard snapshot={snapshot} />);
+  return renderToStaticMarkup(<UsageDashboard snapshot={snapshotOf(sources)} />);
 }
 
 // The widget uses the same source kind for a period budget and a personal wallet.
@@ -75,5 +89,56 @@ describe('widget quota countdowns', () => {
     const source = { ...subscription, when: 'Offline 3h', resetsAtMs: Date.now() - 60_000 };
     expect(columns({ ...source, stale: true })).toContain('Offline 3h');
     expect(columns(source)).toContain('session.menu.usage.awaitingRefresh');
+  });
+});
+
+// Both cases enter through the rendered drawer card and details page (unit, shared cost with the
+// file above). The age is judged on the phone: a computer that went offline cannot mark its own
+// last snapshot as old, so this cannot be covered from the snapshot builder.
+describe('old readings', () => {
+  const strings = { today: 'Today', updatedHours: 'Updated {{n}}h ago' };
+  function views(ageMs: number) {
+    const snapshot = snapshotOf([subscription], { updatedAtMs: Date.now() - ageMs, strings });
+    sync.state = { kind: 'snapshot', snapshot, deviceName: 'Studio' };
+    return [renderToStaticMarkup(<DrawerUsage onOpen={() => {}} />), renderToStaticMarkup(<UsageDashboard snapshot={snapshot} />)];
+  }
+  it('says how old the plan readings are and dims the tubes once they are an hour old', () => {
+    for (const html of views(3 * 3_600_000 + 5_000)) {
+      expect(html).toContain('Updated 3h ago');
+      expect(html).toContain('data-tube-opacity="0.45"');
+    }
+  });
+  it('shows current readings without a notice', () => {
+    for (const html of views(59 * 60_000)) {
+      expect(html).not.toContain('h ago');
+      expect(html).toContain('data-tube-opacity="1"');
+    }
+  });
+});
+
+// The details page (unit): the daily bars and the share list must describe the same series.
+describe('model shares', () => {
+  function page(models: string[], modelTokens: number[]) {
+    const usage: Snapshot['usage'] = { scope: 'local', days: ['2026-11-19'],
+      models: models.map(name => ({ name, harness: 'codex' as const })),
+      daily: [{ money: [0, 0, 0], paid: 0, tokens: [sumOf(modelTokens), 0, 0], models: modelTokens.map(() => 0), modelTokens }] };
+    const html = renderToStaticMarkup(<UsageDashboard snapshot={snapshotOf([], { usage })} />);
+    const body = new DOMParser().parseFromString(html, 'text/html').body;
+    return { text: body.textContent ?? '', fills: [...body.querySelectorAll('[data-fill]')].map(node => node.getAttribute('data-fill')) };
+  }
+  const sumOf = (values: number[]) => values.reduce((a, b) => a + b, 0);
+  it('merges everything past the three largest models into one grey Other, in the bars too', () => {
+    // Five models and an empty remainder: the fourth and fifth palette colors must not be drawn.
+    const { text, fills } = page(['A', 'B', 'C', 'D', 'E'], [50, 40, 30, 20, 10, 0]);
+    expect(new Set(fills)).toEqual(new Set(['taskTagTeal', 'taskTagPink', 'taskTagPurple', 'taskTagGray']));
+    expect(fills.filter(fill => fill === 'taskTagGray')).toHaveLength(2); // one bar segment, one list dot
+    expect(text).toContain('devices.usageOther');
+    expect(text).toContain('20% · 30'); // D + E
+    expect(text).not.toMatch(/[DE]\d/);
+  });
+  it('lists four series as they are', () => {
+    const { text, fills } = page(['A', 'B', 'C'], [50, 40, 30, 20]);
+    expect(new Set(fills)).toEqual(new Set(['taskTagTeal', 'taskTagPink', 'taskTagPurple', 'taskTagGray']));
+    expect(text).toContain('14% · 20');
   });
 });

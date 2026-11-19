@@ -6,7 +6,7 @@ import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { CompanionSheet } from '@/session/CompanionSheet';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, spacing, textStyles, typeScale } from '@/theme/tokens';
+import { fontWeight, iconStroke, spacing, textStyles, typeScale } from '@/theme/tokens';
 
 const PHONE = { width: 132, height: 128, fadeFrom: 94 };
 // Home Screen grid: four columns of app icons; the Cindy widget takes a 2 x 2 block.
@@ -26,7 +26,7 @@ function PhoneTop({ id, children }: { id: string; children: ReactNode }) {
   return <Svg width={PHONE.width} height={PHONE.height} viewBox={`0 0 ${PHONE.width} ${PHONE.height}`} accessible={false}>
     <Defs>{fade('edge', colors.borderStrong)}{fade('screen', colors.surfaceElevated)}</Defs>
     <Rect x={2} y={2} width={PHONE.width - 4} height={PHONE.height * 2} rx={24}
-      fill={`url(#${id}-screen)`} stroke={`url(#${id}-edge)`} strokeWidth={2} />
+      fill={`url(#${id}-screen)`} stroke={`url(#${id}-edge)`} strokeWidth={iconStroke.regular} />
     {Platform.OS === 'android'
       ? <Circle cx={PHONE.width / 2} cy={14} r={3.5} fill={colors.borderStrong} />
       : <Rect x={PHONE.width / 2 - 16} y={10} width={32} height={9} rx={4.5} fill={colors.borderStrong} />}
@@ -58,6 +58,7 @@ function LockScreenPhone() {
     <Rect x={54} y={83} width={17} height={4} rx={2} fill={accent} fillOpacity={0.6} />
     <Rect x={54} y={91} width={11} height={4} rx={2} fill={accent} fillOpacity={0.32} />
     <Circle cx={101} cy={89} r={15} fill={accent} fillOpacity={0.16} />
+    {/* Quota ring: its band is drawn as a stroke, so the width is figure geometry (registered). */}
     <Circle cx={101} cy={89} r={9.5} fill="none" stroke={accent} strokeOpacity={0.26} strokeWidth={3.5} />
     <Circle cx={101} cy={89} r={9.5} fill="none" stroke={accent} strokeWidth={3.5} strokeLinecap="round"
       strokeDasharray={[ring * 0.68, ring]} transform="rotate(-90 101 89)" />

@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { ChevronRight } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +14,25 @@ export function useAutomaticUsage() {
   const { user, isAuthenticated } = useAuth();
   const store = useSyncExternalStore(subscribeUsageWidgetStore, readUsageWidgetStore, () => null);
   return automaticUsageState(store, isAuthenticated ? user?.id : undefined);
+}
+
+/** Like the widgets: readings an hour old are shown as old, whatever the computer last reported. */
+const STALE_AFTER_MS = 3_600_000;
+function useStaleNotice(snapshot: Snapshot | null) {
+  const { t, i18n } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  const updated = snapshot ? snapshot.updatedAtMs ?? snapshot.generatedAtMs : null;
+  useEffect(() => {
+    if (updated == null) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [updated]);
+  if (!snapshot || updated == null || now - updated < STALE_AFTER_MS) return null;
+  const hours = Math.floor((now - updated) / 3_600_000);
+  const template = hours < 24 ? snapshot.strings.updatedHours : snapshot.strings.updatedDays;
+  return template?.replace('{{n}}', String(hours < 24 ? hours : Math.floor(hours / 24)))
+    ?? t('session.menu.usage.lastUpdated', { time: new Date(updated).toLocaleString(i18n.language) });
 }
 
 function usageDayLabel(snapshot: Snapshot, today: string) {
@@ -38,15 +57,30 @@ function chartBuckets(usage: Snapshot['usage'], colors: ThemeColors, other: stri
   if (models?.length && usage.daily.every(day =>
     day.models?.length === models.length + 1 && day.modelTokens?.length === models.length + 1)) {
     const palette = [colors.taskTagTeal, colors.taskTagPink, colors.taskTagPurple, colors.taskTagIndigo, colors.taskTagOrange];
-    return [...models.map((model, index) => ({ label: model.name, color: palette[index % palette.length]!, index })),
-      { label: other, color: colors.taskTagGray, index: models.length }]
+    return [...models.map((model, index) => ({ label: model.name, color: palette[index % palette.length]!, index, rest: false })),
+      { label: other, color: colors.taskTagGray, index: models.length, rest: true }]
       .map(bucket => ({ ...bucket, value: (day: Snapshot['usage']['daily'][number]) => day.modelTokens![bucket.index]! }));
   }
   return [{ label: 'Codex', color: colors.taskTagBlue, index: 1 },
     { label: 'Claude Code', color: colors.taskTagCoral, index: 0 },
     { label: 'Pi', color: colors.taskTagTeal, index: 2 }].map(bucket => ({
-    ...bucket, value: (day: Snapshot['usage']['daily'][number]) => day.tokens[bucket.index]!,
+    ...bucket, rest: false, value: (day: Snapshot['usage']['daily'][number]) => day.tokens[bucket.index]!,
   }));
+}
+
+/**
+ * The one grouping behind both the bars and the share list, in stacking order. With more
+ * than four non-empty buckets, the three largest models stay and everything else is "Other".
+ */
+function usageSeries(usage: Snapshot['usage'], colors: ThemeColors, other: string) {
+  const buckets = chartBuckets(usage, colors, other).map(bucket => ({ ...bucket,
+    tokens: usage.daily.reduce((total, day) => total + bucket.value(day), 0) })).filter(bucket => bucket.tokens > 0);
+  if (buckets.length <= 4) return buckets;
+  const kept = new Set(buckets.filter(bucket => !bucket.rest).sort((a, b) => b.tokens - a.tokens).slice(0, 3));
+  const merged = buckets.filter(bucket => !kept.has(bucket));
+  return [...buckets.filter(bucket => kept.has(bucket)), { label: other, color: colors.taskTagGray, index: -1, rest: true,
+    tokens: sum(merged.map(bucket => bucket.tokens)),
+    value: (day: Snapshot['usage']['daily'][number]) => sum(merged.map(bucket => bucket.value(day))) }];
 }
 
 function HistoryBars({ snapshot, small = false }: { snapshot: Snapshot; small?: boolean }) {
@@ -54,13 +88,13 @@ function HistoryBars({ snapshot, small = false }: { snapshot: Snapshot; small?: 
   const days = snapshot.usage.daily.slice(-30);
   const max = Math.max(1, ...days.map(day => sum(day.tokens)));
   const { t } = useTranslation();
-  const buckets = chartBuckets(snapshot.usage, colors, t('devices.usageOther'));
+  const series = usageSeries(snapshot.usage, colors, t('devices.usageOther'));
   const height = small ? 28 : 108;
   const average = days.length ? days.reduce((total, day) => total + sum(day.tokens), 0) / days.length : 0;
   return <View style={{ flexDirection: 'row', gap: small ? 2 : 3, height, alignItems: 'flex-end' }}>
     {days.map((day, index) => <View key={index} style={{ flex: 1, height: height * sum(day.tokens) / max,
       borderTopLeftRadius: 2, borderTopRightRadius: 2, overflow: 'hidden', flexDirection: 'column-reverse' }}>
-      {buckets.map(bucket => bucket.value(day) > 0 && <View key={bucket.index} style={{ flex: bucket.value(day), backgroundColor: bucket.color }} />)}
+      {series.map((item, key) => item.value(day) > 0 && <View key={key} style={{ flex: item.value(day), backgroundColor: item.color }} />)}
     </View>)}
     {!small && average > 0 && <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0,
       bottom: height * average / max, borderTopWidth: 1, borderStyle: 'dashed', borderColor: colors.textTertiary }} />}
@@ -85,14 +119,18 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
   const accounts = snapshot?.sources.filter(source => source.kind === 'subscription') ?? [];
   const preview = accounts.slice(0, 4);
   const day = snapshot?.usage.daily.at(-1);
+  const staleNotice = useStaleNotice(snapshot);
   return <Pressable accessibilityRole="button" onPress={onOpen} testID="home.chromeDrawer.usage"
     style={({ pressed }) => [s.drawer, pressed && { backgroundColor: colors.surfaceChip }]}>
     <View style={s.between}><Text style={s.section}>{t('devices.usageTitle')}</Text>
       <ChevronRight size={iconSize.md} color={colors.textSecondary} /></View>
     {snapshot && preview.length > 0 ? <View style={s.compactPlans}>
       <View style={s.between}><Text style={s.meta}>{t('devices.usagePlans')}</Text>
-        {accounts.length > preview.length && <Text style={s.meta}>+{accounts.length - preview.length}</Text>}</View>
-      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact />
+        <View style={s.legendItem}>
+          {staleNotice && <Text style={s.stale} numberOfLines={1}>{staleNotice}</Text>}
+          {accounts.length > preview.length && <Text style={s.meta}>+{accounts.length - preview.length}</Text>}
+        </View></View>
+      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact stale={!!staleNotice} />
     </View> : null}
     {day && state?.kind === 'snapshot' ? <View style={preview.length > 0 ? s.usageDivider : undefined}>
       <View style={s.between}>
@@ -116,19 +154,18 @@ export function UsageDashboard({ snapshot, name }: { snapshot: Snapshot; name?: 
   const { sources, usage, strings } = snapshot;
   const day = usage.daily.at(-1);
   const money = (amount: number) => snapshot.moneySymbol + amount.toLocaleString(i18n.language, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const buckets = chartBuckets(usage, colors, t('devices.usageOther'));
-  const ranked = buckets.map(bucket => ({ label: bucket.label, color: bucket.color,
-    tokens: usage.daily.reduce((total, row) => total + bucket.value(row), 0),
-  })).filter(item => item.tokens > 0).sort((a, b) => b.tokens - a.tokens);
-  const series = ranked.length > 4 ? [...ranked.slice(0, 3), { label: t('devices.usageOther'), color: colors.taskTagGray,
-    tokens: ranked.slice(3).reduce((total, row) => total + row.tokens, 0) }] : ranked;
+  const grouped = usageSeries(usage, colors, t('devices.usageOther'));
+  // Largest first; a merged "Other" always closes the list.
+  const series = [...grouped].sort((a, b) => (a.index < 0 ? 1 : b.index < 0 ? -1 : b.tokens - a.tokens));
+  const staleNotice = useStaleNotice(snapshot);
   const periodTotal = usage.daily.reduce((total, day) => total + sum(day.tokens), 0);
   const accounts = sources.filter(source => source.kind === 'subscription');
   return <View style={{ gap: spacing.lg }}>
     {name ? <Text style={s.section}>{name}</Text> : null}
       {accounts.length > 0 && <View style={s.card}>
-        <Text style={s.section}>{t('devices.usagePlans')}</Text>
-        <UsageQuotaColumns sources={accounts} strings={strings} />
+        <View style={s.between}><Text style={s.section}>{t('devices.usagePlans')}</Text>
+          {staleNotice && <Text style={s.stale} numberOfLines={1}>{staleNotice}</Text>}</View>
+        <UsageQuotaColumns sources={accounts} strings={strings} stale={!!staleNotice} />
       </View>}
     <View style={s.card}>
       <View style={s.between}><Text style={s.section}>{usageDayLabel(snapshot, t('session.menu.usage.today'))}</Text>
@@ -172,6 +209,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   usageDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.borderTranslucent, paddingTop: spacing.sm },
   section: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold, color: c.textPrimary },
   meta: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: c.textSecondary },
+  // The widget's old-data line: orange, and only once the readings are old.
+  stale: { fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium, color: c.statusAccent, flexShrink: 1 },
   number: { fontSize: typeScale.headline, lineHeight: lineHeight.headline, fontWeight: fontWeight.semibold, color: c.textPrimary, fontVariant: ['tabular-nums'] },
   hero: { fontSize: typeScale.largeTitle, lineHeight: lineHeight.largeTitle, fontWeight: fontWeight.semibold, color: c.textPrimary, fontVariant: ['tabular-nums'] },
   breakdown: { gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.borderTranslucent, paddingTop: spacing.md },

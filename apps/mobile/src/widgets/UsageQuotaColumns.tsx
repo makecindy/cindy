@@ -7,7 +7,7 @@ import { resetTimeLevel } from '@cindy/maker-shared/quota-level';
 import { Text } from '@/components/AppText';
 import { MobileProviderMark } from '@/session/MobileProviderMark';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, spacing, textStyles } from '@/theme/tokens';
+import { fontWeight, iconStroke, spacing, textStyles } from '@/theme/tokens';
 
 type Strings = MobileUsageWidgetSnapshot['strings'];
 const providerMarks = { claude: 'anthropic', codex: 'openai', grok: 'xai', cindy: 'cindy', kimi: undefined };
@@ -27,7 +27,7 @@ function resetLabel(source: Source, now: number, strings: Strings, compact: bool
   return !compact && duration && strings.resetsIn ? strings.resetsIn.replace('{{duration}}', duration) : duration;
 }
 
-function QuotaTube({ source, small }: { source: Source; small: boolean }) {
+function QuotaTube({ source, small, stale }: { source: Source; small: boolean; stale: boolean }) {
   const { colors } = useTheme();
   const id = useId().replace(/[^a-zA-Z0-9]/g, '');
   const width = small ? 22 : 30, height = small ? 46 : 74;
@@ -36,24 +36,28 @@ function QuotaTube({ source, small }: { source: Source; small: boolean }) {
   const fill = Math.min(1, Math.max(0, source.fill));
   const liquid = fill === 0 ? 0 : Math.max(3, innerHeight * fill);
   const tint = source.level === 'error' ? colors.quotaBarCrit : source.level === 'warn' ? colors.quotaBarWarn : colors.quotaWidgetPlenty;
-  return <Svg width={width} height={height} accessible={false} opacity={source.stale ? 0.45 : 1}>
+  return <Svg width={width} height={height} accessible={false} opacity={stale ? 0.45 : 1}>
     <Defs>
       <LinearGradient id={'well' + id} x1="0%" y1="0%" x2="0%" y2="100%">
         <Stop offset="0" stopColor={colors.surfaceElevated} /><Stop offset="1" stopColor={colors.surfaceChip} />
       </LinearGradient>
       <ClipPath id={'clip' + id}><Rect x={inset} y={inset} width={innerWidth} height={innerHeight} rx={corner - inset} /></ClipPath>
     </Defs>
-    <Rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={corner}
-      fill={'url(#well' + id + ')'} stroke={source.emphasized ? colors.borderStrong : colors.borderTranslucent} strokeWidth={source.emphasized ? 1.25 : 1} />
+    {/* Tube wall: a hairline like the widget's, slightly heavier when emphasized (registered geometry). */}
+    <Rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={corner} fill={'url(#well' + id + ')'}
+      stroke={source.emphasized ? colors.borderStrong : colors.borderTranslucent} strokeWidth={source.emphasized ? 1.25 : 1} />
     <G clipPath={'url(#clip' + id + ')'}>
       {source.reserve && <Path d={Array.from({ length: Math.ceil((height + width) / 7) }, (_, i) =>
-        `M${i * 7 - height},${height} l${height},-${height}`).join(' ')} stroke={colors.borderTranslucent} strokeWidth={2} />}
+        `M${i * 7 - height},${height} l${height},-${height}`).join(' ')} stroke={colors.borderTranslucent} strokeWidth={iconStroke.regular} />}
       {liquid > 0 && <Rect x={inset} y={height - inset - liquid} width={innerWidth} height={liquid + 4} rx={Math.min(4, liquid / 2)} fill={tint} />}
     </G>
   </Svg>;
 }
 
-export function UsageQuotaColumns({ sources, strings, compact = false }: { sources: Source[]; strings: Strings; compact?: boolean }) {
+/** `stale` dims every tube: the whole snapshot is old, not only the sources the computer marked. */
+export function UsageQuotaColumns({ sources, strings, compact = false, stale = false }: {
+  sources: Source[]; strings: Strings; compact?: boolean; stale?: boolean;
+}) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const s = useThemedStyles(styles);
@@ -84,7 +88,7 @@ export function UsageQuotaColumns({ sources, strings, compact = false }: { sourc
           {value}{unit && !source.reserve && <Text style={s.unit}>{unit}</Text>}
         </Text>
         {hasCreditUnit && <Text numberOfLines={1} style={s.unit}>{source.reserve ? unit : ' '}</Text>}
-        <QuotaTube source={source} small={compact} />
+        <QuotaTube source={source} small={compact} stale={stale || !!source.stale} />
         <View style={[s.identity, compact && s.stackedIdentity]}>
           <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
             logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />

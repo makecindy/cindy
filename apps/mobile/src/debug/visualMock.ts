@@ -345,7 +345,8 @@ async function visualMockInvoke<T = unknown>(
       },
       strings: { today: '今日用量', scopeLocal: '这台电脑', dailyAverage: '日均', resetsIn: '{{duration}}后重置',
         'durationShort.days': '{{d}}天', 'durationShort.hours': '{{h}}时', 'durationShort.minutes': '{{m}}分',
-        'durationShort.daysHours': '{{d}}天{{h}}时', 'durationShort.hoursMinutes': '{{h}}时{{m}}分' },
+        'durationShort.daysHours': '{{d}}天{{h}}时', 'durationShort.hoursMinutes': '{{h}}时{{m}}分',
+        updatedHours: '{{n}} 小时前更新', updatedDays: '{{n}} 天前更新' },
     } } satisfies MobileUsageWidgetSnapshotResult as T;
   }
   // The extra computers have no recent work; sample tasks belong to their original host.
