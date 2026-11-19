@@ -2241,7 +2241,7 @@
         "standard": "Padrão",
         "wide": "Larga",
         "width": "Largura do conteúdo",
-        "hint": "Usa o espaço disponível no painel de conversa. Mantém pelo menos a largura padrão quando há espaço e ajusta-se em painéis estreitos."
+        "hint": "Usa o espaço entre as margens da conversa. Os painéis estreitos ajustam-se automaticamente."
       },
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",

@@ -2203,7 +2203,7 @@
         "standard": "Standard",
         "wide": "Wide",
         "width": "Content width",
-        "hint": "Uses the available space in the chat pane. Keeps the Standard width when it fits and shrinks in narrow panes."
+        "hint": "A share of the space between the chat margins. Narrow panes adjust automatically."
       },
       "title": "Appearance",
       "modeLabel": "Appearance Mode",

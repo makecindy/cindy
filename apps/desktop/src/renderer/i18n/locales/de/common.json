@@ -2203,7 +2203,7 @@
         "standard": "Standard",
         "wide": "Breit",
         "width": "Inhaltsbreite",
-        "hint": "Richtet sich nach dem verfügbaren Platz im Chat. Wenn genug Platz vorhanden ist, bleibt mindestens die Standardbreite erhalten. Schmale Bereiche passen sich an."
+        "hint": "Der Anteil bezieht sich auf den Platz zwischen den Chaträndern. Schmale Bereiche passen sich automatisch an."
       },
       "title": "Darstellung",
       "modeLabel": "Darstellungsmodus",

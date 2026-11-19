@@ -138,11 +138,22 @@ describe('useProportionalWidth resize hot path', () => {
     act(() => controls.preview(100));
     expect(message()).toBe('1500px');
     expect(localStorage.getItem('chat.layoutWidthPercent')).toBe('99.5');
-    act(() => controls.setWidth(25));
-    expect(message()).toBe('914px');
+    for (const [ratio, width] of [[50, 750], [55, 825], [60, 900], [65, 975]]) {
+      act(() => controls.setWidth(ratio));
+      expect(message()).toBe(`${width}px`);
+    }
     act(() => controls.setMode('standard'));
+    expect(message()).toBe('914px');
     act(() => controls.setMode('wide'));
-    expect(controls!.width).toBe(25);
+    expect(controls!.width).toBe(65);
+
+    act(() => {
+      localStorage.setItem('chat.layoutWidthPercent', '25');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'chat.layoutWidthPercent' }));
+    });
+    expect(controls!.width).toBe(50);
+    expect(message()).toBe('750px');
+    expect(localStorage.getItem('chat.layoutWidthPercent')).toBe('25');
 
     // Other windows write the same native storage keys. An older queued event
     // cannot override the current value. No app restart/migration is needed.
@@ -151,6 +162,18 @@ describe('useProportionalWidth resize hot path', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: 'chat.layoutWidthPercent', newValue: '50' }));
     });
     expect(message()).toBe('1500px');
+    // Feedback #12, unit tier. The 700px compact breakpoint used to drop 60px
+    // of content between adjacent sizes. Verify both ends of the padding ramp.
+    for (const [pane, expected] of [[699, 659], [700, 660], [701, 660.5], [819, 719.5], [820, 720], [821, 721]]) {
+      measuredWidth = pane;
+      act(() => notifyResize?.(
+        [{ contentRect: { width: pane } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      ));
+      expect(parseFloat(message())).toBeCloseTo(expected);
+    }
+    measuredWidth = 280;
+    act(() => controls.setWidth(50));
     act(() => notifyResize?.(
       [{ contentRect: { width: 280 } } as ResizeObserverEntry],
       {} as ResizeObserver,

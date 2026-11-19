@@ -5,13 +5,9 @@ import { useWideChatWidth } from './useChatLayoutPreference';
 /**
  * 主区域内容宽度 hook
  *
- * 同时返回两个宽度：
- *   messageWidth = min(maxWidth, containerWidth - sidePadding*2)   // 普通模式 50px/侧
- *   inputWidth   = messageWidth + INPUT_OUTSET (输入框每侧少 10px)
- *
  * maxWidth 为标准模式的内容上限（首参）。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建任务、普通任务、
- * 伙伴私聊和群聊以 914px 为标准上限。宽屏模式以留白后的可用宽度乘以用户选定比例，
- * 容器足够宽时至少保留标准列宽。正文、表格与代码使用同一列，气泡内的内容仍受气泡宽度约束。
+ * 伙伴私聊和群聊以 914px 为标准上限。宽屏模式按留白后的可用宽度取比例，小窗保留紧凑栏能提供的行宽。
+ * 正文、表格与代码使用同一列，气泡内的内容仍受气泡宽度约束。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -49,14 +45,23 @@ const COMPACT_MESSAGE_PAD = 20;
 // 之前 padding 就先收紧,过渡顺序自然(padding 收紧 → 必要时 toolbar dense
 // → 必要时 toolbar compact)。
 const AUTO_COMPACT_THRESHOLD = 700;
+const ROOMY_PADDING_THRESHOLD = 820;
+const COMPACT_COLUMN_WIDTH = AUTO_COMPACT_THRESHOLD - 2 * COMPACT_MESSAGE_PAD;
 
 export const STANDARD_CHAT_MESSAGE_WIDTH = 914;
 
 export function getChatColumnWidths(containerWidth: number, standardCap: number, widePercent: number | null, compact = false) {
-  const messagePad = compact ? COMPACT_MESSAGE_PAD : DEFAULT_MESSAGE_PAD;
+  // Increase padding more slowly than the pane grows, so crossing the compact
+  // breakpoint cannot make the same conversation column narrower.
+  const paddingProgress = compact ? 0 : Math.min(1, Math.max(0,
+    (containerWidth - AUTO_COMPACT_THRESHOLD) / (ROOMY_PADDING_THRESHOLD - AUTO_COMPACT_THRESHOLD),
+  ));
+  const messagePad = COMPACT_MESSAGE_PAD + (DEFAULT_MESSAGE_PAD - COMPACT_MESSAGE_PAD) * paddingProgress;
   const available = Math.max(0, containerWidth - messagePad * 2);
   const standardWidth = Math.min(standardCap, available);
-  const messageWidth = Math.max(standardWidth, widePercent === null ? 0 : available * widePercent / 100);
+  const messageWidth = widePercent === null
+    ? standardWidth
+    : Math.min(available, Math.max(COMPACT_COLUMN_WIDTH, available * widePercent / 100));
   return {
     messageWidth,
     inputWidth: messageWidth + INPUT_OUTSET,
@@ -104,7 +109,7 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       const useCompact = opts.compact || containerWidth < AUTO_COMPACT_THRESHOLD;
       // 非法或未传的标准上限回落到历史默认 1200。
       const baseCap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
-      const widths = getChatColumnWidths(containerWidth, baseCap, wideWidthPercent, useCompact);
+      const widths = getChatColumnWidths(containerWidth, baseCap, wideWidthPercent, opts.compact);
       let nextInput = widths.inputWidth;
       if (opts.minWidth && opts.minWidth > nextInput) {
         // 地板夹到实测容器宽以内:窄窗仍是"填满容器",不会溢出/裁切。

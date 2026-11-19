@@ -70,7 +70,7 @@ export default {
       const thumb = await slider.boundingBox();
       await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
       await page.mouse.down();
-      await page.mouse.move(track.x + track.width * 0.87, track.y + track.height / 2, { steps: 8 });
+      await page.mouse.move(track.x + track.width * 0.8, track.y + track.height / 2, { steps: 8 });
       const preview = Number(await slider.getAttribute('aria-valuenow'));
       assert.equal(preview, 90);
       assert.equal(await savedWidth(), null);
@@ -78,7 +78,12 @@ export default {
       await page.mouse.up();
       assert.equal(await savedWidth(), String(preview));
       await slider.press('Home');
-      assert.equal(await slider.getAttribute('aria-valuetext'), '25%');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '50%');
+      const minimumPreviewWidth = (await previewColumn.boundingBox()).width;
+      await slider.press('ArrowRight');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '55%');
+      assert.ok((await previewColumn.boundingBox()).width > minimumPreviewWidth);
+      await ui.capture('wide-55');
       await slider.press('End');
       assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
       assert.equal(await savedWidth(), '100');

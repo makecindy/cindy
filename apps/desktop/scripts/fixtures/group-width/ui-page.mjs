@@ -26,7 +26,11 @@ export default {
   }])), ...Object.fromEntries([1860, 3440].map(width => [`table-${width}`, {
     about: 'Opt-in wide group conversation with long and short tables',
     viewport: { width, height: 1080 }, storage: widePreference(75), data: { ...data, sidebar: true, wideTables: tables, ratio: 75 },
-  }])), ...Object.fromEntries([1568, 960, 800, 660, 400].map(width => [`split-${width}`, {
+  }])), 'table-width-55': {
+    about: 'The group conversation uses the same 55% width as a task with either a long or short table',
+    viewport: { width: 1860, height: 1080 }, storage: widePreference(55),
+    data: { ...data, sidebar: true, wideTables: tables, ratio: 55 },
+  }, ...Object.fromEntries([1568, 960, 800, 660, 400].map(width => [`split-${width}`, {
     about: 'Sidebar and real topic splitter at both limits, with long content and independent drafts',
     viewport: { width, height: 900 }, storage: widePreference(100),
     data: { ...data, sidebar: width !== 400, bubbles: true, threadPanel: true, ratio: 100 },
@@ -87,8 +91,9 @@ export default {
     });
     const check = async () => {
       const m = await measure();
-      const available = m.main.width - (m.main.width < 700 ? 40 : 100);
-      const column = Math.max(Math.min(914, available), available * (ui.data.ratio ?? 0) / 100);
+      const available = m.main.width - 40 - Math.min(60, Math.max(0, (m.main.width - 700) / 2));
+      const column = ui.data.ratio === undefined ? Math.min(914, available)
+        : Math.min(available, Math.max(660, available * ui.data.ratio / 100));
       const close = (actual, expected, label) => assert.ok(Math.abs(actual - expected) <= 1,
         `${label}: expected ${expected}px, got ${actual}px`);
       close(m.column.width, column, 'message column');
@@ -109,7 +114,7 @@ export default {
     if (ui.data.wideTables) {
       const { main, column, composer, tables } = await measure();
       assert.ok(main.width >= 1600);
-      assert.ok(Math.abs(column.width - (main.width - 100) * 0.75) <= 1);
+      assert.ok(Math.abs(column.width - (main.width - 100) * ui.data.ratio / 100) <= 1);
       assert.ok(Math.abs(composer.width - column.width - 20) <= 1);
       assert.ok(tables.length === 2 && tables.every(table => table.width <= table.viewport + 1));
       assert.ok(tables[0].width > tables[1].width * 2 && tables[1].width < 240, JSON.stringify(tables));

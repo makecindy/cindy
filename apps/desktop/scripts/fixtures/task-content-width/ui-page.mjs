@@ -34,6 +34,11 @@ export default {
     ]))),
     'width-live': { about: 'Adjust real settings controls against the mounted task without navigating away',
       viewport: { width: 1860, height: 1080 }, data: { shortTable: true, interactive: true } },
+    'width-live-ultrawide': { about: 'All slider positions change the chat column on an ultrawide pane',
+      viewport: { width: 3440, height: 1080 }, data: { shortTable: true, interactive: true } },
+    'companion-width-55': { about: 'The companion conversation uses the same 55% width as a task',
+      viewport: { width: 1860, height: 1080 }, storage: widePreference(55),
+      data: { companion: true, shortTable: true, ratio: 55 } },
     'width-maximum': { about: '100% of the ultrawide pane retains normal margins',
       viewport: { width: 3440, height: 1080 }, storage: widePreference(100), data: { shortTable: true, ratio: 100 } },
     'width-collapsed': { about: 'Large desktop, sidebar collapsed', data: { collapsed: true } },
@@ -94,13 +99,13 @@ export default {
         const pane = document.querySelectorAll('[data-task-pane]')[index];
         const el = pane.querySelector('[data-task-width]');
         const width = pane.getBoundingClientRect().width;
-        const available = width - (width < 700 ? 40 : 100);
-        const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
+        const available = width - 40 - Math.min(60, Math.max(0, (width - 700) / 2));
+        const expected = ratio === undefined ? Math.min(914, available) : Math.min(available, Math.max(660, available * ratio / 100));
         return Math.abs(parseFloat(el.style.getPropertyValue('--cindy-message-width')) - expected) <= 1;
       }, { index, ratio });
       const m = await measure(index);
-      const available = m.pane - (m.pane < 700 ? 40 : 100);
-      const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
+      const available = m.pane - 40 - Math.min(60, Math.max(0, (m.pane - 700) / 2));
+      const expected = ratio === undefined ? Math.min(914, available) : Math.min(available, Math.max(660, available * ratio / 100));
       assert.ok(Math.abs(m.column - expected) <= 1, JSON.stringify({ ratio, expected, ...m }));
       assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= 1, JSON.stringify(m));
       assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
@@ -125,6 +130,7 @@ export default {
       }
       assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
       console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, paneIndex: index, ratio, ...m }));
+      return m;
     };
     if (ui.data.splitWidth) {
       // User requested extremely narrow views. Top-level task panes stop at400,
@@ -177,7 +183,14 @@ export default {
       await page.mouse.up();
       await ui.capture('wide-100');
       await slider.press('Home');
-      await verify(0, 25);
+      let previousWidth = 0;
+      for (let ratio = 50; ratio <= 100; ratio += 5) {
+        const { column } = await verify(0, ratio);
+        assert.ok(column > previousWidth, 'Each slider step changes the real chat column');
+        previousWidth = column;
+        if (ratio <= 60) await ui.capture(`wide-${ratio}`);
+        if (ratio < 100) await slider.press('ArrowRight');
+      }
       return;
     }
     const process = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
@@ -188,6 +201,19 @@ export default {
     }
     if (ui.case === 'width-panel') {
       const divider = page.getByTestId('layout-divider');
+      let previousWidth = 0;
+      for (const paneWidth of [699, 700, 701, 819, 820, 821]) {
+        const box = await divider.boundingBox();
+        const { pane } = await measure();
+        await page.mouse.move(box.x + box.width / 2, box.y + 100);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + paneWidth - pane, box.y + 100, { steps: 8 });
+        await page.mouse.up();
+        await page.waitForFunction(width => Math.abs(document.querySelector('[data-task-pane]').getBoundingClientRect().width - width) <= 1, paneWidth);
+        const { column } = await verify();
+        assert.ok(column >= previousWidth, 'Growing the pane never narrows the chat');
+        previousWidth = column;
+      }
       for (const edge of ['left', 'right']) {
         const box = await divider.boundingBox();
         await page.mouse.move(box.x + box.width / 2, box.y + 100);

@@ -50,8 +50,9 @@ export async function checkSplit(page, ui) {
       const sample = `${width}:${column}`;
       const stable = window.__widthSample === sample;
       window.__widthSample = sample;
-      const available = width - (width < 700 ? 40 : 100);
-      const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
+      const available = width - 40 - Math.min(60, Math.max(0, (width - 700) / 2));
+      const expected = ratio === undefined ? Math.min(914, available)
+        : Math.min(available, Math.max(660, available * ratio / 100));
       return stable && Math.abs(column - expected) < 1;
     }, ui.data.ratio);
     const result = await page.evaluate(() => {
