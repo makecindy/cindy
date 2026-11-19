@@ -140,6 +140,7 @@ export async function rewritePiSkillMessageForSend(params: {
   sessionId?: string;
   piProjectSkillIntent?: PiProjectSkillDraftIntent;
   onCatalogUnavailable?: () => never;
+  prepareRuntime?: () => Promise<void>;
 }): Promise<string> {
   if (params.piProjectSkillIntent && params.agentKind !== 'pi') {
     params.onCatalogUnavailable?.();
@@ -151,7 +152,16 @@ export async function rewritePiSkillMessageForSend(params: {
   const commands = await loadAllCommands(params.agentKind, params.workingDir, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
-  const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  const hit = params.piProjectSkillIntent
+    ? (await reconcilePiRuntimeCommandForSessionDispatch({
+        agentKind: params.agentKind, sessionId: params.sessionId, commandName: leading.name,
+        commands, piProjectSkillIntent: params.piProjectSkillIntent,
+        prepareRuntime: params.prepareRuntime, onCatalogUnavailable: params.onCatalogUnavailable,
+        reload: () => loadAllCommands(params.agentKind, params.workingDir, {
+          sessionId: params.sessionId, forceReload: true,
+        }),
+      })).command
+    : commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
   if (params.piProjectSkillIntent && (!matchesPiProjectSkillIntent(hit, params.piProjectSkillIntent)
     || hit?.kind !== 'agent-skill' || hit.runtimeStatus !== 'loaded' || isSlashCommandUnavailable(hit))) {
     params.onCatalogUnavailable?.();
@@ -563,6 +573,24 @@ export async function loadAllCommands(
     : rawDesktop;
   const agentBuiltin = (builtinRes.success && builtinRes.commands ? builtinRes.commands : []) as UnifiedCommand[];
   return mergeCommands(desktop, agentBuiltin, agentSkill);
+}
+
+/** Only use after a successful checkout creation, never for an arbitrary directory switch. */
+export function rebindPiProjectSkillToWorktree(
+  intent: PiProjectSkillDraftIntent,
+  sourceDirectory: string,
+  targetDirectory: string,
+): PiProjectSkillDraftIntent | null {
+  const slash = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const source = slash(sourceDirectory);
+  const skill = slash(intent.path);
+  const windows = /^[a-z]:\//i.test(source) || source.startsWith('//');
+  const prefix = `${source}/`;
+  if (!(windows ? skill.toLowerCase().startsWith(prefix.toLowerCase()) : skill.startsWith(prefix))) return null;
+  const relative = skill.slice(prefix.length);
+  if (!relative || relative.split('/').some(part => !part || part === '.' || part === '..')) return null;
+  const rebound = `${slash(targetDirectory)}/${relative}`;
+  return { ...intent, path: targetDirectory.includes('\\') ? rebound.replace(/\//g, '\\') : rebound };
 }
 
 export function matchesPiProjectSkillIntent(

@@ -540,10 +540,14 @@ function saveDraftAtKey(
     ?? (opts?.silent ? drafts.get(key)?.builtInSkillIntent : undefined);
   const piIntent = withQuotes.piProjectSkillIntent
     ?? (opts?.silent ? drafts.get(key)?.piProjectSkillIntent : undefined);
-  const firstBlock = withQuotes.text?.content?.[0];
-  const leadingText = firstBlock?.type === 'paragraph'
-    ? (firstBlock.content ?? []).map((node) => node.type === 'text' ? node.text ?? '' : '\uFFFC').join('')
-    : '';
+  // Paragraph boundaries and hard breaks are whitespace to the send parser.
+  // Other nodes remain barriers: a quoted/list/chip command is not leading text.
+  const leadingText = (withQuotes.text?.content ?? []).map((block) => (
+    block.type === 'paragraph'
+      ? (block.content ?? []).map((node) => node.type === 'text' ? node.text ?? ''
+        : node.type === 'hardBreak' ? '\n' : '\uFFFC').join('')
+      : '\uFFFC'
+  )).join('\n');
   const { builtInSkillIntent: _previousIntent, piProjectSkillIntent: _previousPiIntent, ...withoutIntent } = withQuotes;
   const commandName = leadingSlashInvocation(leadingText)?.name;
   drafts.set(key, {

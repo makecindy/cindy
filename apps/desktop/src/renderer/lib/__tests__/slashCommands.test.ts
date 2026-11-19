@@ -15,6 +15,7 @@ import {
   nextAvailableSlashCommandIndex,
   pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  rebindPiProjectSkillToWorktree,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   reconcilePiRuntimeCommandForSessionDispatch,
@@ -93,6 +94,27 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
     },
   });
 }
+
+// #11533 review, unit: the direct first-send path after checkout creation must
+// prepare Pi and dispatch the same relative skill in the new checkout. Earlier
+// dispatch tests stayed in one directory and never exercised this public entry.
+it.each([
+  ['/repo', '/repo/.agents/skills/demo/SKILL.md', '/worktree', '/worktree/.agents/skills/demo/SKILL.md'],
+  ['C:/Repo', 'c:/Repo/.agents/skills/demo/SKILL.md', 'D:/Worktree', 'D:/Worktree/.agents/skills/demo/SKILL.md'],
+])('confirms the selected skill after checkout creation from %s', async (source, path, target, expectedPath) => {
+  const intent = rebindPiProjectSkillToWorktree({ commandName: 'demo', path, runtimeCommandName: 'skill:demo' }, source, target)!;
+  expect(intent.path).toBe(expectedPath);
+  const catalog = { success: true, skills: [skill({ scope: 'repo', path: expectedPath,
+    runtimeStatus: 'discovered', runtimeCommandName: 'skill:demo' })] };
+  stubCommandLists(catalog);
+  const output = await rewritePiSkillMessageForSend({ agentKind: 'pi', sessionId: `checkout-${source}`,
+    workingDir: target, message: '/demo first', piProjectSkillIntent: intent,
+    prepareRuntime: async () => { catalog.skills = [{ ...catalog.skills[0], runtimeStatus: 'loaded' }]; },
+    onCatalogUnavailable: () => { throw new Error('unconfirmed selection'); },
+  });
+  expect(output).toBe('/skill:demo first');
+  expect(rebindPiProjectSkillToWorktree({ ...intent, path: `${source}-other/demo/SKILL.md` }, source, target)).toBeNull();
+});
 
 // Unit: repeated palette consumers previously logged each identical conflict.
 // Existing merge tests checked precedence but not repeated renderer log IPC.
