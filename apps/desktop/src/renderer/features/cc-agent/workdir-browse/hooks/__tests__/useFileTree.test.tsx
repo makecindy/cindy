@@ -83,6 +83,62 @@ describe('useFileTree refresh scheduling', () => {
     mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
+  // PR #11392: two tabs can browse the same tree. Collapse must keep their listings
+  // available without rescanning every previously opened directory (unit, real shared store).
+  it('collapses the shared tree while retaining only directories used by open panes', async () => {
+    const workdir = '/shared-directory-panes';
+    const root = ['docs', 'src', 'other'].map(name => ({
+      name, relPath: name, type: 'directory' as const, size: 0, mtimeMs: 1,
+    }));
+    mocks.listDir.mockImplementation(async ({ relPath }) => relPath
+      ? [{ name: 'a.txt', relPath: relPath + '/a.txt', type: 'file', size: 1, mtimeMs: 1 }]
+      : root);
+    const docs = renderHook(() => useFileTree({ workdir, displayedDirectory: 'docs' }));
+    const src = renderHook(() => useFileTree({ workdir, displayedDirectory: 'src' }));
+    await waitFor(() => expect(docs.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      for (const { relPath } of root) await docs.result.current.expandToPath(relPath, 'directory');
+    });
+    mocks.listDir.mockClear();
+    act(() => src.result.current.collapseAll());
+    expect([...docs.result.current.expanded]).toEqual(['']);
+    expect(docs.result.current.entries.get('docs')?.[0].name).toBe('a.txt');
+    expect(src.result.current.entries.get('src')?.[0].name).toBe('a.txt');
+    expect(src.result.current.entries.has('other')).toBe(false);
+    expect(mocks.listDir).not.toHaveBeenCalled();
+    docs.unmount();
+    act(() => src.result.current.collapseAll());
+    expect(src.result.current.entries.has('docs')).toBe(false);
+    src.unmount();
+  });
+
+  // PR #11392: a cached child can finish refreshing after its root failed. Only
+  // a successful root read should clear the error. Existing tests use the opposite order.
+  it('keeps a root error after a child succeeds and reloads both on retry', async () => {
+    const folder: DirEntry = { name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 };
+    const file: DirEntry = { name: 'readme.md', relPath: 'docs/readme.md', type: 'file', size: 1, mtimeMs: 1 };
+    mocks.listDir.mockImplementation(async ({ relPath }) => relPath ? [file] : [folder]);
+    const view = renderHook(() => useFileTree({ workdir: '/retry-visible-folder', displayedDirectory: 'docs' }));
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => { await view.result.current.expandToPath('docs', 'directory'); });
+
+    const child = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation(({ relPath }) => relPath ? child.promise : Promise.reject(new Error('offline')));
+    let refresh!: Promise<void>;
+    act(() => { refresh = view.result.current.refresh(); });
+    await waitFor(() => expect(view.result.current.loadError).toBe('load-failed'));
+    await act(async () => { child.resolve([file]); await refresh; });
+    expect(view.result.current.loadError).toBe('load-failed');
+
+    mocks.listDir.mockClear().mockImplementation(async ({ relPath }) =>
+      relPath ? [{ ...file, size: 2 }] : [folder]);
+    await act(async () => { await view.result.current.refresh(); });
+    expect(mocks.listDir.mock.calls.map(([args]) => args.relPath).sort()).toEqual(['', 'docs']);
+    expect(view.result.current.loadError).toBeNull();
+    expect(view.result.current.entries.get('docs')?.[0].size).toBe(2);
+    view.unmount();
+  });
+
   // #8422: restored folders previously started all directory IPCs at once.
   // Unit through the real hook: bounded outstanding reads, complete final tree,
   // and no queued reads after leaving. Existing tests restore only a few folders.
@@ -285,8 +341,9 @@ describe('useFileTree refresh scheduling', () => {
 
   // #10882 review; unit through production hooks. Existing alias tests only
   // change target contents, never the link identity with identical entry names.
-  it.each(['watcher', 'manual refresh'])('replaces alias mappings and descendant content after retarget via %s', async (source) => {
+  it.each(['watcher', 'manual refresh', 'root event after collapse'])('replaces alias mappings and descendant content after retarget via %s', async (source) => {
     const workdir = '/alias-retarget';
+    const collapsed = source === 'root event after collapse';
     let target = 'a';
     let added = false;
     mocks.loadExpandedSet.mockReturnValue(new Set(['alias']));
@@ -297,18 +354,21 @@ describe('useFileTree refresh scheduling', () => {
       ok: true, data: { relPath, content: target, size: 1, mtimeMs: 1, truncated: false },
     }));
     const view = renderHook(({ file }) => ({
-      tree: useFileTree({ workdir }), content: useFileContent(workdir, file).content,
+      tree: useFileTree({ workdir, displayedDirectory: collapsed ? 'alias' : undefined }),
+      content: useFileContent(workdir, file).content,
     }), { initialProps: { file: 'alias/note.md' } });
     try {
       await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'a' }));
       view.rerender({ file: 'alias/second.md' });
       await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'alias/second.md' }));
+      if (collapsed) act(() => view.result.current.tree.collapseAll());
       target = 'b';
       await act(async () => {
         if (source === 'manual refresh') await view.result.current.tree.refresh();
-        else for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: 'alias', type: 'change' });
+        else for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: collapsed ? 'sibling.md' : 'alias', type: 'change' });
       });
-      expect(view.result.current.content).toMatchObject({ content: 'b' });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'b' }));
+      expect(view.result.current.tree.entries.has('alias')).toBe(true);
       view.rerender({ file: 'alias/note.md' });
       await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'b' }));
       await act(async () => { await view.result.current.tree.refresh(); });

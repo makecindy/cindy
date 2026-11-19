@@ -149,11 +149,13 @@ function FileBrowserBodyWithWorkdir({
   // 切换开关会换一份 store,listDir 与 watcher 都用新 matcher 重建,
   // 目录列表立即重新拉取(不需要用户手动刷新)。
   const { showIgnoredDirs } = useFileBrowserPreference();
-  const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs });
+  const [directory, setDirectory] = useState(() => dirname(state.selectedFilePath ?? ''));
+  const tree = useFileTree({
+    workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs, displayedDirectory: directory,
+  });
   const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
   const renderingHtml = !!htmlPreview && state.selectedFilePath === htmlPreview;
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId);
-  const [directory, setDirectory] = useState(() => dirname(state.selectedFilePath ?? ''));
   const [treeOpen, setTreeOpen] = useState(false);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
   const [directoryFilter, setDirectoryFilter] = useState('');
@@ -641,10 +643,7 @@ function FileBrowserBodyWithWorkdir({
         {!activeRelPath ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {tree.loadError || (!tree.entries.has(directory) && !tree.initialLoading && !tree.loadingPaths.has(directory)) ? (
-              <TreeLoadErrorPlaceholder kind={tree.loadError ?? 'load-failed'} onRetry={() => {
-                if (directory) void tree.expandToPath(directory, 'directory');
-                else handleRefresh();
-              }} />
+              <TreeLoadErrorPlaceholder kind={tree.loadError ?? 'load-failed'} onRetry={tree.refresh} />
             ) : (
               <DirectoryContents
                 key={directory}

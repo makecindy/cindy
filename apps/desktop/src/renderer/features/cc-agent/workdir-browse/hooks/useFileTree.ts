@@ -73,6 +73,8 @@ export interface DirEntry {
 
 interface UseFileTreeOptions {
   workdir: string;
+  /** Directory displayed by this subscriber independently of the tree's expanded rows. */
+  displayedDirectory?: string;
   /**
    * 非空 = SSH remote 会话:listDir 经 main 路由到远端 file-service;
    * 本地 watcher 不启动(远端暂无 watch,P4 计划事件推回),树的时效性靠
@@ -103,6 +105,8 @@ interface UseFileTreeOptions {
    */
   showIgnoredDirs?: boolean;
 }
+
+type FileTreeStoreOptions = Required<Omit<UseFileTreeOptions, 'displayedDirectory'>>;
 
 export interface UseFileTreeReturn {
   /** Entries per folder, keyed by relPath ('' = root). */
@@ -234,7 +238,7 @@ interface FileTreeStore {
   restoreGeneration: number;
   /** Full refreshes during restoration share its workers and pending paths. */
   restoreQueue: DirectoryRestoreQueue | null;
-  listeners: Set<() => void>;
+  listeners: Map<() => void, string>;
 }
 
 interface DirectoryRestoreQueue {
@@ -292,7 +296,7 @@ function directoryAliasEventPath(entry: DirEntry, eventRelPath: string): string 
   return eventRelPath.startsWith(prefix) ? `${entry.relPath}/${eventRelPath.slice(prefix.length)}` : null;
 }
 
-function storeKey(opts: Required<UseFileTreeOptions>): string {
+function storeKey(opts: FileTreeStoreOptions): string {
   const remote = opts.remoteHostId ? `::remote=${opts.remoteHostId}` : '';
   const device = opts.deviceId ? `::device=${opts.deviceId}` : '';
   const reveal = opts.showIgnoredDirs ? '::reveal' : '';
@@ -310,7 +314,7 @@ function treeIdentityKey(
 }
 
 function emit(store: FileTreeStore): void {
-  for (const l of store.listeners) l();
+  for (const notify of store.listeners.keys()) notify();
 }
 
 /**
@@ -401,7 +405,7 @@ function filterSeedTreeForHiddenView(
  * 「刷新」按钮没有这个问题:它在同一份 store 上原地 refetch,从不经过空态。
  */
 function findRevealSiblingSnapshot(
-  opts: Required<UseFileTreeOptions>,
+  opts: FileTreeStoreOptions,
 ): FileTreeStore['snapshot'] | null {
   const siblingKey = storeKey({ ...opts, showIgnoredDirs: !opts.showIgnoredDirs });
   return stores.get(siblingKey)?.snapshot ?? null;
@@ -462,7 +466,7 @@ function pruneExpandedForCurrentTree(
   saveExpandedSet(store.workdir, next, { showIgnoredDirs: store.showIgnoredDirs });
 }
 
-function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
+function getOrCreateStore(opts: FileTreeStoreOptions): FileTreeStore {
   const key = storeKey(opts);
   const existing = stores.get(key);
   if (existing) return existing;
@@ -528,7 +532,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     refCount: 0,
     restoreGeneration: 0,
     restoreQueue: null,
-    listeners: new Set(),
+    listeners: new Map(),
   };
   // 继承来的展开集合要按**（可能已过滤的）**树剪一次：剪枝那条路径挂在 fetch
   // 成功分支上，根请求失败时根本不会执行 —— 而 reveal-only 路径一旦被写进本
@@ -561,7 +565,7 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
     // 这份列表已是本 store 自己请求的真实数据：从「借来的」证据集合里摘除，
     // 之后 prune 恢复用它做精确可达性判断（见 borrowedDirs 注释）。
     store.borrowedDirs.delete(relPath);
-    if (store.snapshot.loadError) {
+    if (relPath === ROOT_KEY && store.snapshot.loadError) {
       store.snapshot = { ...store.snapshot, loadError: null };
     }
     // 根请求**成功**（无论后面是否结构等价而跳过替换）都代表「借来的树」窗口
@@ -586,12 +590,13 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
     const aliases = new Map(list.filter(entry => entry.symlinkTarget !== undefined)
       .map(entry => [entry.relPath, entry.symlinkTarget]));
     const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !== aliases.get(old.relPath));
+    const displayed = retargeted.length ? displayedDirectoryPaths(store) : undefined;
     const reload: string[] = [];
     for (const key of nextEntries.keys()) {
       if (retargeted.some(entry => key === entry.relPath || key.startsWith(`${entry.relPath}/`))) {
         nextEntries.delete(key);
         store.tokens.set(key, (store.tokens.get(key) ?? 0) + 1);
-        if (store.snapshot.expanded.has(key)) reload.push(key);
+        if (store.snapshot.expanded.has(key) || displayed?.has(key)) reload.push(key);
       }
     }
     nextEntries.set(relPath, list);
@@ -887,16 +892,28 @@ function toggleFolder(store: FileTreeStore, relPath: string): void {
   emit(store);
 }
 
+/** Keep each open pane's directory and its ancestors (including any directory aliases). */
+function displayedDirectoryPaths(store: FileTreeStore): Set<string> {
+  const paths = new Set([ROOT_KEY]);
+  for (let dir of store.listeners.values()) {
+    while (!paths.has(dir)) {
+      paths.add(dir);
+      dir = parentPath(dir);
+    }
+  }
+  return paths;
+}
+
 function collapseAll(store: FileTreeStore): void {
-  const nextExpanded = new Set([ROOT_KEY]);
-  const prevEntries = store.snapshot.entries;
   const nextEntries = new Map<string, readonly DirEntry[]>();
-  const rootEntries = prevEntries.get(ROOT_KEY);
-  if (rootEntries) nextEntries.set(ROOT_KEY, rootEntries);
+  for (const dir of displayedDirectoryPaths(store)) {
+    const entries = store.snapshot.entries.get(dir);
+    if (entries) nextEntries.set(dir, entries);
+  }
   saveExpandedSet(store.workdir, new Set(), { showIgnoredDirs: store.showIgnoredDirs });
   store.snapshot = {
     ...store.snapshot,
-    expanded: nextExpanded,
+    expanded: new Set([ROOT_KEY]),
     entries: nextEntries,
   };
   emit(store);
@@ -908,7 +925,7 @@ async function refresh(store: FileTreeStore): Promise<void> {
   // 展开目录同样恒在：根失败清 entries 会把刚取得的子目录一并清掉，只遍历
   // 现有键会让它们永远不再被请求 —— 重试后目录「已展开但空」（评审 P1）。
   const targets = new Set<string>([
-    ROOT_KEY,
+    ...displayedDirectoryPaths(store),
     ...store.snapshot.entries.keys(),
     ...store.snapshot.expanded,
   ]);
@@ -970,6 +987,7 @@ async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' 
 
 export function useFileTree({
   workdir,
+  displayedDirectory = ROOT_KEY,
   remoteHostId = null,
   deviceId = null,
   hideMetaFiles = true,
@@ -1052,10 +1070,10 @@ export function useFileTree({
   const snapshot = useSyncExternalStore(
     useCallback(
       (cb) => {
-        store.listeners.add(cb);
+        store.listeners.set(cb, displayedDirectory);
         return () => store.listeners.delete(cb);
       },
-      [store],
+      [store, displayedDirectory],
     ),
     () => store.snapshot,
     () => store.snapshot,
