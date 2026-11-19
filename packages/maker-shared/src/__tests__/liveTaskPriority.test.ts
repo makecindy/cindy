@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection } from '../liveTaskPriority';
+import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection } from '../liveTaskPriority';
 
 describe('liveTaskPriorityRank', () => {
   it('puts waiting (including error) ahead of unread, then running, then rest', () => {
@@ -31,6 +31,12 @@ describe('task inbox lifecycle', () => {
     expect(taskInboxSection({}, idle, now)).toBe('inbox');
     expect(taskInboxSection({}, { running: true, waiting: false }, now)).toBe('working');
     expect(taskInboxSection({}, { running: true, waiting: true }, now)).toBe('inbox');
+  });
+  it('keeps indefinite deferrals out of expiry timers and wakes them on new input', () => {
+    const indefinite = { ...task, snoozedUntil: INDEFINITE_SNOOZE_UNTIL };
+    expect(taskSnoozeUntil(indefinite)).toBe(Infinity);
+    expect(taskInboxSection(indefinite, idle, now + 2 * 365 * 86400000)).toBe('snoozed');
+    expect(taskInboxSection({ ...indefinite, userSendAt: new Date(now + 1).toISOString() }, idle, now)).toBe('inbox');
   });
   it('defers until the deadline, with archive and new input taking precedence', () => {
     expect(taskInboxSection(task, idle, now)).toBe('snoozed');

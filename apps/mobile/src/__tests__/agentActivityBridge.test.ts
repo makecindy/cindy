@@ -283,5 +283,46 @@ it('keeps stale recovery bounded across connection changes in the mounted bridge
     for (const listener of mock.appStateListeners) listener('active');
   });
   expect(recoveries()).toHaveLength(2);
+  // The service owns this activity: the partial Home projection is never written.
+  expect(mock.native.setState.mock.calls.every(([json]) => json === null)).toBe(true);
+});
+
+// Unit: with no service to renew it (self-hosted relay, failed registration) an
+// activity whose computer went away was greyed out at once and then stayed for
+// hours. The cases above use a native build without expiry reporting. Mount the
+// real bridge: unconfirmed content stays as it is until its stale date, then ends.
+it('keeps unconfirmed content until it expires, then ends it instead of leaving it greyed out', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 } as Response)));
+  const registration = (isStale: boolean): ActivityPushRegistration => ({
+    accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'local', activityId: 'active',
+    dismissed: false, supportsInputPushToken: true, isStale,
+  });
+  mock.native.configureAccount = vi.fn(async () => {});
+  let expired = false;
+  mock.native.getPushRegistration = vi.fn(async () => registration(expired));
+  const row: RemoteSession = {
+    id: 'host-task', userId: '', title: 'Host task', workingDir: '/example', workspaceKind: 'project',
+    model: 'claude', effort: 'medium', permissionMode: 'default', fastMode: false,
+    status: 'active', agentKind: 'cc', userSendAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  remoteSessionStore.setDeviceSessions('desktop', 'Example Mac', [row]);
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'running', attention: false,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('running');
+  mock.native.setState.mockClear();
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'offline' }));
+  mock.link.presenceVersion++;
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(mock.native.markStale).not.toHaveBeenCalled();
   expect(mock.native.setState).not.toHaveBeenCalled();
+  expired = true;
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(mock.native.setState).toHaveBeenCalledExactlyOnceWith(null);
 });

@@ -35,7 +35,7 @@ export function taskTeammateId(session: Pick<RemoteSession, 'taskTeammate' | 'co
 
 export function isTeammateTask(session: Pick<RemoteSession, 'source' | 'companion'>): boolean {
   return session.source === 'bot' && !!session.companion?.id
-    && (session.companion.role === 'routine' || session.companion.role === 'channel' || (session.companion.role === 'group' && !!session.companion.taskProjectDir));
+    && (session.companion.role === 'routine' || session.companion.role === 'channel' || session.companion.role === 'group');
 }
 
 export function parseTaskCompanion(value: unknown): TaskCompanion | undefined {

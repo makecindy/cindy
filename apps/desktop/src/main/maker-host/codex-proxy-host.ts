@@ -50,6 +50,9 @@ import {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
+  createThreadStripController,
   createImageGenerationIdRecoveryRule,
   createResponsesItemIdPrefixRecoveryRule,
   createResponsesItemIdLengthRecoveryRule,
@@ -124,6 +127,7 @@ import {
 } from './provider-route.js';
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
@@ -288,6 +292,8 @@ const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
 /** WS 已确认、尚未在落回的 HTTP 请求上激活对应 strip 的 recovery 原因（一次性消费）。 */
 const pendingHttpRecoveryStripByThread = new Map<string, string>();
+// Kept inside this host instance: another Host/proxy must not inherit its marker.
+let responsesToolAudioStripController = createThreadStripController();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
@@ -331,6 +337,9 @@ const responsesItemIdLengthRecoveryRule = createResponsesItemIdLengthRecoveryRul
 const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRecoveryRule({
   onRetry: (threadId, model) => responsesReasoningContentStripController.markActive(threadId, model),
 });
+const responsesToolAudioRecoveryRule = createResponsesToolAudioRecoveryRule({
+  onRetry: (threadId, model, upstreamBase) => responsesToolAudioStripController.markActive(threadId, model, upstreamBase),
+});
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
@@ -354,6 +363,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
   responsesReasoningContentRecoveryRule,
+  responsesToolAudioRecoveryRule,
   duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
@@ -364,12 +374,12 @@ const CODEX_BODY_RECOVERY_RULES = [
 function isRepairableToolItemIdError(errorText: string): boolean {
   // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
   const text = errorText.replace(/\\+(?=["'])/g, '');
-  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco|call)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco|call|msg)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
   if (!match) return false;
-  // Legacy `call_…` item ids (issue #4023) are rewritten to whichever tool dialect the target
+  // Legacy `call_…` / `msg_…` item ids (#4023 / #9645) are rewritten to whichever tool dialect the target
   // asks for, so any of the four expected prefixes is repairable. Case-sensitive like the
-  // normalizer's `startsWith('call_')`: an upper-case prefix would not be rewritten on retry.
-  if (match[1] === 'call') return true;
+  // normalizer's prefix checks: an upper-case prefix would not be rewritten on retry.
+  if (match[1] === 'call' || match[1] === 'msg') return true;
   return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
     === match[2]!;
 } function armCodexHttpRecovery(args: {
@@ -463,7 +473,7 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
     if (Boolean(rule?.useUpstreamModel) !== useUpstreamModel) return null;
     pendingHttpRecoveryStripByThread.delete(threadId);
     if (!rule?.enabled() || !rule.onRetry) return null;
-    rule.onRetry(threadId, body.model);
+    rule.onRetry(threadId, body.model, ctx.upstreamBase);
     log.info('codex HTTP recovery strip activated from websocket error', { threadId, reason, model: body.model });
     return null;
   };
@@ -2681,7 +2691,7 @@ function codexCustomProviderRouteFailure(status: number, code: string): RoutingD
   };
 }
 
-function codexGuestRouteRefusal(sessionId?: string | null, model = ''): RoutingDecision {
+function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'scope' | 'model' = 'scope'): RoutingDecision {
   const denial = guestProviderModelDenial(sessionId, model);
   return {
     localHandler: async ({ res }) => {
@@ -2693,7 +2703,11 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = ''): RoutingD
         error: {
           type: 'invalid_request_error',
           code: denial?.code ?? 'shared_provider_only',
-          message: denial?.message ?? 'This request is outside the provider shared with you.',
+          // Catalog/model refusals can be repaired by another group member.
+          // Only a proven session/provider mismatch carries the scope marker.
+          message: denial?.message ?? (kind === 'scope'
+            ? SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE
+            : 'This request is outside the provider shared with you.'),
         },
       }));
     },
@@ -2726,16 +2740,16 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = ''): RoutingD
     const reviewerModel = requestModel === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
       ? reviewerModelBySession.get(sessionId)
       : undefined;
-    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel);
+    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel, 'model');
     if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
-      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel);
+      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
       const offered = effectiveModel === CODEX_AUTO_REVIEW_MODEL
         ? isOpenAiSubscriptionProviderId(providerId)
         : await guestProviderOffersModel(providerId, 'codex', effectiveModel, sessionId ?? undefined);
-      if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel);
+      if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
     }
     if (requestSessionId) {
       return guestProviderRouteForSession(requestSessionId)?.providerId === providerId
@@ -3449,6 +3463,12 @@ function createTransformRequestChain(
     createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
     createArmedHttpRecoveryStripTransform(true),
+    createActiveStripTransform({
+      controller: responsesToolAudioStripController,
+      enabled: () => true,
+      strip: stripResponsesToolAudioFromBody,
+      scopeByUpstream: true,
+    }),
     createActiveStripTransform({
       controller: responsesReasoningContentStripController,
       enabled: () => true,
@@ -4172,6 +4192,7 @@ function clearSessionThreads(sessionId: string): string[] {
       pendingHttpRecoveryStripByThread.delete(threadId);
       responsesReasoningContentStripController.clear(threadId);
       responsesToolCallHistoryStripController.clear(threadId);
+      responsesToolAudioStripController.clear(threadId);
     }
   }
   return threadIds;
@@ -4205,6 +4226,7 @@ function clearSessionThreads(sessionId: string): string[] {
   reviewerModelBySession.clear();
   httpRecoveryReasonByThread.clear();
   pendingHttpRecoveryStripByThread.clear();
+  responsesToolAudioStripController = createThreadStripController();
 
   if (_startPromise) {
     await _startPromise.catch(() => undefined);

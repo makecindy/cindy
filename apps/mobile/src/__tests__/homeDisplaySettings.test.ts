@@ -87,6 +87,22 @@ function run(id: string, agentKind: string, daysAgo: number): RemoteSessionListI
 const NO_FILTERS: HomeContentFilters = { lastActivity: 'all', projects: 'all', vendor: 'all' };
 
 describe('home content filters (desktop 筛选 parity)', () => {
+  // Regression: only the session's creation source identifies an automated run.
+  it('hides scheduler-created tasks while retaining manual follow-ups and pinned runs', () => {
+    const scheduled = run('nightly', 'codex', 1);
+    const manual = { ...item('follow-up'), title: '[Schedule] Nightly', scheduleInfo: scheduled.scheduleInfo };
+    const teammate = item('teammate-task');
+    const input = home({ pinned: [scheduled], projects: [project('p', [scheduled, manual, teammate])] });
+    const filters = { ...NO_FILTERS, hideAutomations: true };
+    const visible = applyHomeContentFilters(input, filters, NOW);
+    expect(visible.pinned).toEqual([scheduled]);
+    expect(visible.projects[0]).toMatchObject({ sessions: [manual, teammate], sessionCount: 2 });
+    const personal = applyHomeContentFilters(input, {
+      ...filters, teammates: 'none', teammateKey: row => row === teammate ? 'cindy' : undefined,
+    }, NOW);
+    expect(personal.projects[0]).toMatchObject({ sessions: [manual], sessionCount: 1 });
+  });
+
   const fixture = home({
     chats: [item('chat-cc'), item('chat-codex', { agentKind: 'codex' })],
     pinned: [item('pin-old', { daysAgo: 40 }), item('pin-codex', { agentKind: 'codex' })],

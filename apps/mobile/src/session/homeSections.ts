@@ -596,9 +596,15 @@ export function buildInboxHomeSections(
           teammate: taskTeammateId(task as RemoteSession) !== undefined,
         }, nowMs);
         if (!group) continue;
-        const until = taskSnoozeUntil(task);
+        let sourceLabel = row.sourceLabel;
+        if (group === 'snoozed') {
+          const until = taskSnoozeUntil(task);
+          sourceLabel = Number.isFinite(until)
+            ? new Date(until).toLocaleString(i18n.language)
+            : i18n.t('devices.list.menu.inbox.indefinite');
+        }
         groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
-          sourceLabel: group === 'snoozed' ? new Date(until).toLocaleString(i18n.language) : row.sourceLabel });
+          sourceLabel });
       }
     }
   }

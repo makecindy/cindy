@@ -1,3 +1,4 @@
+import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 /**
  * Feature Sidebar Slot Context
  * ---------------------------------------------------------------------------
@@ -225,13 +226,15 @@ export function useRegisterContentHeader(node: ReactNode): void {
     throw new Error('useRegisterContentHeader must be used inside <FeatureSidebarSlotProvider>');
   }
   const { setHeaderContent } = ctx;
+  const focused = useSplitPaneFocus();
 
   useLayoutEffect(() => {
+    if (!focused) return;
     setHeaderContent(node);
     return () => {
       setHeaderContent(null);
     };
-  }, [node, setHeaderContent]);
+  }, [focused, node, setHeaderContent]);
 }
 
 /**

@@ -22,6 +22,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  locallyProvenProviderShareDelegation: () => false,
   delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
@@ -1373,14 +1374,18 @@ describe('被控端控制链路生命周期', () => {
 
   // 控制端把 16 个名额填满历史 / 列表读取后,用户正在等的发送以前会被 BACKPRESSURE 打回、
   // 再等 ≥2s 重试;交互类写入另有少量名额,读取仍按原上限拒绝。
-  it('交互类 invoke 在 per-controller 名额用满后仍被执行,读取照旧 BACKPRESSURE', async () => {
+  it.each([false, true])('交互类 invoke 在 per-controller 名额用满后仍被执行,读取照旧 BACKPRESSURE (remoteAgent=%s)', async remoteAgent => {
     remoteControlEnabled = true;
-    let resolveList: ((value: unknown[]) => void) | undefined;
+    const releaseLists: Array<() => void> = [];
     registry.register('local-db:sessions:list', vi.fn(() => new Promise<unknown[]>((resolve) => {
-      resolveList = resolve;
+      releaseLists.push(() => resolve([]));
     })));
-    const enqueue = vi.fn(() => ({ accepted: true }));
-    registry.register('maker:input:enqueue', enqueue);
+    const releaseControls: Array<() => void> = [];
+    const enqueue = vi.fn(() => new Promise(resolve => {
+      releaseControls.push(() => resolve({ accepted: true }));
+    }));
+    if (remoteAgent) setRemoteAgentHandler({ handle: enqueue, abortAll: vi.fn() });
+    else registry.register('maker:input:enqueue', enqueue);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
@@ -1392,7 +1397,9 @@ describe('被控端控制链路生命周期', () => {
     }
     for (let index = 0; index < extra + 1; index += 1) {
       feed({ v: 1, kind: 'invoke', id: `send-${index}`, src: 'ctrl-a', payload: {
-        channel: 'maker:input:enqueue', args: ['s1', { text: `hello ${index}` }],
+        ...(remoteAgent ? { channel: 'maker:remote-agent:v1', args: [{ op: 'call', runId: 'run',
+          callId: `stop-${index}`, method: 'abort', payload: { json: [] } }] }
+          : { channel: 'maker:input:enqueue', args: ['s1', { text: `hello ${index}` }] }),
       } });
     }
     await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(extra));
@@ -1402,7 +1409,10 @@ describe('被控端控制链路生命周期', () => {
       channel: 'local-db:sessions:list', args: [20, 'all', { fresh: true, index: 'late' }],
     } });
     await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: 'list-late', payload: busy }));
-    resolveList?.([]);
+    releaseLists.forEach(release => release());
+    releaseControls.forEach(release => release());
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(limit + extra + 2));
+    if (remoteAgent) setRemoteAgentHandler(null);
   });
 
   // 2026-11-17 review：经 Agent-Net 会话上传附件时一次在途 3 块、每块 1 MiB（base64 约 1.4 MB），第三块单独就超过每个控制端
@@ -1635,7 +1645,10 @@ describe('被控端控制链路生命周期', () => {
 
   // 准入给交互类请求多放了名额,它们的回包也得有位置:否则已生效的发送因回包入不了 outbox
   // 而让控制端超时、用户重试。
-  it('交互类 invoke 的结果在 per-controller outbox 用满后仍有预留位置,读取结果照旧被拒', () => {
+  it.each([
+    ['maker:input:enqueue', undefined],
+    ['maker:remote-agent:v1', [{ op: 'reply', runId: 'run', requestId: 'answer', payload: { json: { type: 'interaction', result: {} } } }]],
+  ] as const)('交互类 %s 的结果在 per-controller outbox 用满后仍有预留位置,读取结果照旧被拒', (channel, args) => {
     const client = {
       sendInvokeResult: () => {
         throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
@@ -1653,11 +1666,11 @@ describe('被控端控制链路生命周期', () => {
     )).toBe(false);
     for (let index = 0; index < extra; index++) {
       expect(dispatchTesting.sendInvokeResultSafe(
-        client, 'ctrl-a', `invoke-reserve-send-${index}`, { ok: true, result: index }, 'maker:input:enqueue',
+        client, 'ctrl-a', `invoke-reserve-send-${index}`, { ok: true, result: index }, channel, args ? [...args] : undefined,
       )).toBe(true);
     }
     expect(dispatchTesting.sendInvokeResultSafe(
-      client, 'ctrl-a', 'invoke-reserve-send-over', { ok: true, result: 'x' }, 'maker:input:enqueue',
+      client, 'ctrl-a', 'invoke-reserve-send-over', { ok: true, result: 'x' }, channel, args ? [...args] : undefined,
     )).toBe(false);
   });
 

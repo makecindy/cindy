@@ -97,6 +97,7 @@ vi.mock('../../sidebarSettingsStoreCore.js', () => ({
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../projects-root-settings.js', () => ({ readProjectsRootDirectory: () => h.projectsRoot }));
 
+import { projectForNewTask } from '../projectManagementCore.js';
 import { createProject } from '../createProject.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
 
@@ -215,6 +216,29 @@ describe('createProject', () => {
       .toEqual({ ok: true, projectDir: h.registered[0].path });
     expect(h.upsert).not.toHaveBeenCalled();
     expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it('opens a directory as a dialogue until it is registered and never revives hidden projects', async () => {
+    h.registered = [];
+    expect(await projectForNewTask(directory)).toEqual({ workspaceKind: 'dialogue', projectDir: null });
+    await expect(projectForNewTask(directory, directory)).rejects.toThrow();
+    h.registered = [{ path: directory }];
+    expect(await projectForNewTask(path.join(directory, 'child'))).toEqual({ workspaceKind: 'project', projectDir: directory });
+    h.hiddenKeys = [`local:${directory}`];
+    expect(await projectForNewTask(directory)).toEqual({ workspaceKind: 'dialogue', projectDir: null });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it('hands off from the buddy’s private chat to its already registered project', async () => {
+    const home = path.join(directory, 'owners', 'owner-a', 'bots', 'bot-1', 'workspace');
+    await mkdir(home, { recursive: true });
+    h.registered.push({ path: home });
+    h.query.mockResolvedValue([{ id: 'caller', source: 'bot', workspaceKind: 'dialogue', workingDir: home }]);
+    h.botLinks.mockResolvedValue([{ botId: 'bot-1', role: 'canonical' }]);
+    expect(await resolveSessionProject({ callerSessionId: 'caller' })).toEqual({ ok: true, projectDir: home });
+    h.botLinks.mockResolvedValue([{ botId: 'bot-1', role: 'group' }]);
+    expect(await resolveSessionProject({ callerSessionId: 'caller' })).toEqual({ ok: true, projectDir: null });
   });
 
   // Unit: omitted membership inherits the persisted source, never the execution

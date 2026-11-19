@@ -35,6 +35,9 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],
+    // #11484 unit: the new explicit account rejection uses the existing account
+    // fallback/cooling policy, never generic transport failure or same-source retry.
+    ['upstream account denied', { reason: 'account_access_denied', message: 'Access denied' }, switchTo('auth')],
     ['signed out (Codex)', { codexErrorInfo: 'unauthorized' }, switchTo('auth')],
     ['invalid API key text', { message: 'Invalid API key provided' }, switchTo('auth')],
     ['agent not authenticated at start', { message: 'Claude Code is not authenticated' }, switchTo('auth')],
@@ -163,6 +166,10 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
     ['HTTP 413', { errorStatus: 413, message: 'too large' }, 'invalid-request'],
     ['Codex bad request', { codexErrorInfo: 'badRequest', message: 'x' }, 'invalid-request'],
     ['content policy', { codexErrorInfo: 'cyberPolicy', message: 'x' }, 'policy'],
+    // Unit, provider-groups §6.1: relocating cannot repair the shared proxy's
+    // explicit scope refusal. Existing stay inputs did not cover this message.
+    ['shared provider scope', { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.' }, 'policy'],
+    ['shared scope with SDK auth wrapper', { errorStatus: 403, sdkError: 'authentication_failed', message: '[SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.' }, 'policy'],
     ['tool loop', { reason: 'tool_use_loop_detected', message: 'loop' }, 'tool-loop'],
     ['permission denied by user', { message: 'Permission denied by user' }, 'user'],
     ['tool execution failed', { reason: 'turn-failed', message: 'Tool execution failed' }, 'local'],
@@ -174,6 +181,17 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
   it('does not count usage limits wrapped as invalid_request as a request problem', () => {
     expect(decideProviderGroupFailure({ sdkError: 'invalid_request', errorStatus: 429, message: 'rate limited' }, 'run'))
       .toEqual(switchTo('usage-limit'));
+  });
+
+  it('keeps ambiguous upstream 403s eligible for the existing group recovery', () => {
+    for (const phase of PHASES) {
+      expect(decideProviderGroupFailure({ errorStatus: 403, message: 'Forbidden' }, phase)).toEqual(switchTo('failed'));
+      // Older proxies also used this sentence when their model catalog went
+      // empty. Without the new producer marker it is not proof of scope denial.
+      expect(decideProviderGroupFailure({ errorStatus: 403, message: 'This request is outside the provider shared with you.' }, phase))
+        .toEqual(switchTo('failed'));
+      expect(decideProviderGroupFailure({ errorStatus: 403, sdkError: 'authentication_failed' }, phase)).toEqual(switchTo('auth'));
+    }
   });
 });
 

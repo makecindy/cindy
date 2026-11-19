@@ -140,7 +140,7 @@ describe('ChatInput model source switching wiring', () => {
     );
     const guard = chatInputSource.slice(guardStart, guardEnd);
     expect(guard).toContain(
-      'return accepted && targetContextWindow ? targetContextWindow : accepted',
+      'return targetContextWindow ?? true;',
     );
 
     const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
@@ -218,7 +218,7 @@ describe('ChatInput model source switching wiring', () => {
     const piBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
     const sameOrExpand = guard.indexOf('targetContextWindow >= currentContextWindow');
     const localVerdictShortcut = guard.indexOf("verdict.level === 'ok'");
-    const confirmation = guard.indexOf('const accepted = await confirmDialog({');
+    const confirmation = guard.indexOf('modelSwitchContextGuard.condensedToast');
 
     expect(guard).toContain(
       'const contextTokens = requireDestructiveConfirmation\n        ? verifiedContextTokens',
@@ -256,7 +256,7 @@ describe('ChatInput model source switching wiring', () => {
     );
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
-    const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
+    const confirmPath = guard.indexOf('modelSwitchContextGuard.condensedToast');
 
     expect(piCapability).toBeGreaterThan(-1);
     expect(piCapability).toBeLessThan(piRuntimeBypass);
@@ -299,10 +299,7 @@ describe('ChatInput model source switching wiring', () => {
     expect(blocked).toContain('overflowDescriptionRemote');
     expect(blocked).toContain('toast.error(');
     expect(blocked).toContain('return false;');
-    const localConfirm = guard.slice(confirmPath);
-    expect(localConfirm).not.toContain('overflowDescriptionRemote');
-    expect(localConfirm).toContain('overflowDescription');
-    expect(localConfirm).toContain('confirmSwitch');
+    expect(guard.slice(confirmPath)).toContain('return targetContextWindow ?? true;');
   });
 
   it('lets a disconnected source reselect the highlighted fallback provider row', () => {
@@ -448,10 +445,6 @@ describe('ChatInput model source switching wiring', () => {
     const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
-    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);**有意变更**
-    // (Chris 2026-08-19):现在把**本次目标引擎**交给确认门 —— 「已确认过就不再问」的判据
-    // 收窄成「已有指向该目标的意图」,否则任何残留意图都会让确认框永久静默。
-    expect(block).toContain('confirmAgentBrowseSwitch(targetAgent)');
     // 切换事务照旧;effort 显式带上(用户看着点下去的档)。
     expect(block).toContain('performAgentSwitchRef.current(');
     expect(block).toContain('...(effort ? { effort } : {})');

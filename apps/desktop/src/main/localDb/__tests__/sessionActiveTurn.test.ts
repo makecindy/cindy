@@ -241,6 +241,46 @@ describe('sessionActiveTurn', () => {
     expect(row?.last_turn_ended_at).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
   });
 
+  it('keeps the first completion through duplicate terminal and idle close writes, then completes a new turn', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, markSessionTurnEndedAfterBarrier,
+      drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const firstEnd = Date.now() - 10000;
+    await seedSession(client, 's-idle-close', { startedAt: firstEnd - 2000, endedAt: firstEnd });
+    markSessionTurnEnded('s-idle-close');
+    markSessionTurnEndedAfterBarrier('s-idle-close', Promise.resolve());
+    await Promise.resolve();
+    await drainSessionActiveTurnWrites('s-idle-close');
+    expect((await readMarks(client, 's-idle-close'))?.last_turn_ended_at).toBe(firstEnd);
+    markSessionTurnStarted('s-idle-close');
+    markSessionTurnEnded('s-idle-close');
+    await drainSessionActiveTurnWrites('s-idle-close');
+    const next = await readMarks(client, 's-idle-close');
+    expect(next?.last_turn_ended_at).toBeGreaterThan(firstEnd);
+    expect(next?.last_turn_ended_at).toBeGreaterThanOrEqual(next!.active_turn_started_at!);
+  });
+
+  it('keeps a completion captured before a pending barrier when idle close overtakes it', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, markSessionTurnEndedAfterBarrier,
+      drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-barrier-close');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10000);
+    markSessionTurnStarted('s-barrier-close');
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    clock.mockReturnValue(12000);
+    markSessionTurnEndedAfterBarrier('s-barrier-close', barrier);
+    clock.mockReturnValue(20000);
+    markSessionTurnEnded('s-barrier-close');
+    await drainSessionActiveTurnWrites('s-barrier-close');
+    expect((await readMarks(client, 's-barrier-close'))?.last_turn_ended_at).toBe(12000);
+    release();
+    await barrier;
+    await drainSessionActiveTurnWrites('s-barrier-close');
+    expect((await readMarks(client, 's-barrier-close'))?.last_turn_ended_at).toBe(12000);
+  });
+
   it('markSessionTurnEnded honors endedAtOverride so deferred writes keep the frozen timestamp', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

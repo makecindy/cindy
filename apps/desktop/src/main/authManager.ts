@@ -1,5 +1,7 @@
 import { isDefinitiveRefreshError } from './authRefreshError.js';
 import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/authUser.js';
+import { HOST_NOT_STARTED, readHostUnavailableReason, type HostUnavailable } from '../shared/hostStartFailure.js';
+import { createIpcError } from '../shared/ipc-errors.js';
 export type { User } from '../shared/authUser.js';
 import { resolveRuntimeDeviceId } from './deviceId.js';
 /**
@@ -55,7 +57,7 @@ import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
-import { decodeAccessTokenOrgSlug } from './authTokenClaims';
+import { accessTokenRefreshDelayMs, decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
 import {
   ACCOUNT_DELETION_RECEIPT_KEY,
@@ -109,6 +111,16 @@ import {
   restoreLoggedOutVaultAccount,
   type LoggedOutAccountIdentity,
 } from './authAccountLogoutPolicy';
+import {
+  applyRefreshedCredentialsToVault,
+  AUTH_ACCOUNT_VAULT_LOCK_FILE,
+  AUTH_ACCOUNT_VAULT_VERSION,
+  writeResourceSessionToVault,
+  type ActiveRefreshCredentialCommit,
+  type AuthAccountVault,
+  type StoredPassportSession,
+  type StoredResourceSession,
+} from './authRefreshCommit';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -218,12 +230,6 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-// The aggregate vault stays readable by v1 clients for explicit-login
-// compatibility. Per-membership logout tombstones live in a separate key that
-// older clients never read or rewrite, so their Passport sync cannot resurrect
-// an account explicitly logged out by a newer client.
-const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 
 
@@ -235,35 +241,6 @@ const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 //    落 main 进程本地标记并通过 AuthState 独立投影给 renderer,不混入 User;
 //  - feishuOpenId → 退役,飞书登录已整体下线,身份锚(identityAnchor)只写 email;
 //  - role(产品级 admin)→ 退役,唯一消费是侧栏头像角标(纯装饰),一并移除。
-
-interface StoredResourceSession {
-  realm: AuthRegion;
-  refreshToken: string;
-  metadata: StoredAccountMetadata;
-  lastUsedAt: number;
-}
-
-interface StoredPassportSession {
-  realm: AuthRegion;
-  passportId: string;
-  accountRefreshToken: string;
-  memberships: StoredAccountMetadata[];
-}
-
-interface AuthAccountVault {
-  version: typeof AUTH_ACCOUNT_VAULT_VERSION;
-  activeAccountKey: string | null;
-  resources: Record<string, StoredResourceSession>;
-  passports: Record<string, StoredPassportSession>;
-  /** Memberships explicitly logged out on this device stay hidden until a fresh login restores them. */
-  loggedOutAccountKeys?: string[];
-  /**
-   * Durable signed-out owner marker. The vault is the crash-consistent owner
-   * record, so this must win over a compatibility session left behind by an
-   * interrupted logout until another account is explicitly activated.
-   */
-  signedOutAt?: number;
-}
 
 export interface AuthState {
   user: User | null;
@@ -291,6 +268,11 @@ export interface AuthState {
    * 续期持久化,renderer 应显示可操作提示;成功读写一次后自动回 false。
    */
   credentialStoreUnavailable: boolean;
+  /**
+   * Client mode only, from the Host: why the Host serving this window did not start (shared/hostStartFailure.ts).
+   * Absent in every state this process produces itself and in an ordinary signed-out Host state.
+   */
+  hostUnavailable?: HostUnavailable | null;
 }
 
 export interface AuthInitializeOptions {
@@ -505,6 +487,15 @@ export function setAuthRefreshOverride(
 ): void {
   authRefreshOverride = fn;
   delegatedAuthState = null;
+}
+
+/**
+ * Client mode, while the Host serving this window reports that it did not start: the window does not sign in
+ * or skip sign-in on its own. Doing so would write a session, the saved accounts and the owner beside a Host
+ * that stays down. Lifted when sign-in moves to the Host (docs/host/client-mode-account-switch.md 3.5).
+ */
+function hostNotStartedInClientMode(): boolean {
+  return authRefreshOverride !== null && readHostUnavailableReason(delegatedAuthState) !== null;
 }
 
 export function receiveHostAuthState(state: AuthState): void {
@@ -1475,31 +1466,6 @@ async function removeRejectedResourceSession(input: {
   });
 }
 
-function writeResourceSessionToVault(
-  vault: AuthAccountVault,
-  pair: AuthTokenPair,
-  realm: AuthRegion,
-  passportId: string,
-  options: {
-    markActive?: boolean;
-    lastUsedAt?: number;
-    restoreLoggedOutAccount?: boolean;
-  } = {},
-): void {
-  const key = accountVaultKey(realm, pair.membership.id);
-  if (options.restoreLoggedOutAccount) restoreLoggedOutVaultAccount(vault, key);
-  vault.resources[key] = {
-    realm,
-    refreshToken: pair.refreshToken,
-    metadata: metadataFromMembership(pair.membership, passportId),
-    lastUsedAt: options.lastUsedAt ?? Date.now(),
-  };
-  if (options.markActive !== false) {
-    delete vault.signedOutAt;
-    vault.activeAccountKey = key;
-  }
-}
-
 async function rememberPassportSession(input: {
   realm: AuthRegion;
   passportId: string;
@@ -1681,8 +1647,6 @@ function assertPassportReplacementStored(result: PassportSessionReplacementResul
   );
 }
 
-type ActiveRefreshCredentialCommit = 'active' | 'inactive' | 'discarded';
-
 async function commitDesktopRefreshCredentials(
   pair: AuthTokenPair,
   realm: AuthRegion,
@@ -1695,37 +1659,15 @@ async function commitDesktopRefreshCredentials(
   return transactAuthAccountVault(
     (vault) => {
       options.validateBeforeWrite?.();
-      const key = accountVaultKey(realm, pair.membership.id);
-      const latestSession = readPersistedAuthSession();
-      const requestedTokenStillStored =
-        (latestSession?.realm === realm && latestSession.refreshToken === requestedRefreshToken) ||
-        (vault.activeAccountKey === key &&
-          vault.resources[key]?.realm === realm &&
-          vault.resources[key]?.refreshToken === requestedRefreshToken) ||
-        (realm === AUTH_REGION &&
-          readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === requestedRefreshToken);
-      const canClaimUninitializedVault =
-        options.allowUnclaimedVault === true &&
-        vault.activeAccountKey === null &&
-        typeof vault.signedOutAt !== 'number' &&
-        Object.keys(vault.resources).length === 0 &&
-        !loggedOutAccountKeySet(vault).has(key);
-      const stillOwnsActiveSession =
-        requestedTokenStillStored && (vault.activeAccountKey === key || canClaimUninitializedVault);
-      const passportId = pair.membership.passportId;
-      if (
-        passportId &&
-        (stillOwnsActiveSession || vault.resources[key]?.refreshToken === requestedRefreshToken)
-      ) {
-        // A passive stale refresh may still rotate account A's resource token
-        // after the primary has committed account B. Preserve A for a future
-        // explicit switch, but never let that late result reclaim activeAccountKey.
-        writeResourceSessionToVault(vault, pair, realm, passportId, {
-          markActive: stillOwnsActiveSession,
-        });
-      }
-      if (stillOwnsActiveSession) return 'active';
-      return vault.resources[key] ? 'inactive' : 'discarded';
+      return applyRefreshedCredentialsToVault(vault, {
+        pair,
+        realm,
+        requestedRefreshToken,
+        allowUnclaimedVault: options.allowUnclaimedVault,
+        buildRegion: AUTH_REGION,
+        readStoredSession: readPersistedAuthSession,
+        readLegacyResourceRefreshToken: () => readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY),
+      });
     },
     (commit) => {
       if (commit === 'active') {
@@ -3187,8 +3129,7 @@ function scheduleRefresh(token: string): void {
   // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
   // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
-    const delay = (payload.exp - 300) * 1000 - Date.now();
+    const delay = accessTokenRefreshDelayMs(token, Date.now());
     if (delay <= 0) {
       refresh();
     } else {
@@ -4348,6 +4289,7 @@ export function hasNoPersistedAuthCredentials(): boolean {
 
 /** Enter the account-free local session through the shared projection boundary. */
 export async function enterLocalMode(): Promise<AuthState> {
+  if (hostNotStartedInClientMode()) throw createIpcError('PRECONDITION_FAILED', HOST_NOT_STARTED);
   stopColdStartRecovery();
   browserAuthorizationSlot.cancelActive();
   // Local mode has a different data owner. Drop process-local generic OAuth
@@ -5301,17 +5243,25 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   return loginFlowState;
 }
 
-async function discoverOrganizationRealm(org: string, expectedLoginFlowEpoch = loginFlowEpoch) {
+async function discoverOrganizationRealm(
+  org: string,
+  expectedLoginFlowEpoch = loginFlowEpoch,
+  options: { allowPartialSuccess?: boolean } = {},
+) {
   // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后才重新冻结。
   pendingAuthRealm = null;
-  const discovery = await lookupOrganizationRealm(org, expectedLoginFlowEpoch);
+  const discovery = await lookupOrganizationRealm(org, expectedLoginFlowEpoch, options);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   pendingAuthRealm = discovery.region;
   return discovery;
 }
 
 /** Read-only realm lookup also serves optional hints after successful personal authentication. */
-async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: number) {
+async function lookupOrganizationRealm(
+  org: string,
+  expectedLoginFlowEpoch: number,
+  options: { allowPartialSuccess?: boolean } = {},
+) {
   const realmConfig = getClientEndpointRealmConfig();
   if (!realmConfig.crossRealmOrgLoginEnabled || !realmConfig.realmManifestBaseUrls) {
     const discovery = await createAuthClient(AUTH_REGION).discoverSsoOrg(org);
@@ -5319,9 +5269,9 @@ async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: numb
     return discovery;
   }
 
-  // 先并行加载/校验两区清单，再并行做 home-realm discovery。任一清单或请求
-  // 不可用都 fail closed，不凭另一侧成功结果猜区域；只有发现结果跨出安装包
-  // 区域时，后续状态机才要求用户确认。
+  // 先并行加载/校验两区清单，再并行发现企业区域；清单不可用仍阻断。
+  // 只有显式企业标识入口允许单侧发现成功，邮箱发现与登录后提示保持严格策略。
+  // 发现结果跨出安装包区域时，后续状态机仍要求用户确认。
   try {
     await Promise.all([loadClientEndpointsForRealm('cn'), loadClientEndpointsForRealm('global')]);
     assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -5335,7 +5285,7 @@ async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: numb
   const selected = await discoverSsoOrgRealm(org, {
     cn: createAuthClient('cn'),
     global: createAuthClient('global'),
-  });
+  }, options);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   return selected.discovery;
 }
@@ -5762,6 +5712,7 @@ async function runLoginAction(
       const discovery = await discoverOrganizationRealm(
         action.org.trim().toLowerCase(),
         actionLoginFlowEpoch,
+        { allowPartialSuccess: true },
       );
       const methods = ssoOrgDiscoveryToMethods(discovery);
       if (discovery.region !== AUTH_REGION) {
@@ -6027,6 +5978,7 @@ async function runLoginAction(
 }
 
 export async function dispatchLoginAction(action: unknown): Promise<DesktopLoginActionResult> {
+  if (hostNotStartedInClientMode()) return { success: false, code: HOST_NOT_STARTED, state: loginFlowState };
   const dispatchLoginFlowEpoch = loginFlowEpoch;
   // Terminal logout clears credentials synchronously, then tears down the old
   // account boundary in the background so the rejecting request can unwind.

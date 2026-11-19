@@ -21,6 +21,7 @@ import toolObservation from '../../../resources/system-skills/cindy-plugin-creat
 import messageHooks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-message-hooks.md?raw';
 import controlPoints from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-control-points.md?raw';
 import pluginModels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-models.md?raw';
+import pluginHarnesses from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-harnesses.md?raw';
 import network from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-network.md?raw';
 import settings from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-settings.md?raw';
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
@@ -72,6 +73,7 @@ export const FORGE_GUIDE = [
   messageHooks,
   controlPoints,
   pluginModels,
+  pluginHarnesses,
   network,
   settings,
   notifications,

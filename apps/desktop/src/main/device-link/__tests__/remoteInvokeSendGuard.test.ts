@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { DeviceLinkError, FILE_PEER_CHANNEL, ProviderShareScopeChangedError, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ServerApiError } from '../../serverApiClient';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
+import { RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient';
+import type { RemoteAgentPoller } from '../../remote-agent/controller/poller';
 import { isTemporaryProviderMetadataFailure } from '../providerMetadataContinuity';
 import { isShareAvailabilityRead, projectShareAvailabilityRead } from '../providerShareAvailabilityModels';
 
@@ -26,7 +29,9 @@ function loadAdapters(overrides: Record<string, unknown>) {
   const epochs = overrides.openLinkCloseEpochs as Map<string, number> ?? new Map<string, number>();
   const dependencies = {
     DeviceLinkError, ServerApiError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
-    parseProviderSharePeer,
+    parseProviderSharePeer, providerShareHostPeer,
+    parseProviderShareAgentDeviceId: (id: string) => id.startsWith('share:') ? id.slice(6) : null,
+    findReceivedShareForExecution: () => null,
     activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false,
     getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
     invokeProviderMetadataContinuity: (_target: string, _channel: string, _args: unknown[], read: () => unknown) => read(),
@@ -57,6 +62,47 @@ function loadAdapters(overrides: Record<string, unknown>) {
 
 const loadRemoteInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteInvoke;
 const loadBackgroundInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteBackgroundInvoke;
+
+// Unit regression #11345: a shared target rechecks ownership after its RPC result.
+// The real RunClient + background adapter must cancel an unsent input, but retain
+// an accepted result after Stop/signal. Earlier queue tests missed this post-RPC
+// adapter boundary. Only client admission and its acknowledgement are deferred.
+it.each(['signal', 'stop'] as const)('preserves shared input delivery across %s at the dispatch boundary', async cancel => {
+  for (const phase of ['queued', 'sent'] as const) {
+    const callId = randomUUID();
+    let release!: () => void, reached!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const delivered: string[] = [];
+    const remoteBackgroundInvoke = loadBackgroundInvoke({ client: {
+      invoke: vi.fn<DeviceLinkClient['invoke']>(async (_peer, payload, _timeout, options) => {
+        const request = payload.args![0] as { callId: string };
+        if (request.callId === callId && phase === 'queued') { reached(); await held; }
+        options?.preSend?.();
+        options?.beforeDispatch?.();
+        delivered.push(request.callId);
+        if (request.callId === callId && phase === 'sent') { reached(); await held; }
+        client.onData(Buffer.from(JSON.stringify({ t: 'result', callId: request.callId, ok: true, value: 'accepted' }) + '\n'), false);
+        return { ok: true, result: {} };
+      }),
+    } });
+    const invoke = remoteAgentInvoker(providerShareHostPeer('share', 'host'), remoteBackgroundInvoke);
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const abort = new AbortController();
+    const result = client.callWithId(callId, 'send', ['hello'], abort.signal);
+    const observed = result.then(value => ({ value }), error => ({ error }));
+    await waiting;
+    if (cancel === 'signal') abort.abort();
+    else await client.callWithId(randomUUID(), 'abort', []);
+    release();
+    if (phase === 'queued') expect(await observed).toMatchObject({ error: { name: 'AbortError' } });
+    else expect(await observed).toEqual({ value: 'accepted' });
+    expect(delivered.filter(id => id === callId)).toHaveLength(phase === 'sent' ? 1 : 0);
+    client.abandon('fixture-complete');
+  }
+});
 
 // PR #10895 / unit: real closeRemoteLink must wake a hung startup after changing
 // its epoch, without notifying other peers or retaining disposed subscriptions.
@@ -266,7 +312,7 @@ it.each(['caller cancelled', 'target disabled', 'link closed', 'still valid'])(
     const remoteInvoke = loadRemoteInvoke({
       assertRemoteControlTargetEnabled: () => { if (!enabled) throw new DeviceLinkError('REMOTE_DISABLED', 'disabled'); },
       openLinkCloseEpochs: epochs,
-      client: { invoke },
+      client: { needsLinkRecovery: () => false, invoke },
       openRemoteLink: reopen,
     });
     const cancelled = new Error('caller cancelled');
@@ -312,6 +358,7 @@ it('rejects instead of throwing when a stored direct-connection invoke outlives 
   let stored!: PeerInvoke;
   const remoteInvoke = loadRemoteInvoke({
     client: {
+      needsLinkRecovery: () => false,
       invoke: vi.fn<DeviceLinkClient['invoke']>(async (_peer, _payload, _timeout, options) => {
         options?.preSend?.();
         return { ok: true, result: null };
@@ -330,4 +377,69 @@ it('rejects instead of throwing when a stored direct-connection invoke outlives 
   let closing: Promise<unknown> | undefined;
   expect(() => { closing = stored('host', 'file-peer', [{ action: 'close' }]); }).not.toThrow();
   await expect(closing).rejects.toBe(stopped);
+});
+
+it.each(['ready', 'recover', 'cancel', 'close', 'disabled'])('handles relay recovery before sending new work: %s', async mode => {
+  const epochs = new Map<string, number>();
+  let current = true, enabled = true;
+  const invoke = vi.fn(async () => ({ ok: true, result: null }));
+  const reopen = vi.fn(async () => {
+    if (mode === 'cancel') current = false;
+    if (mode === 'close') epochs.set('host', 1);
+    if (mode === 'disabled') enabled = false;
+  });
+  const remoteInvoke = loadRemoteInvoke({
+    client: { invoke, needsLinkRecovery: () => mode !== 'ready' },
+    openRemoteLink: reopen, openLinkCloseEpochs: epochs,
+    assertRemoteControlTargetEnabled: () => { if (!enabled) throw new DeviceLinkError('REMOTE_DISABLED', 'disabled'); },
+  });
+  const pending = remoteInvoke('host', 'maker:send', [], { preSend: () => { if (!current) throw new Error('cancelled'); } });
+  if (['ready', 'recover'].includes(mode)) {
+    await expect(pending).resolves.toEqual({ ok: true, result: null });
+    expect(invoke).toHaveBeenCalledOnce();
+  } else {
+    await expect(pending).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalled();
+  }
+  expect(reopen).toHaveBeenCalledTimes(mode === 'ready' ? 0 : 1);
+});
+
+it.each(['first-listing', 'recovery', 'unsubscribed', 'closed', 'closed and disabled'])('replays only a still-owned listing subscription: %s', async mode => {
+  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === 'remoteSubscribe')!;
+  const code = ts.transpileModule(declaration.getText(source).replace(/^export /, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let topics = ['sessions'];
+  const epochs = new Map<string, number>();
+  const invoke = vi.fn(async () => ({ ok: true, result: null }));
+  const reopen = vi.fn(async () => {
+    if (mode === 'unsubscribed') topics = [];
+    if (mode.startsWith('closed')) epochs.set('host', 1);
+  });
+  // As in production: control turned off during the reopen tears the link down again and throws.
+  const teardown = vi.fn();
+  const deps = {
+    DeviceLinkError, sharedTaskTopics: (_id: string, topics: string[]) => topics,
+    assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+    assertRemoteControlTargetEnabledAfterReopen: () => {
+      if (mode !== 'closed and disabled') return;
+      teardown();
+      throw new DeviceLinkError('REMOTE_DISABLED', 'disabled');
+    },
+    client: { invoke, isLinkReady: () => false, needsLinkRecovery: () => mode !== 'first-listing' },
+    snapshotSubscriptions: () => [{ deviceId: 'host', topics }],
+    openLinkCloseEpochs: epochs, ensureOnlineForRequest: async () => {},
+    requiresSessionLink: () => false, openRemoteLink: reopen,
+    responsivenessTracker: null, DL_SUBSCRIBE_CHANNEL: 'device-link:subscribe',
+    deviceName: () => 'test', CONTROLLER_CAPABILITIES: [],
+  };
+  const subscribe = new Function(...Object.keys(deps), code + '; return remoteSubscribe;')(...Object.values(deps));
+  const pending = subscribe('host', ['sessions']);
+  if (mode.startsWith('closed')) await expect(pending).rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
+  else await expect(pending).resolves.toEqual({ ok: true, result: null });
+  expect(invoke).toHaveBeenCalledTimes(['first-listing', 'recovery'].includes(mode) ? 1 : 0);
+  expect(reopen).toHaveBeenCalledTimes(mode === 'first-listing' ? 0 : 1);
+  // A subscription the user's close already superseded fails as closed and never tears the link down again.
+  expect(teardown).not.toHaveBeenCalled();
 });

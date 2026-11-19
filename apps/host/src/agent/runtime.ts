@@ -874,11 +874,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   });
   piPackages.attachMaker(maker);
   // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
-  // window of a route, as the desktop's resolveVerifiedWindow (register.ts); the learned Pi cache
+  // verified window of a route, as in Desktop; the learned Pi cache
   // compatibility of this profile; and the Codex runtime's native history.
   const contextRecovery = {
     resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId),
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId, undefined, 'required'),
+    async resolveHandoffWindow(sessionId: string, route: {
+      agentKind: string; model: string; providerId: string | null; agentDeviceId?: string | null;
+    }) {
+      if (route.agentDeviceId) return null;
+      return startOptions.resolveConfiguredContextWindow(
+        getActiveCatalog(), dbToMakerAgentKind(route.agentKind), route.providerId, route.model,
+        await startOptions.readStoredSessionContextWindowBudget(sessionId), 'required',
+      );
+    },
     piCompat: {
       read: piNativeCompatOverrides.readPiNativeCompatOverride,
       record: piNativeCompatOverrides.recordPiNativeCompatOverride,
@@ -888,8 +897,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
   // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
   const modelWindow = {
-    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null, verification?: 'required') =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget, verification),
     readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
   };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,

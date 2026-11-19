@@ -8,8 +8,13 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { Maker } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 
+import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
+import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
@@ -22,6 +27,7 @@ import {
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
+import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
 import {
@@ -50,6 +56,13 @@ export interface StartGoalControllerDeps {
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 
+/** Goals do not run on plugin engines; every other live session keeps its Goal path. */
+function isGoalEngineSession<T extends { readonly agentKind: EngineKind }>(
+  session: T,
+): session is T & { readonly agentKind: AgentKind } {
+  return !isPluginEngineTask(session);
+}
+
 let _controller: GoalController | null = null;
 // Reuse the bounded startup gate, with one instance per controller lifetime.
 let _controllerReady = createMakerStartupGate();
@@ -67,7 +80,11 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
-    getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
+    // Goal 只跑在内置引擎上;插件引擎任务的 live 会话不当作 Goal 会话(sessionRestore 同口径拒绝)。
+    getSession: (id): SessionLike | undefined => {
+      const session = deps.maker.getSession(id);
+      return session && isGoalEngineSession(session) ? session : undefined;
+    },
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
     ensureSession: (id): Promise<SessionLike | undefined> =>
@@ -119,6 +136,18 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     getAccountLimit: async (agentKind, sessionId, turnError) => {
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+      const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
+      if (provider && isOpenCodeGoProvider(provider, agentKind)) {
+        // Go uses an API key for its subscription. A rejected turn can consult
+        // the official allowance for this runtime; successful turns carry on.
+        if (turnError === undefined || !row || sessionUsesOtherMachineAccount(row)) return null;
+        const route = providerRoutingForModel(provider, agentKind, modelId ?? undefined);
+        if (!route || !opencodeGoUsageEndpoint(route.upstream)) return null;
+        const result = await readOpenCodeGoAccountUsage({ providerId: provider.id, agent: agentKind }, 'after-limit');
+        if (result.status !== 'ready' || result.stale || result.snapshot.kind !== 'opencode-go-quota') return null;
+        const exhausted = result.snapshot.windows.filter(w => w.limited);
+        return accountUsageLimitFromExhaustedResets(exhausted.map(w => w.resetsAt), Date.now());
+      }
       const family = subscriptionFamilyOf(agentKind, providerId);
       // ChatGPT windows do not establish credit-backed admission, and cached credits
       // may be stale or unknown. Let the next normal turn reach the provider; retain
