@@ -48,32 +48,40 @@ export default {
     // UI tier. Feedback #12: a 1920px desktop was still capped at 914px.
     // Existing narrow-pane fixtures never measured a wide task column or the
     // relationship between prose, wide blocks and the composer.
-    const measure = async () => page.evaluate(() => {
-      const pane = document.querySelector('[data-task-pane]').getBoundingClientRect();
-      const stream = document.querySelector('[data-scroll-container]');
+    const measure = async (index = 0) => page.evaluate(index => {
+      const paneElement = document.querySelectorAll('[data-task-pane]')[index];
+      const pane = paneElement.getBoundingClientRect();
+      const stream = paneElement.querySelector('[data-scroll-container]');
       const column = stream.firstElementChild.getBoundingClientRect();
-      const composer = document.querySelector('[data-width-composer]').getBoundingClientRect();
-      const markdown = document.querySelector('[data-message-client-id="answer"] .msg-markdown');
+      const composer = paneElement.querySelector('[data-width-composer]').getBoundingClientRect();
+      const markdown = paneElement.querySelector('[data-message-client-id="answer"] .msg-markdown');
       const paragraph = markdown.querySelector(':scope > p');
       const prose = paragraph.getBoundingClientRect();
+      const table = markdown.querySelector('table');
+      const tableViewport = table?.parentElement;
+      const headerLines = table ? Math.max(...Array.from(table.querySelectorAll('th'), th => {
+        const range = document.createRange();
+        range.selectNodeContents(th);
+        return Math.ceil(range.getBoundingClientRect().height / parseFloat(getComputedStyle(th).lineHeight));
+      })) : undefined;
       const lineHeight = parseFloat(getComputedStyle(paragraph).lineHeight);
       return { pane: pane.width, column: column.width, composer: composer.width, prose: prose.width,
-        supportedWideCap: Number(document.querySelector('[data-task-width]').dataset.wideCap),
+        supportedWideCap: Number(paneElement.querySelector('[data-task-width]').dataset.wideCap),
         proseLines: Math.round(prose.height / lineHeight),
-        table: markdown.querySelector('table')?.getBoundingClientRect().width,
+        table: table?.getBoundingClientRect().width, tableViewport: tableViewport?.clientWidth, headerLines,
         code: markdown.querySelector('pre')?.getBoundingClientRect().width,
         cssViewport: innerWidth, pageScale: visualViewport?.scale, dpr: devicePixelRatio,
         centerDelta: (composer.left + composer.right - column.left - column.right) / 2,
         overflow: document.documentElement.scrollWidth - innerWidth,
         withinPane: composer.left >= pane.left && composer.right <= pane.right };
-    });
-    const verify = async () => {
-      await page.waitForFunction(() => {
-        const pane = document.querySelector('[data-task-pane]');
-        const el = document.querySelector('[data-task-width]');
+    }, index);
+    const verify = async (index = 0) => {
+      await page.waitForFunction(index => {
+        const pane = document.querySelectorAll('[data-task-pane]')[index];
+        const el = pane.querySelector('[data-task-width]');
         return parseFloat(el.style.getPropertyValue('--cindy-message-width')) <= pane.getBoundingClientRect().width;
-      });
-      const m = await measure();
+      }, index);
+      const m = await measure(index);
       // --compare loads the original production hook, with no wide-cap export.
       // Preserve its known6px one-sided gutter in before evidence; the new
       // ordinary-task layout must share the composer's exact center axis.
@@ -81,8 +89,15 @@ export default {
       assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= (original ? 6.1 : 1), JSON.stringify(m));
       assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
       assert.ok(Math.abs(m.prose - m.column) <= 1, `Prose and blocks share one content edge: ${JSON.stringify(m)}`);
-      for (const width of [m.table, m.code].filter(value => value !== undefined)) {
+      for (const width of [m.code].filter(value => value !== undefined)) {
         assert.ok(Math.abs(width - m.column) <= 1, `Wide blocks share the prose column: ${JSON.stringify(m)}`);
+      }
+      if (m.table !== undefined) {
+        assert.ok(Math.abs(m.tableViewport - m.column) <= 1 && m.table >= m.tableViewport - 1,
+          `The table scrollport shares the content column: ${JSON.stringify(m)}`);
+        // UI regression2026-11-19: a280px task pane stacked seven labels
+        // character by character; the earlier wide-column checks missed it.
+        if (m.pane < 700) assert.equal(m.headerLines, 1, `Narrow table labels remain readable: ${JSON.stringify(m)}`);
       }
       assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
       if (!original && !ui.data.legacy && m.pane >= 1600) {
@@ -91,7 +106,7 @@ export default {
       if (m.pane >= 1014 && m.pane <= 1200) {
         assert.ok(Math.abs(m.column - 914) <= 1, `Laptop reading width remains unchanged: ${JSON.stringify(m)}`);
       }
-      console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, ...m }));
+      console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, paneIndex: index, ...m }));
     };
     if (ui.data.splitWidth) {
       // User requested extremely narrow views. Top-level task panes stop at400,
@@ -106,7 +121,25 @@ export default {
       await page.mouse.up();
       await page.waitForFunction(width => Math.abs(document.querySelector('[data-task-pane]').getBoundingClientRect().width - width) < 1, ui.data.splitWidth);
       await verify();
+      await verify(1);
       await ui.capture('narrow-split');
+      const tableViewport = page.locator('[data-task-pane]').first().locator('.msg-markdown table').locator('..');
+      await tableViewport.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+      const rightEdge = await tableViewport.evaluate(el => ({
+        scrolled: el.scrollLeft > 0,
+        right: el.getBoundingClientRect().right,
+        last: el.querySelector('tr').lastElementChild.getBoundingClientRect().right,
+      }));
+      assert.ok(rightEdge.scrolled && rightEdge.last <= rightEdge.right + 1, 'Last columns remain reachable inside the table');
+      await ui.capture('table-last-columns');
+      await tableViewport.evaluate(el => { el.scrollLeft = 0; });
+      if (ui.data.splitWidth === 280) {
+        await gutter.press('End');
+        await verify();
+        await verify(1);
+        await ui.capture('other-pane-min');
+        await gutter.press('Home');
+      }
     }
     await verify();
     const process = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
