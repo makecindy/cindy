@@ -133,6 +133,7 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
         : ports.coordinator().autoRetryLastError(sessionId, attemptToken),
     },
     interruptedTurnAutoResumeGuard,
+    settlePausedResumeIntoHistory: true,
     autoResumeBookkeeping,
     // Teammate tasks are refused at admission: no input carries a Teammate route to fall back from.
     botFallbackInputs: { has: () => false },
