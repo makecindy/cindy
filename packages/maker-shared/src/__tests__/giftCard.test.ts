@@ -103,6 +103,35 @@ describe('gift card server responses', () => {
     if (creditExpiresAt === null) expect(() => projectGiftCardPreview({ card: purchased })).toThrow();
   });
 
+  // 来源与去向对不上（买来的卡却进赠送余额，或后台发的卡却进充值余额）时，两端会承诺错误的到账条款：拒绝。
+  it.each([
+    ['PURCHASE', 'PROMOTIONAL', false],
+    ['PLATFORM', 'PURCHASED', false],
+    ['GIFT', 'PROMOTIONAL', false],
+    ['PLATFORM', 'PROMOTIONAL', true],
+    ['PURCHASE', 'PURCHASED', true],
+  ])('checks that source %s goes with destination %s', (source, destination, accepted) => {
+    const terms = destination === 'PURCHASED' ? { claimDeadline: null, validityDays: null } : {};
+    const project = () => projectGiftCardPreview({ card: { ...card, source, destination, ...terms } });
+    if (accepted) expect(project().card.destination).toBe(destination);
+    else expect(project).toThrow();
+  });
+
+  // 买来的卡到账额度就是卡面金额：金额对不上的兑换结果拒绝，写法不同但数值相等的照常接受。
+  it.each([
+    ['20', true],
+    ['20.000000000', true],
+    ['1', false],
+  ])('accepts a purchased redemption crediting %s only when it equals the face value', (creditAmount, accepted) => {
+    const redeemed = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+      status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const project = () => projectGiftCardRedemption({ card: redeemed, credit: { state: 'APPLIED', amount: creditAmount, expiresAt: null } });
+    if (accepted) expect(project().credit.amount).toBe(creditAmount);
+    else expect(project).toThrow();
+  });
+
   // 买来的卡永久有效：预览或兑换结果里出现「已过期」同样自相矛盾，拒绝而不是告诉用户卡过期了。
   it('rejects a purchased card reported as expired', () => {
     const expired = {

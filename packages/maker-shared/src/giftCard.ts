@@ -176,18 +176,33 @@ function validityDaysOf(value: unknown): number {
   return value;
 }
 
+/** 卡的来源与它兑换后进哪一种余额一一对应：后台发的进赠送余额，用户买的进充值余额。 */
+const DESTINATION_BY_SOURCE: Record<string, GiftCardDestination> = {
+  PLATFORM: 'PROMOTIONAL',
+  PURCHASE: 'PURCHASED',
+};
+
 /**
  * 旧服务端不下发 destination，它发出的卡都是后台发放、进赠送余额。用户买的卡
  * 没有领取截止和有效天数；后台发的卡这两项必须齐全，缺一项就不能告诉用户条款。
+ * 同时给了来源时两者必须对得上：去向决定两端承诺的到账条款，自相矛盾的响应直接拒绝。
  */
 function destinationOf(value: Record<string, unknown>): GiftCardDestination {
   const { destination, source } = value;
+  if (source !== undefined && (typeof source !== 'string' || !Object.hasOwn(DESTINATION_BY_SOURCE, source))) invalid();
   if (destination === undefined) {
     if (source === 'PURCHASE') invalid();
     return 'PROMOTIONAL';
   }
   if (destination !== 'PROMOTIONAL' && destination !== 'PURCHASED') invalid();
+  if (source !== undefined && DESTINATION_BY_SOURCE[source as string] !== destination) invalid();
   return destination;
+}
+
+/** 两个十进制金额是否相等（去掉小数末尾的 0 再比，如 100 与 100.000000000）。 */
+function sameAmount(left: string, right: string): boolean {
+  const normalize = (value: string) => (value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value);
+  return normalize(left) === normalize(right);
 }
 
 function projectCard(value: unknown): GiftCard {
@@ -243,7 +258,7 @@ export function projectGiftCardRedemption(value: unknown): { card: GiftCard; cre
   if (!isRecord(value)) invalid();
   const card = projectCard(value.card);
   const credit = projectCredit(value.credit);
-  // 买来的卡进充值余额、永久有效：到账额度带过期时间同样自相矛盾，拒绝。
-  if (card.destination === 'PURCHASED' && credit.expiresAt !== null) invalid();
+  // 买来的卡进充值余额、永久有效，到账额度就是卡面金额：带过期时间或金额对不上同样自相矛盾，拒绝。
+  if (card.destination === 'PURCHASED' && (credit.expiresAt !== null || !sameAmount(card.amount, credit.amount))) invalid();
   return { card, credit };
 }
