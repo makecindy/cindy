@@ -352,7 +352,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     expect(parsePayload(result)).toEqual({ ok: true, ghost });
   });
 
-  it("GHOST_NOT_FOUND 引导回查清单或改道，且不要重复重试同一目标", async () => {
+  it("GHOST_NOT_FOUND 保留宿主恢复指引并过滤内部字段", async () => {
     const result = await handleGhostInfo(
       fakeDeps({
         getAwakeGhost: async () =>
@@ -370,7 +370,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
       ok: false,
       errorCode: "GHOST_NOT_FOUND",
       message:
-        "目标插件不存在；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。",
+        "目标插件不存在",
     });
   });
 
@@ -920,14 +920,14 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(String(payload.hint)).toContain("markdown");
   });
 
-  it("xdt_media_descriptions 透传但不被 hoist(视觉桥描述不触发图卡渲染)", async () => {
+  it("附加元数据透传但不提升为媒体卡", async () => {
     const result = await handleGhostCall(
       fakeDeps({
         callGhostTool: async () => ({
           ok: true,
           result: { done: true },
           producedMedia: ["cindy-media://blobs/abc.png"],
-          xdt_media_descriptions: [
+          extra_notes: [
             { url: "cindy-media://blobs/abc.png", description: "一张截图" },
           ],
         }),
@@ -935,12 +935,12 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       { ghost_id: "xd-feishu", tool: "call_tool", args: {} },
     );
     const payload = parsePayload(result);
-    // 描述字段原样透传给模型(纯文本模型靠它看到图)。
-    expect(payload.xdt_media_descriptions).toEqual([
+    // 额外字段原样透传给模型。
+    expect(payload.extra_notes).toEqual([
       { url: "cindy-media://blobs/abc.png", description: "一张截图" },
     ]);
     // 不被提升为图卡字段:渲染层只认 xdt_image_urls / xdt_video_urls 顶层,
-    // xdt_media_descriptions 不是媒体卡,不会触发双份渲染。
+    // 普通额外字段不是媒体卡,不会触发双份渲染。
     expect(payload.xdt_image_urls).toBeUndefined();
   });
 
@@ -1193,6 +1193,16 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it('binds an original paid invocation during prepare without an extra tool action', async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', provider_id: 'relay', model_id: 'video', capability: 'video.generate', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(callMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'prepare', providerId: 'relay', modelId: 'video', capability: 'video.generate', sourceInvocationId: 'paid-source' }));
+  });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
     const deps = fakeDeps({ callMedia });
@@ -1207,6 +1217,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       provider_id: "openai",
+      source_agent: 'pi',
+      guide_source: 'official',
       model_id: "vendor/image-model",
     });
 
@@ -1214,6 +1226,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       providerId: "openai",
+      sourceAgent: 'pi',
+      guideSource: 'official',
       modelId: "vendor/image-model",
     });
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });

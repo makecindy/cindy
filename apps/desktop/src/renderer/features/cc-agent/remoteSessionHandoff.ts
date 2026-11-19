@@ -24,6 +24,13 @@
  * 直接调它就自动带齐这三条不变量。
  */
 
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { isExplicitRemoteNotFoundError } from './remotePrecreatedWorktree';
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
+import type { AttachedFile } from '@/lib/fileTypes';
+import type { ChatMessage } from '@/lib/makerChatStore';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { createLogger } from '@/lib/logger';
@@ -80,15 +87,16 @@ export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void 
   // 项目外的草稿区再跳回项目。必须先于临时行与回流登记。
   if (p.markFirstSend) remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);
   // ② 临时行:让 SessionView 的 delayed-create 交接不必等权威快照。
+  const existing = remoteProjectsStore.getDeviceSessions(p.deviceId).some(row => row.id === p.remoteSessionId);
+  // The host listing can beat its create ACK. Keep the host row and skip the
+  // redundant list request so the first input can use the link immediately.
+  if (existing) return;
   if (p.workDir) {
-    remoteProjectsStore.mergeDeviceSessions(p.deviceId, p.deviceName, [
-      buildProvisionalRemoteSession({
-        sessionId: p.remoteSessionId,
-        workDir: p.workDir,
-        args: p.createArgs,
-        nowIso: p.nowIso,
-      }),
-    ]);
+    const row = buildProvisionalRemoteSession({
+      sessionId: p.remoteSessionId, workDir: p.workDir, args: p.createArgs, nowIso: p.nowIso,
+    });
+    const projectDir = remoteProjectsStore.getCreationPreview(p.remoteSessionId)?.row.projectDir;
+    remoteProjectsStore.mergeDeviceSessions(p.deviceId, p.deviceName, [projectDir ? { ...row, projectDir } : row]);
   }
   // ③ 权威快照回流:**不等它**(见上)。失败只记日志 —— sessions:created push 还会触发一次
   // 防抖重拉,不能因为镜像慢一拍就影响交接。refreshRemoteDeviceSessions 本身不抛,
@@ -102,4 +110,80 @@ export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void 
     .catch((err) => {
       log.warn(`[${p.logTag}] remote sessions refresh after create threw`, err);
     });
+}
+
+/** Pin the same task and message identities used for delivery, before opening the task. */
+export function previewRemoteCreation(p: RemoteSessionHandoffParams, title: string | null, message: ChatMessage, files?: AttachedFile[]): void {
+  remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId);
+  markSessionStarting(p.remoteSessionId);
+  if (title) remoteProjectsStore.setPendingTitlePreview(p.remoteSessionId, title, Boolean(normalizeAutoTitle(message.content)));
+  remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);
+  const attachments = buildUserMessageAttachmentPayload(files);
+  const row = buildProvisionalRemoteSession({
+    sessionId: p.remoteSessionId, workDir: p.workDir ?? '', args: p.createArgs, nowIso: p.nowIso,
+  });
+  remoteProjectsStore.setCreationPreview({
+    row: { ...row, projectDir: p.createArgs.workingDir, title: title || row.title, userSendAt: p.nowIso,
+      deviceLinkDeviceId: p.deviceId, deviceLinkDeviceName: p.deviceName, deviceLinkConnectionStatus: 'connected' },
+    message: { ...message, images: attachments.imageAttachments, files: attachments.fileAttachments },
+  });
+}
+
+export function updateRemoteCreationAttachments(id: string, files: AttachedFile[]): void {
+  const preview = remoteProjectsStore.getCreationPreview(id);
+  if (!preview) return;
+  const { imageAttachments, fileAttachments } = buildUserMessageAttachmentPayload(files);
+  remoteProjectsStore.setCreationPreview({
+    ...preview, message: { ...preview.message, images: imageAttachments, files: fileAttachments },
+  });
+}
+
+// A failed draft can be edited on a different computer or with a different route.
+// Only an unchanged target may resume the original host operation.
+const retryTargets = new WeakMap<ReturnType<typeof getDataOwnerGeneration>, Map<string, string>>();
+function targetKey(deviceId: string, args: DeviceLinkCreateArgs): string {
+  return JSON.stringify([deviceId, { ...args, id: undefined }]);
+}
+
+export function rememberRemoteCreationRetry(id: string, deviceId: string, args: DeviceLinkCreateArgs): void {
+  const owner = getDataOwnerGeneration();
+  const targets = retryTargets.get(owner) ?? new Map();
+  targets.set(id, targetKey(deviceId, args));
+  retryTargets.set(owner, targets);
+}
+
+export function remoteCreationRetryId(composerKey: string, deviceId: string, args: DeviceLinkCreateArgs): string | undefined {
+  const id = composerKey.replace(/^remote-create-draft-/, '');
+  if (composerKey !== id && retryTargets.get(getDataOwnerGeneration())?.get(id) === targetKey(deviceId, args)) return id;
+  return undefined;
+}
+
+export async function createRemoteSessionForPreview(
+  args: DeviceLinkCreateArgs, id: string,
+  invoke: (channel: string, args: unknown[]) => Promise<unknown>,
+  retry = false,
+): Promise<{ sessionId: string; workDir?: string }> {
+  const owner = getDataOwnerGeneration();
+  const probe = async () => {
+    const row = await invoke('local-db:sessions:get', [id]) as { id?: string; workingDir?: string; status?: string };
+    if (row?.id !== id || row.status !== 'active' || !row.workingDir) throw new Error('Remote task could not be confirmed');
+    retryTargets.get(owner)?.delete(id);
+    return { sessionId: id, workDir: row.workingDir };
+  };
+  if (retry) {
+    try { return await probe(); }
+    catch (error) { if (!isExplicitRemoteNotFoundError(error)) throw error; }
+  }
+  let result: { sessionId?: string; workDir?: string } | null;
+  try {
+    result = await invoke('maker:create-session', [args]) as typeof result;
+  } catch (error) {
+    if (isTransientRemoteError(error)) {
+      try { return await probe(); } catch { /* Report the original create error. */ }
+    }
+    throw error;
+  }
+  if (result?.sessionId !== id) throw new Error('Remote host did not confirm the requested task');
+  retryTargets.get(owner)?.delete(id);
+  return { sessionId: id, workDir: result.workDir };
 }

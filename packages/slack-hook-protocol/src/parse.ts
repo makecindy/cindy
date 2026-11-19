@@ -1163,6 +1163,9 @@ function validateAgentModels(v: unknown): string | null {
       if (m.group !== undefined && !isNullableString(m.group)) {
         return `${path}.group must be a string or null when present`;
       }
+      if (m.provider !== undefined && !isNullableString(m.provider)) {
+        return `${path}.provider must be a string or null when present`;
+      }
     }
     // permissionModes 可选(旧版 desktop 不发); present 时校验形状
     if (g.permissionModes !== undefined) {

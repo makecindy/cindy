@@ -7,6 +7,28 @@ import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocati
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
 
 describe('custom xAI Videos protocol', () => {
+  // #11243: the paid boundary must accept first/last frames for 1.5, while
+  // rejecting the same input on the classic model and invalid reference resolution (unit).
+  it('accepts 1.5 frame pins and keeps the classic model single-image', () => {
+    const frame = { url: 'https://images.example/frame.png' };
+    const body = { prompt: 'move', image: frame, last_frame: frame, resolution: '720p' };
+    expect(() => validateCustomVideoBody(body, true, 'xai-videos', 'xai/grok-imagine-video-1.5')).not.toThrow();
+    expect(() => validateCustomVideoBody(body, true, 'xai-videos', 'xai/grok-imagine-video')).toThrow();
+    expect(() => validateCustomVideoBody({ ...body, resolution: '1080p' }, true, 'xai-videos', 'xai/grok-imagine-video-1.5')).toThrow();
+  });
+  it('validates 1.5 keyframe timing, reference inputs and optional prompt', () => {
+    const frame = { url: 'https://images.example/frame.png' };
+    const validate = (body: Record<string, unknown>) => validateCustomVideoBody(body, true, 'xai-videos', 'xai/grok-imagine-video-1.5');
+    expect(() => validate({ last_frame: frame, resolution: '720p' })).not.toThrow();
+    expect(() => validate({ reference_images: [frame], keyframes: [{ image: frame, timestamp_s: 1 }], duration: 6 })).not.toThrow();
+    for (const body of [
+      { keyframes: [{ image: frame, timestamp_s: 6 }], duration: 6 },
+      { keyframes: [{ image: frame, timestamp_s: 1 }, { image: frame, timestamp_s: 1.01 }] },
+      { keyframes: Array.from({ length: 5 }, (_, i) => ({ image: frame, timestamp_s: i + 1 })) },
+      { reference_images: [] }, { last_frame: { url: 'file:///private/test.png' } },
+      { image: frame, resolution: ['720p'] },
+    ]) expect(() => validate(body)).toThrow();
+  });
   // /v1/videos 回归：标准图片输入在付费边界不得被当作未知字段；原测试只有 MiniMax content。
   // unit，最小输入为 prompt + 一条受管图片引用；仍拒绝非图片、超量、混合格式和文生视频引用。
   it('validates relay input_reference as one or two images without MiniMax content', () => {

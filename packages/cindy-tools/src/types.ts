@@ -210,14 +210,6 @@ export type CindyGhostCallResult =
        */
       producedMedia?: string[];
       /**
-       * 工具结果图片的文字描述(可选,host 视觉桥最佳努力附加)。纯文本模型
-       * 拿不到 cindy-media:// 图片内容只能看到 URL 文本——host 把图片经
-       * 外部多模态模型转成描述随结果带回,模型据此「看到」图而非幻觉编造。
-       * 仅 host 侧注入的视觉桥能力存在且命中时附加;渲染层/IM 出站只消费
-       * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
-       */
-      xdt_media_descriptions?: Array<{ url: string; description: string }>;
-      /**
        * Images the plugin shows the model (host-checked and re-encoded under
        * the inline budget). ghost_call returns them as MCP image content after
        * the JSON text; they are not part of the JSON.
@@ -359,6 +351,10 @@ export type CindyMediaToolRequest =
       action: 'prepare';
       /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
       providerId?: string;
+      sourceAgent?: 'claude-code' | 'codex' | 'pi';
+      guideSource?: 'auto' | 'official';
+      /** 修正 Guide 时复用原付费调用，prepare 后直接 request/poll。 */
+      sourceInvocationId?: string;
       modelId: string;
       capability: CindyMediaCapability;
     }

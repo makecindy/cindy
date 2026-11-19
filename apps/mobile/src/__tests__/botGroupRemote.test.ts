@@ -3,6 +3,7 @@ import { groupExecutionVisualFixture } from '@/debug/groupExecutionVisualFixture
 import { getRemoteResource } from '@/device-link/remoteResources';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 import { botGroupComposerPlanState, botGroupPlanStepState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -49,6 +50,19 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  // Unit regression: exercise the real wire parser and stop predicate. Existing member
+  // fixtures omitted public Cindy; losing assistant hid the requester's valid stop control.
+  it.each([[true, true, true], [true, false, false], [undefined, true, false], ['true', true, false]])(
+    'preserves public Cindy stop ownership through remote parsing (assistant=%s, mine=%s)', (assistant, isSelfRequested, allowed) => {
+      const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsOwnedStop: true,
+        members: [{ botId: 'public-cindy', name: 'Cindy', assistant, isOwned: false }],
+        round: { status: 'running', canStop: true, canContinue: false, speakers: [
+          { botId: 'public-cindy', sessionId: null, executionId: 'public-run', activity: 'reply', isSelfRequested },
+        ] },
+      }))!;
+      expect(canStopBotGroupSpeaker(parsed, parsed.round.speakers[0]!)).toBe(allowed);
+    });
+
   it.each([
     ['RUNTIME_TIMEOUT', 'unclaimed_timeout', 'unclaimed_timeout'],
     ['RUNTIME_TIMEOUT', 'future-reason', undefined],
@@ -60,6 +74,13 @@ describe('parseBotGroupChatData', () => {
       runtimeFailureCode: code, runtimeFailureReason: reason }] }))!;
     expect(parsed.messages[0].runtimeFailureReason).toBe(expected);
   });
+  // Unit regression: Host's optional permission affordance was dropped by the real resource
+  // parser, hiding own-companion removal. Old/malformed hosts must not authorize the entry.
+  it.each([true, undefined, 'true'])('preserves own-companion removal capability only for explicit true (%s)', flag => {
+    const parsed = parseBotGroupChatData(chatData({ supportsOwnBotRemoval: flag }));
+    expect(parsed?.supportsOwnBotRemoval).toBe(flag === true);
+  });
+
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
     const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
@@ -227,12 +248,24 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.hasMoreBefore).toBe(true);
   });
 
+  it.each([true, false, undefined, 'true'])('retains requester permission without granting it to old or malformed hosts (%s)', isSelfRequested => {
+    const parsed = parseBotGroupChatData(chatData({ round: { status: 'running', speakers: [{
+      botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'work', timelineAt: 123, sourceMessageId: 'source', requesterName: 'Ann', isSelfRequested,
+    }] } }))!;
+    expect(parsed.round.speakers[0]).toMatchObject({ timelineAt: 123, sourceMessageId: 'source', requesterName: 'Ann' });
+    expect(parsed.round.speakers[0]?.isSelfRequested === true).toBe(isSelfRequested === true);
+  });
+
   // Unit/protocol: old hosts silently ignore scope, so only literal capabilities permit all.
-  it.each([true, false, undefined, 'true'])('preserves stop permission separately from scope support (%s)', supportsScopedStop => {
-    const parsed = parseBotGroupChatData(chatData({ canStopAll: true, supportsScopedStop,
+  it.each([true, false, undefined, 'true'])('ignores legacy stop-all and reads literal ownership support (%s)', supportsScopedStop => {
+    const parsed = parseBotGroupChatData(chatData({ serverBacked: true, canStopAll: true, supportsScopedStop, supportsOwnedStop: supportsScopedStop,
+      plans: [{ ...chatData().plans[0], canStop: true, steps: chatData().plans[0].steps.map(step => ({ ...step, canStop: true })) }],
       round: { status: 'running', speakers: [], othersActive: true, canStop: false },
     }))!;
-    expect(parsed.canStopAll).toBe(true);
+    expect(parsed.canStopAll).toBe(false);
+    expect(parsed.supportsOwnedStop).toBe(supportsScopedStop === true);
+    expect(parsed.plans[0]?.canStop).toBe(supportsScopedStop === true);
+    expect(parsed.plans[0]?.steps.every(step => step.canStop)).toBe(supportsScopedStop === true);
     expect(parsed.round.othersActive).toBe(true);
     expect(parsed.round.canStop).toBe(false);
     expect(parsed.supportsScopedStop).toBe(supportsScopedStop === true);
@@ -399,6 +432,14 @@ it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
     .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
+});
+
+// Wire: remote group management must retain the host's invitation capability and value.
+it('retains the invitation setting from a computer without enabling it on old hosts', () => {
+  expect(parseBotGroupChatData(chatData({ supportsMemberInvites: true, allowMemberInvites: true })))
+    .toMatchObject({ supportsMemberInvites: true, allowMemberInvites: true });
+  expect(parseBotGroupChatData(chatData()))
+    .toMatchObject({ supportsMemberInvites: false, allowMemberInvites: false });
 });
 
 // Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.

@@ -85,7 +85,8 @@ export interface RemoteSession {
   agentDeviceId?: string | null;
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
-  source?: string;
+  /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
+  source?: string | null;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
@@ -101,6 +102,8 @@ export interface RemoteSession {
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;
@@ -137,6 +140,9 @@ export interface RemoteSessionRuntimePending {
   profile: RemoteSessionRuntimeProfile;
 }
 
+export type MobileHandoffCoverage = 'complete' | 'condensed';
+export type MobileSystemCardData = Record<string, unknown> & { handoffCoverage?: MobileHandoffCoverage };
+
 export interface RemoteMessage {
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: import('@cindy/maker-shared/message-window').HistoryCacheReceipt;
@@ -152,7 +158,7 @@ export interface RemoteMessage {
   createdAt: string;
   /** Large settled tool input released from the transcript mirror and recoverable by message id. */
   mobileToolInputProjection?: MobileToolInputProjection;
-  systemCardData?: Record<string, unknown>;
+  systemCardData?: MobileSystemCardData;
   systemCardType?:
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */

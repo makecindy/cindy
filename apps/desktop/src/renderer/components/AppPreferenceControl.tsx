@@ -8,12 +8,14 @@ import { useTheme } from '@/hooks/useTheme';
 import { useLocale } from '@/hooks/useLocale';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 import { useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import { useComposerFollowUpPreference } from '@/hooks/useComposerFollowUpPreference';
 import { useLinkOpenPreference } from '@/hooks/useLinkOpenPreference';
 import { useStreamFadePreference } from '@/hooks/useStreamFadePreference';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { useHomeUsageDashboardPreference } from '@/hooks/useHomeUsageDashboardPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import { useWorktreeModelNamingPreference, WORKTREE_MODEL_NAMING_STORAGE_KEY } from '@/hooks/useWorktreeModelNamingPreference';
 import { getThemeFamilies, tryGetFamily } from '@/themes/families';
 import { refreshLocalThemes } from '@/themes/local-themes';
 
@@ -21,6 +23,7 @@ import { refreshLocalThemes } from '@/themes/local-themes';
 const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
   theme: { key: 'theme' }, themeFamily: { key: 'theme.familyId' }, language: { key: 'language' },
   notifications: { key: 'notifications.enabled' }, sendShortcut: { key: 'chat.sendShortcutPreference', absent: 'enter' },
+  followUpBehavior: { key: 'chat.followUpBehavior', absent: 'queue' },
   webLinks: { key: 'chat.webLinkOpenPreference', absent: 'external' },
   localLinks: { key: 'chat.localLinkOpenPreference', absent: 'sidebar' },
   streamFade: { key: 'chat.streamFadePreference', absent: 'on' },
@@ -28,26 +31,30 @@ const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknow
   showIgnoredDirectories: { key: 'fileBrowser.showIgnoredDirs', absent: false },
   homeUsageDashboard: { key: 'home.usageDashboard.enabled' },
   promptRecommendations: { key: 'prompt-recommendation-enabled' },
+  worktreeModelNaming: { key: WORKTREE_MODEL_NAMING_STORAGE_KEY, absent: false },
 };
 
 /** Mounted once in the main App. Reuses the same setters and subscribers as Settings. */
 export function AppPreferenceControl() {
   const theme = useTheme(); const locale = useLocale(); const notifications = useNotificationSettings();
-  const shortcut = useComposerSendShortcutPreference(); const web = useLinkOpenPreference('web');
+  const shortcut = useComposerSendShortcutPreference(); const followUp = useComposerFollowUpPreference(); const web = useLinkOpenPreference('web');
   const local = useLinkOpenPreference('local'); const fade = useStreamFadePreference();
   const navigation = useMessageNavRailPreference(); const files = useFileBrowserPreference();
   const home = useHomeUsageDashboardPreference(); const recommendations = usePromptRecommendationPreference();
+  const worktreeNaming = useWorktreeModelNamingPreference();
   const state: Required<AppPreferencePatch> = { theme: theme.theme, themeFamily: theme.familyId,
-    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference,
+    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference, followUpBehavior: followUp.preference,
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
-    homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled };
+    homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled,
+    worktreeModelNaming: worktreeNaming.enabled };
   const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch, active: () => boolean) => Promise<void> | undefined }>({ state, apply: () => undefined });
   current.current = { state, apply: (patch, active) => {
     if (patch.themeFamily !== undefined && !tryGetFamily(patch.themeFamily)) throw new Error('UNKNOWN_THEME');
     // The shortcut setter can reject a voice-input conflict, before other fields change.
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
     const applyOtherFields = () => {
+      if (patch.followUpBehavior !== undefined) followUp.setPreference(patch.followUpBehavior);
       if (patch.language !== undefined) locale.setLocale(patch.language);
       if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
       if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
@@ -57,6 +64,7 @@ export function AppPreferenceControl() {
       if (patch.showIgnoredDirectories !== undefined) files.setShowIgnoredDirs(patch.showIgnoredDirectories);
       if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
       if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
+      if (patch.worktreeModelNaming !== undefined) worktreeNaming.setEnabled(patch.worktreeModelNaming);
     };
     const pending = patch.theme !== undefined || patch.themeFamily !== undefined
       ? theme.setSelection({ theme: patch.theme, familyId: patch.themeFamily }, active) : undefined;

@@ -39,6 +39,7 @@ import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
 import { NotificationSection } from './NotificationSection';
+import { AwayFromComputerSection } from './AwayFromComputerSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { DefaultNewTaskWorkingDirSection } from './DefaultNewTaskWorkingDirSection';
@@ -76,7 +77,6 @@ const VoiceInputSection = lazy(() => import('./VoiceInputSection').then(module =
 const AppearanceSection = lazy(() => import('./AppearanceSection').then(module => ({ default: module.AppearanceSection })));
 const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
-const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
 const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
@@ -520,6 +520,15 @@ function SettingsViewContent() {
                       <WindowBehaviorSection />
                     </section>
 
+                    {/* Section — 离开电脑时:保持唤醒、用隐私屏代替锁屏(docs/product-rules/privacy-screen.md)。 */}
+                    <section
+                      id={generalSettings.awayFromComputer.targetId}
+                      className="py-[18px]"
+                      aria-label={t(generalSettings.awayFromComputer.titleKey)}
+                    >
+                      <AwayFromComputerSection />
+                    </section>
+
                     {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
                     <section
                       id={generalSettings.composer.targetId}
@@ -623,6 +632,7 @@ function SettingsViewContent() {
                   <BillingSettingsSection
                     key={`billing:${dataOwnerId ?? 'none'}`}
                     accountId={dataOwnerId}
+                    accountName={user?.name ?? null}
                   />
                 </section>
               </div>
@@ -675,9 +685,6 @@ function SettingsViewContent() {
                     <AuxiliaryModelSection
                       key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
                     />
-                  </section>
-                  <section id={personalizationSettings.visionBridge.targetId} aria-label={t(personalizationSettings.visionBridge.titleKey)}>
-                    <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
                   {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                   <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} aria-label={t(personalizationSettings.terminalShell.titleKey)}>

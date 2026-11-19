@@ -60,6 +60,7 @@ export type {
 
 export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS, PROVIDER_VIDEO_APIS, isProviderVideoApi } from "./types.js";
 export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, isClaudeSubscriptionProvider, supportsSubscriptionFastPolicy, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
+export { acceptsWebpImageInput, type ImageRouteIdentity } from './imageInputCapability.js';
 export { sourceProviderForPreset } from './providerPresetIdentity.js';
 export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
@@ -357,4 +358,5 @@ export {
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';
 
-export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from './subscriptionIdentity.js';
+export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy, listedSourceFolds, effectiveRunLocation, RUN_LOCATION_LOCAL } from './subscriptionIdentity.js';
+export type { ListedSourceComputer, ListedSourceRef, ListedSourcesInput, ListedSourceFolds } from './subscriptionIdentity.js';

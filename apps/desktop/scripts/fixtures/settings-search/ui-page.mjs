@@ -23,6 +23,7 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
+    'model-tokens': { about: 'A signed-in profile can opt in to and stop sharing model totals', data: {tab: 'about', modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
@@ -33,6 +34,7 @@ export default {
     'appearance-desktop-hidden': { about: 'Hidden desktop retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'none' } },
     'appearance-wallpaper-hidden': { about: 'Hidden wallpaper retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'cindy-window' } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
+    'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
     ...Object.fromEntries([
@@ -44,6 +46,38 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    // Product regression: the opt-in must remain off until selected. Exercise the
+    // real setting, search and local override; existing cases only read controls.
+    if (ui.data.modelTokens) {
+      const toggle = panel.getByRole('switch', { name: await ui.t('settings.about.productTokenUsage'), exact: true });
+      await toggle.scrollIntoViewIfNeeded();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      await ui.capture('token-counts-default');
+      await toggle.click();
+      await page.waitForFunction(() => document.querySelector('[data-setting-id="settings.about.productTokenUsage"]')?.getAttribute('aria-checked') === 'true');
+      await ui.capture('token-counts-enabled');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      return;
+    }
+    if (ui.data.worktreeModelNaming) {
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      await search.fill(await ui.t('settings.worktreeModelNaming.cell.label'));
+      await page.locator('[id="settings-search-result-personalization.worktreeModelNaming"]').click();
+      const row = panel.locator('#settings-worktree-model-naming');
+      const toggle = row.getByRole('switch');
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      assert.equal(await page.evaluate(() => localStorage.getItem('worktree.modelNaming.enabled')), null);
+      await ui.capture('naming-default');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+      assert.equal(await page.evaluate(() => localStorage.getItem('worktree.modelNaming.enabled')), 'true');
+      await ui.capture('naming-enabled');
+      await row.getByRole('button', { name: await ui.t('settings.defaults.restore'), exact: true }).click();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      assert.equal(await page.evaluate(() => localStorage.getItem('worktree.modelNaming.enabled')), null);
+      return;
+    }
     // 2026-11-14 recording: settled screenshots missed a blank frame caused by each tab's fade-in.
     // Exercise real SettingsView navigation and Chromium paint, with normal motion, on the first
     // committed frame. This browser scenario covers the animation gap beside the Suspense unit tests.

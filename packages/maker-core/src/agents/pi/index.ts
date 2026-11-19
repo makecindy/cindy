@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
@@ -552,6 +553,22 @@ function slugifyForMemory(input: string, maxLen: number): string {
 function oneLineDescription(text: string, maxLen: number): string {
   const line = text.replace(/\s+/g, ' ').trim();
   return line.length > maxLen ? line.slice(0, maxLen - 1) + '…' : line;
+}
+
+// A copy of Windows process.env loses case-insensitive lookup. When spellings
+// collide, Node passes the first in lexical order to the child. Keep all bypasses.
+function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
+  const keys = Object.keys(env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key)).sort();
+  for (const key of keys) {
+    const name = key.toUpperCase();
+    if (name === key) continue;
+    if (name === 'NO_PROXY') {
+      env.NO_PROXY = [env.NO_PROXY, env[key]].filter(Boolean).join(',');
+    } else {
+      env[name] ??= env[key];
+    }
+    delete env[key];
+  }
 }
 
 /**
@@ -2726,6 +2743,9 @@ export class PiAgent extends BaseAgent {
     // 受邀者(另一个账号)：本机用户的 Pi 包、扩展、托管技能、全局说明与技能偏好都不进入会话，
     // 受邀者带来的项目扩展也不在本机执行；说明文件只取会话目录内的(见 device-hosted-guest.ts)。
     const hostedGuest = hosted?.guest === true;
+    const nativeRecovery = !reviewMode && !remote && !opts.deviceHosted && opts.sessionId
+      ? this.deps.nativeRecoveryObserver?.(opts.sessionId)
+      : undefined;
     const guestRoot = hosted && hostedGuest ? deviceHostedGuestSessionRoot(hosted, opts.workingDir) : undefined;
     // 受邀者的 Pi 会话文件放在受邀者目录里(分享删除时整体清理)，不与本机用户的会话混放；
     // 恢复只能打开那里的会话文件，不能凭路径打开本机的其它文件。
@@ -4261,6 +4281,7 @@ export class PiAgent extends BaseAgent {
       };
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
+    piToolMarkupProjection(ctx).attachTerminalQueue(queue);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -4281,6 +4302,9 @@ export class PiAgent extends BaseAgent {
     // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    // Ownership begins at send preparation, before native agent_start. Policy
+    // objects can be reused across turns, so their identity is not a turn fence.
+    let activeTurnPermissionPolicyOwner: symbol | null = null;
     let mutableModel = opts.model;
     let appliedCacheRoutes = cacheRoutes;
     let appliedModelConfigHash = modelConfigHash;
@@ -4288,7 +4312,8 @@ export class PiAgent extends BaseAgent {
     let retainedLiveGatewayModel = initialProvider === PI_PROVIDER_ID ? selectedRuntimeModel : undefined;
     const providerRefreshStages = new Map<string, {
       nonce: string;
-      operation: 'inspect' | 'refresh';
+      operation: 'inspect' | 'refresh' | 'tool-catalog';
+      toolRequest?: { method: string; args: unknown[] };
       env: Record<string, string>;
       aliases: ReturnType<typeof nativeProviderAdapterAliases>;
       acknowledge: (ok: boolean, code?: string, settings?: unknown) => void;
@@ -4413,6 +4438,7 @@ export class PiAgent extends BaseAgent {
       opts?: { dismissPending?: boolean; surfaceLost?: boolean },
     ): void => {
       activeTurnPermissionPolicy = null;
+      activeTurnPermissionPolicyOwner = null;
       if (opts?.surfaceLost) autoReviewDecisionCache.clear();
       if (opts?.dismissPending) {
         dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
@@ -4728,6 +4754,8 @@ export class PiAgent extends BaseAgent {
       task: PiSubagentRunStatus['tasks'][number],
     ): Promise<void> => {
       if (closed && !detachedApprovalSupervisorActive) return;
+      const approval = task.pendingApproval;
+      if (!approval || status.interactiveOwner === 'extension') return;
       // Shared userData can contain active runs from another Desktop instance.
       // Missing ownership is legacy metadata and must fail closed here. A
       // reopened task's new handle may *adopt* an approval parked by an earlier
@@ -4735,19 +4763,18 @@ export class PiAgent extends BaseAgent {
       // gone) — otherwise navigation-close approvals stay unreachable forever.
       // Adoption moves the delivery surface only; the verdict path below forces
       // explicit confirmation for it.
-      const approvalScope = piSubagentApprovalScope(
+      const approvalScope = await piSubagentApprovalScope(
         status,
         subagentRuntimeOwnerId,
         process.pid,
         sid,
       );
+      if (accountBoundaryTeardown || (closed && !detachedApprovalSupervisorActive)) return;
       if (approvalScope === 'refused') return;
       const adopted = approvalScope === 'adopted';
       // Controls must carry the run's own owner id, not ours, or the mailbox
       // owner filter would reject an adopted answer.
       const controlOwnerId = status.runtimeOwnerId ?? subagentRuntimeOwnerId;
-      const approval = task.pendingApproval;
-      if (!approval || status.interactiveOwner === 'extension') return;
       const turnChangeCapture = approval.method === 'confirm'
         && approval.title === 'cindy:turn-change-capture';
       const key = `${status.runId}:${task.childId}:${approval.id}`;
@@ -5090,7 +5117,7 @@ export class PiAgent extends BaseAgent {
             return 'allow';
           }
           if (reviewPermissionMode === 'auto' && decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
-          if (decision.unavailable) autoReviewUnavailableNotice.notify();
+          if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
           return requestUserDecision({
             forcePrompt: true,
             ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
@@ -5251,7 +5278,7 @@ export class PiAgent extends BaseAgent {
         active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
         succeeded = true;
       } catch (error) {
-        deps.logger.warn('pi subagent durable status refresh failed', {
+        this.deps.logger.warn('pi subagent durable status refresh failed', {
           message: error instanceof Error ? error.message : String(error),
         });
       } finally {
@@ -5333,8 +5360,17 @@ export class PiAgent extends BaseAgent {
       if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
       return result;
     };
-    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
-      runExclusivePiRpc(() => requestPiCompact(instructions));
+    const runPiCompact = (instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> =>
+      runExclusivePiRpc(async () => {
+        if (!beforeDispatch) return requestPiCompact(instructions);
+        // A host-tool grant can expire while this operation waits in the native RPC lane.
+        await beforeDispatch();
+        try {
+          return await requestPiCompact(instructions);
+        } catch (cause) {
+          throw Object.assign(new Error('Pi native context compaction failed', { cause }), { code: 'COMPACT_FAILED' });
+        }
+      });
     let sessionTransport: PiTransport | undefined;
     let localProcessSpawned = false;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
@@ -5639,13 +5675,14 @@ export class PiAgent extends BaseAgent {
         // Model refresh writes and rolls back these files in the RPC lane. Read
         // the snapshot there too, so a child never freezes a mixed generation.
         // Launch/refresh below stay outside: they may enqueue their own RPC.
-        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson] = await runExclusivePiRpc(() => {
           if (closed) throw new Error('PI session is closed');
           return Promise.all([
             fs.readFile(path.join(configHome, 'models.json')),
             fs.readFile(bridgeExtensionPath),
             fs.readFile(subagentRunnerPath),
             fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+            fs.readFile(path.join(configHome, 'settings.json')),
           ]);
         });
         const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
@@ -5660,7 +5697,7 @@ export class PiAgent extends BaseAgent {
             ...reviewPathSnapshot,
           },
           runnerFallbackFile: subagentRunnerPath,
-          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson },
         }, childId);
         if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
         await requestPiSubagentRefresh();
@@ -5703,15 +5740,6 @@ export class PiAgent extends BaseAgent {
           ));
         }
       }
-      // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
-      // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
-      // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
-      // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
-      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
-      // 供应商分享受邀者不注入：视觉后端是本机用户自己的其它供应商，且 vision 工具直接读本机文件。
-      const visionBridgeEnv = hostedGuest
-        ? null
-        : this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -5721,7 +5749,6 @@ export class PiAgent extends BaseAgent {
         PI_SESSION_TOKEN_ENV,
         ...(piPackageManagementToken ? [PI_PACKAGE_MANAGEMENT_ENV] : []),
         PI_BASH_PACKAGE_HOME_ENV,
-        ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
@@ -5766,8 +5793,6 @@ export class PiAgent extends BaseAgent {
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,
-        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
-        ...(visionBridgeEnv ? visionBridgeEnv : {}),
         // Input handoff askpass, owner's own local tasks only (deterministic per session).
         ...(!remote && !hosted && !reviewMode && opts.sessionId
           ? this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId })
@@ -5781,6 +5806,8 @@ export class PiAgent extends BaseAgent {
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
+        CINDY_PI_TOOL_LIFECYCLE: !remote && !hosted && !reviewMode && opts.sessionId
+          ? (['call', 'result'] as const).filter(phase => this.deps.toolLifecycleControl?.enabled(opts.sessionId!, phase)).join(',') : '',
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5840,6 +5867,14 @@ export class PiAgent extends BaseAgent {
         if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
         spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
       }
+      if (!remote && this.deps.getLocalPiHttpsProxy) {
+        if (process.platform === 'win32') normalizeWindowsProxyEnv(spawnEnv);
+        const proxy = await this.deps.getLocalPiHttpsProxy(spawnEnv);
+        if (proxy) {
+          spawnEnv.HTTPS_PROXY = proxy;
+          spawnEnv.https_proxy = proxy;
+        }
+      }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
@@ -5875,6 +5910,26 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          // Retry exhaustion already settled the old run. Its optional native
+          // tail must not clear a new prompt's permission policy before start.
+          if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
+          if (nativeRecovery) {
+            switch (event.type) {
+              case 'auto_retry_start':
+                nativeRecovery.publish('pi', event.type, typeof event.attempt === 'number' ? { attempt: event.attempt } : {});
+                break;
+              case 'auto_retry_end':
+                nativeRecovery.publish('pi', event.type, { success: event.success === true });
+                break;
+              case 'compaction_start':
+                nativeRecovery.publish('pi', event.type, {});
+                break;
+              case 'compaction_end':
+              case 'agent_settled':
+                nativeRecovery.publish('pi', event.type, { aborted: event.aborted === true });
+                break;
+            }
+          }
           const cacheInput = cacheInputTracker.observe(event);
           if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
           if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
@@ -5962,7 +6017,8 @@ export class PiAgent extends BaseAgent {
               if (event.title === 'cindy:provider-refresh') {
                 proc.send(valid
                   ? { type: 'extension_ui_response', id: requestId,
-                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases }) }
+                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases,
+                      ...(stage!.toolRequest ? { toolRequest: stage!.toolRequest } : {}) }) }
                   : { type: 'extension_ui_response', id: requestId, cancelled: true });
               } else {
                 if (valid) stage!.acknowledge(payload.ok === true, typeof payload.code === 'string' ? payload.code : undefined, payload.runtimeSettings);
@@ -5976,6 +6032,12 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              controlToolLifecycle: async input => {
+                if (remote || hosted || reviewMode || closed || accountBoundaryTeardown || !opts.sessionId) throw new Error('Tool hook control unavailable');
+                const result = await this.deps.toolLifecycleControl?.run(opts.sessionId, { ...input, engine: 'pi' });
+                if (closed || accountBoundaryTeardown) throw new Error('Tool hook control expired');
+                return result ?? {};
+              },
               controlModelRequest: async input => {
                 const control = activeModelRequestControl;
                 if (!control || closed || accountBoundaryTeardown) throw new Error('Model request control is unavailable');
@@ -6004,7 +6066,7 @@ export class PiAgent extends BaseAgent {
               writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
               reviewAutoAction,
               recordUserClarification: (question, answer) => setAutoReviewIntent(composeAutoReviewIntentWithClarification(currentAutoReviewIntent, [{ question, answer }])),
-              notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewUnavailable: (decision) => autoReviewUnavailableNotice.notify(decision),
               notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
@@ -6891,6 +6953,7 @@ export class PiAgent extends BaseAgent {
       let cleanupPending: AgentStartupCleanupPendingError | null = null;
       try {
         await proc.close();
+        piProcessExited = true;
       } catch (error) {
         if (!remote) configHomeCleanupDeferredToQuarantine = true;
         let confirmStopped!: () => void;
@@ -6989,21 +7052,23 @@ export class PiAgent extends BaseAgent {
     };
     let liveRuntimeSettings: PiNativeRuntimeSettings | undefined;
     const queryNativeRuntime = async (
-      operation: 'inspect' | 'refresh',
+      operation: 'inspect' | 'refresh' | 'tool-catalog',
       env: Record<string, string> = {},
       aliases: ReturnType<typeof nativeProviderAdapterAliases> = [],
-    ): Promise<{ ok: boolean; code?: string }> => {
+      toolRequest?: { method: string; args: unknown[] },
+    ): Promise<{ ok: boolean; code?: string; toolCatalog?: unknown }> => {
       // Unknown extension commands become model prompts. Check ownership first.
       const commands = await proc.request({ type: 'get_commands' });
       const entries = (commands.data as { commands?: Array<{ name?: unknown; source?: unknown }> } | undefined)?.commands;
       if (!commands.success || !entries?.some((entry) =>
         entry.name === 'cindy-native-provider-refresh' && entry.source === 'extension')) {
+        if (operation === 'tool-catalog') throw new Error('UNSUPPORTED_CAPABILITY');
         throw new Error('Cindy native provider refresh extension is unavailable; reopen this task with the current Cindy version.');
       }
       const nonce = randomBytes(24).toString('base64url');
       let timer: ReturnType<typeof setTimeout> | undefined;
       const ack = new Promise<{ ok: boolean; code?: string; settings?: unknown }>((resolve) => {
-        providerRefreshStages.set(nonce, { nonce, operation, env, aliases,
+        providerRefreshStages.set(nonce, { nonce, operation, env, aliases, toolRequest,
           acknowledge: (ok, code, settings) => resolve({ ok, code, settings }) });
         timer = setTimeout(() => resolve({ ok: false, code: 'ACK_TIMEOUT' }), 10_000);
       });
@@ -7012,6 +7077,7 @@ export class PiAgent extends BaseAgent {
         if (!response.success) return { ok: false, code: 'COMMAND_FAILED' };
         const receipt = await ack;
         if (!receipt.ok) return receipt;
+        if (operation === 'tool-catalog') return { ok: true, toolCatalog: receipt.settings };
         const settings = parsePiNativeRuntimeSettings(receipt.settings);
         if (!settings) return { ok: false, code: 'INVALID_SETTINGS' };
         liveRuntimeSettings = settings;
@@ -7887,7 +7953,7 @@ export class PiAgent extends BaseAgent {
     const handle: AgentSessionHandle = {
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       // getter 而非固定值:setModel / commitRewindFiles 会更新闭包里的 mutableModel /
@@ -7901,8 +7967,23 @@ export class PiAgent extends BaseAgent {
       get model() {
         return mutableModel;
       },
+      retryFailedRuntimeCapabilityCapture: () => {
+        const manifest = runtimeCapabilityManifest;
+        if (closed || runtimeCapabilityRefreshPromise || !manifest
+          || (manifest.status !== 'failed' && manifest.status !== 'unknown')
+          || manifest.error?.code === 'unsupported') return;
+        void scheduleRuntimeCapabilityRefresh('ready').catch(() => {
+          this.deps.logger.warn('pi runtime capability refresh failed after Skill retry');
+        });
+      },
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
+      },
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (remote || hostedGuest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        const receipt = await queryNativeRuntime('tool-catalog', {}, [], { method, args });
+        if (!receipt.ok) throw new Error(receipt.code ?? 'NATIVE_TOOL_CATALOG_FAILED');
+        return receipt.toolCatalog;
       },
       disabledSkillPaths: disabledSkillSnapshot,
       hasProjectResourceDrift() {
@@ -7964,8 +8045,10 @@ export class PiAgent extends BaseAgent {
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        const previousTurnPermissionPolicyOwner = activeTurnPermissionPolicyOwner;
         const previousModelRequestControl = activeModelRequestControl;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeTurnPermissionPolicyOwner = Symbol('pi-turn-permission-policy');
         activeModelRequestControl = sendOpts?.[MODEL_REQUEST_CONTROL];
         let providerAccepted = false;
         let promptRequestStarted = false;
@@ -8302,6 +8385,7 @@ export class PiAgent extends BaseAgent {
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) {
             activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            activeTurnPermissionPolicyOwner = previousTurnPermissionPolicyOwner;
             activeModelRequestControl = previousModelRequestControl;
             if (reviewIntentUpdated) {
               currentAutoReviewIntent = '';
@@ -8471,6 +8555,7 @@ export class PiAgent extends BaseAgent {
 
       async requestGracefulStop(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
@@ -8488,11 +8573,14 @@ export class PiAgent extends BaseAgent {
           rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
-        clearActiveTurnPermissionPolicy('turn_aborted');
+        if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+          clearActiveTurnPermissionPolicy('turn_aborted');
+        }
       },
 
       async abort(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) return;
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
@@ -8503,7 +8591,9 @@ export class PiAgent extends BaseAgent {
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
-            clearActiveTurnPermissionPolicy('turn_aborted');
+            if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+              clearActiveTurnPermissionPolicy('turn_aborted');
+            }
           } else {
             rollbackPiHostAbortRequest(ctx, hostAbortToken);
             deps.logger.warn('pi abort request rejected', {
@@ -8787,9 +8877,9 @@ export class PiAgent extends BaseAgent {
         return path;
       },
 
-      async compactSession(instructions?: string): Promise<ManualCompactResult> {
+      async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
         // Manual compact shares the session RPC chain with prompts and model controls.
-        return runPiCompact(instructions);
+        return runPiCompact(instructions, beforeDispatch);
       },
 
       async previewRewindFiles(): Promise<RewindFilesResult> {
@@ -9289,6 +9379,7 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
+      controlToolLifecycle?: (input: Omit<import('../shared/tool-lifecycle.js').ToolLifecycleEvent, 'engine'>) => Promise<import('../shared/tool-lifecycle.js').ToolLifecycleVerdict>;
       controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
         request?: Record<string, unknown>; failure?: 'request-too-large' }) => Promise<unknown>;
       workspaceRoots: string[];
@@ -9297,7 +9388,7 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
-      notifyAutoReviewUnavailable: () => void;
+      notifyAutoReviewUnavailable: (decision: AutoReviewDecision) => void;
       /** 故障确认没送到 / 被系统收口时纠正「用户拒绝」归因。 */
       notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
@@ -9363,6 +9454,23 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
+    if (method === 'input' && event.title === 'cindy:tool-lifecycle') {
+      const context = getPermissionCtx();
+      void (async () => {
+        try {
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown() || !context.controlToolLifecycle) throw new Error('Tool hook unavailable');
+          const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+          if (!['call', 'result'].includes(input?.phase) || typeof input.toolName !== 'string' || typeof input.toolCallId !== 'string'
+            || !input.input || typeof input.input !== 'object' || Array.isArray(input.input)) throw new Error('Invalid tool hook');
+          const result = await context.controlToolLifecycle(input);
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown()) throw new Error('Tool hook expired');
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(result) });
+        } catch {
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ error: 'Tool hook failed' }) });
+        }
+      })();
+      return;
+    }
     // Internal, read-only query over the existing stdio/SSH RPC response channel.
     if (method === 'input' && event.title === 'cindy:model-request-control') {
       const context = getPermissionCtx();
@@ -9557,7 +9665,7 @@ export class PiAgent extends BaseAgent {
             deny();
             return;
           }
-          if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable();
+          if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable(autoDecision);
           const approved = getPermissionCtx().permissionMode === 'bypassPermissions'
             || (!forcePrompt && autoDecision?.verdict === 'allow' && getPermissionCtx().permissionMode === 'auto')
             || await new Promise<boolean>((resolve) => {
@@ -10073,7 +10181,7 @@ export class PiAgent extends BaseAgent {
           if (decision.verdict === 'ask' || (permissionMode !== 'auto' && decision.verdict !== 'allow')) {
             // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
             // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
-            if (decision.unavailable) notifyAutoReviewUnavailable();
+            if (decision.unavailable) notifyAutoReviewUnavailable(decision);
             sendPermissionResolution(await requestUserConfirmation({
               forcePrompt: true,
               unavailableHandoff: decision.unavailable === true,

@@ -19,7 +19,7 @@ import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
-import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
+import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -36,6 +36,7 @@ export function registerScheduleCreateTool(
     category: 'scheduler',
     description:
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
+      '单条 GitHub PR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；manual=true 只按变化触发，也可保留周期补查。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
       '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
@@ -94,6 +95,10 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=不按时间自动触发（nextFireAt 为空），仍可立即运行；配合 webhookTrigger 即仅由事件触发。false 或省略=按 cronExpr / intervalMs 定时触发，可与 Webhook 并存。cronExpr / timezone 仍必填并保留，便于以后恢复定时；适用于 agent 和 script 执行方式。'),
       agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
       modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
@@ -158,6 +163,7 @@ export function registerScheduleCreateTool(
         .nullable()
         .optional()
         .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
+      prTrigger: schedulePrTriggerSchema,
       webhookTrigger: z
         .strictObject({
           events: z
@@ -299,6 +305,11 @@ export function registerScheduleCreateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
+        }
+        const caller = getSessionContext?.().sessionId;
+        if (caller && deps.getSessionProject && !input.targetSessionId && input.workingDir && input.workspaceKind !== 'dialogue') {
+          const source = await deps.getSessionProject(caller);
+          if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
         return scheduler.create(input);
       });

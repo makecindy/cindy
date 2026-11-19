@@ -4,6 +4,7 @@ import {
   diffHomeDeviceSyncScope,
   HOME_DEVICE_SYNC_CONCURRENCY,
   HomeDeviceSyncLimiter,
+  readHomeSessionList,
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
@@ -92,5 +93,39 @@ describe('home device sync scope', () => {
       for (let index = 0; index < 5; index += 1) await Promise.resolve();
     }
     await Promise.all([...initial, visible]);
+  });
+});
+
+// PR #10685, unit: production list-read composition must keep old active tasks
+// when 200 newer archived tasks fill the all-status ceiling. Existing scope/limiter
+// tests never exercised result membership. No network, store or timers are used.
+describe('home session list allowance', () => {
+  const old = { id: 'old-active', updatedAt: '2026-01-01T00:00:00Z' };
+  const history = Array.from({ length: 200 }, (_, i) => ({ id: `archive-${i}`, updatedAt: '2026-11-18T00:00:00Z' }));
+  it('retains active tasks when archive history fills the all-status ceiling', async () => {
+    const calls: string[] = [];
+    const result = await readHomeSessionList('all', async status => {
+      calls.push(status);
+      return status === 'active' ? [old] : history;
+    });
+    expect(result).toHaveLength(201);
+    expect(result.find(row => row.id === old.id)).toEqual(old);
+    expect(result[0].id).toBe('archive-0');
+    expect(calls).toEqual(['active', 'archived']);
+  });
+  it('keeps the later snapshot for an ID that changed status between reads', async () => {
+    const newer = { ...old, updatedAt: '2026-11-18T01:00:00Z' };
+    expect(await readHomeSessionList('all', async status => status === 'active' ? [old] : [newer])).toEqual([newer]);
+  });
+  it.each(['active', 'archived'] as const)('keeps the single %s query and its original results', async status => {
+    const calls: string[] = [];
+    expect(await readHomeSessionList(status, async filter => { calls.push(filter); return [old]; })).toEqual([old]);
+    expect(calls).toEqual([status]);
+  });
+  it('rejects a partial snapshot when the archive read fails', async () => {
+    await expect(readHomeSessionList('all', async status => {
+      if (status === 'archived') throw new Error('offline');
+      return [old];
+    })).rejects.toThrow('offline');
   });
 });

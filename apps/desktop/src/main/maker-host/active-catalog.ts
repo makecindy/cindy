@@ -552,7 +552,7 @@ function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set
 /** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
 export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
-  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
+  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（运行时传给路由判定的形态）；
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
   const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
@@ -1221,7 +1221,7 @@ function projectXdGatewayMediaModels(
   };
 }
 
-function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): Catalog {
+function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, claudeModels?: readonly CatalogModel[]): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
@@ -1432,8 +1432,9 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): 
     }
     if (providerCatalogId(p) === 'anthropic') {
       // Claude 订阅只供 Claude Code(内置 CLI 用它自己的登录),不向 Codex / Pi 投影。
-      const accountModels = p.id === 'anthropic' ? anthropicModels : [];
-      const seed = accountModels.length > 0 ? accountModels : (p.models['claude-code'] ?? []);
+      const accountModels = p.id === 'anthropic' ? claudeModels ?? anthropicModels : [];
+      const seed = (p.id === 'anthropic' && claudeModels !== undefined) || accountModels.length > 0
+        ? accountModels : (p.models['claude-code'] ?? []);
       // 成员只来自 Claude Code SDK 返回的清单;registry 不补 SDK 没返回的型号。
       const root = assembleRoot(
         'anthropic', 'claude-code', seed, plan, false, false, p.id, accountModels,
@@ -2064,6 +2065,19 @@ export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[])
   const catalog = computeMerged(models);
   const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   pooledCodexProjection.catalogs.set(models, projected);
+  return projected;
+}
+
+let pooledClaudeProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;
+/** Apply the same Registry and user overrides to only this Claude account's membership. */
+export function getActiveCatalogWithClaudeModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledClaudeProjection?.revision !== revision)
+    pooledClaudeProjection = { revision, catalogs: new WeakMap() };
+  const cached = pooledClaudeProjection.catalogs.get(models);
+  if (cached) return cached;
+  const catalog = computeMerged(undefined, models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledClaudeProjection.catalogs.set(models, projected);
   return projected;
 }
 

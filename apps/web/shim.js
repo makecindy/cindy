@@ -211,15 +211,6 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       taskDaily: Object.freeze([]),
       tasks: Object.freeze([]),
     }),
-    visionBridgeSettings: Object.freeze({
-      enabled: false,
-      targetModels: Object.freeze([]),
-      primary: null,
-      fallback: null,
-      isCustomized: false,
-      customizedKeys: Object.freeze([]),
-      defaults: Object.freeze({ enabled: false, targetModels: Object.freeze([]), primary: null, fallback: null }),
-    }),
     mediaStorageStats: Object.freeze({
       success: true,
       blobs: Object.freeze({ totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 }),
@@ -500,12 +491,10 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'maker.gitSafetySet': () => unsupported('maker.gitSafetySet'),
     // The host already opened and migrated the owner database before serving.
     'localDb.ensureReady': () => ({ ready: true }),
-    // The browser cannot create a local identity. Preserve the Host's actual
-    // verdict, including canEnterApp=false when its account is signed out.
-    'authEnterLocal': () => routes['authInitialize'](),
+    // The browser cannot create a local identity; querying auth is not entry.
+    'authEnterLocal': () => unsupported('authEnterLocal'),
     'authExitLocal': () => routes['authInitialize'](),
-    // The host exposes no cloud login surface; the entry step still offers the
-    // local profile, which is what the desktop client shows when signed out.
+    // The Host exposes no cloud login surface; keep the signed-out entry step.
     'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
     'authInitialize': () => hostChannels['auth.getState'](),
     'authRefresh': () => hostChannels['auth.refresh'](),
@@ -560,6 +549,10 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'checkAppUpdate': () => ({ hasUpdate: false }),
     'modelFavoritesHost.ready': () => undefined,
     'modelFavoritesHost.changed': () => () => {},
+    // The Host has no model groups yet. The generic read fallback would answer
+    // `null`, which the renderer stores as the config and the model picker then
+    // crashes on; rejecting keeps the renderer's built-in empty defaults.
+    'modelGroups.get': () => Promise.reject(unsupportedHostChannel('modelGroups.get')),
     'gitContext.listAllPrRefs': () => [],
     'gitContext.getForSession': () => ({ workdir: null, head: null, source: null }),
     'gitContext.listPrRefs': () => [],
@@ -903,9 +896,6 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       updateAvailable: false,
       latestCheckFailed: false,
     }),
-    'maker.visionBridgeSettingsGet': () => STATIC.visionBridgeSettings,
-    'maker.visionBridgeSettingsSet': () => unsupported('maker.visionBridgeSettingsSet'),
-    'maker.visionBridgeSettingsReset': () => unsupported('maker.visionBridgeSettingsReset'),
     'maker.getGoalStatus': () => null,
     'maker.setGoal': () => unsupported('maker.setGoal'),
     'maker.clearGoal': () => unsupported('maker.clearGoal'),

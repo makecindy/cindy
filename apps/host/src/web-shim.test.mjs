@@ -84,25 +84,32 @@ test('both auth API shapes use the same Host routes', async () => {
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
 });
 
-test('plugin approval and confirmation use the authenticated Host routes', async () => {
+test('installation and business confirmations use the authenticated Host routes', async () => {
   const b = browser(() => ({ granted: true, handled: true }));
-  assert.equal((await b.api.ghosts.requestTaskApproval('demo', 'host-tools:terminal')).granted, true);
   await b.api.ghosts.resolveInstallConsent('group-request', true);
   await b.api.ghosts.resolveConfirm('command-request', false);
   assert.deepEqual(b.calls.map(call => ({ url: call.url, body: call.body })), [
-    { url: '/api/ghosts/request-task-approval', body: { id: 'demo', capability: 'host-tools:terminal' } },
     { url: '/api/ghosts/install-consent/resolve', body: { requestId: 'group-request', confirmed: true } },
     { url: '/api/ghosts/confirm/resolve', body: { requestId: 'command-request', confirmed: false } },
   ]);
 });
 
-test('entering the app preserves the actual Host auth verdict', async () => {
+// #10601: a state query silently accepted local entry. Unit: public shim API;
+// no Host identity exists, so entry must reject without querying signed-out auth.
+test('browser local entry is unavailable without querying Host auth', async () => {
+  const b = browser();
+  assert.equal(b.api.hostConnection.client, 'browser');
+  await assert.rejects(b.api.authEnterLocal(), /HOST_CHANNEL_UNSUPPORTED/);
+  assert.equal(b.calls.length, 0);
+});
+
+test('initializing auth preserves the actual Host auth verdict', async () => {
   for (const state of [
     { user: { id: 'test-user' }, mode: 'cloud', canEnterApp: true },
     { user: null, mode: 'signed-out', canEnterApp: false },
   ]) {
     const b = browser(() => state);
-    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authEnterLocal())), state);
+    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authInitialize())), state);
   }
 });
 
@@ -191,6 +198,15 @@ test('unsupported web actions cannot report a successful save or execution', asy
   ]) {
     await assert.rejects(action(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   }
+  assert.equal(b.calls.length, 0);
+});
+
+// Regression: the generic read fallback answered `modelGroups.get()` with `null`;
+// the renderer stored it as the model group config and the model picker crashed
+// reading `config.routes`. Minimal input: one call, which must reject.
+test('the model groups read rejects instead of answering a null config', async () => {
+  const b = browser();
+  await assert.rejects(b.api.modelGroups.get(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   assert.equal(b.calls.length, 0);
 });
 

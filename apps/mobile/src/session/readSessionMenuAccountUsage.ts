@@ -1,3 +1,4 @@
+import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { selectCodexUsageForModel } from "@cindy/maker-shared/codex-usage-buckets";
 import { isCodexGatewayWireModel } from "@cindy/model-providers/classification";
 import { formatRemoteError } from "@cindy/maker-shared/device-link-contract";
@@ -263,11 +264,7 @@ async function readClaudeAccount(
     await reader.getSubscriptionUsage("claude", accountScope(session)),
   );
   const result = empty("claude");
-  result.plan =
-    typeof snapshot.subscriptionType === "string" &&
-    snapshot.subscriptionType.trim()
-      ? snapshot.subscriptionType.trim()
-      : null;
+  result.plan = formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName);
   result.updatedAt = finite(snapshot.updatedAt) ? snapshot.updatedAt : null;
   const now = Date.now();
   const add = (
@@ -442,7 +439,7 @@ function projectCodexAccount(
   return {
     source: "chatgpt",
     accountOnly,
-    plan: typeof selectedPlan === "string" ? selectedPlan : plan,
+    plan: formatCodexPlanLabel(typeof selectedPlan === "string" ? selectedPlan : plan),
     updatedAt: timestamps.length > 0 ? Math.min(...timestamps) : observedAt,
     windows,
     amounts: [],

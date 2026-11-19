@@ -53,7 +53,7 @@ export interface McpAppsHostDeps {
   readCard(sessionId: string, clientId: string): Promise<McpAppRecord>;
   writeCard(sessionId: string, clientId: string, record: McpAppRecord): Promise<void>;
   authorizeTool(
-    sessionId: string | null,
+    sessionId: string,
     tool: Tool,
     args: Record<string, unknown>,
     signal: AbortSignal,
@@ -81,6 +81,8 @@ export interface McpAppModelContext {
 
 /** Main-owned authority for a declared resource opened independently of a tool. */
 export interface McpAppResourceBinding {
+  /** Main-owned plugin config; legacy tool-card servers remain in their registry. */
+  config?: AppServerConfig;
   id: string;
   title: string;
   serverId: string;
@@ -265,7 +267,7 @@ export class McpAppsHost {
   }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
   private readonly resourceCache = new OwnerScopedAppResourceCache<{
-    html: string; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
+    html: string; hostFullscreenButton: boolean; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
     policy: ReturnType<typeof appCsp>;
   }>();
   private sweepTimer?: ReturnType<typeof setInterval>;
@@ -281,9 +283,9 @@ export class McpAppsHost {
     return owner;
   }
 
-  /** Native entries use the same policy, one-use ticket and original main.js runner. */
-  async callPluginAction(caller: string, sessionId: string | null, source: {
-    serverId: string; id: string; title: string; attachments?: string[]; assertCurrent(): void | Promise<void>;
+  /** Installed native entries use the original main.js runner and source ticket. */
+  async callPluginAction(_caller: string, sessionId: string | null, source: {
+    config: AppServerConfig; id: string; title: string; attachmentBytes?: Uint8Array; assertCurrent(): void | Promise<void>;
   }, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
     const owner = this.captureOwner();
     const assertCurrent = async () => {
@@ -292,18 +294,16 @@ export class McpAppsHost {
       await source.assertCurrent();
     };
     await assertCurrent();
-    const config = this.deps.config(source.serverId);
+    const config = source.config;
     if (!config?.plugin) throw new Error('MCP_PLUGIN_UNAVAILABLE');
     const connection = this.deps.connection?.(config) ?? sharedPluginConnection(config, owner);
     const target = (await connection.tools(signal)).find(tool => tool.name === name && toolVisibleTo(tool, 'app'));
     if (!target) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-    await this.deps.authorizeTool(sessionId, target, args, signal, { caller, clientId: source.id,
-      serverId: config.id, title: source.title });
     await assertCurrent();
     const client = await connection.getClient(signal);
     return withPluginPageTicket({ instance: config.plugin.instance, revision: config.plugin.revision,
       sessionId, clientId: source.id, tool: name, assertCurrent,
-      ...(source.attachments ? { attachments: source.attachments } : {}) }, async ticket => {
+      ...(source.attachmentBytes ? { attachmentBytes: source.attachmentBytes } : {}) }, async ticket => {
       const result = await client.callTool({ name, arguments: args, _meta: { [PLUGIN_PAGE_TICKET]: ticket } },
         CallToolResultSchema, { signal, timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS });
       await assertCurrent();
@@ -458,7 +458,7 @@ export class McpAppsHost {
     const serverId = resourceBinding?.serverId ?? record!.serverId;
     const serverRevision = resourceBinding?.serverRevision ?? record!.serverRevision;
     const resourceUri = resourceBinding?.resourceUri ?? record!.resourceUri;
-    const config = this.deps.config(serverId);
+    const config = resourceBinding?.config ?? this.deps.config(serverId);
     if (!config || this.serverRevision(config) !== serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
     config.plugin?.assertCurrent(sessionId ?? undefined);
@@ -565,6 +565,7 @@ export class McpAppsHost {
       // Private restoration data is execution-host owned, including on the first open.
       delete context[VIEW_STATE_KEY];
       delete context.viewState;
+      delete context['cindy/host-controls'];
       // Independently opened resources have no persisted card to own a snapshot.
       const stateStorage = sessionId !== null && record
         ? this.deps.viewState?.(owner, sessionId, clientId, record) : undefined;
@@ -749,6 +750,12 @@ export class McpAppsHost {
         bridge.oninitialized = () => {
           if (view.initialized || !bridge.getAppCapabilities()) return;
           view.initialized = true;
+          // Host-generated presentation fact. Page requests cannot forge this key.
+          const appModes = bridge.getAppCapabilities()?.availableDisplayModes;
+          view.context = { ...view.context, 'cindy/host-controls': {
+            fullscreenButton: resource.hostFullscreenButton && view.context.availableDisplayModes?.includes('fullscreen') === true &&
+              (!appModes || appModes.includes('fullscreen')),
+          } };
           void assertCurrent()
             .then(async () => {
               const attachments = (record?.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
@@ -789,9 +796,13 @@ export class McpAppsHost {
           const tools = await currentResult(connection.tools(extra.signal), extra.signal);
           const target = tools.find((item) => item.name === params.name);
           if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-          // Page calls use the tool's normal policy regardless of how the script started.
-          // The one-use ticket below binds identity; it does not grant approval.
-          await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId, title: resourceBinding?.title ?? record!.tool.title ?? record!.tool.name, caller });
+          // Named plugin pages use installation authority. Legacy tool-card pages
+          // and external MCP Apps retain their existing Agent approval flow.
+          if (!resourceBinding || !config.plugin) {
+            if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+            await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal,
+              { clientId, serverId, title: resourceBinding?.title ?? record!.tool.title ?? record!.tool.name, caller });
+          }
           const client = await currentClient(extra.signal);
           if (!config.plugin) {
             const token = params._meta?.progressToken;
@@ -1203,7 +1214,7 @@ export class McpAppsHost {
 
   private view(caller: string, sessionId: string | null, id: string): View {
     const view = this.ownedView(caller, sessionId, id);
-    const config = this.deps.config(view.serverId);
+    const config = view.resourceBinding?.config ?? this.deps.config(view.serverId);
     if (!config || this.serverRevision(config) !== view.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
     config.plugin?.assertCurrent(sessionId ?? undefined);
@@ -1522,11 +1533,10 @@ export class McpAppsHost {
       if (item.owner === this.deps.owner()) {
         try {
           const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(item.sessionId, item.clientId);
-          const config = this.deps.config(item.serverId);
+          const config = item.assertSource ? undefined : this.deps.config(item.serverId);
           current =
             item.owner === this.deps.owner() &&
-            !!config &&
-            this.serverRevision(config) === item.revision &&
+            (item.assertSource !== undefined || !!config && this.serverRevision(config) === item.revision) &&
             (!card || card.serverId === item.serverId && card.serverRevision === item.revision);
         } catch {
           // Unavailable cards cannot contribute model context.
@@ -1551,11 +1561,10 @@ export class McpAppsHost {
       };
       try {
         const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(sessionId, item.clientId);
-        const config = this.deps.config(item.serverId);
+        const config = item.assertSource ? undefined : this.deps.config(item.serverId);
         if (owner !== this.deps.owner()) return empty;
         if (
-          !config ||
-          this.serverRevision(config) !== item.revision ||
+          (!item.assertSource && (!config || this.serverRevision(config) !== item.revision)) ||
           (card && card.serverRevision !== item.revision)
         ) {
           remove();
@@ -1582,10 +1591,9 @@ export class McpAppsHost {
         );
         if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
         for (const [index, item] of captured.entries()) {
-          const config = this.deps.config(item.serverId);
+          const config = item.assertSource ? undefined : this.deps.config(item.serverId);
           if (
-            !config ||
-            this.serverRevision(config) !== item.revision ||
+            (!item.assertSource && (!config || this.serverRevision(config) !== item.revision)) ||
             (cards[index] && cards[index]!.serverRevision !== item.revision)
           )
             throw new Error('MCP_APP_SERVER_CHANGED');
@@ -1648,7 +1656,12 @@ export class McpAppsHost {
       // Retained local Views have their five-second Renderer lease; invalidation
       // is pushed by the registry/owner lifecycle, not by hidden reads.
       if (view.suspended && view.owner === this.deps.owner()) continue;
-      const config = this.deps.config(view.serverId);
+      let config: AppServerConfig | undefined;
+      try {
+        const current = view.resourceBinding?.config ?? this.deps.config(view.serverId);
+        current?.plugin?.assertCurrent(view.sessionId ?? undefined);
+        config = current;
+      } catch { /* Reclaim resources whose installed instance has been revoked. */ }
       if (
         view.owner !== this.deps.owner() ||
         !config ||

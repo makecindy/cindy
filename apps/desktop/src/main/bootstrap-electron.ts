@@ -1,11 +1,13 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
-import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
+import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
+import { getClaudeSessionBackgroundActivity } from './maker-host/claude-session-background-activity';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
@@ -17,6 +19,8 @@ import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { WindowsQuotaPanel } from './quota-overview/windowsPanel.js';
+import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
@@ -364,7 +368,8 @@ import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
 import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
-import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
+import { fetchRemoteMediaImageBytes, openRemoteMediaForSave } from './device-link/remoteMediaProtocol';
+import { saveMediaStream } from './mediaSaveStream';
 import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
@@ -655,14 +660,21 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
-import { registerRemoteDesktopIpc } from './remote-desktop';
+import {
+  isLinuxAwayCoverUp,
+  registerRemoteDesktopIpc,
+  setAwayCaptureExcludedWindows,
+  startLinuxAwayCover,
+} from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
   isDesktopScreenLocked,
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
+import * as usageReporting from './product-token-usage/reporting.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -679,6 +691,8 @@ import {
   issueWritableDirectoryRecentGrant,
   WritableDirectoryPickerGrantError,
 } from './maker-ipc/writableDirectoryPickerGrant.js';
+import { projectDirectoryGrantScope } from './projectInfoAuthorization.js';
+import { configureProjectDirectoryProbe } from './projectDirectoryValidation.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -690,8 +704,11 @@ import {
   handleDeviceLinkSystemResume,
   handleDeviceLinkSystemSuspend,
   getControllerName,
+  remoteBackgroundInvoke,
   revokeController,
 } from './device-link';
+import { findReceivedShare, getReceivedShares } from './device-link/providerShareGuest.js';
+import { configureSharedImageAccess } from './cindy-media/sharedImageCatalog.js';
 import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js';
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
@@ -699,7 +716,8 @@ import { registerProviderShareIpc } from './device-link/providerShareRuntime.js'
 import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
-import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
+import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
+import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -732,7 +750,7 @@ import {
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
-import { registerGitContextIpc, disposeGitContext } from './git-context';
+import { registerGitContextIpc, disposeGitContext, refreshSchedulePr } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerProjectOrderIpc } from './projectOrderStore';
 import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainViewHidden } from './sidebarSettingsStore';
@@ -744,6 +762,7 @@ import { registerLocalThemesIpc } from './local-themes/register';
 import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
+  probeRemoteWorkingDirectory,
   disposeRemoteSshPool,
   startAutoConnectHostsBackground,
   isCcMgrUpgradeInFlight,
@@ -960,7 +979,7 @@ import {
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
 } from './maker-host/claude-native-cli.desktop.js';
-import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge } from './maker-host/cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
@@ -974,6 +993,7 @@ import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
   getChatgptBridgeAuth,
+  getChatgptBridgeAuthForDispatch,
   invalidateChatgptBridgeAuth,
 } from './maker-host/anthropic-responses-bridge-host.js';
 import {
@@ -986,9 +1006,7 @@ import {
   resetSessionRuntimeFallbackSettings,
   writeSessionRuntimeFallbackEnabled,
 } from './maker-host/session-runtime-fallback-store.js';
-import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
-import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
-import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
+import { clearOwnerScopedSessionRuntimeSelection } from './maker-ipc/sessionRuntimeControl.js';
 import {
   resolveOwnerScopedSecretStorageKey,
   getProviderSecretStore,
@@ -1023,13 +1041,6 @@ import {
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from './maker-host/subagent-model-settings-store.js';
-import {
-  readVisionBridgeSettings,
-  readVisionBridgeSettingsState,
-  resetVisionBridgeSettings,
-  writeVisionBridgeSettings,
-} from './vision-bridge/vision-bridge-settings-store.js';
-import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
 import {
   readChatEmbeddingSettings,
@@ -1313,6 +1324,7 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 // Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { forwardProjectWrite } from './host-platform/project-writes.desktop.js';
 import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
@@ -1330,6 +1342,11 @@ function hostDelegation(): HostDelegationConfig | null {
 }
 
 const hostClientMode = hostDelegation() !== null;
+function projectWindowOwnerStamp() {
+  if (!hostClientMode) return getActiveDataOwnerPushStamp();
+  const { dataOwnerId, ownerGeneration } = authManager.getAuthState();
+  return { dataOwnerId, ownerGeneration };
+}
 if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
@@ -1358,6 +1375,7 @@ function installHostClientMode(): boolean {
     }
   };
   const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    forwardProjectWrite: (client, event, input) => forwardProjectWrite(client, event, input, projectWindowOwnerStamp),
     assertTrusted: assertTrustedAppRendererEvent,
     authorizePluginApproval: (event, channel, args) => {
       if (!isTrustedAppRendererEvent(event)) return false;
@@ -1474,7 +1492,11 @@ function installHostClientMode(): boolean {
       }
     },
     onPluginPush: (channel, payload) => {
-      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+      // Pushes the windows take as they come from the local main process; the recent projects push is the
+      // one updateSessionInDb sends after a move (sessions.ts broadcastRecentWorkdirsChanged).
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify',
+        'ghosts:user-message-blocked', 'ghosts:user-message-rewritten', 'ghosts:hook-fused',
+        'local-db:recent-workdirs:changed'].includes(channel)) {
         for (const win of BrowserWindow.getAllWindows())
           if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
         return;
@@ -1546,8 +1568,9 @@ function installHostClientMode(): boolean {
     onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
     onRightSidebarTabsChanged: event => sendToAllWindows('maker:right-sidebar-tabs:changed', event),
     onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
-    onProjectAliasesChanged: () => {
+    onProjectAliasesChanged: event => {
       sendToAllWindows('local-db:project-aliases:changed', {});
+      if (event.catalogChanged) sendToAllWindows('local-db:recent-workdirs:changed', {});
     },
     onError: (error) => {
       console.warn(
@@ -1695,6 +1718,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     await restoreUsageLimitWaits();
     if (getGoalTeardownGeneration() !== goalGenBefore) return;
     const scheduler = await startScheduler({
+      refreshSchedulePr,
       maker,
       getDb: () => getDbClient().drizzle,
       getMainWindow: () => mainWindowRef,
@@ -3018,6 +3042,26 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  async acquireRemoteAuth(providerId, modelId) {
+    const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote: true, capability: 'image.generate' });
+    let proof: (() => boolean) | undefined;
+    return {
+      async getAuth() {
+        const auth = await getChatgptBridgeAuthForDispatch(providerId, lease?.account);
+        proof = auth.canDispatch;
+        return auth;
+      },
+      assertDispatchable() {
+        lease?.assertDispatchable();
+        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+      },
+      async onAuthFailure(failure) {
+        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
+        await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
+      },
+      release() { lease?.release(); },
+    };
+  },
   hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
@@ -3055,9 +3099,7 @@ setAppSessionCommitBoundaryHook(() => {
   remoteDesktopViewerWindows.reset();
   // 弹出的页签窗口带着旧 owner 的任务指派与 renderer 本地页签缓存:同步销毁,不让新 owner 看到旧内容。
   sidebarTabWindowsController.destroyAllWindows();
-  clearAllSessionProviders();
-  clearAllSessionRuntimeAxes();
-  clearAllSessionRuntimeControlStates();
+  clearOwnerScopedSessionRuntimeSelection();
 });
 const ownerBackgroundLog = createLogger('owner-background');
 const builtinPostCommitStep = new StableOwnerPostCommitStep({
@@ -3085,6 +3127,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  scheduleNativeHistoryBackupCleanup();
   if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -3681,6 +3724,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+const personalLoadFailures = new WeakMap<BrowserWindow, number>();
 let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
@@ -3805,6 +3849,7 @@ const authCredentialRecovery = createAuthCredentialRecovery({
 });
 
 let windowsTray: Tray | null = null;
+let windowsQuotaPanel: WindowsQuotaPanel | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
@@ -3891,6 +3936,8 @@ function quitFromDesktopTray(): void {
 }
 
 function destroyWindowsTray(): void {
+  windowsQuotaPanel?.dispose();
+  windowsQuotaPanel = null;
   windowsTray?.destroy();
   windowsTray = null;
   windowsTrayMenu = null;
@@ -3929,8 +3976,22 @@ function ensureWindowsTray(): boolean {
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
-    tray.on('click', () => focusMainWindow());
-    tray.on('right-click', () => openWindowsTrayMenu());
+    const quotaTray = tray;
+    tray.on('mouse-enter', (_event, position) => windowsQuotaPanel?.hover(quotaTray.getBounds(), position));
+    tray.on('mouse-leave', () => windowsQuotaPanel?.cancelPendingHover());
+    windowsQuotaPanel = new WindowsQuotaPanel(() => mainWindowRef, () => {
+      const win = mainWindowRef;
+      if (win && !win.isDestroyed()) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
+    });
+    // 卡片只由悬停触发；左键单击保持原有语义，直接回到主窗口。
+    tray.on('click', () => {
+      windowsQuotaPanel?.dismiss();
+      focusMainWindow();
+    });
+    tray.on('right-click', () => {
+      windowsQuotaPanel?.dismiss();
+      openWindowsTrayMenu();
+    });
     windowsTray = tray;
     windowsTrayMenu = null;
     return true;
@@ -3945,6 +4006,8 @@ function ensureWindowsTray(): boolean {
     windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
+    windowsQuotaPanel?.dispose();
+    windowsQuotaPanel = null;
     windowsTray = null;
     windowsTrayMenu = null;
     return false;
@@ -4669,6 +4732,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    windowsQuotaPanel?.destroyWindow();
     remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     sidebarTabWindowsController.destroyAllWindows();
@@ -4757,7 +4821,7 @@ const createWindow = () => {
   // work-area fill, so that fill cannot become the next restore size (#9461).
   // The keeper keeps this filtered view for its whole lifetime; the window itself
   // is untouched, so drag / sidebar reads still see the live rectangle.
-  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow), screen);
+  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow, screen), screen);
   // The constructor size is not the rectangle the keeper will save. `saveState`
   // copies the live normal bounds into its closure; `maximize()` after that only
   // flips the flag, so quit no longer writes the old work-area rectangle back.
@@ -4819,6 +4883,7 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      windowsQuotaPanel?.prewarm();
       remoteDesktopViewerWindows.setLocale(
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
@@ -4954,6 +5019,11 @@ const createWindow = () => {
     }
   });
   let devLoadRetries = 0;
+  if (personalMonitorEnvironment) {
+    mainWindow.webContents.on('did-start-navigation', (event) => {
+      if (event.isMainFrame && !event.isSameDocument) personalLoadFailures.delete(mainWindow);
+    });
+  }
   mainWindow.webContents.on(
     'did-fail-load',
     (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -4970,6 +5040,8 @@ const createWindow = () => {
         setTimeout(() => {
           if (!mainWindow.isDestroyed()) void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
         }, delayMs);
+      } else if (personalMonitorEnvironment) {
+        personalLoadFailures.set(mainWindow, errorCode);
       }
     },
   );
@@ -5226,18 +5298,39 @@ const registerIpcHandlers = () => {
   // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
+    // 隐私屏只在需要时让屏幕常亮:有 Agent 任务在跑,或定时任务快要开始(见 privacy-screen.md)。
+    const displayDemand = new DisplayDemand({
+      runningTasks: () => getAgentIslandService()?.getLocalRunningTaskCount() ?? 0,
+      nextScheduledRunAt: async () => {
+        const next = (await getScheduleStorage().listActive())
+          .map((schedule) => schedule.nextFireAt)
+          .filter((at): at is number => typeof at === 'number');
+        return next.length ? Math.min(...next) : null;
+      },
+      now: Date.now,
+    });
     startAwayGuard({
+      excludedWindows: setAwayCaptureExcludedWindows,
+      needsDisplay: () => displayDemand.needed(),
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       screenLocked: isDesktopScreenLocked,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
-    setPhysicalInputShielded(isAwayCoverUp);
+    // Hyprland draws its privacy screen in the compositor; same policy, own loop.
+    startLinuxAwayCover();
+    setPhysicalInputShielded(() => isAwayCoverUp() || isLinuxAwayCoverUp());
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
   if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  // macOS 桌面小组件:同一份余量概览,桌面上放了 Cindy 小组件时才读取,数据变化后通知系统刷新。
+  // 共享 userData 的被动实例不写,避免两个实例争写同一份组件数据。
+  if (!authManager.isPassiveSharedUserDataInstance()) {
+    const stopDesktopWidgets = startDesktopWidgets(getQuotaOverviewService());
+    if (stopDesktopWidgets) onQuit('desktop-widgets', stopDesktopWidgets);
+  }
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
@@ -5677,24 +5770,6 @@ const registerIpcHandlers = () => {
   };
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreSubagentSettings(); });
 
-  // 视觉桥设置 IPC —— store 与 Maker 单例无关, 提前注册（见 vision-bridge-settings-store）。
-  // GET 也是特权配置面读取（providerId/modelId/开关），非可信 sender 同样拒绝（与 SET/RESET 对齐）。
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_GET, async (event) => {
-    assertTrustedAppRendererEvent(event);
-    return visionBridgeSettingsWire();
-  });
-  const updateVisionSettings = async (patch: unknown) => {
-    const parsed = parseVisionBridgeSettingsPatch(patch);
-    writeVisionBridgeSettings(parsed);
-    return visionBridgeSettingsWire();
-  };
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_SET, async (event, patch: unknown) => { assertTrustedAppRendererEvent(event); return updateVisionSettings(patch); });
-  const restoreVisionSettings = async () => {
-    resetVisionBridgeSettings();
-    return visionBridgeSettingsWire();
-  };
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreVisionSettings(); });
-
   registerRuntimeSettingsSection({
     id: 'subagent-models', title: '子代理模型',
     description: 'Claude Code 子代理模型及来源；Codex 智能调配开关。Codex 忙碌时沿用设置页的延迟生效规则。',
@@ -5704,15 +5779,6 @@ const registerIpcHandlers = () => {
       codexSmartSubagentRouting: settingsSchema.boolean().optional() }),
     read: subagentModelSettingsWire, update: updateSubagentSettings, reset: restoreSubagentSettings,
   });
-  const visionBackendSchema = settingsSchema.strictObject({ providerId: settingsSchema.string().min(1).max(256), modelId: settingsSchema.string().min(1).max(256) }).nullable();
-  registerRuntimeSettingsSection({
-    id: 'vision-bridge', title: '视觉桥', description: '视觉桥总开关、目标模型、主视觉模型与备用模型。', effective: 'next-request',
-    schema: settingsSchema.strictObject({ enabled: settingsSchema.boolean().optional(),
-      targetModels: settingsSchema.array(settingsSchema.string().min(1).max(256)).max(512).optional(),
-      primary: visionBackendSchema.optional(), fallback: visionBackendSchema.optional() }),
-    read: visionBridgeSettingsWire, update: updateVisionSettings, reset: restoreVisionSettings,
-  });
-
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
   // buildDesktopClaudeRuntimeConfig.behaviorFlags 是动态 getter, 下个新 session 读到新值。
   ipcMain.handle(MAKER_IPC_INVOKE.SILENT_ENCRYPTED_RETRY_GET, async () => {
@@ -6001,13 +6067,16 @@ const registerIpcHandlers = () => {
   //   - SDK supportedModels 捕获(maker-core 会话 init 后上报)是能力字段权威。
   setClaudeSupportedModelsListener(noteAnthropicSdkSupportedModels);
   // CLI 登录态在 Cindy 之外变化(终端里登录 / 登出)时同步连接态;登出与手动断开同款收尾。
-  onClaudeCliLoginStatusChange((status) => {
+  onClaudeCliLoginStatusChange(() => {
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
+  });
+  // 套餐显示名可能随文本状态查询暂时缺失;展示照常刷新,不重置模型发现世代。
+  onClaudeCliLoginStatusChange((status) => {
     if (!status.loggedIn) resetProviderModelAutoRefreshCooldowns('anthropic');
     // 登出清空清单;登录(含在终端里登录)后主动读一次;直接换号先清旧账号再读。
     syncAnthropicModelsWithClaudeLogin(status);
-  });
+  }, { includeDisplayNameChanges: false });
   // 启动时后台读一次(不阻塞):已连接的用户由 provider 目录加载等这次结果;
   // 从未连接的用户据此自动沿用本机登录。明确断开过的用户不再读。
   if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
@@ -6017,7 +6086,7 @@ const registerIpcHandlers = () => {
   // 退出时结束进行中的登录子进程(CLI 的本机回调监听没有超时),并关闭 CLI 的代理桥。
   app.once('will-quit', () => {
     cancelClaudeCliLogin();
-    void closeClaudeCliProxyBridge();
+    void closeCliProxyBridge();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
     // 没有使用许可时结论恒为 false,不必拉起 CLI(状态栏等常驻读取对所有用户都会调用)。
@@ -7129,6 +7198,8 @@ const registerIpcHandlers = () => {
       // Packaged apps and ordinary dev launches retain their existing lifecycle.
       if (process.platform === 'darwin' && !app.isPackaged && personalMonitorEnvironment) {
         let personalReady = false;
+        const interactive = createPersonalRendererProbe(() => mainWindowRef, personalMonitorEnvironment.assetDigest
+          ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`) : undefined);
         const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
         const tick = createPersonalBuildMonitor({
           directory: personalMonitorEnvironment.directory,
@@ -7136,6 +7207,9 @@ const registerIpcHandlers = () => {
           pid: process.pid, now: Date.now,
           ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
             && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          assetDigest: personalMonitorEnvironment.assetDigest,
+          interactive,
+          interfaceFailure: () => mainWindowRef ? personalLoadFailures.get(mainWindowRef) : undefined,
           remoteReady: () => getDeviceLinkStatus() === 'online',
           idle: () => powerMonitor.getSystemIdleTime() >= 120,
           busy: () => hasUpdateRelaunchBusyActivity({
@@ -7202,6 +7276,7 @@ const registerIpcHandlers = () => {
       registerFileBrowserDeviceOp();
       // Remote SSH host management (Phase A) —— 连接管理 + ~/.ssh/config IO,
       // 暂未涉及 agent-on-remote / session 同步,后续 Phase B 扩展。
+      configureProjectDirectoryProbe((...args) => probeRemoteWorkingDirectory(...args));
       registerRemoteSshIpc();
       // Phase D — 启动后台 autoConnect: 把 prefs 里 autoConnect=true 的 host
       // 提前连好, 用户进新建对话点远程项目时不用等。fire-and-forget, 失败仅
@@ -7863,15 +7938,22 @@ const registerIpcHandlers = () => {
       {
         defaultPath,
         writableGrantScope,
-      }: { defaultPath?: string; writableGrantScope?: string } = {},
+        projectGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string; projectGrantScope?: string } = {},
     ) => {
+      const projectOwner = projectWindowOwnerStamp();
+      const projectScope =
+        projectGrantScope === undefined
+          ? undefined
+          : projectDirectoryGrantScope(projectOwner, projectGrantScope);
+      if (projectScope !== undefined) assertTrustedAppRendererEvent(event);
       if (writableGrantScope !== undefined) {
         assertTrustedAppRendererEvent(event);
         if (!writableGrantScope || writableGrantScope.length > 128) {
           throw new Error('invalid writable directory grant scope');
         }
       }
-      const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
+      const targetWin = projectScope !== undefined ? BrowserWindow.fromWebContents(event.sender) : getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
         // createDirectory:macOS 显示"新建文件夹"按钮(Windows 自带);
@@ -7883,6 +7965,23 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       const selectedPath = result.filePaths[0];
+      let displayedPath = selectedPath;
+      if (projectScope !== undefined) {
+        const current = projectWindowOwnerStamp();
+        if (
+          isAppSessionBoundaryPending() ||
+          current.dataOwnerId !== projectOwner.dataOwnerId ||
+          current.ownerGeneration !== projectOwner.ownerGeneration
+        )
+          throwIpcError('PRECONDITION_FAILED', 'Project account changed');
+        assertTrustedAppRendererEvent(event);
+        displayedPath = await issueWritableDirectoryPickerGrant({
+          useCanonicalPath: true,
+          scopeId: projectScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
       if (writableGrantScope !== undefined) {
         await issueWritableDirectoryPickerGrant({
           scopeId: writableGrantScope,
@@ -7890,7 +7989,7 @@ const registerIpcHandlers = () => {
           directory: selectedPath,
         });
       }
-      return { success: true, path: selectedPath };
+      return { success: true, path: displayedPath };
     },
   );
 
@@ -9142,6 +9241,10 @@ const registerIpcHandlers = () => {
         }
       },
       fetchRemoteMediaImage: (url) => fetchRemoteMediaImageBytes(url),
+      saveRemoteMedia: (source, destination) => saveMediaStream(source, destination, {
+        fetchHttp: (url, signal) => net.fetch(url, { signal }),
+        fetchRemote: (url, signal) => openRemoteMediaForSave(url, signal),
+      }),
       getTempDir: () => {
         fs.mkdirSync(remoteImagesTmpDir, { recursive: true });
         return remoteImagesTmpDir;
@@ -10561,7 +10664,22 @@ app.on('ready', async () => {
   registerDevEmbeddingIpc();
   // worktree-parallel-sessions: 注册 7 个 worktree:* channel (创建/查询/列表/reveal/...)
   // 删除路径不暴露 IPC; 仅在 cc-agent:close-session 内部调用 removeWorktreeForSession。
-  registerWorktreeIpc(ipcMain);
+  registerWorktreeIpc(ipcMain, async () => {
+    const maker = getMakerIfReady();
+    return Promise.all(
+      (maker?.listActiveSessions() ?? []).map(async (session) => ({
+        id: session.id,
+        workDir: session.workDir,
+        remoteHostId: session.remoteHostId,
+        name: (await maker!.getSessionMeta(session.id))?.title || session.id,
+        running:
+          session.isTurnRunning() ||
+          session.listBackgroundTasks().length > 0 ||
+          isSessionInTurn(session.id) ||
+          getClaudeSessionBackgroundActivity(session.id),
+      })),
+    );
+  });
   // session-git-pr-context: git-context:* channel(分支查询/HEAD 监听/PR 引用/PR 状态)
   registerGitContextIpc();
   registerGitReviewIpc({
@@ -10657,7 +10775,13 @@ app.on('ready', async () => {
   // tapdbClient 一挂载就 invoke analytics:settings-get 来决定是否初始化 SDK,
   // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
   // 的用户会一直不上报,直到手动去设置里拨一下开关。
-  initAnalyticsSettingsService();
+  initAnalyticsSettingsService({
+    enabled: usageReporting.tokenReportingEnabled,
+    set: usageReporting.setTokenReporting,
+    interrupt: usageReporting.interruptTokenReporting,
+    revokeAll: usageReporting.revokeAllTokenReporting,
+    report: usageReporting.reportTokenUsage,
+  });
   // 日志上报:同样必须在 createWindow 之前注册 —— 设置页一挂载就 invoke
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
@@ -10718,12 +10842,22 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
+  configureSharedImageAccess({
+    getReceivedShares, findReceivedShare, invoke: remoteBackgroundInvoke,
+    captureOwner: () => {
+      const owner = activeOwnerScopeKey();
+      return () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
+    },
+  });
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
+  // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
+  // 这是写操作，归窗口进程；Host 客户端模式不补做(docs/host/personal-migration-release-table.md)。
+  if (!hostClientMode) startUpgradeSplitRepair();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
@@ -10870,7 +11004,14 @@ onQuit('usage-limit-waits-flush', flushUsageLimitWaits, 'async');
 onQuit(
   'reap-claude-children',
   () => {
-    reapClaudeOrphansSync();
+    // Fence product events first, but keep transports alive until the process
+    // tree sweep has captured Windows descendants (#9323). Turn markers were
+    // frozen above, so cancellation cannot erase interrupted-task recovery.
+    try {
+      getMakerIfReady()?.prepareForAppQuit();
+    } finally {
+      reapClaudeOrphansSync();
+    }
   },
   'sync',
 );
@@ -11317,74 +11458,6 @@ function subagentModelSettingsWire() {
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,
   };
-}
-
-function visionBridgeSettingsWire() {
-  const state = readVisionBridgeSettingsState();
-  return {
-    ...state.value,
-    isCustomized: state.isCustomized,
-    customizedKeys: state.customizedKeys,
-    defaults: state.defaults,
-  };
-}
-
-/** 解析视觉桥设置 patch（白名单键，逐字段校验；非法抛 INVALID_PARAMS）。 */
-function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSettings> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'vision bridge settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: Partial<VisionBridgeSettings> = {};
-  if ('enabled' in input) {
-    if (typeof input.enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'vision bridge enabled must be boolean');
-    }
-    patch.enabled = input.enabled;
-  }
-  if ('targetModels' in input) {
-    if (!Array.isArray(input.targetModels)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a string array');
-    }
-    // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
-    const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
-    if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        'vision bridge targetModels must be a non-blank string array',
-      );
-    }
-    patch.targetModels = trimmed;
-  }
-  for (const key of ['primary', 'fallback'] as const) {
-    if (!(key in input)) continue;
-    const value = input[key];
-    if (value === null) {
-      patch[key] = null;
-      continue;
-    }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        `vision bridge ${key} must be { providerId, modelId } or null`,
-      );
-    }
-    const ref = value as Record<string, unknown>;
-    if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError(
-        'INVALID_PARAMS',
-        `vision bridge ${key} must be { providerId, modelId } or null`,
-      );
-    }
-    // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
-    const providerId = ref.providerId.trim();
-    const modelId = ref.modelId.trim();
-    if (providerId.length === 0 || modelId.length === 0) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} providerId/modelId must not be blank`);
-    }
-    patch[key] = { providerId, modelId };
-  }
-  return patch;
 }
 
 function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPatch {

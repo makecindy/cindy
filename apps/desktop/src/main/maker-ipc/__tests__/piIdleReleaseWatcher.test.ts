@@ -11,6 +11,7 @@ import { sessions } from '../../localDb/schema.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
+  createPiIdleReleaseCandidateQueries,
   piIdleReleaseCandidateWhere,
   piIdleReleaseIdleSince,
   type PiIdleReleaseCandidate,
@@ -145,6 +146,29 @@ it('retires only the Pi runtime and resumes the same native identity', async () 
 });
 
 describe('createPiIdleReleaseWatcher', () => {
+  // The scan and recheck queries the desktop and the Node Host share, through the database the
+  // caller reads now: only idle Pi rows in scope are listed, and a row that left scope rechecks as null.
+  it('lists and rechecks candidates through the shared queries', async () => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(`CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, agent_kind TEXT, status TEXT, source TEXT, orca_role TEXT,
+        hidden_at INTEGER, remote_host_id TEXT, agent_device_id TEXT,
+        updated_at INTEGER, last_turn_ended_at INTEGER, user_send_at INTEGER
+      )`);
+      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      insert.run('idle', 'pi', 'active', 'desktop', null, null, null, null, 0, 10, 0);
+      insert.run('recent', 'pi', 'active', 'desktop', null, null, null, null, 0, 90_000, 0);
+      insert.run('codex', 'codex', 'active', 'desktop', null, null, null, null, 0, 0, 0);
+      const queries = createPiIdleReleaseCandidateQueries(() => ({ drizzle: drizzle(sqlite) }));
+      await expect(queries.listCandidates(60_000)).resolves.toEqual([{ id: 'idle', idleSinceMs: 10 }]);
+      await expect(queries.readIdleSinceMs('idle')).resolves.toBe(10);
+      await expect(queries.readIdleSinceMs('codex')).resolves.toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   // #10424: scan/recheck SQL excluded bot and scheduler processes indefinitely.
   // Unit tier: an idle source row in real in-memory SQLite must reach release;
   // preselected candidate mocks cannot detect a missing source in the predicate.

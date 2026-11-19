@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 /**
  * 插件安装／更新确认框（docs/dev-rules/plugin-security-and-authoring.md §3.1）。
  *
@@ -233,8 +234,8 @@ export function GhostInstallConsentHost() {
                         source,
                       }),
                 content: <>
-                  {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
-                    <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
+                  {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}

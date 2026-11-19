@@ -22,6 +22,10 @@ export const SESSION_STARTING_TTL_MS = 120_000;
 
 const listeners = new Set<() => void>();
 const startingIds = new Set<string>();
+// Bind terminal evidence to the submitted input, not arrival time: a prior
+// turn's done/error can arrive after the next send. Main owns reply attribution.
+// Keep the receipt only for the existing starting lifetime, across view remounts.
+const startingInputs = new Map<string, { clientId: string; terminal: boolean }>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 /** 不可变快照,只在 emit 时重建 —— 无变化时返回同一引用。 */
 let snapshot: ReadonlySet<string> = new Set();
@@ -38,6 +42,21 @@ function clearTimer(sessionId: string): void {
   timers.delete(sessionId);
 }
 
+export function hasStartingTerminal(sessionId: string): boolean {
+  return startingInputs.get(sessionId)?.terminal === true;
+}
+
+export function getStartingInputClientId(sessionId: string): string | undefined {
+  return startingInputs.get(sessionId)?.clientId;
+}
+
+export function noteStartingTerminal(sessionId: string, replyToClientId?: unknown): void {
+  const input = startingInputs.get(sessionId);
+  if (!input || input.terminal || input.clientId !== replyToClientId) return;
+  input.terminal = true;
+  emit();
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -49,8 +68,8 @@ export function getStartingSessionIds(): ReadonlySet<string> {
   return snapshot;
 }
 
-/** 用户已提交发送。重复标记只刷新 TTL,不抖快照。 */
-export function markSessionStarting(sessionId: string): void {
+/** 用户已提交发送。同一输入重复标记只刷新 TTL；新输入重置终态证据。 */
+export function markSessionStarting(sessionId: string, clientId?: string): void {
   if (!sessionId) return;
   const already = startingIds.has(sessionId);
   if (!already) {
@@ -59,21 +78,25 @@ export function markSessionStarting(sessionId: string): void {
     dropStaleRemoteTerminalActivity(sessionId, getSessionDeviceId(sessionId));
     startingIds.add(sessionId);
   }
+  const newInput = !!clientId && startingInputs.get(sessionId)?.clientId !== clientId;
+  if (newInput) startingInputs.set(sessionId, { clientId, terminal: false });
   clearTimer(sessionId);
   timers.set(
     sessionId,
     setTimeout(() => {
       timers.delete(sessionId);
+      startingInputs.delete(sessionId);
       if (!startingIds.delete(sessionId)) return;
       emit();
     }, SESSION_STARTING_TTL_MS),
   );
-  if (!already) emit();
+  if (!already || newInput) emit();
 }
 
 export function clearSessionStarting(sessionId: string): void {
   if (!sessionId) return;
   clearTimer(sessionId);
+  startingInputs.delete(sessionId);
   if (!startingIds.delete(sessionId)) return;
   emit();
 }
@@ -84,6 +107,7 @@ export function absorbSessionStarting(settledSessionIds: Iterable<string>): void
   for (const sessionId of settledSessionIds) {
     if (!startingIds.has(sessionId)) continue;
     clearTimer(sessionId);
+    startingInputs.delete(sessionId);
     startingIds.delete(sessionId);
     changed = true;
   }
@@ -111,6 +135,7 @@ export function resetSessionStartingStoreForTests(): void {
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
   startingIds.clear();
+  startingInputs.clear();
   snapshot = new Set();
   listeners.clear();
 }

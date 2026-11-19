@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as providers from '@/hooks/useDeviceProviders';
 import * as capabilities from '@/hooks/useAgentCapabilities';
 import { invalidateRemoteCatalogSnapshots, refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
 
 beforeEach(() => {
   invalidateRemoteCatalogSnapshots();
@@ -18,6 +19,73 @@ function deferred() {
 }
 
 describe('remote catalog refresh scheduling', () => {
+  // A capability-only route has no provider-cache generation/history to retire.
+  it('keeps a newly mounted capability-only route retired while its source refresh is queued', async () => {
+    const source = deferred();
+    let holdSource = true;
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (holdSource && channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) await source.promise;
+      const targetChannel = channel === CONTROLLED_MODEL_CATALOG_CHANNEL
+        ? (args[0] as { channel: string }).channel : channel;
+      return targetChannel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const first = refreshRemoteCatalogSnapshot('share:capability-only');
+    await Promise.resolve();
+    const target = modelCatalogKey('share:capability-only', 'task-host')!;
+    const off = capabilities.subscribeDeviceCapabilities(target, 'codex', () => undefined);
+    try {
+      await capabilities.prefetchDeviceCapabilities(target);
+      expect(providers.getCachedDeviceProviders(target)).toBeNull();
+      const queued = refreshRemoteCatalogSnapshot('share:capability-only');
+      providers.evictDeviceProviders('task-host');
+      capabilities.evictDeviceCapabilities('task-host');
+      const reads = invoke.mock.calls.length;
+      holdSource = false;
+      source.resolve();
+      await Promise.all([first, queued]);
+      expect(invoke.mock.calls.length).toBe(reads + 4); // Only the live source's trailing read.
+      expect(capabilities.getCachedCapabilities('codex', target)).toBeNull();
+      expect(providers.getCachedDeviceProviders(target)).toBeNull();
+    } finally { off(); }
+  });
+
+  // #10711 routed-refresh repair / unit: a queued share refresh must not reopen
+  // a task-host alias independently retired by control-disable/disconnect.
+  it('does not reopen an independently retired routed target from a queued source refresh', async () => {
+    const source = deferred();
+    let holdSource = false;
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (holdSource && channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) await source.promise;
+      const targetChannel = channel === CONTROLLED_MODEL_CATALOG_CHANNEL
+        ? (args[0] as { channel: string }).channel : channel;
+      return targetChannel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const target = modelCatalogKey('share:a', 'task-host')!;
+    const off = providers.subscribeDeviceProviders(target, () => undefined);
+    try {
+      await refreshRemoteCatalogSnapshot(target);
+      holdSource = true;
+      const first = refreshRemoteCatalogSnapshot('share:a');
+      await Promise.resolve(); // Start the blocked source read before queuing its trailing refresh.
+      expect(invoke.mock.calls.filter(([, channel]) => channel !== CONTROLLED_MODEL_CATALOG_CHANNEL)).toHaveLength(4);
+      const queued = refreshRemoteCatalogSnapshot('share:a');
+      providers.evictDeviceProviders('task-host');
+      capabilities.evictDeviceCapabilities('task-host');
+      const routedReads = () => invoke.mock.calls.filter(([, channel]) => channel === CONTROLLED_MODEL_CATALOG_CHANNEL).length;
+      const reads = routedReads();
+      holdSource = false;
+      source.resolve();
+      await Promise.all([first, queued]);
+      expect(routedReads()).toBe(reads);
+      expect(providers.getCachedDeviceProviders(target)).toBeNull();
+      expect(capabilities.getCachedCapabilities('codex', target)).toBeNull();
+    } finally { off(); }
+  });
+
   // 2026-10-20 黑盒验收：成员 A/B 使用同一个 shareId，B 的选择器显示 A 的模型。
   // 现有覆盖只驱逐单设备；最小输入为账号边界前的缓存和在途读取，tier: unit。
   it('clears all remote catalogs at an account boundary and rejects late old-owner results', async () => {

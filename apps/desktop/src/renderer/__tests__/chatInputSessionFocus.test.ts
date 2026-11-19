@@ -80,9 +80,33 @@ describe('ChatInput session switch focus contract', () => {
     expect(firstMountHydrationBlock).toContain("editor.commands.focus('end');");
   });
 
+  // Guard tier, #11517 security regression: background companion approvals and composer
+  // commands must not be consumed. Evaluate the production ownership predicate,
+  // shared by approval/text/voice/scroll subscribers, rather than a copied formula.
+  // Existing focus guards covered only header ownership. Smallest failure input
+  // is an unfocused visible companion with navigationMode='route-owner'.
+  it.each([
+    [false, false, 'route-owner', true, false],
+    [false, true, 'route-owner', true, false],
+    [true, false, 'route-owner', true, true],
+    [true, true, 'route-owner', true, true],
+    [true, false, 'sidebar-embedded', true, false],
+    [true, false, 'split-pane', true, false],
+    [true, false, 'route-owner', false, false],
+  ])('hardware ownership with focus=%s route=%s mode=%s visible=%s is %s',
+    (paneFocused, ownsRoute, navigationMode, viewVisible, expected) => {
+      const predicate = extractBetween(sessionViewSource,
+        'const ownsHardwareTaskActions =', 'const showComposerControlledBanner');
+      expect(runInNewContext(
+        '(function () { ' + predicate + '; return ownsHardwareTaskActions; })()',
+        { paneFocused, ownsRoute, navigationMode, viewVisible, sessionId: 'companion-chat' },
+      )).toBe(expected);
+    },
+  );
+
   it('enables storageKey refocus for routed session and new-draft views', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+      'const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}');
     expect(sessionViewSource).toContain(

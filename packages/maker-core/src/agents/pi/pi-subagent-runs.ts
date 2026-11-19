@@ -870,14 +870,14 @@ export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
   root: string,
-  options: { latestPerTask?: boolean } = {},
+  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void | Promise<void> } = {},
 ): AsyncGenerator<PiSubagentRunStatus> {
   if (options.latestPerTask) {
     // Directory order is not generation order. Select using small identities
     // first so an old run cannot publish a result/approval before its successor.
     // Re-read only the selected payloads instead of retaining every output.
     const newest = new Map<string, { runId: string; startedAt: number }>();
-    for await (const status of scanPiSubagentRuns(root)) {
+    for await (const status of scanPiSubagentRuns(root, { onRead: options.onRead })) {
       const previous = newest.get(status.taskId);
       if (!previous || status.startedAt > previous.startedAt
         || (status.startedAt === previous.startedAt && status.runId.localeCompare(previous.runId) > 0)) {
@@ -890,7 +890,7 @@ export async function* scanPiSubagentRuns(
         status = parseStatus(await readSmallJson(path.join(root, selected.runId, 'status.json')), selected.runId);
       } catch { continue; }
       if (status?.taskId === taskId && status.startedAt === selected.startedAt
-        && !isPiSubagentRunStale(status, Date.now())) yield status;
+        && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
     }
     return;
   }
@@ -905,7 +905,11 @@ export async function* scanPiSubagentRuns(
     try {
       status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
     } catch { continue; }
-    if (status && !isPiSubagentRunStale(status, Date.now())) yield status;
+    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) {
+      // Accounting can observe all generations without exposing old results or approvals.
+      await options.onRead?.(status);
+      yield status;
+    }
   }
 }
 
@@ -1287,17 +1291,19 @@ export function piSubagentControlOwnership(
  */
 export type PiSubagentApprovalScope = 'own' | 'adopted' | 'refused';
 
-export function piSubagentApprovalScope(
+export async function piSubagentApprovalScope(
   status: PiSubagentRunStatus,
   runtimeOwnerId: string,
   hostPid: number,
   parentSessionId: string | undefined,
-): PiSubagentApprovalScope {
+): Promise<PiSubagentApprovalScope> {
   if (status.runtimeOwnerId === runtimeOwnerId) return 'own';
   if (!status.runtimeOwnerId) return 'refused';
   if (!parentSessionId || status.parentSessionId !== parentSessionId) return 'refused';
-  const ownership = piSubagentControlOwnership(status, hostPid);
-  return ownership === 'self' || ownership === 'orphaned' ? 'adopted' : 'refused';
+  const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+  if (identity === null) return 'refused';
+  const alive = await isOwnerInstanceAliveAsync(identity);
+  return identity.pid === hostPid || !alive ? 'adopted' : 'refused';
 }
 
 /** True when this host may write control requests for the run. */
@@ -1389,6 +1395,52 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
  */
 type ProcessStartTimeMemo = Map<number, number | null>;
 
+// Only share work while the OS query is in flight. Retaining completed answers
+// across polls would let a recycled PID keep proving the previous owner's id.
+const pendingProcessStartTimes = new Map<number, Promise<number | null>>();
+
+function readProcessStartTimeSecAsync(pid: number): Promise<number | null> {
+  const pending = pendingProcessStartTimes.get(pid);
+  if (pending) return pending;
+  const probe = (async (): Promise<number | null> => {
+    try {
+      if (process.platform === 'win32') {
+        const { stdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
+        ], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+        const match = stdout.match(/-?\d+/);
+        const seconds = match ? Number(match[0]) : NaN;
+        return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+      }
+      // ps reports elapsed seconds, so take the clock sample after the query.
+      const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'etime='], {
+        encoding: 'utf8', timeout: 5_000,
+      });
+      const elapsed = parseElapsedSeconds(stdout);
+      return elapsed === null ? null : Math.round(Date.now() / 1_000 - elapsed);
+    } catch {
+      return null;
+    }
+  })();
+  pendingProcessStartTimes.set(pid, probe);
+  void probe.finally(() => {
+    if (pendingProcessStartTimes.get(pid) === probe) pendingProcessStartTimes.delete(pid);
+  });
+  return probe;
+}
+
+async function isOwnerInstanceAliveAsync(identity: PiSubagentOwnerIdentity): Promise<boolean> {
+  if (isProcessAlive(identity.pid) === false) return false;
+  if (identity.startTimeSec === undefined) return true;
+  const startTimeSec = identity.pid === process.pid
+    ? ownProcessStartTimeSec()
+    : await readProcessStartTimeSecAsync(identity.pid);
+  if (isProcessAlive(identity.pid) === false) return false;
+  return startTimeSec === null
+    || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
+}
+
 function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
   const cached = memo?.get(pid);
   if (cached !== undefined) return cached;
@@ -1449,6 +1501,17 @@ function isProcessAlive(pid: number | undefined): boolean | null {
 const RUNNER_IDENTITY_TTL_MS = 10_000;
 const RUNNER_IDENTITY_CACHE_MAX = 64;
 const runnerIdentityCache = new Map<string, { at: number; presence: PiSubagentRunnerPresence }>();
+const pendingRunnerIdentities = new Map<string, Promise<PiSubagentRunnerPresence>>();
+
+function rememberRunnerPresence(key: string, presence: PiSubagentRunnerPresence): void {
+  runnerIdentityCache.delete(key);
+  runnerIdentityCache.set(key, { at: Date.now(), presence });
+  while (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
+    const oldest = runnerIdentityCache.keys().next().value;
+    if (oldest === undefined) break;
+    runnerIdentityCache.delete(oldest);
+  }
+}
 
 function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
   const key = `${status.runnerPid}:${status.runnerScript}`;
@@ -1460,19 +1523,39 @@ function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPr
   // outlived its process is what makes a sweep count work that is already over.
   // A signal-0 syscall, no spawn, and only on the expired-heartbeat path.
   if (isProcessAlive(status.runnerPid) === false) {
-    runnerIdentityCache.set(key, { at: now, presence: 'gone' });
+    rememberRunnerPresence(key, 'gone');
     return 'gone';
   }
   const cached = runnerIdentityCache.get(key);
   if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
   const presence = classifyRunnerPresenceSync(status);
-  runnerIdentityCache.set(key, { at: now, presence });
-  if (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
-    for (const [entryKey, entry] of runnerIdentityCache) {
-      if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
-    }
-  }
+  rememberRunnerPresence(key, presence);
   return presence;
+}
+
+/** Reuse runner classifications only for stale display, never for owner/control authority. */
+async function runnerPresenceForStaleAsync(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
+  const key = `${status.runnerPid}:${status.runnerScript}`;
+  // A completed "running" answer must not hide an exit inside its TTL.
+  if (isProcessAlive(status.runnerPid) === false) {
+    rememberRunnerPresence(key, 'gone');
+    return 'gone';
+  }
+  const cached = runnerIdentityCache.get(key);
+  if (cached && Date.now() - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
+  const pending = pendingRunnerIdentities.get(key);
+  if (pending) return pending;
+  const probe = (async () => {
+    const classified = await classifyRunnerPresence(status);
+    const presence = isProcessAlive(status.runnerPid) === false ? 'gone' : classified;
+    rememberRunnerPresence(key, presence);
+    return presence;
+  })();
+  pendingRunnerIdentities.set(key, probe);
+  try { return await probe; }
+  finally {
+    if (pendingRunnerIdentities.get(key) === probe) pendingRunnerIdentities.delete(key);
+  }
 }
 
 export function isPiSubagentRunStale(
@@ -1512,6 +1595,20 @@ export function isPiSubagentRunStale(
   //    costs an honest failure at the boundary — the kill path answers
   //    `unverifiable` with a refusal too, so the two stay consistent.
   return runnerPresenceForStale(status) === 'gone';
+}
+
+/** Polling must not invoke the synchronous force-quit process probes. */
+async function isPiSubagentRunStaleAsync(
+  status: PiSubagentRunStatus,
+  now: number,
+): Promise<boolean> {
+  if (isPiSubagentTerminal(status.state) || now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
+  if (status.state === 'queued' && status.runnerInstanceId.startsWith('launch-pending-')
+    && !Number.isSafeInteger(status.runnerPid)) {
+    const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+    if (identity !== null && await isOwnerInstanceAliveAsync(identity)) return false;
+  }
+  return await runnerPresenceForStaleAsync(status) === 'gone';
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
@@ -1555,7 +1652,7 @@ export async function listPiSubagentRunDiagnostics(root: string): Promise<PiSuba
     let parsedStatus: PiSubagentRunStatus | null = null;
     try {
       parsedStatus = parseStatus(await readSmallJson(path.join(root, runId, 'status.json')), runId);
-      if (parsedStatus && !isPiSubagentRunStale(parsedStatus)) continue;
+      if (parsedStatus && !await isPiSubagentRunStaleAsync(parsedStatus, Date.now())) continue;
     } catch {
       // Fall through to the immutable config snapshot for safe display metadata.
     }
@@ -2293,6 +2390,7 @@ interface PiSubagentResumeLaunch {
     bridgeSource: Buffer;
     runnerSource: Buffer;
     cacheRulesJson?: Buffer;
+    settingsJson?: Buffer;
   };
 }
 
@@ -2745,6 +2843,30 @@ async function resumeClaimedPiSubagentRun(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  // Older snapshots may lack settings; new launches freeze only native shell keys.
+  let settingsJson = launch.runtimeSnapshot?.settingsJson;
+  if (settingsJson === undefined) {
+    const sourceSettingsFile = path.join(sourceConfigHome, 'settings.json');
+    try {
+      const [info, canonical] = await Promise.all([fs.lstat(sourceSettingsFile), fs.realpath(sourceSettingsFile)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STATUS_BYTES
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume settings escaped their source run');
+      }
+      settingsJson = await fs.readFile(sourceSettingsFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (settingsJson && settingsJson.byteLength > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume settings escaped their source run');
+  }
+  const settings = settingsJson ? JSON.parse(settingsJson.toString('utf8')) : {};
+  const shellSettings: Record<string, string> = {};
+  for (const key of ['shellPath', 'shellCommandPrefix']) {
+    const value = settings && settings[key];
+    if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2814,6 +2936,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(path.join(childConfigHome, 'settings.json'), JSON.stringify(shellSettings) + '\n', { mode: 0o600, flag: 'wx' });
     if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,

@@ -1,6 +1,5 @@
 import { useContext, useRef, useState, useSyncExternalStore } from 'react';
-import { Puzzle } from 'lucide-react';
-import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
+import { MAIN_VIEW_ICONS, mainViewIconName } from '@/cindy-brain/mainViewIcons';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import { useBotProfiles } from '@/features/bots/botStore';
@@ -59,7 +58,7 @@ export function useTabCreationMenu({
       instanceId,
       ghost,
       title: globalTabTitleForGhost(ghost),
-      icon: MAIN_VIEW_ICONS[ghost.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle,
+      icon: MAIN_VIEW_ICONS[mainViewIconName(ghost.manifest.mainView)],
       open: globalTabs.some(tab => (tab.state as PluginViewTabState | null)?.instanceId === instanceId),
     };
   }).sort((a, b) => a.title.localeCompare(b.title) || a.instanceId.localeCompare(b.instanceId));

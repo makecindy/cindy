@@ -2,7 +2,8 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改插件分发来源边界、device-link 协议／relay／隧道 payload／IPC
-> allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前
+> allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前；Device Link 改动同时读「自建中转同步维护」
+> **适用路径**：`packages/{device-link*,*-protocol}/**`、`apps/{desktop/src/main,mobile/src}/device-link/**`
 
 客户端与服务端分别维护本仓所需的 wire Bean、validator、parser 与 builder，不共享代码仓库
 或发布节奏。真正危险的是单端改变既有 wire 语义，或在不兼容变更中缺少协同；这类问题在
@@ -86,7 +87,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 - 插件必须检测接口并处理不支持响应，局部降级或提示升级。`minCindyVersion` 不能替代
   这些处理：手动导入、旧版或其它安装渠道仍可能将包交给不适配客户端。
 - `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal/files/storage/browser/computer/ssh/docs/discovery。
-  未知字符串保留但不授权；receipt 增量可选 `approvedHostToolGroups` 不改变版本，旧记录可继续读取，缺少批准只影响新接口。
+  未知字符串保留但当前宿主不支持；整体安装批准有效且已启用时按 manifest 已知声明放行，不另存分组批准。旧 receipt 中的 `approvedHostToolGroups` 字段读取时忽略，不迁移或清理数据。
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
   无 `node` 批准的插件不支持脚本/前置命令调度；普通调度更新、运行和恢复复用既有 `expectedSchedule` 参数及执行点检查，不新增协议字段或确认层，原 Agent 不带守卫时行为保持。
@@ -105,7 +106,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   接收任务按来源电脑限定 `sourcePlugin.pluginId=deviceId::pluginId`，保留目标权限与 Plan；界面不把它导航到本机同名插件。
   不新增 channel、授权存储或 relay 字段；自建中转继续透明传输原业务 payload，无需同步适配。
 - `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
-  receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
+  整体安装批准有效且已启用时按 manifest 已知 topic 声明分发，不另存主题批准；旧 receipt 中的 `approvedEventTopics` 字段读取时忽略，原有 topic 继续原行为。
   新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。
   `task-state` 只发布开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除等生命周期变化，不发布高频进度、活动或仅隐藏状态的变化。
   两种 topic 沿用逐事件投递、100 条熄灯队列和单调序号，不新增合批、折叠或 timer；序号缺口可补拉，溢出标记 `dropped`。

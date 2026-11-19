@@ -37,6 +37,7 @@ import type {
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
@@ -98,6 +99,8 @@ export interface NodeWorkerProcess {
   stderr: NodeWorkerReadable;
   pid?: number;
   killed?: boolean;
+  /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
+  reconcileExit?(): boolean;
   on(event: 'exit', listener: (code: number | null, signal: string | null) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   once(event: 'spawn', listener: () => void): this;
@@ -164,6 +167,7 @@ export interface GhostNodeRuntimeBrokerDeps {
   hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
   /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
   onStopped?(ghostId: string): void;
+  networkRequest?: (ghostId: string, payload: Record<string, unknown>) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
@@ -318,6 +322,7 @@ interface ChildProcEntry {
 
 /** 已 fork 但尚未完成 spawn 握手的代启子进程。 */
 interface StartingChildProcEntry {
+  exited: boolean;
   ghostId: string;
   proc: NodeWorkerProcess;
   hardKillTimer: NodeJS.Timeout | null;
@@ -357,6 +362,7 @@ interface WorkerEntry {
   pending: Map<string, PendingRpc>;
   /** Autonomous Host calls can wait for native consent without an Agent RPC. */
   hostToolRequests: number;
+  networkRequests: number;
   /** 本 worker 名下代启的子进程(childId → 记账;级联生死)。 */
   children: Map<string, ChildProcEntry>;
   idleTimer: NodeJS.Timeout | null;
@@ -800,11 +806,16 @@ export class GhostNodeRuntimeBroker {
             }
             if (!resolved.ok) {
               clearHostSecrets(hostSecrets);
+              if (resolved.error === 'HOST_INJECTION_REQUIRED') return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused accounts');
               return errorResult('PERMISSION_DENIED', '账号不可用，请在插件详情页检查授权');
             }
             value = resolved.accessToken;
           } else {
             value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+            if (value === GHOST_SAVED_CREDENTIAL_MARKER) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused credentials');
+            }
           }
           if (value === null) {
             clearHostSecrets(hostSecrets);
@@ -907,6 +918,9 @@ export class GhostNodeRuntimeBroker {
     if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     const message = parseGhostNodeChildToHostMessage(raw);
     if (!message) return;
+    if (message.type === 'network-request') {
+      void this.handleNetworkRequest(entry, message); return;
+    }
     if (message.type === 'host-tool-request') {
       void this.handleHostToolRequest(entry, message); return;
     }
@@ -932,14 +946,38 @@ export class GhostNodeRuntimeBroker {
     }
   }
 
+  private workerHostCurrent(entry: WorkerEntry): boolean {
+    const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    const ghost = this.deps.getGhost(id);
+    return !entry.stopping && this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
+      this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
+      ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
+  }
+
+  private async handleNetworkRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'network-request' }>) {
+    let acquired = false;
+    try {
+      if (!this.workerHostCurrent(entry) || !this.deps.networkRequest) throw new Error('NODE_HOST_UNAVAILABLE');
+      if (entry.networkRequests >= 8) throw new Error('NODE_HOST_BUSY');
+      this.clearIdleTimer(entry);
+      entry.networkRequests += 1;
+      acquired = true;
+      const result = await this.deps.networkRequest(GhostNodeRuntimeBroker.instanceId(entry.ghost), { ...message.request, callId: undefined });
+      if (!this.workerHostCurrent(entry)) throw new Error('NODE_HOST_UNAVAILABLE');
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result });
+    } catch {
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: false });
+    } finally {
+      if (acquired) {
+        entry.networkRequests -= 1;
+        this.scheduleIdleStop(entry);
+      }
+    }
+  }
+
   private async handleHostToolRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'host-tool-request' }>) {
     const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
-    const current = () => {
-      const ghost = this.deps.getGhost(id);
-      return this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
-        this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
-        ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
-    };
+    const current = () => this.workerHostCurrent(entry);
     const denied = { isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] };
     this.clearIdleTimer(entry);
     entry.hostToolRequests += 1;
@@ -1079,6 +1117,10 @@ export class GhostNodeRuntimeBroker {
     return count;
   }
 
+  private reconcileProcessExits(ghostId: string): void {
+    for (const proc of [...(this.liveProcesses.get(ghostId) ?? [])]) proc.reconcileExit?.();
+  }
+
   /**
    * 代生在途预约(ghostId → 数量):spawn 要等子进程就绪才记账,并发申请会在
    * 记账前一起挤过数量顶——预约位在检查的同一同步段占坑,堵死这条竞态。
@@ -1101,6 +1143,7 @@ export class GhostNodeRuntimeBroker {
     message: Extract<GhostNodeChildToHostMessage, { type: 'spawn-child' }>,
   ): Promise<void> {
     const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    this.reconcileProcessExits(ghostId);
     const fail = (reason: string): void => {
       this.deps.log?.warn('ghost node child spawn rejected', { ghostId, reason });
       this.replyToWorker(entry, {
@@ -1214,6 +1257,7 @@ export class GhostNodeRuntimeBroker {
         proc.once('spawn', () => settle(resolve));
         proc.once('error', (error) => settle(() => reject(error)));
         proc.once('exit', (code) => settle(() => reject(new Error(`子进程启动前退出(code=${code})`))));
+        if (proc.reconcileExit?.()) settle(() => reject(new Error('子进程已退出')));
       });
     } catch (error) {
       // error 只表示进程通道失败，不保证 OS 进程已经退出。保留 starting
@@ -1223,6 +1267,13 @@ export class GhostNodeRuntimeBroker {
       return;
     } finally {
       signal?.removeEventListener('abort', abortStarting);
+    }
+
+    // ready resolves asynchronously: an exit in the same turn must not promote
+    // a dead process back into children, including custom adapters without probes.
+    if (startingChild.exited || proc.reconcileExit?.()) {
+      fail('子进程就绪后已退出');
+      return;
     }
 
     // worker 在等待答复期间死了/被停:孩子不能变孤儿,就地收掉。
@@ -1346,6 +1397,7 @@ export class GhostNodeRuntimeBroker {
   async stopAndWait(ghostId: string): Promise<void> {
     // 先封住新的 child spawn；这段没有 await，随后快照可覆盖所有已 fork 的进程。
     this.stoppedGhosts.add(ghostId);
+    this.reconcileProcessExits(ghostId);
     // 以真实进程账本为准，而不是 workers/children 的业务状态。错误事件、父进程
     // 退出或上一次停止超时都可能先移除业务记账；只要没有真实 exit，重试更新
     // 仍必须等待同一 OS 进程，不能绕过 Windows 文件锁保护。
@@ -1408,12 +1460,15 @@ export class GhostNodeRuntimeBroker {
 
   private trackStartingChild(ghostId: string, proc: NodeWorkerProcess): StartingChildProcEntry {
     this.trackLiveProcess(ghostId, proc);
-    const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false };
+    const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false, exited: false };
     const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
     children.add(entry);
     this.startingChildren.set(ghostId, children);
     // error 不是进程已退出的证明，任何路径都保留记账直到真实 exit。
-    proc.once('exit', () => this.forgetStartingChild(entry));
+    proc.once('exit', () => {
+      entry.exited = true;
+      this.forgetStartingChild(entry);
+    });
     return entry;
   }
 
@@ -1429,7 +1484,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private stopStartingChild(entry: StartingChildProcEntry, force = false): void {
-    if (entry.stopping) return;
+    if (entry.exited || entry.stopping) return;
     entry.stopping = true;
     try {
       entry.proc.kill(force ? 'SIGKILL' : 'SIGTERM');
@@ -1711,6 +1766,7 @@ export class GhostNodeRuntimeBroker {
       nextId: 1,
       pending: new Map(),
       hostToolRequests: 0,
+      networkRequests: 0,
       children: new Map(),
       idleTimer: null,
       hardKillTimer: null,
@@ -2413,7 +2469,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0 || entry.networkRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);

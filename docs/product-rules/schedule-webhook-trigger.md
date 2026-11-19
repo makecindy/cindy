@@ -1,6 +1,14 @@
 # 自动化任务的 Webhook 触发
 
-> **读取时机**：修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **读取时机**：新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **适用路径**：`apps/desktop/src/main/scheduler-host/webhook/**`、`packages/maker-scheduler/src/**/webhook-*`、
+> `packages/lizi-mcps/src/scheduler/*webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/components/**/Webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/lib/webhookEventOptions.ts`、
+> `apps/desktop/src/shared/webhookAccount.ts`、
+> `apps/desktop/scripts/fixtures/{webhook-detail,webhook-account}/**`、
+> `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+> **要点**：事件只是门铃，正文不进任务，密钥不进任务记录。
 
 ## 用户行为
 
@@ -17,6 +25,18 @@ Webhook 表单沿用自动化编辑器的「内容与触发 / 运行选项」分
 事件筛选使用按发送方分组、可搜索的多选列表，默认明确显示「全部事件」，已选事件以可移除标签呈现。取消最后一项不自动扩大为全部：须在选择器中明确选择「全部事件」或另选事件后应用；取消选择器保留原配置。常用目录不是白名单，未收录的已有值原样保留，自定义名称通过高级入口逐项添加并校验。Standard Webhooks 和自定义格式没有固定目录，明确说明后提供相同高级入口。
 
 存储仍是 `event` 或 `event.action` 列表，例如 `check_suite`、`pull_request.closed`、`pullrequest:created`；空列表响应全部。界面不改变接收协议，不收集事件正文。预设目录与交互见 `webhookEventOptions.ts`、`WebhookEventSelect.tsx`，保存行为回归在 `ScheduleFormDialog.test.tsx`。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
+
+## Agent 工具的触发方式
+
+Agent 工具 `schedule_create` / `schedule_update` 接受可选布尔字段 `manual`。
+`manual: true` 关闭定时并清空 `nextFireAt`，保留立即运行；与 `webhookTrigger` 同用即仅事件触发，
+适用于 Agent 和脚本执行方式。`manual: false` 按保存的 cron／间隔恢复定时。
+创建时省略沿用默认 `false`，更新时省略不修改；创建仍须提供合法 `cronExpr` 和 `timezone`。
+定时的一次性任务与 Webhook 不兼容的校验保持不变，已有组合触发不自动改写。
+本机和跨电脑沿用原调用链；跨电脑更新不得同时带 `cronExpr`、`manual`、`notify`，
+否则可能命中目标电脑的旧手机全量表单兼容逻辑。工具在发送前明确报错，可单独更新 `manual`；
+不自动拆分写入，也不先读后复制未修改字段。实现及回归见 `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+与 `cindy_schedulerMcpServer.test.ts`、`schedulerDevices.test.ts`。
 
 ## 账号接收地址管理（2026-11-04）
 
@@ -91,7 +111,15 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 
 ## GitHub App 触发（2026-11-11，测试）
 
-任意普通自动任务（Agent 或脚本）都可在事件来源选择 **GitHub App**，填写一至五十个
+发送方仅显示一个 **GitHub**，其下用「通过 Cindy 连接（推荐）」和「手动配置 Webhook」区分接入方式。
+新建表单默认通过 Cindy 连接；已有任务（包括未显式保存 source 的旧任务）保留原连接方式，不自动迁移。
+通过 Cindy 连接按账号状态、仓库、事件排列，复用现有 GitHub App 连接与仓库授权入口；手动方式提示
+保存后到任务详情获取地址和密钥。账号已连接不代表任务订阅已就绪，详情只有接收状态确认可投递才显示等待事件。
+连接选择及其说明始终可见，详情沿用「GitHub · 通过 Cindy 连接／手动 Webhook」名称。切换方式不清空仓库输入。
+编辑弹窗打开时卸载背景详情中的账号连接卡，由表单独占账号读取与授权操作；关闭后详情重新挂载并复核状态。
+账号状态仅在挂载和返回窗口时复核，合并在途读取；不因输入仓库名发请求，不新增后台轮询。
+
+任意普通自动任务（Agent 或脚本）都可选择 **通过 Cindy 连接**，填写一至五十个
 `owner/repository` 并选择事件或 `event.action`。这些仓库须已安装 App，且运行任务的电脑上已在
 GitHub 插件连接账号并通过仓库权限复核。不为每个任务另建公网地址或密钥。
 
@@ -164,3 +192,10 @@ GitHub 插件连接账号并通过仓库权限复核。不为每个任务另建�
 ## 回归重点
 
 `packages/maker-scheduler/src/__tests__/webhook-queue.test.ts` 覆盖合并、顺延、重启和忽略；`apps/desktop/src/main/scheduler-host/webhook/__tests__/` 覆盖验签、字段提取、本机 HTTP 生命周期和落盘内容，`remote.test.ts` 用与合同相同的假服务器覆盖未登录、确认时机、重连、封停、发送方同步、粘贴和生成密钥、关闭签名、更换地址，以及认不出的发送方不覆盖服务器；`scheduler.test.ts` 覆盖路由保持、省略发送方时沿用原值和 resume 不启动手动任务的占位 cron；`scheduleFormLogic.test.ts` 覆盖表单保存发送方。各预设的实际验签由 cindy-server 的 `webhook.test.ts` 和真实服务器联调覆盖。
+
+## 单条 GitHub PR
+
+普通脚本和 Agent 自动化均可设置 `prTrigger: { url, change }`，指定一条完整的 GitHub PR 链接。
+`any` 跟进状态和评论，`merged` 只认核实的合并，`review` 接受评审事件和评审汇总变化，`ci` 接受检查汇总变化。
+事件和前台观察沿用已有 PR 跟进调度与忙时顺延。仅事件模式不设时间计划；添加定时检查后，宿主按计划复核状态，普通变化检查已有的前置命令保留原节奏。首次读取建立基线，补查只能发现可观察到的变化。
+旧任务的前置检查链接仍按原方式解释；显式规则优先，显式 null 停止旧链接唤醒。PR 卡片使用相同的配置和前置检查入口。

@@ -29,6 +29,8 @@ export interface AgentModelSource {
     defaultEffort: string | null;
     /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版同名, server 靠它加区分后缀。 */
     group?: string;
+    /** 提供这个模型的供应商展示名: 不同供应商会提供同名模型, server 把它写在模型名前面。只用于展示。 */
+    provider?: string;
   }>;
   /** 该 agent 支持的权限档(capabilities.permissionModes; label 用 displayName 原样透传)。 */
   permissionModes: Array<{ id: string; displayName: string }>;
@@ -93,6 +95,8 @@ export async function buildQueryResponse(
         efforts: [...m.efforts],
         defaultEffort: m.defaultEffort,
         group: m.group ?? null,
+        // 没有就不带这个键(旧服务端不认识它; 新服务端缺席时只显示模型名)。
+        ...(m.provider ? { provider: m.provider } : {}),
       })),
       permissionModes: src.permissionModes.map((pm) => ({ id: pm.id, label: pm.displayName })),
     }));

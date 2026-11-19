@@ -13,6 +13,7 @@ import {
   StyleSheet,
   View,
   I18nManager,
+  Platform,
   LayoutChangeEvent,
   StyleProp,
   ViewStyle,
@@ -71,13 +72,13 @@ export interface SwipeableProps
 
   /**
    * Distance that the panel must be dragged from the left edge to be considered
-   * a swipe. The default value is 10.
+   * a swipe. The default value is 16 on Android and 10 elsewhere.
    */
   dragOffsetFromLeftEdge?: number;
 
   /**
    * Distance that the panel must be dragged from the right edge to be considered
-   * a swipe. The default value is 10.
+   * a swipe. The default value is 16 on Android and 10 elsewhere.
    */
   dragOffsetFromRightEdge?: number;
 
@@ -506,8 +507,8 @@ export default class Swipeable extends Component<
       children,
       renderLeftActions,
       renderRightActions,
-      dragOffsetFromLeftEdge = 10,
-      dragOffsetFromRightEdge = 10,
+      dragOffsetFromLeftEdge = Platform.OS === 'android' ? 16 : 10,
+      dragOffsetFromRightEdge = Platform.OS === 'android' ? 16 : 10,
     } = this.props;
 
     const left = renderLeftActions && (
@@ -546,6 +547,10 @@ export default class Swipeable extends Component<
     return (
       <PanGestureHandler
         activeOffsetX={[-dragOffsetFromRightEdge, dragOffsetFromLeftEdge]}
+        // Match drawer arbitration: vertical-first Android drags stay with the
+        // list. This only fails before activation, so intentional swipes keep
+        // tracking normally; native iOS swipe recognition remains unchanged.
+        failOffsetY={Platform.OS === 'android' ? [-16, 16] : undefined}
         touchAction="pan-y"
         {...this.props}
         onGestureEvent={this.onGestureEvent}

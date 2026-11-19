@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 const repo = path.resolve(__dirname, '../../../../../..');
 const hostSrc = path.join(repo, 'apps/host/src');
@@ -115,14 +115,6 @@ describe('Host main.ts wiring', () => {
   it('gives the input queue the gateway key rejection entry', () => {
     const main = read(path.join(hostSrc, 'main.ts'));
     assert.ok(main.includes('  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),\n'));
-  });
-
-  // 规则：视觉桥在 Maker 关闭之后才关。失效后果：关闭途中还在跑的任务读图失败。
-  it('closes the vision bridge after the Maker shuts down', () => {
-    const main = read(path.join(hostSrc, 'main.ts'));
-    const shutdown = main.indexOf('?.shutdown?.());');
-    const close = main.indexOf('agentGraph?.visionBridge.close()');
-    assert.ok(shutdown > 0 && close > shutdown, 'visionBridge.close() follows Maker shutdown in the runtime teardown');
   });
 
   // 规则：XD 快照的写入、未知标记与读取都走本进程共享的 active-catalog（放行表第二节 XD 快照）。
@@ -229,8 +221,8 @@ describe('Host engine assembly (runtime.ts) against the desktop construction sit
   it('formats the Pi startup hint and dialog strings with the desktop lines', () => {
     const runtime = read(path.join(hostAgent, 'runtime.ts'));
     const piHost = read(piHostFile);
-    assert.equal(between(runtime, 'formatPiStartupCloudFileHint: (file) =>', 'resolvePiVisionBridgeEnv:'),
-      between(piHost, 'formatPiStartupCloudFileHint: (file) =>', 'preparePiExtraSpawnConfig:'));
+    assert.equal(between(runtime, 'formatPiStartupCloudFileHint: (file) =>', '\n        }),').trim(),
+      between(piHost, 'formatPiStartupCloudFileHint: (file) =>', '\n    }),').trim());
     assert.ok(runtime.includes('const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);'));
   });
 
@@ -341,22 +333,6 @@ describe('Host copies of desktop expressions', () => {
       shape(cut(desktop, "req.kind === 'permission'", ': req;')).replaceAll('...req,', '...request,').replaceAll('req.', 'request.').replace(' as Record<string, unknown>', ''));
   });
 
-  // 规则：视觉桥的提示文案与去重时间，是桌面 broadcastVisionBridgeEvent 的同一段。
-  // 失效后果：Host 上的视觉桥提示与桌面不同或重复弹出。
-  it('sends the vision bridge notices with the desktop text and dedup', () => {
-    const desktop = read(desktopIndex);
-    const hostSource = read(path.join(hostAgent, 'vision-bridge.ts'));
-    const body = (source: string) => {
-      const start = source.indexOf("if (reason === 'vision-bridge-recognizing') {");
-      const end = source.indexOf("source: 'vision-bridge',", start);
-      return source.slice(start, end).replace(/\s+/g, '');
-    };
-    assert.ok(body(desktop).length > 200);
-    assert.equal(body(hostSource), body(desktop));
-    assert.ok(hostSource.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
-    assert.ok(desktop.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
-  });
-
   // 规则：Host 的 Pi 持久子代理入口与桌面入口逐行相同，只有 ready 帧的发法、断开通道和父进程监视不同。
   // 失效后果：Host 上的 runner 行为与桌面分叉（P4、m1-cp18c 审核方定乙）。
   it('starts the Pi subagent runner with the desktop entry, except the ready frame, the channel and the watchdog', () => {
@@ -407,5 +383,281 @@ describe('Host copies of desktop expressions', () => {
     const copied = after(read(path.join(desktopMain, 'learn-host/__tests__/hostLearnCaptureParity.test.ts')), '  desktop = createCindyLearnInvocationCapture({', '\n  }) as Capture;');
     assert.ok(desktopDeps.length > 0);
     assert.equal(copied, desktopDeps);
+  });
+});
+
+// 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
+// （interruptedTurnAutoResumeHooks.ts、silentStopTurnEnd.ts），Host 之后直接调用这些文件。断言随代码
+// 改读新文件，按测试规范从普通单测移到这里，每条的意思不变；register.ts 一侧的接线断言留在原文件。
+describe('shared turn files moved out of register.ts', () => {
+  const autoResumeHooksSource = read(path.join(desktopMain, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'));
+  const silentStopTurnEndSource = read(path.join(desktopMain, 'maker-ipc/silentStopTurnEnd.ts'));
+
+  // 原在 interruptedContinuationContract.test.ts “keeps a scheduler auto-resume owned until dispatch and fails it
+  // when discarded”。规则：定时任务的自动续接在派发前一直归它所有，被丢弃时以 deferredOwner 收尾。
+  // 失效后果：定时任务的续接在派发前就被清掉，或被丢弃后留在待定状态。
+  it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
+    const scheduleStart = autoResumeHooksSource.indexOf('autoResumeBookkeeping.schedule(');
+    const scheduleEnd = autoResumeHooksSource.indexOf('onUnconfirmedAutoResumeTurn:', scheduleStart);
+    expect(scheduleStart).toBeGreaterThan(-1);
+    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
+    const scheduleHook = autoResumeHooksSource.slice(scheduleStart, scheduleEnd);
+    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
+    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+
+    const ownerDiscardedStart = autoResumeHooksSource.indexOf('onResumableTurnErrorDiscarded: (');
+    const ownerDiscardedEnd = autoResumeHooksSource.indexOf('onResumableTurnError: (', ownerDiscardedStart);
+    expect(autoResumeHooksSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
+      /deferredOwner:\s*options\.owner/,
+    );
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “keeps auto-resume-owned terminal errors out of Agent Island until they
+  // are final”与“preserves continuation-only retry across its exact unexpected provider rebuild”。规则：过期的续接
+  // 不再重试；只续接型的续接记下预期的那一次重建；未确认的续接放弃持久化的那一份。失效后果：过期续接重复发送，
+  // 或只续接型的续接在重建后丢失。
+  it('keeps the auto-resume hooks\' attempt, rebuild and unconfirmed-turn steps', () => {
+    expect(autoResumeHooksSource).toContain('if (!attempt.isCurrent()) {');
+    expect(autoResumeHooksSource).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
+    expect(autoResumeHooksSource).toContain(
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
+    );
+    expect(autoResumeHooksSource).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “preserves the product clock before a silent-stop continuation can emit
+  // running”。规则：静默停止续接发出前先保住这一轮的计时。失效后果：续接一开始就把用时清零。
+  it('preserves the product clock before a silent-stop continuation can emit running', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    const continuation = silentStopTurnEndSource.slice(start);
+    const first = continuation.indexOf('productTurnWallClockTracker.preserveForContinuation(session.id);');
+    const second = continuation.indexOf('const sendResult = await session.sendHostTurnContinuation(');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
+  });
+
+  // 原在 silentStopContinuationBinding.test.ts “binds the reserved generation via the extracted helper and rolls back
+  // on send failure”。规则：续接预约的代次经 helper 绑定，sendOpts 并入续接调用，未派发与抛出两条失败都回滚。
+  // 失效后果：续接失败后代次留着，后面的终止事件被当成过期丢掉。
+  it('binds the reserved generation via the extracted helper and rolls back on send failure', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = silentStopTurnEndSource.indexOf('\n}\n', start);
+    expect(end).toBeGreaterThan(start);
+    const resumeBlock = silentStopTurnEndSource.slice(start, end);
+    expect(resumeBlock).toContain('bindSilentStopContinuationGeneration(session.id');
+    expect(resumeBlock).toContain('...binding.sendOpts,');
+    expect(resumeBlock.match(/binding\.rollbackBinding\(\);/g)).toHaveLength(2);
+  });
+});
+
+// handleSetModel moved verbatim out of register.ts into maker-ipc/sessionRuntimeSelectionApply.ts (the
+// Node Host runs the same steps). The two contracts below were ordinary unit tests reading register.ts;
+// they now read the moved code and live here (test tier rules), each assertion unchanged.
+describe('runtime selection moved out of register.ts', () => {
+  const registerSource = read(path.join(desktopMain, 'maker-ipc/register.ts'));
+  const runtimeSelectionApplySource = read(path.join(desktopMain, 'maker-ipc/sessionRuntimeSelectionApply.ts'));
+
+  // Was in sessionRuntimeFallbackIntent.test.ts. Rule: an automatic same-engine change yields to a
+  // user's pending choice before it writes or reconciles. Failure: an automatic change overwrites the
+  // route the user just picked.
+  it('uses the same guard before every automatic same-engine mutation can write or reconcile', () => {
+    const start = runtimeSelectionApplySource.indexOf('  const handleSetModel = async (');
+    const body = runtimeSelectionApplySource.slice(start, runtimeSelectionApplySource.indexOf('      const routeExplicit =', start));
+    expect(body).toMatch(/internalOptions.source !== 'user' &&\s*!canApplyAutomaticRuntimeSelection\(sessionId, internalOptions.expectedGeneration\)/);
+    expect(body).toContain('return { deferred: false, superseded: true };');
+  });
+
+  // Was in orcaProviderRoutingSnapshotWiring.test.ts. Rule: a task on an SSH host cannot switch to a
+  // local-only account, refused before the selection is deferred or the running route replaced.
+  // Failure: an SSH worker is moved onto a provider that only exists on this computer.
+  it('rejects SSH account switching before deferring or replacing the running route', () => {
+    const guard = runtimeSelectionApplySource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
+    expect(guard).toBeGreaterThan(-1);
+    expect(runtimeSelectionApplySource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
+    expect(runtimeSelectionApplySource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
+    expect(runtimeSelectionApplySource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
+    expect(runtimeSelectionApplySource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
+  });
+
+  // Rule: createHandleSetModel's ports are bound when each call starts; the body used to read these
+  // three register.ts variables at each use. That is the same only while each is assigned once, at
+  // startup, before the set-model handler is registered. Failure: a later reset (an account switch,
+  // say) reaches a call already running with the old value.
+  // Rule: the pending credential switch service's assembly (pendingCredentialSwitchAssembly.ts) takes
+  // agentInputCoordinatorHolder by value, which is the same only while register.ts assigns it once,
+  // before that assembly. Failure: persistRoute refreshes the queued route of a stale coordinator or
+  // of none.
+  it('assigns the input coordinator holder before the pending credential switch service is assembled', () => {
+    const assigned = registerSource.indexOf('\n  agentInputCoordinatorHolder = ');
+    const assembled = registerSource.indexOf('const pendingCredentialSwitchService = createPendingCredentialSwitchService({');
+    expect(assigned).toBeGreaterThan(-1);
+    expect(assembled).toBeGreaterThan(assigned);
+  });
+
+  it('assigns each runtime-selection holder once in register.ts', () => {
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assignments = registerSource.match(new RegExp(`(^|[^.\\w])${holder}\\s*=(?!=)`, 'gm')) ?? [];
+      // the one assignment (the declaration `let holder: … | null = null` does not match)
+      expect(assignments, holder).toHaveLength(1);
+    }
+    const handler = registerSource.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
+    expect(handler).toBeGreaterThan(-1);
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assigned = registerSource.indexOf(`\n  ${holder} = `);
+      expect(assigned, holder).toBeGreaterThan(-1);
+      expect(assigned, holder).toBeLessThan(handler);
+    }
+  });
+});
+
+/**
+ * The event types the desktop's event pipeline acts on, each classified for the Node Host.
+ *
+ * Rule: the desktop decides per event type in its pipeline (sessionEventPreparation.ts, sessionEventDelivery.ts,
+ * sessionEventTerminal.ts) and in register.ts's emitWiredSessionEvent; the Host's executor
+ * (apps/host/src/agent/turn-executor.mjs) is a separate implementation, so a new event type handled on the
+ * desktop does not reach the Host unless someone classifies it. Each type here is either aligned on the Host
+ * (where), a gap the release table records (which row), or a platform difference. The Host locations and
+ * rows are those of the integration branch (cindy/host-m1); they ship with the Host PR.
+ * Failure: a new type the desktop starts acting on, or a type it stopped acting on, turns this red until the
+ * table is updated. It cannot see a new effect added to an existing type; the release table's event
+ * inventory (A7) records those.
+ */
+describe('event types the desktop pipeline acts on, classified for the Host', () => {
+  const EVENT_TYPE_PARITY: Record<string, { host?: string; gaps?: string[]; platform?: string }> = {
+    account_usage: { gaps: ['row 13 (Codex account_usage snapshot)'] },
+    agent_task_update: { host: 'turn-executor.mjs noteBackgroundActivity; history.event (sessionEventStreamCore, shared)' },
+    compact_boundary: { host: 'turn-executor.mjs wireNotes.reset' },
+    done: {
+      host: 'turn-executor.mjs finish: flush, Codex plan, change record, Git savepoint, turn end',
+      gaps: ['A9 turn-end seal', 'A10 last activity', 'A13 list preview and pinned summary', 'checkpoint 4 and 5 (auto-resume)'],
+    },
+    error: {
+      host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim',
+      gaps: ['A15 Opus plan error reason', 'checkpoint 4 (terminal to the coordinator first, auto-resume)'],
+    },
+    image: { gaps: ['A11 Codex generated images'] },
+    interaction_dismissed: { gaps: ['A12 runtime interaction_dismissed'] },
+    plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
+    status: {
+      host: 'turn-executor.mjs context snapshot (shared), background activity',
+      gaps: ['smaller difference: running=false alone does not write the turn end time'],
+    },
+    text: { host: 'history.event (sessionEventStreamCore, shared)', gaps: ['A14 standaloneText notices'] },
+    turn_diff: { host: 'turn-executor.mjs noteTurnDiffEvent, not published' },
+  };
+
+  /** String literals compared with `<x>.type` (=== or !==) or used as `case` of a switch on `<x>.type`. */
+  function eventTypesIn(source: string, name: string): Set<string> {
+    const sf = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    const isTypeAccess = (node: ts.Node) => ts.isPropertyAccessExpression(node) && node.name.text === 'type';
+    const visit = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+        if (isTypeAccess(node.left) && ts.isStringLiteral(node.right)) found.add(node.right.text);
+        if (isTypeAccess(node.right) && ts.isStringLiteral(node.left)) found.add(node.left.text);
+      }
+      if (ts.isSwitchStatement(node) && isTypeAccess(node.expression)) {
+        for (const clause of node.caseBlock.clauses) {
+          if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) found.add(clause.expression.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return found;
+  }
+
+  it('every event type the pipeline acts on is in the table, and every table entry is still acted on', () => {
+    const ipc = path.join(desktopMain, 'maker-ipc');
+    const register = read(path.join(ipc, 'register.ts'));
+    const wiredStart = register.indexOf('const emitWiredSessionEvent');
+    expect(wiredStart, 'emitWiredSessionEvent in register.ts').toBeGreaterThan(-1);
+    const wired = register.slice(wiredStart, register.indexOf('\n  };\n', wiredStart) + 5);
+    const acted = new Set<string>();
+    for (const file of ['sessionEventPreparation.ts', 'sessionEventPreparationSteps.ts', 'sessionEventDelivery.ts', 'sessionEventTerminal.ts']) {
+      for (const type of eventTypesIn(read(path.join(ipc, file)), file)) acted.add(type);
+    }
+    for (const type of eventTypesIn(wired, 'emitWiredSessionEvent')) acted.add(type);
+    expect([...acted].sort()).toEqual(Object.keys(EVENT_TYPE_PARITY).sort());
+    for (const [type, entry] of Object.entries(EVENT_TYPE_PARITY)) {
+      expect(Boolean(entry.host || entry.gaps?.length || entry.platform), `${type} is classified`).toBe(true);
+    }
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：桌面的 XD 报价投影（usage/modelPricing.ts）与账本币种存储
+//   （usage/accountCurrencyStore.ts）。这两个壳在模块加载时各建一个工厂实例，桌面的用量记账、价格显示
+//   与币种读写都经这一个实例。
+// - 规则依据：放行表第 13 行 3a（7727009edb）。这次把 modelPricing / accountCurrencyStore 的模块级状态
+//   （内存报价、磁盘缓存作用域、在途同步、当前账号与币种）搬进 createModelPricing /
+//   createAccountCurrencyStore。搬移前后等价的前提是，整个桌面进程里各只有一个实例。
+// - 现有覆盖缺口：modelPricing.test.ts 与 accountCurrencyStore.test.ts 只测壳建出的那个实例，测不到
+//   别处再建一个。这是算钱的代码：第二个实例有自己的报价与币种，按它记的账会悄悄用旧价或错币种，
+//   而且没有测试会失败。
+// - 最小失败输入：桌面生产代码（apps/desktop/src，不含 __tests__、__mocks__、*.test.*、*.spec.*）里任意
+//   一处多出的调用，包括：
+//   - 别名导入；
+//   - 命名空间导入后再调用；
+//   - 把工厂当作值传出去；
+//   - 在壳里的函数体内调用（每调用那个函数一次就多一个实例）。
+// - tier：guard。读生产源码文本，属于跨文件静态契约，不能从生产入口隔离。
+// - 实测耗时：见交付记录。
+describe('the desktop builds one instance of each usage pricing factory', () => {
+  const desktopSrc = path.join(repo, 'apps/desktop/src');
+  const FACTORIES: Record<string, string> = {
+    createModelPricing: 'main/usage/modelPricing.ts',
+    createAccountCurrencyStore: 'main/usage/accountCurrencyStore.ts',
+  };
+  const names = Object.keys(FACTORIES);
+
+  function productionFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!['__tests__', '__mocks__', 'node_modules'].includes(entry.name)) productionFiles(full, out);
+      } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)
+        && !entry.name.endsWith('.d.ts')) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  it('calls createModelPricing and createAccountCurrencyStore once each, at the top level of their shells', () => {
+    const calls: Record<string, string[]> = Object.fromEntries(names.map(name => [name, []]));
+    const strays: string[] = [];
+    for (const file of productionFiles(desktopSrc)) {
+      const text = read(file);
+      if (!names.some(name => text.includes(name))) continue;
+      const rel = path.relative(desktopSrc, file).split(path.sep).join('/');
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true,
+        /x$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      const visit = (node: ts.Node, inFunction: boolean) => {
+        if (ts.isIdentifier(node) && names.includes(node.text)) {
+          const parent = node.parent;
+          const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+          if ((ts.isCallExpression(parent) && parent.expression === node)
+            || (ts.isPropertyAccessExpression(parent) && parent.name === node
+              && ts.isCallExpression(parent.parent) && parent.parent.expression === parent)) {
+            calls[node.text].push(inFunction ? `${rel}:${line} (inside a function)` : rel);
+          } else if ((ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
+            && (parent.propertyName === undefined || parent.propertyName.text === parent.name.text)) {
+            // An unrenamed import or re-export: calls through it are counted above.
+          } else if (!(ts.isFunctionDeclaration(parent) && parent.name === node) && !ts.isTypeQueryNode(parent)) {
+            strays.push(`${rel}:${line} ${parent.getText(source).split('\n')[0]}`);
+          }
+        }
+        ts.forEachChild(node, child => visit(child, inFunction || ts.isFunctionLike(node)));
+      };
+      visit(source, false);
+    }
+    expect(strays, 'a factory renamed or passed on as a value').toEqual([]);
+    for (const name of names) expect(calls[name], name).toEqual([FACTORIES[name]]);
   });
 });

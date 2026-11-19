@@ -1,7 +1,9 @@
+import { normalizePrTrigger } from '../pr-trigger.js';
 import { EventEmitter } from 'node:events';
 import type {
   Schedule,
   ScheduleRun,
+  ScheduleClosureFailure,
   CreateScheduleInput,
   UpdateScheduleInput,
   ListFilter,
@@ -123,11 +125,12 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'recurring' | 'manual'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
-  if (schedule.webhookTrigger && !schedule.recurring && !schedule.manual) {
+  if (schedule.prTrigger && schedule.webhookTrigger) throw new Error('Choose a PR trigger or a Webhook trigger');
+  if ((schedule.webhookTrigger || schedule.prTrigger) && !schedule.recurring && !schedule.manual) {
     throw new Error('webhook trigger requires a recurring schedule');
   }
   // A bound agent run only overrides its task's location with an explicit model
@@ -947,6 +950,7 @@ export class Scheduler extends EventEmitter {
       id: runId,
       scheduleId: schedule.id,
       firedAt,
+      ...(schedule.prTrigger ? { triggerSource: 'pr-check' as const } : {}),
       status: 'running',
       // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
@@ -1006,6 +1010,7 @@ export class Scheduler extends EventEmitter {
       }
       assertAgentContext?.();
       const result = await this.runner.fire(schedule, {
+        timed: true,
         runId,
         firedAt,
         assertFireContext: assertAgentContext,
@@ -1338,7 +1343,7 @@ export class Scheduler extends EventEmitter {
       status: 'running',
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
       heartbeatAt: firedAt,
-      ...(options?.webhook ? { triggerSource: 'webhook' as const } : {}),
+      ...(options?.webhook ? { triggerSource: 'webhook' as const } : options?.trigger?.source === 'pr-status' ? { triggerSource: 'pr-status' as const } : {}),
     };
     if (!recovery) await this.storage.insertRun(initialRun);
     if (!recovery && options?.onRunCreated) {
@@ -1652,6 +1657,7 @@ export class Scheduler extends EventEmitter {
     const schedule: Schedule = {
       id,
       ...input,
+      prTrigger: input.prTrigger ? normalizePrTrigger(input.prTrigger) : input.prTrigger,
       webhookTrigger: normalizeWebhookTrigger(input.webhookTrigger, undefined, this.generateId),
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
@@ -1725,6 +1731,7 @@ export class Scheduler extends EventEmitter {
     }
     const now = this.clock.now();
     const updates = { ...patch, updatedAt: now } as Partial<Schedule>;
+    if (patch.prTrigger) updates.prTrigger = normalizePrTrigger(patch.prTrigger);
     const expiryChanged = Object.prototype.hasOwnProperty.call(patch, 'expireAt');
     if (expiryChanged) updates.expireAt = normalizeExpireAt(patch.expireAt);
     if (Object.prototype.hasOwnProperty.call(patch, 'scriptConfig')) {
@@ -1965,7 +1972,9 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  async delete(id: string): Promise<void>;
+  async delete(id: string, opts: { exemptRunId?: string; internalRoutine?: true } | undefined): Promise<ScheduleClosureFailure | undefined>;
+  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | void> {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
   }
 
@@ -1992,7 +2001,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | undefined> {
     const schedule = await this.storage.get(id);
     if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
@@ -2008,10 +2017,18 @@ export class Scheduler extends EventEmitter {
     // schedule 级联删除,结束时 updateRun 落在已删行上是 no-op(storage 容错),
     // fireOne 尾部对 schedule 行的重排 update 同样 no-op —— 均无副作用。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
+    const runId = opts?.exemptRunId;
+    const ownSession = runId && this.inflightByschedule.get(id)?.has(runId) && this.runIdToSessionId.get(runId);
+    // Only the task ending its own follow-up gets a receipt. An ordinary delete
+    // retains no run history. A diagnostic read must never prevent cleanup.
+    const previousFailure = ownSession
+      ? await this.storage.latestClosureFailure?.(id, ownSession).catch(() => undefined)
+      : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
+    return previousFailure;
   }
 
   /** 按 schedule id 串行执行 CRUD，并在队尾完成后释放对应条目。 */

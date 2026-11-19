@@ -148,6 +148,9 @@ export interface ScheduleFormState {
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
   /** undefined = 这次编辑不涉及 Webhook，保存时不动已有配置。 */
+  prEnabled?: boolean;
+  prUrl?: string;
+  prChange?: import('@cindy/maker-scheduler/pr-trigger').PrChange;
   webhookEnabled?: boolean;
   /** 逗号分隔的事件筛选，原样保留用户输入。 */
   webhookEvents?: string;
@@ -691,6 +694,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     persistentSession: !isScript && form.persistentSession,
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: hasRealBinding(form) ? form.targetSessionId.trim() : undefined,
+    ...(form.prEnabled === undefined ? {} : { prTrigger: form.prEnabled
+      ? { url: form.prUrl?.trim() ?? '', change: form.prChange ?? 'any' } : null }),
     preRunHook: buildPreRunHook(form),
     preRunPlugin: buildPreRunPlugin(form),
     // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。

@@ -249,6 +249,13 @@ describe('orcaTeamStore', () => {
     const pending = { clientIds: ['c-1'], baselineMessageId: 'old-reply' };
     await store.saveWorkerRemoteReport('worker-1', pending);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: pending });
+    // #9346: a restart must retain the Lead receipt identity as well as remote input IDs.
+    const handoff = { ...pending, delivery: { clientId: 'lead-report-1', inputClientIds: ['c-1'],
+      kind: 'automatic' as const, messageId: 'reply-1' } };
+    const previous = { clientId: 'unknown-report', inputClientIds: ['c-1'], kind: 'manual' as const };
+    const chainedHandoff = { ...handoff, delivery: { ...handoff.delivery, previous } };
+    await store.saveWorkerRemoteReport('worker-1', chainedHandoff);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: chainedHandoff });
     await store.saveWorkerRemoteReport('worker-1', null, 'reply-1');
     await store.markWorkerRemoteStopConfirmed('worker-1', 1234);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null,
@@ -654,7 +661,7 @@ describe('orcaTeamStore', () => {
         fast_mode INTEGER NOT NULL DEFAULT 0,
         plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
         cleared_at INTEGER,
-        pinned_at INTEGER,
+        pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
         hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
         summary TEXT,

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
-  root: '', endpoint: 'https://fake.invalid', usage: null as any, connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
+  root: '', endpoint: 'https://fake.invalid', usage: null as any, connected: true, scope: 'owner', epoch: 0, self: 'owner-pc', remote: true, budget: false,
   invoke: vi.fn(), netFetch: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
@@ -34,7 +34,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopP
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allowsDelegatedExecution: (_p: string, model: string) => !f.budget && model === 'allowed' } }));
 vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
 vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => false }));
-vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }) }));
+vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }), providerShareAccessEpoch: () => f.epoch }));
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
   invalidateProviderShareDelegation: (...args: any[]) => f.invalidate(...args) }));
 vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: async () => {} }));
@@ -59,7 +59,7 @@ beforeEach(async () => {
   f.root = dir;
   f.usage = createProviderShareUsageStore(path.join(dir, 'usage.json'));
   await f.usage.reconcileMemberGenerations('owner', 'owner-pc', [owned]);
-  f.connected = true; f.scope = 'owner'; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
+  f.connected = true; f.scope = 'owner'; f.epoch = 0; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
   f.members = [{ member: { kind: 'device', agentDeviceId: 'standby', providerId: 'local', limit: 2 }, state: 'ok', view: { connected: true, models: { codex: [model, { ...model, id: 'hidden', disabled: true }] } } }];
   f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [] } : {});
 });
@@ -336,6 +336,38 @@ describe('standby client production entry points (all identities/providers are l
     expect((await readShareAvailabilityCatalog('share')).providers[0].models.codex?.[0]).toEqual(model);
     f.request.mockResolvedValue({ shareId: 'other', sessionId: 'task', kind: 'codex', model: 'allowed', executorDeviceId: 'standby', generation: '11111111-1111-4111-8111-111111111111', expiresAt: Date.now() + 60_000 });
     await expect(allocateShareAvailability('share', 'task', 'codex', 'allowed')).rejects.toThrow('Invalid');
+  });
+  // #10826 / server-channel-review: the provider + three capability reads must
+  // share one in-flight HTTP download. Existing projection tests read serially.
+  // Unit: four concurrent public reads; neither settled results nor old grants survive a refresh.
+  it('coalesces concurrent catalog downloads but retries after success and failure', async () => {
+    const value = { providerId: 'group', providerLabel: 'Fake', models: [{ ...model, kind: 'codex' }] };
+    let resolve!: (value: unknown) => void;
+    f.request.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const reads = Array.from({ length: 4 }, () => readShareAvailabilityCatalog('share'));
+    expect(f.request).toHaveBeenCalledTimes(1);
+    resolve(value);
+    for (const result of await Promise.all(reads)) expect(result.providers[0].models.codex).toEqual([model]);
+    f.request.mockRejectedValueOnce(new Error('offline'));
+    await expect(readShareAvailabilityCatalog('share')).rejects.toThrow('offline');
+    f.request.mockResolvedValueOnce(value);
+    expect((await readShareAvailabilityCatalog('share')).providers[0].id).toBe('group');
+    expect(f.request).toHaveBeenCalledTimes(3);
+  });
+  it.each(['account', 'access', 'endpoint'] as const)('isolates an in-flight catalog after %s changes', async change => {
+    let resolve!: (value: unknown) => void;
+    const value = { providerId: 'group', providerLabel: 'Fake', models: [{ ...model, kind: 'codex' }] };
+    f.request.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const pending = readShareAvailabilityCatalog('share');
+    const rejected = expect(pending).rejects.toThrow();
+    if (change === 'account') f.scope = 'other';
+    else if (change === 'access') f.epoch += 1;
+    else f.endpoint = 'https://other.invalid';
+    f.request.mockResolvedValueOnce(value);
+    expect((await readShareAvailabilityCatalog('share')).providers[0].id).toBe('group');
+    expect(f.request).toHaveBeenCalledTimes(2);
+    resolve(value);
+    await rejected;
   });
   // Production projection and consumers, with only HTTP/IPC transport replaced.
   // A populated cloud catalog must survive the existing remote permission filters.

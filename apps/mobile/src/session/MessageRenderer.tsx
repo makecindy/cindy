@@ -1,3 +1,4 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
@@ -46,7 +47,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
-import { MessageListRevealContext } from './messageListReveal';
+import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -372,7 +373,7 @@ import type {
   MobileMediaPlayerKind,
   MobileMediaPlayerStatus,
 } from '@/session/mediaPlayerWebViewHtml';
-import { formatAgentSwitchLocationLabel, formatMobileSystemCard } from '@/session/systemCard';
+import { formatAgentSwitchLocationLabel, formatMobileSystemCard, handoffCoverageKey } from '@/session/systemCard';
 import { MobileBoundaryNotice } from '@/session/MobileBoundaryNotice';
 import {
   getMobileAutoResumePresentation,
@@ -935,6 +936,7 @@ export function MessageRenderer({
     viewportHeight: 0,
   });
   const tailFollowerRef = useRef<MobileTailFollower | null>(null);
+  const inlineEditorCountRef = useRef(0);
   const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
   const processViewport = useProcessDisclosureViewport(() => scrollMetricsRef.current, () => {
     // Short lists normally align to the bottom. Freeze that existing leading space while
@@ -1046,6 +1048,10 @@ export function MessageRenderer({
     tailFollowerRef.current = null;
     initialAnchorDoneRef.current = false;
     reopeningAnchorRef.current = null;
+    if (reopeningFrameRef.current !== null) {
+      cancelAnimationFrame(reopeningFrameRef.current);
+      reopeningFrameRef.current = null;
+    }
     initialRevealGenerationRef.current += 1;
     initialRevealAnimationRef.current?.stop();
     initialRevealAnimationRef.current = null;
@@ -1215,7 +1221,7 @@ export function MessageRenderer({
       tailFollowerRef.current = createMobileTailFollower({
         read: () => ({
           metrics: scrollMetricsRef.current,
-          stickToLatest: nearBottomRef.current,
+          stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
           userControllingScroll: isUserControllingScroll(),
           preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
           layoutSettleAt: mvcpSettleAtRef.current,
@@ -1404,7 +1410,7 @@ export function MessageRenderer({
   }, []);
 
   const scheduleHistoryAnchorRestore = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1428,7 +1434,8 @@ export function MessageRenderer({
     ) => {
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || currentTransaction.userControlledAfterCommit
       ) return;
@@ -1538,7 +1545,7 @@ export function MessageRenderer({
   ]);
 
   const restoreHistoryAnchorOnce = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1562,7 +1569,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, scrollToOffsetProgrammatically]);
 
   const scheduleHistoryPrependUserHandoffSettle = useCallback(() => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (!transaction || !transaction.userHandoffPending) return;
     if (historyAnchorVerifyFrameRef.current !== null) return;
@@ -1573,7 +1580,8 @@ export function MessageRenderer({
       historyAnchorVerifyFrameRef.current = null;
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || isDraggingRef.current
         || isMomentumScrollingRef.current
@@ -1991,6 +1999,18 @@ export function MessageRenderer({
     scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
   }, [scrollToOffsetProgrammatically]);
   const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
+  const [inlineEditorCount, setInlineEditorCount] = useState(0);
+  const keepInlineKeyboard = useCallback(() => {
+    inlineEditorCountRef.current++;
+    nearBottomRef.current = false;
+    tailFollowerRef.current?.reset();
+    setIsAwayFromBottom(true);
+    setInlineEditorCount(count => count + 1);
+    return () => {
+      inlineEditorCountRef.current--;
+      setInlineEditorCount(count => count - 1);
+    };
+  }, [setIsAwayFromBottom]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2172,7 +2192,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, historyProgressKey, onLoadEarlier]);
 
   const flushQueuedLoadEarlier = useCallback(() => {
-    if (!queuedLoadEarlierRef.current) return;
+    if (!historyActiveRef.current || !historyPositioningRef.current || !queuedLoadEarlierRef.current) return;
     // Native MVCP can prepend while iOS is scrolling. Only the app-owned Android anchor
     // needs a quiet gesture boundary; delaying both platforms defeats near-start prefetch.
     if (MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR && (
@@ -2428,7 +2448,7 @@ export function MessageRenderer({
       // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
       // actual momentum retains the existing direction/distance fallback.
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
-      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current
+      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current || inlineEditorCountRef.current > 0
         ? false
         : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
@@ -2447,6 +2467,16 @@ export function MessageRenderer({
       setIsAwayFromBottom(!nearBottom);
       if (nearBottom) setHasNewMessages(false);
     }
+    // Native size anchoring can arrive after a retained history resizes and the
+    // tail verifier has already settled. That late scroll may be the last event:
+    // no subsequent layout/content-size callback will wake follow again. Use the
+    // same bounded controller, never an immediate scroll from onScroll. Its
+    // gesture/history guards and pending-seek ownership still take precedence.
+    if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
+      && metrics.contentHeight > 0 && metrics.viewportHeight > 0
+      && metrics.contentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      runStickToLatestVerify();
+    }
     acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
@@ -2459,6 +2489,8 @@ export function MessageRenderer({
       if (anchor && !reopeningAnchorRef.current) readingPosition?.write({ anchor, atEnd: nearBottomRef.current });
     }
   }, [
+    isUserControllingScroll,
+    runStickToLatestVerify,
     captureCurrentHistoryAnchor,
     reopeningPosition,
     getCurrentHistoryTopOffsetAdjustment,
@@ -2476,6 +2508,7 @@ export function MessageRenderer({
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
+    if (!historyPositioningRef.current) return;
     reopeningAnchorRef.current = null;
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
@@ -2537,6 +2570,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (!historyPositioningRef.current) return;
     richContent?.onScroll();
     reopeningAnchorRef.current = null;
     const nativeMetrics = {
@@ -2578,6 +2612,7 @@ export function MessageRenderer({
   ]);
 
   const handleMomentumScrollBegin = useCallback(() => {
+    if (!historyPositioningRef.current) return;
     isMomentumScrollingRef.current = true;
   }, []);
 
@@ -2598,10 +2633,33 @@ export function MessageRenderer({
   useEffect(() => {
     if (!historyPositioning) {
       tailFollowerRef.current?.reset();
+      // Detached native surfaces may never deliver touch/drag/momentum end.
+      // Release only transient gesture ownership; keep deliberate history intent.
+      isDraggingRef.current = false;
+      isMomentumScrollingRef.current = false;
+      dragStartOffsetYRef.current = null;
+      historyTouchStartYRef.current = null;
+      historyTouchTriggeredRef.current = false;
+      clearProgrammaticScroll();
+      if (historyAnchorVerifyFrameRef.current !== null) {
+        cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
+        historyAnchorVerifyFrameRef.current = null;
+      }
       return;
     }
+    // Returning substitutes for a native gesture-end that never arrived. Keep
+    // the existing transaction owner and resume the same handoff/verification,
+    // including a page committed while hidden or a request queued before blur.
+    const transaction = historyPrependTransactionRef.current;
+    if (transaction?.userHandoffPending) scheduleHistoryPrependUserHandoffSettle();
+    else if (transaction?.pageCommitted && !transaction.anchorStable) {
+      transaction.verifyDeadlineAt = 0;
+      scheduleHistoryAnchorRestore(transaction.generation);
+    }
+    if (queuedLoadEarlierRef.current) scheduleQueuedLoadEarlierFlush();
     getTailFollower().reconcile();
-  }, [historyPositioning, getTailFollower]);
+  }, [historyPositioning, getTailFollower, clearProgrammaticScroll,
+    scheduleHistoryPrependUserHandoffSettle, scheduleHistoryAnchorRestore, scheduleQueuedLoadEarlierFlush]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
@@ -2681,6 +2739,7 @@ export function MessageRenderer({
   // 没有淡入阶段；持续 resize 或复杂 cell 占满 JS 也不能无限延长隐藏。
   useLayoutEffect(() => {
     if (initialAnchorDoneRef.current) return;
+    if (!historyPositioning) return;
     if (listData.length === 0) {
       initialRevealProgress.setValue(1);
       setListRevealed(true);
@@ -2742,6 +2801,7 @@ export function MessageRenderer({
       scrollToEndProgrammatically(false);
     }
   }, [
+    historyPositioning,
     reopeningPosition,
     reconcileReopeningAnchor,
     markProgrammaticScroll,
@@ -2783,6 +2843,7 @@ export function MessageRenderer({
   // 补滚被 readingOlderRef 挡住,即便被判近底(短会话)也必须在这里补,否则 topPadding
   // 变化两边都不处理、可见消息仍跳(review P1 L683)。
   useEffect(() => {
+    if (!historyPositioning) return;
     const prev = prevTopPaddingRef.current;
     prevTopPaddingRef.current = topPadding;
     const delta = topPadding - prev;
@@ -2796,7 +2857,7 @@ export function MessageRenderer({
     if (!initialAnchorDoneRef.current || nativeScrollEventSequenceRef.current === 0) return;
     const { offsetY } = scrollMetricsRef.current;
     scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
-  }, [reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
+  }, [historyPositioning, reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -2804,6 +2865,7 @@ export function MessageRenderer({
       lastAppliedFocusKeyRef.current = null;
       return;
     }
+    if (!historyPositioning) return;
     if (lastAppliedFocusKeyRef.current === focusRunKey) return;
     const index = listData.findIndex((item) => item.key === focusedItemKey);
     if (index < 0) return;
@@ -2824,6 +2886,7 @@ export function MessageRenderer({
       }
     }, () => { /* The existing bounded reveal fallback handles a failed native seek. */ });
   }, [
+    historyPositioning,
     focusRunKey,
     focusedItemKey,
     listData,
@@ -2922,6 +2985,7 @@ export function MessageRenderer({
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <MessageListRevealContext.Provider value={revealContextValue}>
+    <MessageListKeepKeyboardContext.Provider value={keepInlineKeyboard}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2933,7 +2997,7 @@ export function MessageRenderer({
         importantForAccessibility={listRevealed ? 'auto' : 'no-hide-descendants'}>
       <LegendList
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={inlineEditorCount > 0 ? 'none' : 'on-drag'}
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
         data={listData}
@@ -3028,7 +3092,7 @@ export function MessageRenderer({
           </View>
         </View>
       ) : null}
-      {hasNewMessages || showJumpToLatest ? (
+      {inlineEditorCount === 0 && (hasNewMessages || showJumpToLatest) ? (
         <MessageScrollToBottomButton hasNewMessages={hasNewMessages} onPress={scrollToBottom}
           style={{ position: 'absolute', bottom: floatingBottomOffset, right: scrollToBottomFabRight }}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
@@ -3075,6 +3139,7 @@ export function MessageRenderer({
       )}
                 </>
               </View>
+    </MessageListKeepKeyboardContext.Provider>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
@@ -4006,6 +4071,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard
@@ -5746,7 +5812,7 @@ function isEnglishSourceHandoff(handoff: string): boolean {
 
 // session-agent-switch 边界卡 —— 1:1 对齐桌面 SystemCard.tsx 的 AgentSwitchCard:
 // 「分隔线 + 居中药丸」语言(⇄ + 已从 X 切换到 Y + · 目标模型 + 可选 · 已续接原会话),
-// 而非通用盒子卡片。药丸可点展开交接摘要面板(切换时发给新引擎的上下文全文,数据来自
+// 而非通用盒子卡片。药丸可点展开交接内容(切换时发给新引擎的上下文,数据来自
 // desktop 落库 agent_switch 行 content.handoff)。全灰度、走主题 token,无 chromatic 色。
 function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const styles = useThemedStyles(makeStyles);
@@ -5757,11 +5823,17 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const to = agentSwitchEngineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const coverageKey = handoffCoverageKey(data);
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
   const modelOnly = data?.modelOnly === true;
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
     ?? t('message.renderer.agentSwitchLabel', { from, to }));
+  const modelLabel = modelOnly ? '' : toModel;
+  const historyLabel = !coverageKey && (resumed || data?.nativeHistory === 'fallback')
+    ? t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')
+    : '';
+  const accessibilityLabel = [label, modelLabel, historyLabel].filter(Boolean).join(' · ');
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -5771,23 +5843,26 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           onPress={handoff ? () => setExpanded((v) => !v) : undefined}
           disabled={!handoff}
           accessibilityRole={handoff ? 'button' : undefined}
-          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label }) : label}
-          style={styles.agentSwitchPill}
+          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label: accessibilityLabel }) : accessibilityLabel}
+          accessibilityState={handoff ? { expanded } : undefined}
+          style={[styles.agentSwitchPill, handoff ? styles.agentSwitchPillInteractive : undefined]}
         >
           <ArrowLeftRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-          <Text style={styles.agentSwitchPillText} numberOfLines={1}>{label}</Text>
-          {toModel && !modelOnly ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
-            </>
-          ) : null}
-          {resumed || data?.nativeHistory === 'fallback' ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
-            </>
-          ) : null}
+          <Text style={styles.agentSwitchPillText}>
+            {label}
+            {modelLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                <Text style={styles.agentSwitchModel}>{modelLabel}</Text>
+              </>
+            ) : null}
+            {historyLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                {historyLabel}
+              </>
+            ) : null}
+          </Text>
           {handoff ? (
             expanded
               ? (
@@ -5799,11 +5874,12 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
         </Pressable>
         <View style={styles.agentSwitchDivider} />
       </View>
+      {coverageKey ? <Text style={styles.agentSwitchCoverage}>{t(coverageKey)}</Text> : null}
       {expanded && handoff ? (
         <View style={styles.agentSwitchHandoffPanel}>
           <Text style={styles.agentSwitchHandoffTitle}>
             {t(
-              isEnglishSourceHandoff(handoff)
+              coverageKey ? 'message.renderer.handoffContentTitle' : isEnglishSourceHandoff(handoff)
                 ? 'message.renderer.handoffContentDescEnglishSource'
                 : 'message.renderer.handoffContentDesc',
             )}
@@ -7776,6 +7852,7 @@ export function MessagePayloadModal({
     && isDirectPreviewableMediaUrl(payloadSummary.openTarget.value);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
+  const previewChrome = usePreviewChromeFrame();
   const headerLayout = buildPayloadHeaderLayout({
     canCopy: canCopyPayload,
     canOpen: canOpenPayloadUrl,
@@ -7894,7 +7971,7 @@ export function MessagePayloadModal({
         <View style={[
             styles.payloadModal,
             {
-              paddingTop: safeAreaInsets.top + 64,
+              paddingTop: previewChrome.documentContentTop,
               paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
@@ -7959,7 +8036,7 @@ export function MessagePayloadModal({
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,
-            paddingTop: safeAreaInsets.top + 64,
+            paddingTop: previewChrome.documentContentTop,
             },
         ]}
         testID="message.payloadModal"
@@ -9478,8 +9555,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  agentSwitchPillInteractive: {
+    minHeight: 44,
+  },
   agentSwitchPillText: {
     color: colors.textSecondary,
+    flexShrink: 1,
     fontSize: typeScale.micro,
     lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
@@ -9487,15 +9568,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 分隔点:纯语义三级色,不再叠透明度「做淡」(§3 硬规则 1)。
   agentSwitchDot: {
     color: colors.textTertiary,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
   },
   agentSwitchModel: {
-    color: colors.textSecondary,
-    flexShrink: 1,
     fontFamily: monoFont,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.regular,
+  },
+  agentSwitchCoverage: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    textAlign: 'center',
   },
   agentSwitchHandoffPanel: {
     backgroundColor: colors.surface,

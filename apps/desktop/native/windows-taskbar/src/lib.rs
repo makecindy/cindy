@@ -167,6 +167,22 @@ pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bo
     }
 }
 
+// A privacy mask must disappear from capture, including the area it covers.
+// Electron's content-protected state also accepts WDA_MONITOR (a black area).
+#[napi]
+pub fn exclude_privacy_mask_from_capture(handle: Buffer) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut affinity = 0;
+    unsafe {
+        SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE).is_ok()
+            && GetWindowDisplayAffinity(window, &mut affinity).is_ok()
+            && affinity == WDA_EXCLUDEFROMCAPTURE.0
+    }
+}
+
 // The Acrylic/Mica system backdrop takes its tint from the window's own
 // light/dark mode. Electron derives that from the Windows setting, so a dark
 // Cindy theme on light Windows would otherwise show a white-tinted backdrop.

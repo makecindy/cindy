@@ -57,7 +57,9 @@ function PluginIdentityFixture({ mode }: { mode: string }) {
   const recommended = mode === 'preview' ? previewRecommendations : recommendations;
   const detailPending = mode.startsWith('detail-loading');
   const pending = mode === 'install-loading';
-  return mode === 'market-detail'
+  return detailPending
+    ? <MarketPluginDetailView detail={community} refreshing busy={false} onBack={noop} onInstall={noop} onIconLoadError={noop} />
+    : mode === 'market-detail'
     ? <MarketPluginDetailView detail={{ ...community, manifest: {
       schemaVersion: 3, id: 'ntfy', name: 'ntfy', version: '1.0.0', kind: 'chip', entry: 'main.js',
     } }} busy={false} onBack={noop} onInstall={noop} onIconLoadError={noop} />
@@ -70,7 +72,7 @@ function PluginIdentityFixture({ mode }: { mode: string }) {
           <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-3">
             {recommended.map(item => <MarketPluginCard compact key={item.pluginId} item={item}
-              busy={detailPending || pending} detailPending={detailPending && item.pluginId === official.pluginId}
+              busy={pending}
               pending={pending && item.pluginId === official.pluginId}
               onSelect={noop} onInstall={noop} onIconLoadError={noop} />)}
           </div>
@@ -79,7 +81,7 @@ function PluginIdentityFixture({ mode }: { mode: string }) {
           <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.marketSection')}</h2>
           <div className="grid grid-cols-1 gap-3 min-[640px]:grid-cols-2">
             {(mode === 'preview' ? previewRecommendations : [official, community, team, custom]).map(item => <MarketPluginCard key={item.pluginId}
-              item={item} busy={detailPending || pending} detailPending={detailPending && item.pluginId === official.pluginId}
+              item={item} busy={pending}
               pending={pending && item.pluginId === official.pluginId}
               onSelect={noop} onInstall={noop} onIconLoadError={noop} />)}
             {mode !== 'preview' ? <GhostPluginCard item={{ id: 'local-report', name: 'Weekly report', description: 'A plugin developed on this computer.', origin: 'local' }}

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+const accounting = vi.hoisted(() => ({ record: vi.fn(async () => {}), close: vi.fn() }));
+vi.mock('../../usage/auxiliaryUsage.js', () => ({
+  createAuxiliaryUsageRecorder: () => Object.assign(accounting.record, { close: accounting.close }),
+}));
 
 // CodexResponsesTextModelClient uses undici.fetch + Agent for the shared
 // keepalive pool. Keep the real Undici exports and replace only fetch so the
@@ -27,6 +31,7 @@ function makeSseResponse(events: Array<{ event: string; data: unknown }>): Respo
 describe('CodexResponsesTextModelClient', () => {
   afterEach(() => {
     undiciFetchMock.mockReset();
+    accounting.record.mockClear(); accounting.close.mockClear();
     vi.useRealTimers();
   });
 
@@ -370,4 +375,16 @@ describe('CodexResponsesTextModelClient', () => {
       model: 'm', schemaName: 's', system: 'sys', user: {},
     })).rejects.toThrow(/HTTP 429.*rate_limited/);
   });
+});
+
+it('accounts for failed Responses usage even when the final frame has no delimiter', async () => {
+  const event = { type: 'response.failed', response: { model: 'served', error: { message: 'failed' },
+    usage: { input_tokens: 100, output_tokens: 5, input_tokens_details: { cached_tokens: 25 } } } };
+  undiciFetchMock.mockResolvedValueOnce(new Response(`event: response.failed\ndata: ${JSON.stringify(event)}`,
+    { headers: { 'Content-Type': 'text/event-stream' } }));
+  const client = new CodexResponsesTextModelClient({ accessTokenProvider: async () => 'test', accountIdProvider: async () => 'test' });
+  await expect(client.requestJson({ model: 'alias', system: 'test', user: {}, schemaName: 'test' })).rejects.toThrow();
+  expect(accounting.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 75, outputTokens: 5,
+    cacheReadTokens: 25 }), { model: 'served' });
+  expect(accounting.close).toHaveBeenCalledOnce();
 });

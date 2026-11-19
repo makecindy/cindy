@@ -193,6 +193,41 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  // DB regression: sealing a six-message page previously used 15 reads,
+  // including separate full-body reads for both already-loaded endpoints.
+  // Exercise the production handler and retain projected legacy round costs.
+  it('seals a text history page with a bounded batch without losing round costs', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    for (let i = 0; i < 6; i++) {
+      insertCostMessage(sqlite, { id: String(i), role: i % 2 ? 'assistant' : 'user',
+        createdAt: 1000 + i, agentMeta: i % 2 ? { turnCostUsd: 0.25, turnCompleted: true } : undefined });
+      sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify(`fixture-${i}`), String(i));
+    }
+    const queries: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((query: string) => {
+      queries.push(query);
+      return prepare(query);
+    }) as typeof sqlite.prepare);
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(JSON.stringify(page)).toContain('fixture-5');
+      const answers = historyViewLeaves(page.items).flatMap(item => item.type === 'messages' ? item.messages : [])
+        .filter(message => message.role === 'assistant');
+      expect(answers).toHaveLength(3);
+      expect(answers.every(message => (message.agentMeta as { userTurnCostUsd: number }).userTurnCostUsd === 0.25)).toBe(true);
+      expect(queries.length).toBeLessThanOrEqual(11);
+      expect(queries.filter(query => query.includes('from "sessions"'))).toHaveLength(5);
+    } finally {
+      spy.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('serves a lightweight SQLite view, hydrates visible text, then reads only the expanded subagent', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -549,6 +584,30 @@ describe('local-db:messages:list cursor', () => {
     }
   });
 
+  // The history view reads through the shared reader (localHistoryViewReader.ts), which restores task
+  // images only through the port the desktop binds (restoreTaskImages); the cases above cover the other
+  // channels. Unbound, the view would show the unrestored rows. Both the outline read and the hydration
+  // of the visible rows restore, so the restored body is what the page carries.
+  it('restores visible images before returning the history view', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'answer', createdAt: 1000, content: 'Original with a local task image' });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (_db, rows) =>
+      rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') })));
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(restore).toHaveBeenCalled();
+      expect(JSON.stringify(page)).toContain('restored-image');
+      expect(JSON.stringify(page)).not.toContain('Original with a local task image');
+    } finally {
+      restore.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('keeps around windows stable for same timestamp rows', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -667,9 +726,9 @@ describe('local-db:messages:list cursor', () => {
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
-    // list/session + prior-user lookup + bounded visibility scan
-    // (plus the direct storage assertion); never one SQLite query set per SDK segment.
-    expect(prepareSpy).toHaveBeenCalledTimes(6);
+    // The visible real user is already the boundary: no prior-user lookup.
+    // Includes the direct storage assertion; never a query set per SDK segment.
+    expect(prepareSpy).toHaveBeenCalledTimes(5);
   });
 
   it('does not scan older user rounds when projecting legacy turn cost', async () => {
@@ -1174,6 +1233,25 @@ describe('markLatestAgentHandoffConsumed boundary broadcast', () => {
       content: { handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' } } });
     expect(args).toHaveLength(3);
     expect(storedAtSend).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
+  });
+
+  // 2026-11-18 replay contract, unit with the existing in-memory DB: a
+  // single large agent_switch must send the preview through list and push,
+  // while restart and consumption still read/write the original replay.
+  it('bounds list and push bodies while keeping the complete pending handoff', async () => {
+    const handoff = `Record start\n${'新'.repeat(24_000)}\n== End of handoff note; the user's new message follows ==`;
+    const { stored, sends } = open({ handoff, handoffCoverage: 'complete', consumed: false });
+    registerMessageIpc();
+    const listed = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 10 }) as
+      Array<{ clientId: string; content: { handoff: string; handoffCoverage: string } }>;
+    const content = listed.find(row => row.clientId === 'sw')?.content;
+    expect(content?.handoff.length).toBeLessThanOrEqual(2048);
+    expect(content?.handoff).toContain('preview shortened');
+    expect(content?.handoffCoverage).toBe('complete');
+    await expect(findPendingAgentHandoff('s1')).resolves.toBe(handoff);
+    await markLatestAgentHandoffConsumed('s1');
+    expect(sends[0]?.args[1]).toMatchObject({ message: { content: { ...content, consumed: true } } });
+    expect(stored()).toEqual({ handoff, handoffCoverage: 'complete', consumed: true });
   });
 
   it('keeps the owner of the moment it was called: after an owner change the row is written but not shown', async () => {

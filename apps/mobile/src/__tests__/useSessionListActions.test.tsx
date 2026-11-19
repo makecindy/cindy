@@ -1,3 +1,4 @@
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -10,7 +11,7 @@ import type { RemoteSession } from '@/session/types';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
+vi.mock('react-native', () => ({ Alert: { alert: vi.fn() }, Platform: { OS: 'ios' } }));
 vi.mock('react-i18next', async (original) => ({
   ...await original<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
@@ -27,9 +28,9 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let actions: ReturnType<typeof useSessionListActions>;
 const task = { id: 'task', deviceLinkDeviceId: 'old-shard', canonicalDeviceId: 'host' } as RemoteSession;
-function mount(preferredRpcDeviceId?: string) {
+function mount(preferredRpcDeviceId?: string, hasActiveAutomation?: (session: RemoteSession) => boolean) {
   function Probe() {
-    actions = useSessionListActions({ preferredRpcDeviceId });
+    actions = useSessionListActions({ preferredRpcDeviceId, hasActiveAutomation });
     return null;
   }
   act(() => root.render(createElement(Probe)));
@@ -188,4 +189,97 @@ describe('task list mark-read', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('host', 'notification:clear-session-attention', ['task', 'explicit'], { preSend: expect.any(Function) });
     expect(Alert.alert).toHaveBeenCalledExactlyOnceWith('devices.list.alert.actionFailed', 'schedule unavailable');
   });
+});
+
+// Unit: legacy hosts must not turn an ignored metadata write into an optimistic success.
+describe('task snooze writes', () => {
+  it.each([true, false])('settles the authoritative pair or rolls back unsupported hosts (%s)', async supported => {
+    const original = { ...task, status: 'active', updatedAt: '2026-11-12T00:00:00.000Z', snoozedUntil: null, snoozedAt: null } as RemoteSession;
+    remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+    vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _host, _status, run) => run());
+    const until = new Date(Date.now() + 3600000).toISOString();
+    const at = new Date().toISOString();
+    mocks.invoke.mockImplementation(async (host, channel, args) => {
+      expect(host).toBe('host');
+      expect(channel).toBe('local-db:sessions:patch-meta');
+      expect(args).toEqual(['task', { snoozedUntil: until }]);
+      return supported ? { ...original, snoozedUntil: until, snoozedAt: at } : original;
+    });
+    mount();
+    await act(async () => {
+      const write = actions.patchSession(original, { snoozedUntil: until });
+      if (supported) await write;
+      else await expect(write).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+    });
+    expect(remoteSessionStore.getSessions().find(s => s.id === task.id)).toMatchObject({
+      snoozedUntil: supported ? until : null, snoozedAt: supported ? at : null,
+    });
+  });
+});
+
+it('opens snooze without writing, cancels cleanly, and saves the selected instant after dismissal', async () => {
+  const original = { ...task, status: 'active', snoozedUntil: null, snoozedAt: null } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _host, _status, run) => run());
+  mount();
+  act(() => actions.sessionSwipeControls.onSnooze?.(original));
+  expect(actions.snoozeSessionTarget?.id).toBe('task');
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  act(() => actions.closeSnooze());
+  act(() => actions.handleSnoozeClosed());
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  act(() => actions.sessionSwipeControls.onSnooze?.(original));
+  const until = new Date(Date.now() + 3600000).toISOString();
+  mocks.invoke.mockResolvedValue({ ...original, snoozedUntil: until, snoozedAt: new Date().toISOString() });
+  act(() => actions.confirmSnooze(until));
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  await act(async () => actions.handleSnoozeClosed());
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', ['task', { snoozedUntil: until }], expect.any(Object));
+  expect(remoteSessionStore.getSessions().find(s => s.id === 'task')?.snoozedUntil).toBe(until);
+  mocks.invoke.mockClear();
+  mocks.invoke.mockResolvedValue({ ...original, snoozedUntil: null, snoozedAt: null });
+  await act(async () => actions.sessionSwipeControls.onSnooze?.({ ...original, snoozedUntil: until }));
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', ['task', { snoozedUntil: null }], expect.any(Object));
+});
+
+// Inbox Done (2026-11-18): one tap archives even when an automation is bound; the ordinary
+// archive keeps its reminder. Minimal input: a task targeted by an active schedule.
+it('archives with one tap from inbox Done, while ordinary archive still reminds about automations', async () => {
+  const original = { ...task, status: 'active' } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _host, _status, run) => run());
+  mocks.invoke.mockImplementation(async (_device: string, channel: string) => {
+    if (channel === 'maker:schedule:list') {
+      return [{ id: 'routine', name: 'Routine', status: 'active', targetSessionId: 'task', cronExpr: '0 * * * *', manual: false }];
+    }
+    if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+    if (channel === 'local-db:sessions:patch-meta') return { ...original, status: 'archived' };
+    return undefined;
+  });
+  mount();
+  await act(async () => actions.sessionSwipeControls.onArchive(original));
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  expect(mocks.invoke).not.toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', expect.anything(), expect.anything());
+
+  vi.mocked(Alert.alert).mockClear();
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  await act(async () => actions.sessionSwipeControls.onComplete?.(original));
+  expect(Alert.alert).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta',
+    ['task', expect.objectContaining({ status: 'archived' })], expect.any(Object));
+  // Done never looks up automations: the only schedule read is the ordinary archive's.
+  expect(mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list')).toHaveLength(1);
+});
+
+// 2026-11-18 user decision: with an active automation bound, inbox Done only marks the round
+// read (the task returns to Working); archiving would recycle the worktree every round.
+it('only marks the task read from inbox Done while an active automation is bound', async () => {
+  const original = { ...task, status: 'active' } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  mount(undefined, (session) => session.id === 'task');
+  await act(async () => actions.sessionSwipeControls.onComplete?.(original));
+  expect(mocks.invoke).not.toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', expect.anything(), expect.anything());
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'notification:clear-session-attention',
+    expect.arrayContaining(['task']), expect.anything());
+  expect(Alert.alert).not.toHaveBeenCalled();
 });

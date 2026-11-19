@@ -2,8 +2,8 @@ import { execFile, spawn } from 'node:child_process';
 import type { GithubSetupState } from '../../shared/githubSetup.js';
 import { installTool } from '../managed-tools/installer.js';
 import { ghArtifact, GH_VERSION } from './ghArtifact.js';
-import { resolveGhBinary } from './ghBinary.js';
-import { GH_AUTH_CHECK_ARGS, ghAccountEnv } from './ghCliTokenSource.js';
+import { exposeManagedGhOnPath, resolveGhBinary } from './ghBinary.js';
+import { checkGhAccount, ghAccountEnv } from './ghCliTokenSource.js';
 
 interface SetupDeps {
   resolveBinary(): Promise<string>;
@@ -76,7 +76,7 @@ export class GithubSetup {
         ? { phase: 'cancelled' }
         : {
             phase: 'error',
-            error: code === 'unsupported' || code === 'timeout' ? code : stage,
+            error: code === 'unsupported' || code === 'timeout' || code === 'network' ? code : stage,
           };
     }
   }
@@ -179,20 +179,23 @@ export function createGithubSetup(root: string, connected: () => void): GithubSe
     resolveBinary: resolveGhBinary,
     available: (binary) => check(binary, ['--version']),
     // Token reads use the active account; stale secondary accounts must not block setup.
-    authenticated: (binary) => check(binary, GH_AUTH_CHECK_ARGS),
+    authenticated: checkGhAccount,
     login: loginWithGh,
     connected,
     async install(signal, update) {
       const artifact = ghArtifact(process.platform, process.arch);
       if (!artifact) throw new Error('unsupported');
-      return installTool({
+      const binary = await installTool({
         root,
         artifact,
         signal,
-        onProgress: ({ status, progress }) =>
-          update({ phase: status, percent: progress?.percent ?? undefined }),
+        onProgress: ({ status, download }) =>
+          update({ phase: status, percent: download.percent ?? undefined, download }),
         validate: (binary) => check(binary, ['--version'], GH_VERSION),
       });
+      // Tasks and schedule checks started from now on find it by name too.
+      exposeManagedGhOnPath(root, binary);
+      return binary;
     },
   });
 }

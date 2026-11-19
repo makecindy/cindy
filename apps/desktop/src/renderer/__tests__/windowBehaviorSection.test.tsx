@@ -3,6 +3,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { AwayFromComputerSection } from '@/components/settings/AwayFromComputerSection';
+import { awayFromComputerSettings } from '@/components/settings/AwayFromComputerSection.settings-search';
 import { WindowBehaviorSection } from '@/components/settings/WindowBehaviorSection';
 import { windowBehaviorSettings } from '@/components/settings/WindowBehaviorSection.settings-search';
 import type { LoginItemState } from '../../shared/loginItem';
@@ -14,6 +16,22 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/useKeepAwakeSetting', () => ({
   useKeepAwakeSetting: () => ({ keepAwake: false, setKeepAwake: vi.fn() }),
 }));
+
+const awayGuard = vi.hoisted(() => ({
+  available: true,
+  state: { available: true, enabled: false, delaySeconds: null, permission: 'granted' } as {
+    available: boolean;
+    enabled: boolean;
+    delaySeconds: null;
+    permission: string;
+  },
+  busy: false,
+  preview: null,
+  setEnabled: () => {},
+  setDelay: () => {},
+  startPreview: () => {},
+}));
+vi.mock('@/hooks/useAwayGuardSetting', () => ({ useAwayGuardSetting: () => awayGuard }));
 
 vi.mock('@/hooks/useSwallowActivationClickSettings', () => ({
   useSwallowActivationClickSettings: () => ({ enabled: false, setEnabled: vi.fn() }),
@@ -75,7 +93,7 @@ describe('WindowBehaviorSection login startup', () => {
     window.electronAPI.windowBehavior.getMenubarState = vi.fn().mockResolvedValue({ available: true, enabled: true });
     render(<WindowBehaviorSection />);
     await screen.findByRole('switch', { name: windowBehaviorSettings.menubarLabel.titleKey });
-    for (const definition of [windowBehaviorSettings.devicesKeepAwake, windowBehaviorSettings.loginItemLabel,
+    for (const definition of [windowBehaviorSettings.loginItemLabel,
       windowBehaviorSettings.menubarLabel, windowBehaviorSettings.swallowActivationClickLabel]) {
       const control = document.getElementById(definition.targetId)?.querySelector('[role="switch"]');
       expect(control?.getAttribute('data-setting-id')).toBe(definition.id);
@@ -237,5 +255,24 @@ describe('WindowBehaviorSection close behavior', () => {
 
     expect(screen.queryByText('settings.windowBehavior.closeBehavior.label')).toBeNull();
     await waitFor(() => expect(screen.getByRole('switch', { name: 'settings.windowBehavior.loginItem.label' }).hasAttribute('disabled')).toBe(false));
+  });
+});
+
+// docs/product-rules/privacy-screen.md (2026-11-14): the privacy screen keeps the
+// computer awake, so 「保持电脑唤醒」 shows as included and cannot be turned off while it
+// is on; the away delay only appears with the privacy screen.
+describe('AwayFromComputerSection', () => {
+  it.each([false, true])('shows keep-awake as included when the privacy screen is %s', (enabled) => {
+    awayGuard.state = { ...awayGuard.state, enabled };
+    render(<AwayFromComputerSection />);
+    const keepAwake = document
+      .getElementById(awayFromComputerSettings.devicesKeepAwake.targetId)
+      ?.querySelector('[role="switch"]');
+    expect(keepAwake?.getAttribute('aria-checked')).toBe(String(enabled));
+    expect(keepAwake?.hasAttribute('disabled')).toBe(enabled);
+    expect(screen.queryByText('settings.devices.keepAwakeIncluded') !== null).toBe(enabled);
+    expect(document.getElementById(awayFromComputerSettings.awayGuardDelay.targetId) !== null).toBe(
+      enabled,
+    );
   });
 });

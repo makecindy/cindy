@@ -10,6 +10,7 @@ configureAppDataDir(lockRoot);
 vi.mock('electron', () => ({ app: { getPath: () => lockRoot } }));
 vi.mock('../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
 import { acquireSharedSkillMutationLease } from '../skillhub/sharedMutationLease';
+import * as skillMutationLease from '../skillhub/sharedMutationLease';
 
 import {
   prepareSharedGlobalSkillLinks,
@@ -618,6 +619,49 @@ describe('prepareSharedGlobalSkillLinks', () => {
 });
 
 describe('prepareSharedProjectSkillLinks', () => {
+  // Production projection, unit tier: repeated startup must preserve user content,
+  // avoid mutation leases for stable conflicts/links, and discover removal immediately.
+  // Existing tests only covered one preparation, missing repeated warnings/lock I/O.
+  it.each(['directory', 'junction'] as const)('reports a %s conflict once without retrying mutations, then projects after removal', async (kind) => {
+    const workingDir = await makeTmpDir();
+    const paths = sharedProjectSkillsPaths(workingDir);
+    const name = randomUUID();
+    const source = await writeSkill(paths.sharedSkillsDir, name);
+    const target = path.join(paths.claudeSkillsDir, name);
+    const userSkill = await writeSkill(kind === 'directory' ? paths.claudeSkillsDir : path.join(workingDir, 'external'), name);
+    if (kind === 'junction') {
+      await fs.mkdir(paths.claudeSkillsDir, { recursive: true });
+      await fs.symlink(userSkill, target, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    await fs.writeFile(path.join(userSkill, 'SKILL.md'), 'user-owned content');
+    const mutate = vi.spyOn(skillMutationLease, 'withSkillMutation');
+    const first = await prepareSharedProjectSkillLinks({ workingDir });
+    expect(mutate).not.toHaveBeenCalled();
+    expect(first.warnings.length).toBeGreaterThan(0);
+    expect(first.warningsToReport).toEqual(first.warnings);
+    const second = await prepareSharedProjectSkillLinks({ workingDir });
+    expect(second.warnings).toEqual(first.warnings);
+    expect(second.warningsToReport).toEqual([]);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(target, 'SKILL.md'), 'utf8')).toBe('user-owned content');
+    expect(await sameRealPath(target, source)).toBe(false);
+
+    const saved = path.join(workingDir, 'saved-user-skill');
+    await fs.rename(target, saved);
+    const repaired = await prepareSharedProjectSkillLinks({ workingDir });
+    expect(repaired.changed).toBe(true);
+    expect(repaired.warningsToReport).toEqual([]);
+    expect(await sameRealPath(target, source)).toBe(true);
+    expect(await fs.readFile(path.join(saved, 'SKILL.md'), 'utf8')).toBe('user-owned content');
+    expect(mutate).toHaveBeenCalledTimes(1);
+    await prepareSharedProjectSkillLinks({ workingDir });
+    expect(mutate).toHaveBeenCalledTimes(1);
+
+    await fs.unlink(target);
+    await fs.rename(saved, target);
+    expect((await prepareSharedProjectSkillLinks({ workingDir })).warningsToReport).toEqual(first.warnings);
+  });
+
   it('exposes a legacy Claude project skill to Codex without copying it', async () => {
     const workingDir = await makeTmpDir();
     const paths = sharedProjectSkillsPaths(workingDir);

@@ -188,7 +188,8 @@ async function upsertPrRefsWithinWrite(
 }
 
 /** 回填完成标记(migrationMeta kv,先例:codex_history_has_product_prompt_initialized_v1)。 */
-const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v3';
+// Re-run after versions that disabled message indexing, even if v3 already completed.
+const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v4';
 
 /**
  * 进程内防重入,按 DbClient 实例记账:同进程登出再登入另一账号时
@@ -330,6 +331,9 @@ async function reconcilePrRefsForSession(
     // 时间戳,升序处理保证 lastSeenAt 终值正确),最后再删不在存活集里的旧行:
     // 任何中断点都只会"多"不会"少",下次重算自然收敛,无需事务。
     if (scope && !scope.isCurrent()) return;
+    const readRefs = () => db.select(prRefColumns()).from(sessionPrRefs)
+      .where(eq(sessionPrRefs.sessionId, sessionId)).orderBy(asc(sessionPrRefs.id));
+    const before = await readRefs();
     const keep = new Set<string>();
     for (const row of rows) {
       if (scope && !scope.isCurrent()) return;
@@ -352,31 +356,22 @@ async function reconcilePrRefsForSession(
     }
 
     if (scope && !scope.isCurrent()) return;
-    if (!prune) {
-      if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
-      return;
+    if (prune) {
+      const staleIds = before
+        .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
+        .map((r) => r.id);
+      if (staleIds.length > 0) {
+        await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
+      }
     }
-    const existing = await db
-      .select({
-        id: sessionPrRefs.id,
-        provider: sessionPrRefs.provider,
-        host: sessionPrRefs.host,
-        owner: sessionPrRefs.owner,
-        repo: sessionPrRefs.repo,
-        prNumber: sessionPrRefs.prNumber,
-        manuallyAdded: sessionPrRefs.manuallyAdded,
-        removedAt: sessionPrRefs.removedAt,
-      })
-      .from(sessionPrRefs)
-      .where(eq(sessionPrRefs.sessionId, sessionId));
+    // Compare final records under the write queue: repeated mentions can change
+    // timestamps transiently during recomputation without changing the result.
+    // Include ordering/provenance fields so meaningful updates still refresh.
     if (scope && !scope.isCurrent()) return;
-    const staleIds = existing
-      .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
-      .map((r) => r.id);
-    if (staleIds.length > 0) {
-      await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
+    const after = await readRefs();
+    if ((!scope || scope.isCurrent()) && JSON.stringify(before) !== JSON.stringify(after)) {
+      onRefsChanged?.(sessionId);
     }
-    if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
   } finally {
     release?.();
   }

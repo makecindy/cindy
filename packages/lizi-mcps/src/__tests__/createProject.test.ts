@@ -62,6 +62,14 @@ describe("create_project MCP", () => {
       expect(
         parse(await call({ working_dir: "/project", create_directory: true })),
       ).toMatchObject({ errorCode: "INVALID_ARGS" });
+      // Unit protocol regression: the actual tool schema must deliver the complete
+      // creation form to the selected Host; old schema rejected icon/directories.
+      expect(parse(await call({ name: "Demo", repository_url: "https://gitlab.com/team/demo", device: "studio", icon: 'symbol:Rocket', directories: [{ path: '/reference' }] })))
+        .toMatchObject({ ok: true, project_path: "/project", project_key: 'local:/project', device: 'studio' });
+      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Demo", repositoryUrl: "https://gitlab.com/team/demo", device: "studio", icon: 'symbol:Rocket', directories: [{ path: '/reference', access: 'write' }] });
+      expect(parse(await call({ directories: [{ path: '/reference', access: 'admin' }] }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+      expect(parse(await call({ name: "Blank" }))).toMatchObject({ ok: true });
+      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Blank" });
       remoteHostId = "ssh";
       expect(parse(await call({ working_dir: "/project" }))).toMatchObject({
         errorCode: "UNSUPPORTED_CAPABILITY",
@@ -83,7 +91,7 @@ describe("create_project MCP", () => {
         ok: true,
         working_dir: "/project",
       });
-      expect(createProject).toHaveBeenCalledTimes(2);
+      expect(createProject).toHaveBeenCalledTimes(4);
       for (const restricted of ["restricted"] as const) {
         surface = restricted;
         const categories = parse(
@@ -96,7 +104,7 @@ describe("create_project MCP", () => {
         );
         expect((await call({ working_dir: "/project" })).isError).toBe(true);
       }
-      expect(createProject).toHaveBeenCalledTimes(2);
+      expect(createProject).toHaveBeenCalledTimes(4);
     } finally {
       await client.close();
       await server.close();

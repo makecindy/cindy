@@ -1,3 +1,4 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { BotGroupProgressStrip, BotGroupSpeakerInteraction, type BotGroupLiveSpeaker } from './BotGroupLiveStatus';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
@@ -16,7 +17,7 @@ import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'luci
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
+import { flashThreadTarget } from './BotGroupThreadViews';
 import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
@@ -30,6 +31,7 @@ import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGro
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
+import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
@@ -46,6 +48,7 @@ import {
 import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
+import { ThreadMessageWindow } from './ThreadMessageWindow';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 /** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
@@ -169,12 +172,15 @@ async function runFollowSave(key: string, groupId: string, rootId: string, save:
   }
 }
 
-export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: string): Animation | null {
+// Keep the flex slot at its final width: sliding must not rewrap both timelines on every frame.
+export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'close'): Animation | null {
   const style = getComputedStyle(panel);
   const token = style.getPropertyValue('--motion-base').trim();
   const duration = parseFloat(token) * (token.endsWith('ms') ? 1 : 1000);
   if (!panel.animate || !Number.isFinite(duration) || duration <= 0) return null;
-  return panel.animate([{ width: from }, { width: to }], {
+  const from = direction === 'open' ? 'translateX(100%)' : style.transform || 'none';
+  const to = direction === 'open' ? 'translateX(0)' : 'translateX(100%)';
+  return panel.animate([{ transform: from }, { transform: to }], {
     duration, easing: style.getPropertyValue('--motion-ease-move').trim() || 'linear', fill: 'forwards',
   });
 }
@@ -183,11 +189,10 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, canStopAll = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
   stopping?: boolean;
-  canStopAll?: boolean;
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
@@ -211,10 +216,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
   const { resumeFollow } = processScroll;
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const panel = panelRef.current;
-    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus();
-  }, []);
+  useEffect(() => focusBotGroupComposer(panelRef.current), []);
   useEffect(() => {
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
@@ -230,6 +232,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const revisionRef = useRef(initial?.revision);
   const historyEpochRef = useRef(0);
   const latestReadRef = useRef(0);
+  const [hasRead, setHasRead] = useState(false);
   const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
   const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
   const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
@@ -273,6 +276,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   const clearHistory = useCallback((wholeRoom = true) => {
     historyEpochRef.current++;
+    setHasRead(false);
     queuedSourcesRef.current.clear();
     changedRepliesRef.current.clear();
     for (const key of windows().keys())
@@ -337,6 +341,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       }
       if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
+      setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
@@ -507,24 +512,32 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       ? previous.map((send) => (send.clientId === clientId ? { ...send, messageId: outcome.messageId } : send))
       : previous.filter((send) => send.clientId !== clientId));
   }, []);
-  // A share opened this thread: find its reply, reading back a few pages if needed.
+  // A share or sidebar preview opened this thread: find its reply, reading back a few pages if needed.
   const focusSearch = useRef<{ nonce: number; pages: number } | null>(null);
   useEffect(() => {
-    if (!focus || !replies.length) return;
+    if (!focus || !root) return;
     if (focusSearch.current?.nonce !== focus.nonce) focusSearch.current = { nonce: focus.nonce, pages: 0 };
     const search = focusSearch.current;
     if (search.pages < 0) return;
-    const target = findThreadMessageElement(contentRef.current, focus.messageId);
-    if (target) {
-      stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target);
-      if (!replies.find(reply => reply.id === focus.messageId)?.deleted) readLocatedMention(focus.messageId, target);
+    // Loaded targets are revealed by the DOM window, even when they are currently unmounted.
+    if (root.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
+    // Cached replies can be located while refresh waits or fails. Only a successful
+    // read can justify paging further or reporting that the reply is unavailable.
+    if (error || !hasRead) return;
+    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) {
+      search.pages = -1;
+      toast.info(t(key('thread.replyNotFound')));
       return;
     }
-    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore, readLocatedMention]);
+  }, [focus, replies, hasMore, root, error, hasRead, t]);
+  const onLocated = useCallback((messageId: string, target: HTMLElement) => {
+    stickToBottomRef.current = false;
+    flashThreadTarget(target);
+    if (!repliesRef.current.find(reply => reply.id === messageId)?.deleted) readLocatedMention(messageId, target);
+  }, [readLocatedMention]);
 
   /** One server operation per reply and person, so a retry never posts twice. */
   async function postToMain(messageId: string, fromComposer: boolean, acceptedSource?: BotGroupMessageView) {
@@ -679,8 +692,11 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
   };
 
-  const stopSpeaker = interleaveBotGroupWork([], speakers).at(-1)?.value;
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  const liveEntries = interleaveBotGroupWork(replyRows, sharing ? [] : speakers);
+  const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
+  const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -703,17 +719,26 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             stickToBottomRef.current = processScroll.onScroll(event);
           })}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
-            <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
-              {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
-            </ThreadPanelRoot>
-            {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
-            {interleaveBotGroupWork(replyRows, sharing ? [] : speakers).map((entry, index, timeline) => {
+            <ThreadMessageWindow items={[
+              { key: 'root', messageId: root?.id },
+              ...(hasMore ? [{ key: 'earlier' }] : []),
+              ...liveEntries.map(entry => entry.kind === 'work'
+                ? { key: `work:${entry.value.executionId ?? entry.value.member.botId}`, keepMounted: true }
+                : { key: adoptedKeysRef.current.get(entry.value.id) ?? entry.value.id, messageId: entry.value.id }),
+            ]} scrollRef={scrollRef} following={stickToBottomRef} sharing={sharing} focus={focus} onLocated={onLocated}
+              renderItem={itemIndex => {
+                if (itemIndex === 0) return <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
+                  {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
+                </ThreadPanelRoot>;
+                if (hasMore && itemIndex === 1) return <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>;
+                const index = itemIndex - 1 - Number(hasMore);
+                const entry = liveEntries[index]!;
               if (entry.kind === 'work') {
                 const speaker = entry.value;
                 return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
                   <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
-                    canStop={group.round.canStop} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
-                    stopPending={stopping || speakers.every(item => item.stopping || item.executionStatus === 'stopping')} />
+                    canStop={canStopMine} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || executionSpeakers.filter(item => canStopBotGroupSpeaker(group, { ...item, botId: item.member.botId })).every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </Fragment>;
               }
@@ -725,14 +750,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
                     <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
                   </div>
                 ) : null}
-                {renderRow(message, timeline[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
+                {renderRow(message, liveEntries[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
               </Fragment>;
-            })}
+              }} />
           </div>
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <>
-          {error && <p role="alert" className="px-4 pt-3 text-13 text-[var(--error-fg)]">{error}</p>}
+          {error && <div role="alert" className="flex items-center gap-2 px-4 pt-3 text-13 text-[var(--error-fg)]">
+            <span className="min-w-0 flex-1">{error}</span>
+            <Button variant="secondary" size="sm" compact onClick={() => refreshRef.current()}>{t('commonUi.retry')}</Button>
+          </div>}
           {/* Kept apart from read errors: a thread refresh must not hide the retry. */}
           {unposted.size > 0 && <div role="alert" className="mb-2 px-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-13 text-[var(--error-fg)]">
             <span className="min-w-0">{t(key('thread.alsoSendFailed'), { count: unposted.size })}</span>
