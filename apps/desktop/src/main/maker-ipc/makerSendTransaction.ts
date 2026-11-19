@@ -72,7 +72,7 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
-import { TELEGRAM_QUESTION_ORIGIN, activateTelegramQuestionReply } from './telegramQuestionReply.js';
+import { TELEGRAM_QUESTION_ORIGIN, activateTelegramQuestionReply, withTelegramQuestionPolicy } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
@@ -1900,7 +1900,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
-        ), () => sess.send(outgoing as never, {
+        ), () => withTelegramQuestionPolicy(so[TELEGRAM_QUESTION_ORIGIN], sess, questionOptions => sess.send(outgoing as never, {
+          ...questionOptions,
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent || deps.assertQuotaContinuation
@@ -2101,7 +2102,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
           },
-        }));
+        })));
         if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {

@@ -13,6 +13,8 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   type AgentKind,
+  type AgentEvent,
+  type Session,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
@@ -492,6 +494,58 @@ it('keeps the Telegram answer destination across successive question turns', asy
   expect(activate.mock.calls).toEqual([[session], [session]]);
 });
 
+
+
+// Unit regression: a guest answer in an idle Full Access task must receive the
+// original sealed policy and the same temporary runtime mode as its IM turn.
+it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy and cleans up on %s', async (outcome) => {
+  const { deps, session } = createDeps();
+  let mode = { mode: 'bypassPermissions', generation: 0 };
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const setMode = vi.fn(async (previous: { mode: string; generation: number }, next: string) => {
+    if (mode.mode !== previous.mode || mode.generation !== previous.generation) return false;
+    mode = { mode: next, generation: mode.generation + 1 };
+    return true;
+  });
+  Object.assign(session, {
+    capabilities: { setPermissionModeMidSession: { supported: true },
+      permissionModes: [{ id: 'auto' }], turnPermissionPolicy: { supported: { supported: true } } },
+    get stablePermissionModeState() { return mode; },
+    setPermissionModeIfUnchanged: setMode,
+    acquireTurnLease: () => release,
+    onStatusChange: () => () => {},
+    onEvent: (listener: (event: AgentEvent) => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  });
+  const release = vi.fn();
+  // Object.assign materializes getters, so keep the runtime's mode snapshot live.
+  Object.defineProperty(session, 'stablePermissionModeState', { get: () => mode });
+  const policy = { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'desktop' } as const;
+  const origin = telegramQuestionOrigin(() => {}, { session: session as unknown as Session, policy: policy as never });
+  vi.mocked(session.send).mockImplementation(async (_message, options) => {
+    await options?.afterTurnReserved?.();
+    expect(mode.mode).toBe('auto');
+    expect(options?.turnPermissionPolicy).toBe(policy);
+    if (outcome === 'thrown') throw new Error('provider refused');
+    if (outcome === 'rejected') return { accepted: false, reason: 'cancelled-before-dispatch' };
+    options?.onDispatching?.();
+    return { accepted: true };
+  });
+  const tx = createMakerSendTransaction(deps);
+  const answer = tx.sendToAgentAccepted(session.id, 'guest answer', undefined, { [TELEGRAM_QUESTION_ORIGIN]: origin });
+  if (outcome === 'thrown') await expect(answer).rejects.toThrow('provider refused');
+  else await answer;
+  if (outcome === 'done' || outcome === 'user-change') {
+    for (const listener of [...listeners]) listener({ type: 'done', data: {} } as AgentEvent);
+    expect(release).not.toHaveBeenCalled();
+    if (outcome === 'user-change') mode = { mode: 'ask', generation: mode.generation + 1 };
+    for (const listener of [...listeners]) listener({ type: 'done', data: {}, turnOrigin: origin } as AgentEvent);
+  }
+  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  expect(mode.mode).toBe(outcome === 'user-change' ? 'ask' : 'bypassPermissions');
+});
 
 // Host recovery must durably mark a turn before the provider starts, or a crash
 // can replay it. Existing App guard tests cover revocation but no launcher write.

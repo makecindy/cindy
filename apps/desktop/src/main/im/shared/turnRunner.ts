@@ -1,3 +1,4 @@
+import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
 import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
@@ -1862,7 +1863,7 @@ export function createTurnRunner(
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
         origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
-          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true) : { kind: 'user', surface: 'im' },
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true, effectiveTurnPolicy) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -1874,35 +1875,11 @@ export function createTurnRunner(
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         afterTurnReserved: async () => {
           if (!effectiveTurnPolicy) return;
-          const session = state.makerSession;
-          const previous = session.stablePermissionModeState;
-          // A retained policy is mandatory, regardless of channel or whether its
-          // requester is known. Explicit channel/companion exemptions were resolved
-          // above; never remove a mandatory policy just to admit Full access.
-          if (previous?.mode !== 'bypassPermissions') return;
-          if (!session.capabilities.setPermissionModeMidSession?.supported
-              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
-              || !session.capabilities.turnPermissionPolicy?.supported?.supported
-              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
-
-          // Reservation prevents stealing another turn's runtime. Keep the existing
-          // host lease through background continuation AND asynchronous restoration.
-          // CAS protects user changes; the persisted task preference is never changed.
-          const release = session.acquireTurnLease();
-          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
-          const originalMode = previous.mode;
-          item.turn.hostTurnLeaseRelease = () => {
-            void switching.then(async (changed) => {
-              if (changed) {
-                await session.setPermissionModeIfUnchanged(
-                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
-                );
-              }
-            }).catch((err) => {
-              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-            }).finally(release);
-          };
-          await switching;
+          await beginTemporaryImPermission(state.makerSession, cleanup => {
+            item.turn.hostTurnLeaseRelease = cleanup;
+          }, err => {
+            log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
         },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
@@ -2332,7 +2309,7 @@ export function createTurnRunner(
     }
   }
 
-  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean) {
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean, policy?: TurnPermissionPolicy) {
     const session = state.makerSession;
     const account = captureImAccountGeneration();
     const connected = im.getStatus?.();
@@ -2345,7 +2322,7 @@ export function createTurnRunner(
       state.replyRequesterIsOwner = requesterIsOwner;
       state.relayedTurn = true;
       updateReplyMediaScope(state);
-    });
+    }, policy ? { session, policy } : undefined);
   }
 
   /**
