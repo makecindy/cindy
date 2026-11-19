@@ -11,6 +11,7 @@ export const PLUGIN_ENGINE_DEFAULT_MODEL = 'default';
 
 export const PLUGIN_ENGINES_INVOKE = {
   LIST: 'maker:list-plugin-engines',
+  USAGE: 'maker:get-plugin-engine-usage',
   /** Ask engine plugins to republish their models (per-plugin cooldown in main). */
   REFRESH: 'maker:refresh-plugin-engines',
 } as const;
@@ -56,6 +57,7 @@ export interface PluginEnginePermissionMode {
 }
 
 export interface PluginEngineView {
+  reportsUsage?: true;
   /** `<pluginInstance>:<harnessId>`. */
   key: string;
   /** Task `providerId` for this engine: `acp-plugin:<key>`. */

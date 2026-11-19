@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
+import { retainReportingPluginEngines } from './pluginEngineUsage';
 
 import {
   getDataOwnerGeneration,
@@ -55,6 +56,7 @@ let detachPush: (() => void) | null = null;
 let generation = 0;
 
 function setEngines(next: readonly PluginEngineView[]): void {
+  retainReportingPluginEngines(getDataOwnerGeneration(), null, next);
   engines = next.length === 0 ? NO_ENGINES : next;
   for (const listener of listeners) listener();
 }
@@ -145,7 +147,9 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
           : undefined)
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || !Array.isArray(reply)) return;
-          current = sanitize(reply);
+          const next = sanitize(reply);
+          retainReportingPluginEngines(owner, deviceId, next);
+          current = next;
           for (const subscriber of subscribers) subscriber();
         })
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.

@@ -448,6 +448,7 @@ import {
   pluginEngineSessionCapabilities,
   resolvePluginEngineEffort,
   usePluginEngines,
+  usePluginEngineUsageSupport,
   PLUGIN_ENGINE_DEFAULT_MODEL,
   type MobilePluginEngineSelection,
 } from '@/session/pluginEngines';
@@ -2954,12 +2955,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sharedTaskGuest: isSharedTaskPeer(deviceId),
     remoteHostId: currentSession?.remoteHostId,
   });
-  const agentAccountMaker = useMobileMakerTransport(
-    usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId,
-  );
-  const menuAccountReader = usageAccount.kind === 'host'
-    ? maker
-    : usageAccount.kind === 'device' ? agentAccountMaker : null;
+  const usageDeviceId = usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId;
+  const agentAccountMaker = useMobileMakerTransport(usageDeviceId);
+  const pluginReportsUsage = usePluginEngineUsageSupport(usageDeviceId, pluginEngineTask ? currentSession?.providerId : null);
+  const menuAccountReader = usageAccount.kind === 'unreadable' || pluginReportsUsage === false
+    ? null : usageAccount.kind === 'device' ? agentAccountMaker : maker;
   /** 菜单上的来源与登录身份:Agent 在另一台电脑时按那台的目录,不借被控电脑的同名来源。 */
   const menuAccountProvider = usageAccount.kind !== 'host'
     ? currentAgentCatalog.loading
