@@ -309,7 +309,7 @@ export function validateNewSessionDraft(
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
     return i18n.t('session.new.enterProjectPath');
   }
-  if (!draft.model.trim()) return i18n.t('session.new.enterModel');
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return i18n.t('session.new.enterModel');
   if (!hasFirstMessagePayload(draft, content)) return i18n.t('session.new.enterFirstMessageOrAttachment');
   return null;
 }
@@ -326,7 +326,7 @@ export function isNewSessionDraftMissingPayloadOnly(
   content: NewSessionDraftContentState = {},
 ): boolean {
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) return false;
-  if (!draft.model.trim()) return false;
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return false;
   return !hasFirstMessagePayload(draft, content);
 }
 

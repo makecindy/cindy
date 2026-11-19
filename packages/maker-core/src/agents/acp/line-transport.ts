@@ -11,7 +11,7 @@
 export interface AcpTransportClosed {
   /**
    * `peer-exited`: the endpoint ended on its own (crash, EOF, killed elsewhere).
-   * `closed-by-client`: Cindy closed it on purpose.
+   * `closed-by-client`: the host confirmed the endpoint exited after Cindy closed it.
    * `protocol-error`: the stream could not be used anymore (write failure, oversized line).
    */
   reason: 'peer-exited' | 'closed-by-client' | 'protocol-error';

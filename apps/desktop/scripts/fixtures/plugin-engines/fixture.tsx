@@ -113,6 +113,11 @@ function TaskTrigger({ engineGone }: { engineGone: boolean }) {
         onEffortChange={() => {}}
         actualRoute
         remoteAgent={undefined}
+        {...(engineGone ? {
+          providersOverride: providers,
+          providersOverrideState: { status: 'ready' as const, refresh: () => {} },
+          pluginEngines: { engines: [], active: null, onSelect: () => {} },
+        } : {})}
         pluginEngineSession={{
           providerId: engines[1]!.providerId,
           engine,

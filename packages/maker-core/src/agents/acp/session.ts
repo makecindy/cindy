@@ -113,12 +113,10 @@ export class AcpAuthRequiredError extends Error {
   }
 }
 
-/** The task's ACP session cannot be resumed; the host decides whether to start fresh and tell the user. */
+/** Retains the task's native identity when its conversation cannot be restored. */
 export class AcpResumeUnavailableError extends Error {
   constructor(readonly sessionId: string, readonly why: 'unsupported' | 'failed', readonly cause?: unknown) {
-    super(why === 'unsupported'
-      ? 'This agent cannot resume earlier sessions'
-      : `The agent could not resume session ${sessionId}`);
+    super('[PLUGIN_ENGINE_RESUME_UNAVAILABLE] The plugin engine could not restore the previous conversation. Your messages are kept. Choose another engine or start a new task.');
     this.name = 'AcpResumeUnavailableError';
   }
 }
@@ -313,6 +311,7 @@ export class AcpSession {
   private title: string | undefined;
   private closing: Promise<void> | null = null;
   private ended = false;
+  private detachTransportClose?: () => void;
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
@@ -329,6 +328,11 @@ export class AcpSession {
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
+    // Logical RPC closure cancels requests. Only an endpoint exit can end
+    // the product event stream and release the task for a replacement.
+    this.detachTransportClose = init.options.transport.onClose((info) => {
+      if (info.reason !== 'protocol-error') this.endEvents();
+    });
   }
 
   /** Current model value as the agent reports it; empty when the agent exposes no model option. */
@@ -408,12 +412,7 @@ export class AcpSession {
       this.logger?.warn('acp: agent did not settle a cancelled prompt in time', { graceMs: this.cancelGraceMs });
       // Mark the handle as closing before emitting done so no queued or later prompt
       // can share the endpoint with the prompt that ignored cancellation.
-      if (!this.closing) {
-        this.closing = Promise.resolve().then(() => this.connection.close());
-        void this.closing.catch((error: unknown) => {
-          this.logger?.warn('acp: could not confirm exit after cancellation', { error: String(error) });
-        });
-      }
+      this.retireEndpoint();
       this.finishTurn(turn.token, { stopReason: 'cancelled' });
     }, this.cancelGraceMs);
     // ACP also expects cancelled responses to permission requests that arrive during the grace period.
@@ -421,9 +420,8 @@ export class AcpSession {
     this.connection.notify('session/cancel', { sessionId: this.id });
   }
 
-  async close(): Promise<void> {
-    if (!this.closing) this.closing = this.doClose();
-    return this.closing;
+  close(): Promise<void> {
+    return this.beginClose(() => this.doClose());
   }
 
   async setModel(model: string, opts?: { effort?: Effort }): Promise<void> {
@@ -704,7 +702,20 @@ export class AcpSession {
         ? { stopReason: 'cancelled' }
         : { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' });
     }
-    this.endEvents();
+    if (info.reason === 'protocol-error') this.retireEndpoint();
+  }
+
+  private beginClose(action: () => Promise<void>): Promise<void> {
+    if (this.ended) return Promise.resolve();
+    if (this.closing) return this.closing;
+    this.closing = Promise.resolve().then(action).finally(() => { this.closing = null; });
+    return this.closing;
+  }
+
+  private retireEndpoint(): void {
+    void this.beginClose(() => this.closeEndpoint()).catch((error: unknown) => {
+      this.logger?.warn('acp: could not confirm endpoint exit', { error: String(error) });
+    });
   }
 
   private async doClose(): Promise<void> {
@@ -718,6 +729,10 @@ export class AcpSession {
       }
     }
     if (this.turn) this.finishTurn(this.turn.token, { stopReason: 'cancelled' });
+    await this.closeEndpoint();
+  }
+
+  private async closeEndpoint(): Promise<void> {
     await this.connection.close();
     this.endEvents();
   }
@@ -725,6 +740,7 @@ export class AcpSession {
   private endEvents(): void {
     if (this.ended) return;
     this.ended = true;
+    this.detachTransportClose?.();
     this.queue.end();
     try {
       this.onEnded?.();

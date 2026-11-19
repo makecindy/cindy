@@ -907,9 +907,7 @@ export class Maker {
     const onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'] =
       startOpts[LOCAL_AGENT_CLIENT]
         ? async () => false
-        // Plugin engines (acp): Cindy keeps the visible history, so an agent session that can no
-        // longer be resumed is replaced by a fresh one instead of blocking the task forever.
-        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi' || opts.agentKind === 'acp'
+        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
           ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
           : undefined;
     try {

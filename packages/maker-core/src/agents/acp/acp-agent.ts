@@ -19,9 +19,9 @@ import {
   type StartSessionOptions,
 } from '../base-agent.js';
 import { buildAcpCapabilities } from './capabilities.js';
-import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
+import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
-import { AcpResumeUnavailableError, openAcpSession, type AcpClientInfo, type AcpSession } from './session.js';
+import { openAcpSession, type AcpClientInfo, type AcpSession } from './session.js';
 
 export const ACP_PLUGIN_PROVIDER_PREFIX = 'acp-plugin:';
 
@@ -69,33 +69,36 @@ const NO_INIT = buildAcpCapabilities(
 /** Records whether the host confirmed the endpoint exited, for Maker's startup-cleanup contract. */
 function trackClose(transport: AcpLineTransport): {
   transport: AcpLineTransport;
-  stopped: () => boolean | null;
+  stopped: () => boolean;
   whenStopped: Promise<void>;
 } {
-  let outcome: boolean | null = null;
-  let markStopped!: () => void;
-  const whenStopped = new Promise<void>((resolve) => { markStopped = resolve; });
+  let stopped = false;
+  let resolveStopped!: () => void;
+  const whenStopped = new Promise<void>((resolve) => { resolveStopped = resolve; });
+  const markStopped = () => {
+    stopped = true;
+    resolveStopped();
+  };
   // Stays subscribed after the connection detaches, so a late exit still resolves it.
-  transport.onClose(() => { outcome = true; markStopped(); });
+  const detach = transport.onClose((info) => {
+    if (info.reason !== 'protocol-error') markStopped();
+  });
+  void whenStopped.then(detach);
   return {
-    stopped: () => outcome,
+    stopped: () => stopped,
     whenStopped,
     transport: {
       write: (line) => transport.write(line),
       onLine: (listener) => transport.onLine(listener),
-      onClose: (listener: (info: AcpTransportClosed) => void) => transport.onClose((info) => {
-        if (info.reason === 'peer-exited') outcome = true;
-        listener(info);
-      }),
+      onClose: (listener) => transport.onClose(listener),
       close: async () => {
+        if (stopped) return;
         try {
           await transport.close();
-          outcome = true;
-          markStopped();
         } catch (error) {
-          outcome = false;
-          throw error;
+          if (!stopped) throw error;
         }
+        markStopped();
       },
     },
   };
@@ -172,7 +175,7 @@ export class AcpAgent extends BaseAgent {
       }
     };
 
-    const open = async (resumeSessionId: string | undefined): Promise<AcpSession> => {
+    const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(await this.acpDeps.endpoints.connect(harnessKey));
       try {
         return await openAcpSession({
@@ -180,7 +183,7 @@ export class AcpAgent extends BaseAgent {
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           mcpServers: acpMcpServersFromBridge(extra),
-          ...(resumeSessionId ? { resumeSessionId } : {}),
+          ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
@@ -188,28 +191,18 @@ export class AcpAgent extends BaseAgent {
           onEnded: disposeBridge,
         });
       } catch (error) {
-        if (error instanceof AcpResumeUnavailableError) throw error;
-        // openAcpSession closed the endpoint; tell Maker whether that exit was confirmed.
-        throw tracked.stopped() === false
-          ? new AgentStartupCleanupPendingError(error instanceof Error ? error.message : String(error), { cause: error, whenStopped: tracked.whenStopped })
-          : new AgentStartupStoppedError(error);
+        if (tracked.stopped()) throw new AgentStartupStoppedError(error);
+        // The next send must obtain exit proof before it can start another endpoint.
+        throw new AgentStartupCleanupPendingError(error instanceof Error ? error.message : String(error), {
+          cause: error,
+          whenStopped: tracked.whenStopped,
+          retryCleanup: () => tracked.transport.close(),
+        });
       }
     };
 
     try {
-      let session: AcpSession;
-      try {
-        session = await open(opts.resumeSessionId);
-      } catch (error) {
-        const canStartFresh = error instanceof AcpResumeUnavailableError
-          && opts.resumeSessionId
-          && (await opts.onInvalidResumeSession?.(opts.resumeSessionId)) === true;
-        if (!canStartFresh) {
-          throw error instanceof AcpResumeUnavailableError ? new AgentStartupStoppedError(error) : error;
-        }
-        logger.warn('acp: previous session could not be resumed; starting a new one', { why: (error as AcpResumeUnavailableError).why });
-        session = await open(undefined);
-      }
+      const session = await open();
       this.acpDeps.onSessionCapabilities?.(harnessKey, session.capabilities);
       session.onCapabilitiesChange((capabilities) => this.acpDeps.onSessionCapabilities?.(harnessKey, capabilities));
       return session;

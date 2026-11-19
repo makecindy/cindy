@@ -658,7 +658,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
   /** 插件引擎自动任务的准入(见 deps.admitPluginEngine)；不可用时抛错，本次运行或保存明确失败。 */
   private admitScheduledPluginEngine(schedule: Schedule): { model: string; effort: string } {
-    if (!this.deps.admitPluginEngine) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    if (!this.deps.admitPluginEngine || schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp'
+      || schedule.targetSessionId || schedule.persistentSession || schedule.useWorktree
+      || schedule.agentDeviceId || schedule.modelAgentDeviceId || schedule.executionMode === 'script') {
+      throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    }
     try {
       return this.deps.admitPluginEngine({
         providerId: schedule.providerId?.trim() || null,
@@ -2134,7 +2138,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         session.id,
         holder,
         {
-          agentKind: scheduledBuiltinAgentKind(session.agentKind),
+          agentKind: session.agentKind,
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
           fastMode,
@@ -2691,7 +2695,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
     routingBaseline: {
       model?: string;
-      agentKind?: AgentKind;
+      agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
@@ -2735,7 +2739,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     holder: EphemeralSessionHolder,
     routingBaseline: {
       model?: string;
-      agentKind?: AgentKind;
+      agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
@@ -3424,6 +3428,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     live: NonNullable<ReturnType<Maker['getSession']>>,
     baseline: {
       model?: string;
+      agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
@@ -3431,10 +3436,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
     },
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
-    // Runs inside onAccepted: only these route errors stop the vendor dispatch,
-    // so a plugin-engine task is refused through QueuedRouteDisabledError.
-    if (live.agentKind === 'acp') {
-      throw new QueuedRouteDisabledError(new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE).message);
+    if (baseline.agentKind === 'acp' || live.agentKind === 'acp') {
+      // A fresh plugin task already started on its native route. Recheck it
+      // under the send lock in case the engine was disabled while queued.
+      let targetModel: string;
+      try {
+        targetModel = this.admitScheduledPluginEngine(schedule).model;
+      } catch (error) {
+        throw new QueuedRouteDisabledError(error instanceof Error ? error.message : String(error));
+      }
+      if (baseline.agentKind !== 'acp' || live.agentKind !== 'acp' || live.remoteHostId || live.agentDeviceId
+        || getSessionProvider(live.id) !== schedule.providerId?.trim()
+        || (targetModel !== 'default' && targetModel !== live.model)) {
+        throw new QueuedRouteDisabledError('schedule route unavailable: the plugin engine route changed before dispatch');
+      }
+      return;
     }
     this.assertQueuedModelSelection(live, baseline.resolvedSelection);
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;

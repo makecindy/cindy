@@ -3717,7 +3717,7 @@ function CCAgentSessionContent({
   // 本机普通任务的选择器里列出插件引擎：当前选中的是待切到的引擎，或插件引擎任务自己的引擎；
   // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
-    if (!pluginEngineSwitchEligible || pluginEngines.length === 0 || !session) return undefined;
+    if (!pluginEngineSwitchEligible || !session || (!pluginEngineTask && pluginEngines.length === 0)) return undefined;
     const active = pluginEngineSwitchIntent?.providerId
       ? {
           providerId: pluginEngineSwitchIntent.providerId,

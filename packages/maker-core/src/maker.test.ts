@@ -4598,9 +4598,9 @@ describe('Maker invalid-resume persistence bridge', () => {
     expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
   });
 
-  // Plugin engines (acp): without the callback a task whose agent session can no longer be
-  // resumed failed on every start and could never run again (docs/plans/acp-plugin-bridge.md).
-  it('injects the same compare-and-clear callback for resumed plugin engine sessions', async () => {
+  // Unit regression for PR #11549. The actual Maker error path keeps the native
+  // identity on resume failure so a later send cannot silently start a fresh conversation.
+  it('keeps the native identity and returns the failure when a plugin resume is unavailable', async () => {
     const storage = createStorage();
     await storage.create({
       id: 'session-1',
@@ -4611,25 +4611,26 @@ describe('Maker invalid-resume persistence bridge', () => {
       providerId: 'acp-plugin:dsh-acp:dsh',
       sdkSessionId: 'sdk-old',
     });
+    const failure = new Error('[PLUGIN_ENGINE_RESUME_UNAVAILABLE] The plugin engine could not restore the previous conversation.');
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
-      expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
-      return createHandle({ id: '<pending>' });
+      expect(opts.onInvalidResumeSession).toBeUndefined();
+      throw new AgentStartupStoppedError(failure);
     });
     const maker = new Maker({
       agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
       storage,
       logger: createLogger(),
     });
-    await maker.createSession({
+    await expect(maker.createSession({
       id: 'session-1',
       agentKind: 'acp',
       workingDir: '/repo',
       model: 'default',
       providerId: 'acp-plugin:dsh-acp:dsh',
       resumeSessionId: 'sdk-old',
-    });
+    })).rejects.toBe(failure);
     expect(startSession).toHaveBeenCalledOnce();
-    expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
+    expect((await storage.get('session-1'))?.sdkSessionId).toBe('sdk-old');
   });
 
   it('injects a compare-and-clear callback for fresh (non-resume) Claude sessions too', async () => {

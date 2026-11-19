@@ -486,7 +486,12 @@ export class Session {
     return this.agentKind === 'acp' ? undefined : this.agentKind;
   }
   readonly workDir: string;
-  readonly capabilities: Capabilities;
+  private readonly initialCapabilities: Capabilities;
+  get capabilities(): Capabilities {
+    return this.agentKind === 'acp'
+      ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
+      : this.initialCapabilities;
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */
@@ -668,7 +673,7 @@ export class Session {
     this.agentKind = opts.agentKind;
     this.workDir = opts.workDir;
     this.handle = opts.handle;
-    this.capabilities = opts.capabilities;
+    this.initialCapabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
     this.agentDeviceId = opts.agentDeviceId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);

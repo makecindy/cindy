@@ -12,7 +12,7 @@ export default {
     'agent-modes': { about: 'Permission menu of an engine whose agent publishes its own modes: the agent modes in its order, then Full access', viewport: { width: 560, height: 640 } },
     'task-icons': { about: 'Sidebar task identity: grey while idle and original colours while breathing', viewport: { width: 320, height: 200 } },
     task: { about: 'Task running on a plugin engine: trigger shows engine · model · level; the panel lists only that engine' },
-    'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and a notice' },
+    'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and built-in models for switching' },
   },
   async check(page, ui) {
     if (ui.case === 'agent-modes') {
@@ -41,7 +41,7 @@ export default {
       await ui.capture('trigger');
       await trigger.click();
       if (ui.case === 'task-engine-gone') {
-        await page.locator('[data-plugin-engine-missing]').waitFor();
+        await page.getByText('Opus 5', { exact: true }).first().waitFor();
       } else {
         await page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') }).waitFor();
         await page.getByText('OpenCode Small').waitFor();

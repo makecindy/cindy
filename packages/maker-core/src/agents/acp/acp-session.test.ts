@@ -26,8 +26,9 @@ import {
 } from './session.js';
 import type { AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
-import { AgentStartupStoppedError } from '../base-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
+import { Session } from '../../session.js';
 
 type Handler = (params: AcpRecord) => unknown;
 
@@ -416,7 +417,10 @@ describe('AcpSession stop and failure', () => {
   it('retires the endpoint when the agent ignores a cancel past the grace period', async () => {
     vi.useFakeTimers();
     const agent = createFakeAgent();
-    const { session, events } = await open(agent, { cancelGraceMs: 1_000, permissionMode: 'bypassPermissions' });
+    const exit = deferred<void>();
+    const close = vi.spyOn(agent.transport, 'close').mockReturnValueOnce(exit.promise);
+    const onEnded = vi.fn();
+    const { session, events, ended } = await open(agent, { cancelGraceMs: 1_000, permissionMode: 'bypassPermissions', onEnded });
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     await session.abort();
@@ -426,13 +430,18 @@ describe('AcpSession stop and failure', () => {
     })).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'cancelled' } });
-    expect(agent.closedByClient).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    // The product must keep this runtime until the host confirms its exit.
+    expect(onEnded).not.toHaveBeenCalled();
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
     expect(agent.prompts).toHaveLength(1);
     // A late answer for the abandoned prompt must not produce a second turn end.
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.advanceTimersByTimeAsync(0);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    exit.resolve();
+    await ended;
+    expect(onEnded).toHaveBeenCalledOnce();
   });
 
   it('agent process exit mid-turn: terminal error, event stream ends, later sends are refused', async () => {
@@ -499,6 +508,24 @@ describe('AcpSession model and effort', () => {
     expect(session.model).toBe('v4-pro');
     expect(changes).toEqual(['v4-pro']);
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
+  });
+
+  // Unit regression for PR #11549. The handle's own tests missed the product
+  // Session rejecting newly offered effort levels after a config update.
+  it('applies an effort level added after the product session started', async () => {
+    const agent = createFakeAgent({ configOptions: configOptions.slice(0, 1) });
+    const handle = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } });
+    const session = new Session({
+      id: 'task', workDir: '/w', agentKind: 'acp', handle, capabilities: handle.capabilities, logger: silentLogger,
+    });
+    try {
+      await expect(session.setEffort('low')).rejects.toThrow("'effort' not supported");
+      agent.update({ sessionUpdate: 'config_option_update', configOptions });
+      await session.setEffort('low');
+      expect(agent.sent.at(-1)).toMatchObject({ method: 'session/set_config_option', params: { configId: 'reasoning_effort', value: 'low' } });
+    } finally {
+      await session.close();
+    }
   });
 
   it('applies the stored model on open but keeps the agent default when it is no longer offered', async () => {
@@ -591,16 +618,40 @@ describe('AcpAgent (the acp engine)', () => {
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' })).rejects.toThrow("'remoteSession' not supported");
   });
 
-  it.each([true, false])('an unresumable task starts fresh only when the host agrees (%s)', async (hostAgrees) => {
-    const agents: FakeAgent[] = [];
-    const startable = createAcpAgent(() => { const next = createFakeAgent(); agents.push(next); return next.transport; });
-    const start = startable.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', resumeSessionId: 'old-1', onInvalidResumeSession: async () => hostAgrees });
-    if (hostAgrees) {
-      await expect(start).resolves.toMatchObject({ id: 'sess-1' });
-      expect(agents.map((entry) => entry.methods())).toEqual([['initialize'], ['initialize', 'session/new']]);
-    } else {
-      await expect(start).rejects.toBeInstanceOf(AgentStartupStoppedError);
-      expect(agents[0]!.closedByClient).toBe(true);
-    }
+  // Unit regressions for PR #11549. Simulate a failed resume with and without
+  // an exit receipt at AcpAgent.startSession, which Maker uses for cleanup.
+  it('preserves the old conversation and surfaces an actionable resume error', async () => {
+    const agent = createFakeAgent();
+    const confirmNativeReset = vi.fn(async () => true);
+    const start = createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'old-1', onInvalidResumeSession: confirmNativeReset,
+    });
+    const error = await start.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(AgentStartupStoppedError);
+    expect(error).toMatchObject({ cause: { sessionId: 'old-1', message: expect.stringContaining('[PLUGIN_ENGINE_RESUME_UNAVAILABLE]') } });
+    expect(confirmNativeReset).not.toHaveBeenCalled();
+    expect(agent.methods()).toEqual(['initialize']);
+    expect(agent.closedByClient).toBe(true);
+  });
+
+  it('retains cleanup responsibility when resume fails and the endpoint is still running', async () => {
+    const agent = createFakeAgent();
+    const close = vi.spyOn(agent.transport, 'close').mockRejectedValueOnce(new Error('endpoint still running'));
+    const connect = vi.fn(() => agent.transport);
+    const error = await createAcpAgent(connect).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', resumeSessionId: 'old-1',
+    }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(error instanceof AgentStartupCleanupPendingError)) throw error;
+    const stopped = vi.fn();
+    void error.whenStopped.then(stopped);
+    await Promise.resolve();
+    expect(stopped).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+    await error.retryCleanup?.();
+    await error.whenStopped;
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(stopped).toHaveBeenCalledOnce();
   });
 });

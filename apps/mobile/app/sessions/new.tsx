@@ -704,14 +704,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       permissionMode: pluginEnginePermissionMode(pluginEngineChoice.permissionMode, engine),
     };
   }, [pluginEngineChoice, pluginEngines.engines, selectedDeviceId]);
-  const pluginEnginePick = activePluginEngine
+  const pluginEnginePick = useMemo(() => activePluginEngine
     ? {
         providerId: activePluginEngine.engine.providerId,
         model: activePluginEngine.modelId,
         effort: activePluginEngine.effort ?? '',
         permissionMode: activePluginEngine.permissionMode,
       }
-    : null;
+    : null, [activePluginEngine]);
   // 被控电脑支持给协同 Worker 单独选 Agent 所在电脑(远程供应商)时，Worker 与任务一样可以选其他
   // 电脑 / 分享的供应商，协同也不再与「任务的 Agent 在另一台电脑」互斥。
   const workerAgentLocationSupported = !!selectedDeviceId
@@ -1355,7 +1355,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
     [attachments.length, pendingUploads.length],
   );
-  const runtimePending = isNewSessionRuntimePending({
+  const runtimePending = !pluginEnginePick && isNewSessionRuntimePending({
     settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,
     userTouched: userTouchedRuntimeRef.current,
     remoteAgentPicked: !!remoteAgentPick,
@@ -1606,15 +1606,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeBranchPreferenceSyncKey,
     worktreeSourceBranch,
   ]);
-  const createValidation = useMemo(
-    () => activePluginEngine
-      // 插件引擎不读内置模型目录；暂不支持在 worktree 里新建(与 Desktop 一致)。
-      ? (worktreeEnabled && draft.workspaceKind === 'project' && draft.workingDir.trim()
-        ? t('models.pluginEngines.worktreeUnsupported')
-        : validateNewSessionDraft(draft, draftContent))
-      : runtimePending ? t('session.new.modelLoading') : validateNewSessionDraft(draft, draftContent),
-    [activePluginEngine, draft, draftContent, runtimePending, t, worktreeEnabled],
+  const selectedDraft = useMemo(() => applyPluginEnginePick(draft, pluginEnginePick), [draft, pluginEnginePick]);
+  const pluginEngineWorktreeUnsupported = Boolean(
+    pluginEnginePick && worktreeEnabled && draft.workspaceKind === 'project' && draft.workingDir.trim(),
   );
+  const createValidation = useMemo(() => {
+    if (pluginEngineWorktreeUnsupported) return t('models.pluginEngines.worktreeUnsupported');
+    if (runtimePending) return t('session.new.modelLoading');
+    return validateNewSessionDraft(selectedDraft, draftContent);
+  }, [pluginEngineWorktreeUnsupported, selectedDraft, draftContent, runtimePending, t]);
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
   const voiceStartPendingSeqRef = useRef(0);
@@ -1649,11 +1649,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // memo 住的旧语言校验文案与新 t() 输出不等,字符串比对会让豁免静默失效
   // (review 三轮收口)。
   const createValidationIsMissingPayload = useMemo(
-    () => isNewSessionDraftMissingPayloadOnly(draft, draftContent),
-    [draft, draftContent],
+    () => isNewSessionDraftMissingPayloadOnly(selectedDraft, draftContent),
+    [selectedDraft, draftContent],
   );
   const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
     && !runtimePending
+    && !pluginEngineWorktreeUnsupported
     && !creating
     && !voiceIsProcessing
     && !worktreeCreateBlocked;
@@ -4085,10 +4086,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     // 模型仍是占位(最近任务 / 目录未到):不创建,按钮此时本就不可点,这里兜住其它提交入口。
     if (runtimePendingRef.current) return;
+    if (pluginEngineWorktreeUnsupported) {
+      setError(t('models.pluginEngines.worktreeUnsupported'));
+      return;
+    }
     // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
     // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
     if (
-      !planModeCapability
+      !pluginEnginePick
+      && !planModeCapability
       && draft.permissionMode === 'plan'
       && (
         deviceLinkStatus !== 'online'
@@ -4098,7 +4104,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setError(t('session.menu.aiRenameOffline'));
       return;
     }
-    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (!remoteAgentPick && !pluginEnginePick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -4284,7 +4290,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         if (await abortIfDeviceSwitched()) return;
         const guardDeviceId = deviceAtCreate;
         // Agent 在另一台电脑运行:模型属于那台的目录,不按被控电脑的目录校准(由那台在运行时核对)。
-        const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+        const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({
           rows: [] as readonly ProviderModelRow[], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
         }) : resolveSubmitGuardCatalog({
           deferRefreshToCreation: true,
@@ -4436,6 +4442,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     selectedDeviceName,
     draft,
     remoteAgentPick,
+    pluginEnginePick,
     finishVoiceRecording,
     flushRecoveredDraft,
     leaveForeignOutboxRecovery,
@@ -4458,6 +4465,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeBranchPreferenceSyncKey,
     worktreeCaptionKey,
     worktreeEnabled,
+    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -4480,11 +4488,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setGoalError(t('session.new.enterProjectPath'));
       return;
     }
-    if (!draft.model.trim()) {
+    if (!(pluginEnginePick?.model ?? draft.model).trim()) {
       setGoalError(t('session.new.enterModel'));
       return;
     }
-    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (pluginEngineWorktreeUnsupported) {
+      setGoalError(t('models.pluginEngines.worktreeUnsupported'));
+      return;
+    }
+    if (!remoteAgentPick && !pluginEnginePick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setGoalError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -4759,7 +4771,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       if (!ensureDeviceAlive()) return;
       const guardDeviceId = deviceAtCreate;
       // Agent 在另一台电脑运行:不按被控电脑的目录校准,也不按它的来源判登录(同 create())。
-      const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+      const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({
         rows: [] as readonly ProviderModelRow[], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
       }) : resolveSubmitGuardCatalog({
         cached: () => getCachedDeviceProviders(guardDeviceId),
@@ -5193,6 +5205,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     confirmAgentUnauthenticated,
     draft,
     remoteAgentPick,
+    pluginEnginePick,
     goalBusy,
     leaveForeignOutboxRecovery,
     maker,
@@ -5211,6 +5224,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeApplicable,
     worktreeEligibility,
     worktreeEnabled,
+    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -6050,10 +6064,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ) : (
           <ContextSheetGoalCreateForm
             busy={goalBusy}
-            disabled={worktreeCreateBlocked || runtimePending}
+            disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}
             disabledHint={runtimePending
               ? t('session.new.modelLoading')
-              : worktreeCreateBlocked && worktreeControlCaptionKey
+              : pluginEngineWorktreeUnsupported
+                ? t('models.pluginEngines.worktreeUnsupported')
+                : worktreeCreateBlocked && worktreeControlCaptionKey
                 ? t(worktreeControlCaptionKey)
                 : undefined}
             error={goalError}

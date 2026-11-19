@@ -82,9 +82,9 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | Cindy | ACP v1 |
 | --- | --- |
 | 新建任务 | `initialize` → `session/new`（`cwd` = 任务工作目录，`mcpServers` 见下文） |
-| 重开任务 | 对端声明 `session/resume` 用它，否则有 `loadSession` 用 `session/load`（回放的历史不再重复展示）；都没有或恢复失败时抛 `AcpResumeUnavailableError`，由宿主决定新开会话并在界面说明「上下文未恢复」，引擎不静默换新会话 |
+| 重开任务 | 对端声明 `session/resume` 就用此方法，有 `loadSession` 时可用 `session/load`（回放的历史不会重复展示）。无法恢复时保留原会话，提示用户切换引擎或新建任务。 |
 | 发送 | `session/prompt`（文本、资源链接；图片仅在对端声明支持时） |
-| 停止 | `session/cancel`；未决权限请求和等待收尾期间的新权限请求均回 `cancelled`。对端 15 秒内不收尾时终止该连接，以 `cancelled` 结束当前轮次，下一轮使用新连接恢复任务。 |
+| 停止 | `session/cancel`。未决权限请求和等待收尾期间的新权限请求均回 `cancelled`。对端 15 秒内不收尾时结束当前轮次并终止该进程，宿主确认进程退出后才允许恢复。 |
 | 插话 | ACP 每个会话同时只有一个 prompt；插话按排队处理（保持发送顺序），`sameTurnSteer` 标为不支持 |
 | 回合外输出 | Agent 自主运行（如子任务回报）产生的输出标记为 `turnScope: 'background'` |
 | 关闭 | 支持则 `session/close`，随后结束进程 |
