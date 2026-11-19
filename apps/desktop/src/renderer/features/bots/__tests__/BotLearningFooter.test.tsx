@@ -82,6 +82,28 @@ it.each([
   await act(async () => root.unmount());
   host.remove();
 });
+// 伙伴的项目与普通项目一样读写「关于你」(docs/product-rules/cindy-memory.md §9): 伙伴对话里写进
+// 「关于你」的回执点开到「关于你」, 而不是伙伴设置里没有这条记忆的那一页; 写进伙伴自己项目记忆的不变。
+it.each([
+  ['user', '/settings?tab=personalization&openPanel=memory'],
+  ['project', '/bots/b/session/s?settings=1&settingsPage=memory'],
+] as const)('a teammate receipt for %s memory opens %s', async (scope, opened) => {
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () =>
+    root.render(
+      <MemoryRouter initialEntries={['/bots/b/session/s']}>
+        <BotLearningFooter receipts={[{ kind: 'memory', key: 'a', title: 'Preference', action: 'created', scope }]} />
+        <Route />
+      </MemoryRouter>,
+    ),
+  );
+  await act(async () => host.querySelector('button')!.click());
+  expect(host.querySelector('output')!.textContent).toBe(opened);
+  await act(async () => root.unmount());
+  host.remove();
+});
 // 消息列表也会渲染在没有路由的地方(预览、导出): 回执退化成一行文字, 不能让整条消息崩掉。
 it('renders a receipt as plain text where there is no router to navigate with', async () => {
   const host = document.createElement('div');

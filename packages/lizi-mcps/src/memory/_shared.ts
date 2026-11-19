@@ -152,7 +152,7 @@ export async function storeHolding(
 export async function withStore(
   deps: MemoryMcpDeps,
   fn: (store: MakerMemoryStore, ctx: WithStoreContext) => Promise<unknown>,
-  /** `accountWide`: 这次调用要看账号下的全部范围 (memory_scopes), 与 `project` 一样只对普通任务开放。 */
+  /** `accountWide`: 这次调用要看账号下的全部范围 (memory_scopes), 与 `project` 一样只对有账号级记忆的任务开放。 */
   options: { project?: string; accountWide?: boolean } = {},
 ): Promise<MemoryToolResult> {
   let store: MakerMemoryStore;
@@ -198,8 +198,8 @@ export async function withStore(
       );
     }
     scopes = manager.memoryScopesFor(scopeKey);
-    // 只有普通任务 (有账号级记忆的那种) 能看到或换到别的项目; 伙伴只有它自己那一份,
-    // 也不该知道用户有哪些项目。
+    // 只有带账号级记忆的任务能看到或换到别的项目 (普通任务、伙伴的项目); 只有自己那一份的
+    // (旧式伙伴记忆、Cindy 记忆总开关关着时的伙伴项目) 不行。
     if ((options.project !== undefined || options.accountWide) && !scopes.user) {
       return buildJsonResult(
         { ok: false, code: 'INVALID_PARAMS', message: 'this task has only its own memory; other projects are not available' },

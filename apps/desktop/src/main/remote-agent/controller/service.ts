@@ -261,7 +261,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         try {
           const manager = deps.makerMemory();
           opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          const index = opts.makerMemoryProjectDir ? undefined : await manager?.getPromptIndex(scopeKey);
+          // 项目记忆在项目文件夹里的 (伙伴的项目) 只返回账号级那一份的索引, 见 getPromptIndex。
+          const index = await manager?.getPromptIndex(scopeKey);
           requireCurrent();
           opts.makerMemoryIndexSnapshot = index ?? '';
         } catch (error) {

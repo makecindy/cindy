@@ -795,12 +795,12 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(send.mock.calls[0]![1]?.turnPermissionPolicy).toBe(forced ? policy : undefined);
   });
 
-  // 访客轮次里的记忆 (cindy-memory.md §7): 伙伴用的是它自己的记忆, 策略原样; 伙伴不可用、
-  // 回落到渠道自有任务时用的是 Cindy 记忆 (含主人账号级的那一份), 读写要主人确认。
+  // 访客轮次里的记忆 (cindy-memory.md §7、§9): 伙伴的项目与普通项目一样读写得到主人账号级的
+  // 记忆, 所以伙伴任务与渠道自有任务 (伙伴不可用时的回落) 同一条规则: 读写要主人确认。
   it.each([
-    { route: 'companion', memoryNeedsOwner: false },
-    { route: 'paused', memoryNeedsOwner: true },
-  ])('asks the owner before a guest reads Cindy memory, not a teammate\'s own memory: %j', async ({ route, memoryNeedsOwner }) => {
+    { route: 'companion' },
+    { route: 'paused' },
+  ])('asks the owner before a guest reads Cindy memory, on a teammate task too: %j', async ({ route }) => {
     if (route === 'paused') {
       companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
     }
@@ -818,16 +818,18 @@ describe('turnRunner: connection handed to a companion bot', () => {
     const id = route === 'companion' ? 'mimi-main' : legacyIdFor(BOT_CONTEXT, OWNER);
     const sent = harnesses.get(id)!.send.mock.calls[0]![1]?.turnPermissionPolicy;
     expect(sent?.forceConfirmToolCall('mcp__cindy_memory__call_tool', { name: 'memory_read', args: {} }))
-      .toBe(memoryNeedsOwner);
-    if (!memoryNeedsOwner) expect(sent).toBe(policy);
+      .toBe(true);
+    // 其余工具仍按渠道原来的策略。
+    expect(sent?.forceConfirmToolCall('Read', {})).toBe(false);
+    expect(sent?.origin).toEqual(policy.origin);
   });
 
   // 任务启动前登记「这段对话里别人也能说话」(cindy-memory.md §7): 登记过的任务启动时不带
-  // 主人账号级记忆的索引。伙伴任务用自己的记忆, 不登记; 主人的私聊不登记。
+  // 主人账号级记忆的索引。伙伴任务同样登记 (§9); 主人的私聊不登记。
   it.each([
     { label: 'a group turn on the channel\'s own task', route: 'paused', chatKind: 'group', noted: true },
     { label: 'the owner\'s private chat', route: 'paused', chatKind: 'direct', noted: false },
-    { label: 'a group turn on a teammate task', route: 'companion', chatKind: 'group', noted: false },
+    { label: 'a group turn on a teammate task', route: 'companion', chatKind: 'group', noted: true },
   ] as const)('marks the conversation as shared before the task starts: $label', async ({ route, chatKind, noted }) => {
     mocks.noteSharedChannelSession.mockClear();
     if (route === 'paused') {
@@ -839,7 +841,8 @@ describe('turnRunner: connection handed to a companion bot', () => {
       channelNoteSource: { chatKind },
     });
     if (noted) {
-      expect(mocks.noteSharedChannelSession).toHaveBeenCalledWith(legacyIdFor(BOT_CONTEXT, OWNER));
+      expect(mocks.noteSharedChannelSession)
+        .toHaveBeenCalledWith(route === 'companion' ? 'mimi-main' : legacyIdFor(BOT_CONTEXT, OWNER));
     } else {
       expect(mocks.noteSharedChannelSession).not.toHaveBeenCalled();
     }

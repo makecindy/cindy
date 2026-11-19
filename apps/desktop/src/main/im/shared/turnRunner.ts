@@ -1130,7 +1130,8 @@ export function createTurnRunner(
       }
     }
     // Register shared-channel memory scope before cold runtime preparation can wire the agent.
-    if (!target.botOwned && isSharedChannelTurn(args)) noteSharedChannelSession(target.row.id);
+    // 伙伴任务同样登记: 伙伴的项目也带主人账号级记忆的索引 (cindy-memory.md §9)。
+    if (isSharedChannelTurn(args)) noteSharedChannelSession(target.row.id);
     // Only an actual incoming turn prepares a cold runtime. The existing lock bridge applies
     // pending choices and subscription recovery before an exhausted old source can block startup.
     const cold = deps.prepareUnhealthySession && deps.acquirePendingAgentSwitch
@@ -1476,14 +1477,12 @@ export function createTurnRunner(
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       // Binding presence is insufficient: unavailable companions fall back to
       // channel-owned sessions, which must retain the mandatory policy.
-      // 渠道自有任务用的是 Cindy 记忆 (含主人账号级的那一份): 访客轮次里对它的读写要主人确认。
-      // 伙伴任务用伙伴自己的记忆, 策略原样。
+      // 任务用的是 Cindy 记忆 (含主人账号级的那一份): 访客轮次里对它的读写要主人确认。
+      // 伙伴任务同样 —— 伙伴的项目与普通项目一样读写账号级记忆 (cindy-memory.md §9)。
       ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
         && args.requesterIsOwner === true && target.botOwned)
         ? {
-            turnPermissionPolicy: target.botOwned
-              ? args.turnPermissionPolicy
-              : withGuestMemoryConfirmation(args.turnPermissionPolicy),
+            turnPermissionPolicy: withGuestMemoryConfirmation(args.turnPermissionPolicy),
           }
         : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),

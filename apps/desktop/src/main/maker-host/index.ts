@@ -2771,7 +2771,7 @@ export function getMaker(): Maker {
             });
             if (mount) createOpts.hostSkills = [mount];
           }
-          // 伙伴的记忆快照已在上一步给出; 这里只处理用 Cindy 记忆的任务。
+          // 旧式伙伴的记忆快照已在上一步给出; 这里处理带账号级记忆的任务 (含伙伴的项目)。
           await withholdAccountMemoryIndexInSharedConversation(sessionId, createOpts, {
             isSharedSession: isSharedChannelSession,
             noteStart: noteSessionStartAccountIndex,

@@ -91,7 +91,8 @@ function OpenRow({
       type="button"
       className={cn(ROW_CLASS, 'hover:text-[var(--text-secondary)]')}
       onClick={() => {
-        if (surface === 'task') {
+        // A save to the account-level memory opens it wherever it was made, a teammate's chat included.
+        if (surface === 'task' || item.scope === 'user') {
           navigate(memoryEntriesRoute(item.scope === 'project' ? task : null));
           return;
         }
