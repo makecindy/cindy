@@ -50,6 +50,8 @@ export function accessChatDisplayCache(input: unknown): unknown {
     // The full retired list is window history. Only this accept's new removals may
     // add tombstones: an old window must not undo another window's revival.
     const newlyRetired = stringIds(newlyRetiredBotIds);
+    if (newlyRetired.length && retirementRevision !== cloudHomes.revision)
+      throwIpcError('PRECONDITION_FAILED', 'Cloud display cache changed before this deletion; reload and confirm the roster');
     hasNewRetirements = newlyRetired.length > 0;
     const retired = new Set([...cloudHomes.retiredBotIds, ...newlyRetired]);
     const active = new Set(Array.isArray(incoming.actors) ? incoming.actors.flatMap(actor =>

@@ -70,3 +70,122 @@ it('restores a genuinely active cloud identity and clears retirement only for th
   await act(async () => refreshCompanionCloudSettled());
   expect(probe.result.current).toEqual([]);
 });
+
+// #11303 failure recovery, unit tier: existing happy-path fixtures never rejected IPC.
+// Production refresh/push must wait for successful hydration; a failed deletion write
+// must resend its unacknowledged delta on the next update, not resurrect the offline row.
+it.each(['refresh', 'push'])('recovers a failed startup read before accepting a later %s', async source => {
+  let reads = 0;
+  let push!: (next: CompanionCloudSnapshot) => void;
+  const cache = vi.fn(async (request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return null;
+    if (request.action === 'read') {
+      if (++reads === 1) throw new Error('temporarily unreadable');
+      return { ...old, retirementRevision: 1 };
+    }
+    saved = request.value;
+    return { retiredBotIds: ['mia'], retirementRevision: 2 };
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  window.electronAPI.maker.onCompanionCloudChanged = ((fn: typeof push) => { push = fn; return () => undefined; }) as never;
+  const cloud = vi.spyOn(window.electronAPI.maker, 'getCompanionCloudState');
+  await act(async () => refreshCompanionCloudSettled());
+  expect(cloud).not.toHaveBeenCalled();
+  expect(cache.mock.calls.filter(([r]) => r.action === 'write')).toHaveLength(0);
+  const probe = renderHook(() => useCompanionCloud());
+  if (source === 'push') act(() => push(fresh));
+  await waitFor(() => expect(saved).toMatchObject({ actors: [], newlyRetiredBotIds: ['mia'] }));
+  expect(reads).toBe(2);
+  expect(cloudRemoteBots(probe.result.current, [row])).toEqual([]);
+});
+
+it('retains a failed deletion delta until the next successful cache receipt', async () => {
+  let attempts = 0;
+  const cache = vi.fn(async (request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return null;
+    if (request.action === 'read') return { ...old, retirementRevision: 1 };
+    if (++attempts === 1) throw new Error('temporarily unwritable');
+    saved = request.value;
+    return { retiredBotIds: ['mia'], retirementRevision: 2 };
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  await act(async () => refreshCompanionCloudSettled());
+  expect(attempts).toBe(1);
+  await act(async () => refreshCompanionCloudSettled());
+  expect(saved).toMatchObject({ actors: [], newlyRetiredBotIds: ['mia'] });
+  await act(async () => refreshCompanionCloudSettled());
+  expect(saved).toMatchObject({ retiredBotIds: ['mia'], newlyRetiredBotIds: [] });
+});
+
+// A slow write is not a failure: keep one latest queued snapshot, and do not
+// acknowledge a newer removal with the older write's receipt.
+it('coalesces updates behind a slow receipt while preserving a newer deletion', async () => {
+  let revision = 1;
+  let finish!: (value: unknown) => void;
+  const cache = vi.fn((request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return Promise.resolve(null);
+    if (request.action === 'read') return Promise.resolve({ ...old, retirementRevision: revision });
+    saved = request.value;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  await act(async () => refreshCompanionCloudSettled());
+  const first = finish;
+  fresh = old;
+  await act(async () => refreshCompanionCloudSettled());
+  fresh = { ...old, actors: [] };
+  await act(async () => refreshCompanionCloudSettled());
+  expect(cache.mock.calls.filter(([r]) => r.action === 'write')).toHaveLength(1);
+  revision = 2;
+  await act(async () => first({ retiredBotIds: ['mia'], retirementRevision: 2 }));
+  expect(cache.mock.calls.filter(([r]) => r.action === 'write')).toHaveLength(1);
+  await act(async () => refreshCompanionCloudSettled());
+  expect(saved).toMatchObject({ actors: [], newlyRetiredBotIds: ['mia'], retirementRevision: 2 });
+  expect(cache.mock.calls.filter(([r]) => r.action === 'write')).toHaveLength(2);
+  await act(async () => finish({ retiredBotIds: ['mia'], retirementRevision: 3 }));
+  await act(async () => refreshCompanionCloudSettled());
+  expect(saved).toMatchObject({ newlyRetiredBotIds: [] });
+  await act(async () => finish({ retiredBotIds: ['mia'], retirementRevision: 3 }));
+});
+
+// A receipt can contain a deletion from another window. A revival already queued
+// against the old fence must not gain permission from that newer receipt.
+it('does not rebase a queued revival onto a newly learned retirement revision', async () => {
+  let finish!: (value: unknown) => void;
+  const cache = vi.fn((request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return Promise.resolve(null);
+    if (request.action === 'read') return Promise.resolve({ ...old, actors: [], retiredBotIds: ['mia'], retirementRevision: 1 });
+    saved = request.value;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  await act(async () => refreshCompanionCloudSettled());
+  const first = finish;
+  fresh = old;
+  await act(async () => refreshCompanionCloudSettled());
+  await act(async () => first({ retiredBotIds: ['mia'], retirementRevision: 2 }));
+  expect(saved).toMatchObject({ revivedBotIds: [], retirementRevision: 2 });
+  await act(async () => finish({ retiredBotIds: ['mia'], retirementRevision: 2 }));
+});
+
+// A rejected old deletion needs both a new cache fence and a fresh cloud answer.
+// Merely replaying the old intent at the returned version would hide a revival.
+it.each([true, false])('reconfirms a rejected deletion against a fresh roster (active=%s)', async active => {
+  let reads = 0;
+  let attempts = 0;
+  const cache = vi.fn(async (request: { action: string; key: string; value?: unknown }) => {
+    if (request.key !== 'cloud-homes') return null;
+    if (request.action === 'read') return { ...old, retirementRevision: ++reads };
+    if (++attempts === 1) throw new Error('PRECONDITION_FAILED: newer identity decision');
+    saved = request.value;
+    return { retiredBotIds: active ? [] : ['mia'], retirementRevision: 3 };
+  });
+  window.electronAPI.maker.chatDisplayCache = cache as never;
+  await act(async () => refreshCompanionCloudSettled());
+  expect(attempts).toBe(1);
+  expect(reads).toBe(1);
+  fresh = active ? old : { ...old, actors: [] };
+  await act(async () => refreshCompanionCloudSettled());
+  expect(reads).toBe(2);
+  expect(saved).toMatchObject({ actors: fresh.actors, newlyRetiredBotIds: active ? [] : ['mia'], retirementRevision: 2 });
+});

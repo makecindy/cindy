@@ -591,6 +591,7 @@ describe('deleted cloud companion cache reconciliation', () => {
     maker.getCompanionCloudState.mockResolvedValue(fresh);
     const view = renderHook(() => useCompanionCloud());
     if (source === 'push') act(() => push(fresh));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
     await act(async () => finish(snapshot('laptop')));
     await waitFor(() => expect(saved).toMatchObject({ actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'] }));
     expect(cloudRemoteBots(view.result.current, [row, { ...row, id: 'ordinary' }]).map(x => x.id)).toEqual(['ordinary']);
