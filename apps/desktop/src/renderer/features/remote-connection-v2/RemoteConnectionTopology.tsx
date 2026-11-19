@@ -194,11 +194,15 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
 }
 
 const PILL_W = 116;
+const PILL_H = 16;
+const INLINE_PILL_MIN_W = 100;
+const PILL_POINT_GAP = 4;
 
 /** 链路标签(底层传输协议 · 延迟):at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
 function LatencyPill({
   at,
   side,
+  maxWidth,
   transport,
   ms,
   strong,
@@ -206,27 +210,36 @@ function LatencyPill({
 }: {
   at: Point;
   side: 1 | -1;
+  maxWidth: number;
   transport: string | null;
   ms: number | null;
   strong: boolean;
   animate: boolean;
 }) {
   const { t } = useTranslation();
-  const text = [transport, ms === null ? null : formatRtt(ms, t)].filter(Boolean).join(' · ');
-  if (!text) return null;
+  const latency = ms === null ? null : formatRtt(ms, t);
+  if (!transport && !latency) return null;
+  const stacked = maxWidth < INLINE_PILL_MIN_W && transport !== null && latency !== null;
   return (
     <div
       className={cn('pointer-events-none flex items-center', side === 1 ? 'justify-end' : 'justify-start')}
-      style={placed(at.x - (side * PILL_W) / 2, at.y, PILL_W, 16, animate)}
+      style={placed(at.x - (side * PILL_W) / 2, at.y, PILL_W, PILL_H, animate)}
       aria-hidden
     >
       <span
         className={cn(
-          'whitespace-nowrap rounded-full bg-[var(--settings-theme-card-bg)] px-1.5 py-0.5 text-11 leading-none tabular-nums',
+          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5 text-11 leading-none tabular-nums',
+          stacked ? 'flex flex-col items-center gap-0.5 px-1' : 'px-1.5',
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
+        style={{ maxWidth }}
       >
-        {text}
+        {stacked ? (
+          <>
+            <span>{transport}</span>
+            <span className="max-w-full truncate">{latency}</span>
+          </>
+        ) : [transport, latency].filter(Boolean).join(' · ')}
       </span>
     </div>
   );
@@ -367,6 +380,8 @@ export function RemoteConnectionTopology({
   for (const group of model.groups) {
     const g = layout.groups.find((x) => x.id === group.id);
     if (!g) continue;
+    const lineOrigin = g.relay ?? hub;
+    const originRadius = g.relay ? m.relayR : m.ring;
     const { toRelay, rows } = groupLines(layout, group, (id) => (isPhone(id) ? PHONE_W / 2 : m.half));
     if (toRelay && g.relay) {
       const emphasis = emphasisFor(group.ids, model.relay.flow !== null);
@@ -511,11 +526,16 @@ export function RemoteConnectionTopology({
       const transport = reconnecting ? null : peerTransportLabel(node, t);
       const displayName = deviceLabel(node, t);
       const description = [displayName, protocol, transport, sub.text].filter(Boolean).join(' · ');
+      // Keep the complete pill between the tile and the relay point or hub ring on narrow rows.
+      const maxPillWidth = Math.abs(row.at.y - lineOrigin.y) < originRadius + PILL_H / 2
+        ? Math.min(PILL_W, Math.abs(row.at.x - lineOrigin.x) - originRadius - PILL_POINT_GAP)
+        : PILL_W;
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
           at={row.at}
           side={group.side}
+          maxWidth={maxPillWidth}
           transport={transport}
           ms={node.rttMs}
           strong={emphasis !== 'rest' && emphasis !== 'dim'}

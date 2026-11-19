@@ -36,6 +36,13 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
   }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
+  if (name === 'narrow-relay') {
+    return {
+      devices: [SELF, device({ deviceId: 'relay-peer', name: 'Relay PC', platform: 'win32' })],
+      links: [link('relay-peer', 'relay', 24)],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
     const devices: Device[] = [SELF];

@@ -30,6 +30,11 @@ export default {
       about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
       storage: V2_ON,
     },
+    'narrow-relay': {
+      about: 'One relay peer at the topology width of a minimum-width Settings window; its protocol and RTT clear the relay point',
+      storage: V2_ON,
+      viewport: { width: 520, height: 900 },
+    },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
     'remote-switch': {
@@ -192,6 +197,17 @@ export default {
         throw new Error(`no "${text}" under this computer in the topology`);
       };
       const dotBox = await relayDot.boundingBox();
+      const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+      // The full-size cases miss the overlap between one relay peer's link label and the relay point.
+      // Use the production topology in Electron with one peer at the minimum Settings content width.
+      if (ui.case === 'narrow-relay') {
+        const peerRtt = await ui.t('settings.remoteControl.v2.ms', { value: 24 });
+        const pill = page.getByText(new RegExp(`^${relayTransport}[\\s·]*${peerRtt}$`));
+        await pill.waitFor();
+        const pillBox = await pill.boundingBox();
+        assert.ok(pillBox && !overlaps(pillBox, dotBox), 'peer link label overlaps the relay point');
+        return;
+      }
       const dotX = dotBox.x + dotBox.width / 2;
       const labels = [];
       for (const el of await page.getByText(relayName, { exact: true }).all()) {
@@ -212,7 +228,6 @@ export default {
         assert.ok(line, `relay label line ${i} is missing`);
         if (i > 0) assert.ok(line.y >= lines[i - 1].y + lines[i - 1].height - 1, 'relay label lines overlap');
       }
-      const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
       // 细环按圆算:字的每一行离圆心最近的点都要在环外。
       const ringY = hubBox.y + hubBox.height / 2;
       const inRing = (a) => Math.hypot(Math.min(Math.max(hubX, a.x), a.x + a.width) - hubX, Math.min(Math.max(ringY, a.y), a.y + a.height) - ringY) < 36;
