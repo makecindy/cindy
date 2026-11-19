@@ -6,18 +6,16 @@
  * adapter 可能没有可用登录，而账号池默认账号本身仍能正常运行任务。
  *
  * 账号池使用非旧版默认账号，且当前 owner 已授权系统默认登录时，读取该账号自己的目录，
- * 与账号池运行任务时的选择一致。旧私有文件的存在不能覆盖当前授权；私有登录、撤销授权
- * 或旧版默认账号继续走原 adapter 的读取与恢复门禁。
+ * 与账号池运行任务时的选择一致。内置登录文件仍指向同一凭证时，保留 adapter 的读取和
+ * 恢复确认。旧私有文件的存在不能覆盖当前授权；独立登录、撤销授权或旧版默认账号同样走原 adapter。
  */
 
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { CodexRateLimitAccountIdentity, CodexRateLimitResetServiceDeps } from './codexRateLimitReset.js';
+import { codexAuthPathsShareIdentity } from '../maker-host/codex-auth-link.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
-import {
-  isNativeProviderAuthBound,
-  isNativeProviderAuthSharedSystemCredential,
-} from '../maker-host/nativeProviderAuthBinding.js';
+import { isNativeProviderAuthBoundToSharedSystemCredential } from '../maker-host/nativeProviderAuthBinding.js';
 import { accountDirectory, readPool } from '../subscription-accounts/store.js';
 import {
   codexAccountRpc,
@@ -33,9 +31,7 @@ type ResetTarget = Pick<
 function defaultAccountAvailable(): boolean {
   const pool = readPool('openai');
   return Boolean(pool && !pool.disconnected && pool.legacyCodexDefault !== true
-    && pool.accounts.some((account) => account.id === 'default')
-    && isNativeProviderAuthBound('openai')
-    && isNativeProviderAuthSharedSystemCredential('openai'));
+    && pool.accounts.some((account) => account.id === 'default'));
 }
 
 /** The default account's CLI home selected by its current owner authorization. */
@@ -49,22 +45,30 @@ export async function detachedDefaultCodexHome(): Promise<string | null> {
   }
   const nativeHome = getCodexHome();
   if (path.resolve(home) === path.resolve(nativeHome)) return null;
+  const systemAuth = path.join(home, 'auth.json');
   try {
     // Keyring-only logins keep the original reader: the account bridge needs this file.
-    if (!(await stat(path.join(home, 'auth.json'))).isFile()) return null;
+    if (!(await stat(systemAuth)).isFile()) return null;
   } catch {
     return null;
   }
-  // Pool authorization can change while the filesystem checks yield.
-  return defaultAccountAvailable() && accountDirectory('openai', 'default') === home ? home : null;
+  if (await codexAuthPathsShareIdentity(path.join(nativeHome, 'auth.json'), systemAuth)) return null;
+  // Read authorization after the filesystem checks, and recheck the pool after that read.
+  return await isNativeProviderAuthBoundToSharedSystemCredential('openai')
+    && defaultAccountAvailable() && accountDirectory('openai', 'default') === home ? home : null;
 }
 
 /** Identity of that home, with the credential guard used before a redemption. */
 export async function readDefaultCodexHomeIdentity(
   home: string,
+  assertCurrent: () => Promise<void>,
 ): Promise<CodexRateLimitAccountIdentity & { canDispatch: () => boolean }> {
-  const auth = await readNativeAccount('openai', home);
+  await assertCurrent();
+  const auth = await readNativeAccount('openai', home, {
+    codexCanDispatch: () => assertCurrent().then(() => true, () => false),
+  });
   const tokens = await readNativeCodexTokens(home);
+  await assertCurrent();
   if (!auth.authenticated || !auth.identity || !tokens.canDispatch())
     throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
   return { email: auth.identity, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch };
@@ -96,9 +100,7 @@ export function withDetachedDefaultCodexHome(
         credentials.set(identity, { home: null, current: () => true });
         return identity;
       }
-      await assertHome(home);
-      const { canDispatch, ...identity } = await readDefaultCodexHomeIdentity(home);
-      await assertHome(home);
+      const { canDispatch, ...identity } = await readDefaultCodexHomeIdentity(home, () => assertHome(home));
       credentials.set(identity, { home, current: canDispatch });
       return identity;
     },
@@ -106,7 +108,8 @@ export function withDetachedDefaultCodexHome(
       const home = await resolveHome();
       if (!home) return native.readRateLimits();
       await assertHome(home);
-      const result = await codexAccountRpc(home, 'account/rateLimits/read', {});
+      const result = await codexAccountRpc(home, 'account/rateLimits/read', {},
+        () => assertHome(home).then(() => true, () => false));
       await assertHome(home);
       return result as Awaited<ReturnType<ResetTarget['readRateLimits']>>;
     },

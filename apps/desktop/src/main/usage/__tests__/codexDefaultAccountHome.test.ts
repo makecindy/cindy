@@ -10,7 +10,7 @@
  * - tier：unit（真实临时目录 + 进程内假 CLI，不启动 Codex）。
  * - 实测耗时：2026-11-14 单文件运行 4.18s，21 项通过。
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,8 +30,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../maker-host/codex-home-path.js', () => ({ getCodexHome: () => h.nativeHome }));
 vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
-  isNativeProviderAuthBound: () => h.authBound,
-  isNativeProviderAuthSharedSystemCredential: () => h.sharedSystemCredential,
+  isNativeProviderAuthBoundToSharedSystemCredential: async () => h.authBound && h.sharedSystemCredential,
 }));
 vi.mock('../../subscription-accounts/store.js', () => ({
   readPool: h.readPool,
@@ -125,6 +124,9 @@ describe('built-in Codex quota target of the account pool default account', () =
   });
 
   it.each([
+    ['the built-in login already links to the system credential', () => {
+      linkSync(path.join(h.defaultHome, 'auth.json'), path.join(h.nativeHome, 'auth.json'));
+    }],
     ['the current owner has no authorization', () => { h.authBound = false; }],
     ['the built-in connection owns a private login', () => {
       h.sharedSystemCredential = false;
@@ -156,6 +158,24 @@ describe('built-in Codex quota target of the account pool default account', () =
 
     await expect(service.read()).rejects.toThrow('ChatGPT account changed');
     expect(builtIn.recordRateLimitSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(['identity', 'quota'] as const)('cancels %s dispatch if authorization is revoked during CLI startup', async (kind) => {
+    const target = withDetachedDefaultCodexHome(native(), () => {});
+    const dispatch = vi.fn();
+    const startCli = async (canDispatch: () => Promise<boolean>) => {
+      h.authBound = false;
+      if (!await canDispatch()) throw new Error('Codex account changed before dispatch');
+      dispatch();
+    };
+    if (kind === 'identity') {
+      h.readNativeAccount.mockImplementationOnce(async (_provider, _home, { codexCanDispatch }) => startCli(codexCanDispatch));
+    } else {
+      h.rpc.mockImplementationOnce(async (_home, _method, _params, canDispatch) => startCli(canDispatch));
+    }
+    const read = kind === 'identity' ? target.readAccountIdentity() : target.readRateLimits();
+    await expect(read).rejects.toThrow('Codex account changed before dispatch');
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each(['credential', 'owner', 'authorization', 'pool disconnect', 'default removal', 'built-in login'])

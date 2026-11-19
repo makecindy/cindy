@@ -340,8 +340,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
     }
     const defaultHome = id ? null : await detachedDefaultCodexHome();
     if (defaultHome) {
-      const identity = await readDefaultCodexHomeIdentity(defaultHome);
-      if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
+      const identity = await readDefaultCodexHomeIdentity(defaultHome, async () => {
+        if (await detachedDefaultCodexHome() !== defaultHome
+          || scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
+      });
       return codexResetAccountKey(identity.email, identity.accountId);
     }
     const state = await desktopCodexAuthAdapter.getState({ providerId: id });
