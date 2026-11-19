@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { MobileUsageWidgetSnapshot as Snapshot } from '@cindy/maker-shared/device-link-contract';
 import { UsageQuotaColumns } from './UsageQuotaColumns';
+import { CountUp, useOpeningMotion } from './usageOpeningMotion';
 import { Text } from '@/components/AppText';
 import { useAuth } from '@/auth/AuthContext';
 import { automaticUsageState, readUsageWidgetStore, subscribeUsageWidgetStore } from './usageWidgetSync';
@@ -120,6 +121,8 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
   const preview = accounts.slice(0, 4);
   const day = snapshot?.usage.daily.at(-1);
   const staleNotice = useStaleNotice(snapshot);
+  // The drawer mounts this card each time it opens, so every opening plays once.
+  const opening = useOpeningMotion();
   return <Pressable accessibilityRole="button" onPress={onOpen} testID="home.chromeDrawer.usage"
     style={({ pressed }) => [s.drawer, pressed && { backgroundColor: colors.surfaceChip }]}>
     <View style={s.between}><Text style={s.section}>{t('devices.usageTitle')}</Text>
@@ -130,7 +133,8 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
           {staleNotice && <Text style={s.stale} numberOfLines={1}>{staleNotice}</Text>}
           {accounts.length > preview.length && <Text style={s.meta}>+{accounts.length - preview.length}</Text>}
         </View></View>
-      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact stale={!!staleNotice} palette="panel" />
+      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact stale={!!staleNotice} palette="panel"
+        opening={opening} locale={snapshot.locale} />
     </View> : null}
     {day && state?.kind === 'snapshot' ? <View style={preview.length > 0 ? s.usageDivider : undefined}>
       <View style={s.between}>
@@ -138,7 +142,7 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
         <TokenScope scope={state.snapshot.usage.scope} name={state.deviceName} />
       </View>
       <View style={s.usageStrip}>
-        <Text style={s.number}>{compact(sum(day.tokens), i18n.language)}</Text>
+        <Text style={s.number}><CountUp text={compact(sum(day.tokens), i18n.language)} locale={i18n.language} delay={0.2} play={opening} /></Text>
         <View style={s.spark}><HistoryBars snapshot={state.snapshot} small /></View>
       </View>
     </View> : null}
