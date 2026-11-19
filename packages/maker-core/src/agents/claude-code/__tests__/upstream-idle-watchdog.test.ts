@@ -800,7 +800,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 
   // #9221: send starts a provider request before its first SDK event exists.
   // An accepted steer must not transfer ownership of that running request.
-  it.each(['old-request', 'new-request', 'superseded-error', 'late-old-tool-result'] as const)('preserves initiated request ownership before its first event (%s)', async (kind) => {
+  it.each(['old-request', 'new-request', 'superseded-error', 'late-old-tool-result', 'retry-in-flight', 'retry-before-marker', 'retry-after-steer-envelope', 'retry-new-request'] as const)('preserves initiated request ownership before its first event (%s)', async (kind) => {
     const session = await startSessionWithStream();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
@@ -820,13 +820,26 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
           total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
         await vi.advanceTimersByTimeAsync(1);
       }
-      if (kind === 'new-request') {
+      if (kind === 'new-request' || kind === 'retry-new-request') {
         session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'old-request' } } });
         session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
         session.stream.emit({ type: 'assistant', message: { id: 'old-request', content: [{ type: 'thinking', thinking: '', signature: 'old' }] } });
         await vi.advanceTimersByTimeAsync(1);
       }
+      if (kind.startsWith('retry-') && kind !== 'retry-new-request') {
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'failed-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        if (kind !== 'retry-after-steer-envelope') session.stream.emit({ type: 'assistant', error: 'unknown', uuid: 'retry-error-envelope',
+          message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'API Error: The operation timed out.' }] } });
+        if (kind === 'retry-in-flight') session.stream.emit({ type: 'system', subtype: 'api_retry',
+          attempt: 1, max_retries: 3, retry_delay_ms: 1000, error_status: null, error: 'unknown' });
+        await vi.advanceTimersByTimeAsync(1);
+      }
       await session.handle.steer!({ type: 'user', content: 'new work' });
+      if (kind === 'retry-after-steer-envelope' || kind === 'retry-new-request') session.stream.emit({ type: 'assistant', error: 'unknown', uuid: 'late-retry-error',
+        message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'API Error: The operation timed out.' }] } });
+      if (kind === 'retry-before-marker' || kind === 'retry-after-steer-envelope' || kind === 'retry-new-request') session.stream.emit({ type: 'system', subtype: 'api_retry',
+        attempt: 1, max_retries: 3, retry_delay_ms: 1000, error_status: null, error: 'unknown' });
       if (kind === 'late-old-tool-result') session.stream.emit(userToolResult('old-unfinished-tool'));
       session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'dispatch-request' } } });
       session.stream.emit({ type: 'assistant', message: { id: 'dispatch-request', content: [{
@@ -838,7 +851,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
         usage: { input_tokens: 1000, output_tokens: 2 } });
       await pumpUntil(() => session.events.some(e => e.type === 'done'), 'request ended');
       expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
-        .toBe(kind === 'new-request' ? undefined : true);
+        .toBe(kind === 'new-request' || kind === 'retry-new-request' ? undefined : true);
     } finally { session.stream.end(); await session.handle.close(); await session.collected; }
   });
 
