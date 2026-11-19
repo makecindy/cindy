@@ -9586,7 +9586,7 @@
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Les données de ce compte ne peuvent pas être ouvertes.",
-          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez Cindy à jour sur cet ordinateur, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy. Sinon, exécutez cindy-host status pour voir pourquoi."
+          "action": "Si vous avez récemment utilisé une version plus récente, mettez Cindy à jour sur ce poste, redémarrez le service d’arrière-plan Cindy et rouvrez Cindy. Sinon, lancez cindy-host status pour voir la cause."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Au démarrage, le service d’arrière-plan Cindy n’a pas pu joindre le service de connexion.",
