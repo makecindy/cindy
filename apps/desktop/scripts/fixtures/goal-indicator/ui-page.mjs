@@ -18,7 +18,7 @@ export default {
     loop: { about: 'Localized tool loop reason', data: { reason: 'tool_use_loop_detected' } },
     technical: {
       about: 'Expandable technical details',
-      data: { reason: 'turn failed: fixture connection closed' },
+      data: { reason: 'turn dispatch failed: unable to restore the agent session' },
     },
   },
   async check(page, ui) {

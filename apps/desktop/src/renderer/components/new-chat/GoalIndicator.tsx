@@ -238,7 +238,8 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
     reason === 'agent reported blocked' ||
     reason === 'turn failed: unknown error' ||
     reason === 'unknown error';
-  const failedTurn = reason?.startsWith('turn failed:');
+  const failedTurn =
+    reason?.startsWith('turn failed:') || reason?.startsWith('turn dispatch failed:');
   const blockedMessage = unknownReason
     ? t('goal.blockedReasonUnknown')
     : reason === 'tool_use_loop_detected'

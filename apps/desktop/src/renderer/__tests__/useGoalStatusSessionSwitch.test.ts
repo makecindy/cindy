@@ -96,37 +96,44 @@ it.each([
   },
 );
 
-it('expands technical failure details and clears the goal through the existing control', async () => {
-  let push!: (payload: { sessionId: string; goal: null }) => void;
-  vi.stubGlobal('window', {
-    electronAPI: {
-      maker: {
-        getGoalStatus: async () => ({
-          ...goal('A', 'Goal A'),
-          status: 'blocked',
-          lastReason: 'turn failed: fixture connection closed',
-        }),
-        onGoalStatusChanged: (listener: typeof push) => {
-          push = listener;
-          return () => {};
-        },
-        clearGoal: async () => {
-          push({ sessionId: 'A', goal: null });
+it.each([
+  'turn failed: fixture connection closed',
+  'turn dispatch failed: unable to restore the agent session',
+])(
+  'expands technical failure details and clears the goal through the existing control: %s',
+  async (reason) => {
+    let push!: (payload: { sessionId: string; goal: null }) => void;
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          getGoalStatus: async () => ({
+            ...goal('A', 'Goal A'),
+            status: 'blocked',
+            lastReason: reason,
+          }),
+          onGoalStatusChanged: (listener: typeof push) => {
+            push = listener;
+            return () => {};
+          },
+          clearGoal: async () => {
+            push({ sessionId: 'A', goal: null });
+          },
         },
       },
-    },
-  });
-  render(createElement(GoalIndicator, { sessionId: 'A' }));
-  await act(async () => {});
-  expect(screen.queryByText('turn failed: fixture connection closed')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
-  expect(screen.getByText('turn failed: fixture connection closed')).toBeTruthy();
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'goal.clear' }));
-  });
-  expect(screen.queryByText('turn failed: fixture connection closed')).toBeNull();
-  expect(screen.queryByText('goal.status.blocked')).toBeNull();
-});
+    });
+    render(createElement(GoalIndicator, { sessionId: 'A' }));
+    await act(async () => {});
+    expect(screen.getByText('goal.blockedTurnFailed')).toBeTruthy();
+    expect(screen.queryByText(reason)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    expect(screen.getByText(reason)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'goal.clear' }));
+    });
+    expect(screen.queryByText(reason)).toBeNull();
+    expect(screen.queryByText('goal.status.blocked')).toBeNull();
+  },
+);
 
 describe('useGoalStatus session switch', () => {
   it('clears the previous goal synchronously when sessionId changes, before the new fetch resolves', async () => {
