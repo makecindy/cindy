@@ -27,6 +27,8 @@ beforeAll(async () => {
   vi.spyOn(app, 'getPath').mockImplementation((name) =>
     name === 'userData' ? tempProfile : originalGetPath(name));
   configureUserDataDir(tempProfile);
+  // Signed-out owner storage also uses the OS temp directory as a fallback.
+  vi.spyOn(os, 'tmpdir').mockReturnValue(tempProfile);
 
   const registry = ownerScopedUserDataPath('provider-share-availability.json');
   await mkdir(path.dirname(registry), { recursive: true });
