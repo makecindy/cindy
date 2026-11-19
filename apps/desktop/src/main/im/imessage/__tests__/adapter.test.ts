@@ -7,8 +7,22 @@ import type { ImChannelAdapter } from '../../shared/types';
 import { wireIMessageOrchestrator } from '../adapter';
 
 vi.mock('../../shared/orchestrator', () => ({ createImOrchestrator: (adapter: ImChannelAdapter) => adapter }));
-vi.mock('../../shared/channelGroupWindow', () => ({ IMESSAGE_GROUP_WINDOW: {}, sanitizeGroupWindowName: (name: string) => name }));
+vi.mock('../../shared/channelGroupWindow', () => ({ IMESSAGE_GROUP_WINDOW: { record: vi.fn(), buildContextPrefix: vi.fn() }, sanitizeGroupWindowName: (name: string) => name }));
 vi.mock('../../shared/botImConnectionStore', () => ({ readBotImConnection: vi.fn() }));
+
+it('passes selected iMessage media as model input on group mentions and inline DM replies', async () => {
+  const { IMESSAGE_GROUP_WINDOW } = await import('../../shared/channelGroupWindow');
+  vi.mocked(IMESSAGE_GROUP_WINDOW.buildContextPrefix).mockResolvedValue({ prefix: 'background', attachmentMessageIds: ['photo'], commit: () => {} });
+  const photo = { kind: 'image' as const, originalName: 'a.png', mimeType: 'image/png', absPath: '/test/a.png' };
+  const contextMedia = vi.fn(async () => ({ attachments: [photo], unavailable: [], providedBy: [{ originalName: 'a.png', author: 'Guest' }] }));
+  const adapter = wireIMessageOrchestrator({ isGroup: (id: string) => id === 'group', contextMedia } as never, {} as never,
+    { instanceKey: 'test', companionBotId: 'bot', connectionId: 'conn' }) as unknown as ImChannelAdapter;
+  for (const chatId of ['group', 'dm']) {
+    const event = { chatId, text: 'look', attachments: [], contextId: 'bot', messageId: 'request', imessageReplyGuid: 'root' } as unknown as IMMessageEvent;
+    expect((await adapter.prepareAgentTurnText!(event))?.contextAttachments).toEqual([photo]);
+    expect(contextMedia).toHaveBeenLastCalledWith(event, chatId === 'group' ? ['photo'] : []);
+  }
+});
 
 // Tier 1: production adapter policy contract consumed by the shared turn runner.
 // Review #9250: guest DM/group + Full access previously failed provider preflight.
