@@ -1471,8 +1471,7 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
   let tagSpans: Array<[number, number]> | undefined;
-  let commentSpans: Array<[number, number]> | undefined;
-  let declarationSpans: Array<[number, number]> | undefined;
+  let markupSpans: Array<[number, number]> | undefined;
   let reference: ReturnType<typeof nextMarkdownReference> | undefined;
   const contains = (spans: Array<[number, number]>, index: number) => {
     let low = 0;
@@ -1512,16 +1511,25 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
         }
       }
       if (contains(tagSpans, index)) return true;
-      if (!declarationSpans) {
-        declarationSpans = [];
-        const text = blankHtmlComments(commentProbe(), startsInsideHtmlComment);
-        const opening = /<!\[CDATA\[|<!(?!--)|<\?/g;
+      if (!markupSpans) {
+        markupSpans = [];
+        const text = commentProbe();
+        // Recognize comments and declarations in source order. Markers inside
+        // CDATA, processing instructions or quoted DTD text are literal, so
+        // blanking comments first could hide their real closing delimiter.
+        const opening = /<!--|<!\[CDATA\[|<!(?!--)|<\?/g;
+        if (startsInsideHtmlComment) {
+          const close = text.indexOf('-->');
+          const end = close === -1 ? text.length : close + 3;
+          markupSpans.push([0, end]);
+          opening.lastIndex = end;
+        }
         let match: RegExpExecArray | null;
         while ((match = opening.exec(text)) !== null) {
           if (contains(tagSpans, match.index)) continue;
           let end = text.length;
-          if (match[0] === '<?' || match[0] === '<![CDATA[') {
-            const close = match[0] === '<?' ? '?>' : ']]>';
+          if (match[0] === '<?' || match[0] === '<![CDATA[' || match[0] === '<!--') {
+            const close = match[0] === '<?' ? '?>' : match[0] === '<!--' ? '-->' : ']]>';
             const at = text.indexOf(close, opening.lastIndex);
             if (at !== -1) end = at + close.length;
           } else {
@@ -1536,26 +1544,11 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
               else if (char === '>' && brackets === 0) { end = at + 1; break; }
             }
           }
-          declarationSpans.push([match.index, end]);
+          markupSpans.push([match.index, end]);
           opening.lastIndex = end;
         }
       }
-      if (contains(declarationSpans, index)) return true;
-      if (!needsCommentCheck) return false;
-      if (!commentSpans) {
-        commentSpans = [];
-        const text = commentProbe();
-        let cursor = 0;
-        let open = startsInsideHtmlComment ? 0 : text.indexOf('<!--');
-        while (open !== -1) {
-          const close = text.indexOf('-->', startsInsideHtmlComment && cursor === 0 ? open : open + 4);
-          const end = close === -1 ? text.length : close + 3;
-          commentSpans.push([open, end]);
-          cursor = end;
-          open = text.indexOf('<!--', cursor);
-        }
-      }
-      return contains(commentSpans, index);
+      return contains(markupSpans, index);
     },
     nextBareUrl: (from: number) => {
       // parseInlines advances monotonically. Reuse only this paragraph's pending

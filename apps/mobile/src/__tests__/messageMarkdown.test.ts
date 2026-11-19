@@ -2974,7 +2974,7 @@ describe('unresolved references and raw declaration regressions', () => {
   });
 
   it('keeps references inside raw declarations, processing instructions and CDATA literal', () => {
-    for (const markup of ['<!DOCTYPE [site][s]>', '<?xml [site][s]?>', '<![CDATA[[site][s]]]>', '<!DOCTYPE root [ <!ENTITY x "a > [site][s]"> ]>', '<!DOCTYPE "a > [site][s]">']) {
+    for (const markup of ['<!DOCTYPE [site][s]>', '<?xml [site][s]?>', '<![CDATA[[site][s]]]>', '<!DOCTYPE root [ <!ENTITY x "a > [site][s]"> ]>', '<!DOCTYPE "a > [site][s]">', '<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">', '<!-- <? <!DOCTYPE -->']) {
       const source = '[s]: https://example.com/\n\n' + markup + ' [site][s]';
       const links = parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
       expect(links).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
