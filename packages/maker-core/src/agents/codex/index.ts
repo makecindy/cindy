@@ -11746,6 +11746,9 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
+      // Display only: lets the finished message show the chart the turn ran with.
+      const codexGenerationTrace = translatorRt.generationTimingReliable
+        ? translatorRt.tokenSpeed.trace() : undefined;
       const generationDurationMs = translatorRt.generationSegmentComplete
         ? codexGenerationDurationMs(translatorRt) : undefined;
       const codexDoneUsage = {
@@ -11768,6 +11771,7 @@ assertRouteCurrent();
         ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
           ? { turnDurationMs: turn.durationMs }
           : {}),
+        ...(codexGenerationTrace ? { generationTrace: codexGenerationTrace } : {}),
       };
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,

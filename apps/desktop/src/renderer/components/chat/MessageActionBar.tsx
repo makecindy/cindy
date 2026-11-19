@@ -70,6 +70,8 @@ import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
 import { UsageCostPopover } from '@/components/status/UsageCostPopover';
+import { TurnGenerationTrace } from '@/components/status/TurnGenerationTrace';
+import { traceHasChart } from '@cindy/maker-shared/usage-format';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   legacyUsdMoney,
@@ -593,7 +595,9 @@ export function MessageActionBar({
 
     const costText = displayedMoney && displayedMoney.amount > 0 && (
       <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
-        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode} />
+        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode}
+        header={turnUsageDetails?.trace && traceHasChart(turnUsageDetails.trace)
+          ? <TurnGenerationTrace trace={turnUsageDetails.trace} /> : undefined} />
     );
 
     // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、

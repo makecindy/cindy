@@ -207,6 +207,7 @@ export function recordSessionPiTurnUsage(
           typeof (rawUsage as { turnDurationMs?: unknown }).turnDurationMs === 'number'
             ? (rawUsage as { turnDurationMs: number }).turnDurationMs
             : undefined;
+        const trace = (rawUsage as { generationTrace?: unknown }).generationTrace;
         const usageOnlyDetails = buildTurnUsageDetails({
           ...turnBillingSource(turnContext, billingRoute),
           ...tokens,
@@ -216,6 +217,7 @@ export function recordSessionPiTurnUsage(
           turnDurationMs,
           steps,
           stepContextTokens,
+          trace,
         });
 
         // 每个模型组的用量行只写一次:catch 只补写正常分支尚未发起的组。后续消息 /
@@ -312,6 +314,7 @@ export function recordSessionPiTurnUsage(
             turnDurationMs,
             steps,
             stepContextTokens,
+            trace,
           });
           if (actualMoney && !identified) {
             await recordTurnSpend(actualMoney);
