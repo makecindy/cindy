@@ -109,5 +109,12 @@
     "quotaResetIn": "{{duration}}後復初",
     "quotaAverageHint": "週限額 · 諸名籍等權均值",
     "quotaResetHint": "依今耗速，重置或尚有餘：距 24 小時以內示黃，6 小時以內示紅。"
+  },
+  "pluginEngines": {
+    "genericName": "法器引擎",
+    "defaultModel": "預設模型",
+    "unavailable": "{{engine}} 暫不可用",
+    "unavailableWithHint": "{{engine}} 暫不可用：{{hint}}",
+    "worktreeUnsupported": "法器引擎尚不能於 worktree 中新建差事，請先取消勾選 worktree 再發"
   }
 }

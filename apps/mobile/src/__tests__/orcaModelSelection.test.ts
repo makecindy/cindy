@@ -42,6 +42,9 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     currentAgentDeviceId: agentDeviceId,
     capabilities: windowState.relocation ? { supportsOrcaAgentRelocation: true } : null,
     remoteAgentCatalogs: ['current', 'other'].map(deviceId => ({ deviceId, providers: [] })),
+    // Built-in tasks only; plugin-engine tasks never reach Orca.
+    pluginEngineTask: false, currentPluginEngine: null, PLUGIN_ENGINE_DEFAULT_MODEL: 'default',
+    resolvePluginEngineEffort: () => null,
     sessionAgentSwitchSupported: supported, sessionAgentKind: windowState.agent ?? 'codex', modelSheetAgentKind: windowState.agent ?? 'codex',
     canUseRemoteSessionControls: true, canConfigureSessionModel: true, controlBusy: false,
     sessionId: 's1', deviceId: 'host', deviceIdRef: { current: 'host' },

@@ -882,8 +882,7 @@
         "loading": "Lecture du quota…",
         "unavailable": "Impossible de lire le quota de cet ordinateur pour le moment",
         "none": "Ce fournisseur ne dispose d'aucune information de quota",
-        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu",
-        "share": "Le quota n'est pas affiché pour les ordinateurs partagés par d'autres personnes"
+        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu"
       },
       "runningCount_one": "{{count}} tâche en cours d'exécution",
       "runningCount_other": "{{count}} tâches en cours d'exécution",
@@ -999,8 +998,8 @@
       "loading": "Chargement de l'image…"
     },
     "moveToolbar": "Déplacer la barre d'outils à gauche ou à droite",
-    "hint": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : plein écran · C : copier la couleur · Échap : quitter",
-    "hintWithLast": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : plein écran · R : dernière zone · C : copier la couleur · Échap : quitter",
+    "hint": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : sélectionner toute la fenêtre · C : copier la couleur · Échap : quitter",
+    "hintWithLast": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : sélectionner toute la fenêtre · R : dernière zone · C : copier la couleur · Échap : quitter",
     "copy": "Copier",
     "cancel": "Quitter la capture d'écran",
     "captureFailed": "Impossible de capturer l'écran",
@@ -2841,6 +2840,8 @@
       "autoUpdateSaveFailed": "Impossible d'enregistrer les paramètres de mise à jour automatique",
       "analyticsLabel": "Statistiques d'utilisation",
       "analyticsDescription": "Nous aide à comprendre à quelle fréquence Cindy est lancée et utilisée dans la durée. Transmet des informations sur l'appareil et l'environnement d'utilisation (modèle de l'appareil, version du système, version de l'application et identifiant de l'appareil), ainsi que, une fois connecté, votre ID de compte ; jamais les conversations, fichiers ou prompts. La désactivation arrête immédiatement la transmission.",
+      "productTokenUsage": "Partager la consommation des modèles",
+      "productTokenUsageHint": "Les nouveaux tokens de ce compte sur cet appareil sont agrégés par source et modèle dans votre région avant leur envoi à TapDB.",
       "analyticsEnabledToast": "Statistiques d'utilisation activées",
       "analyticsDisabledToast": "Statistiques d'utilisation désactivées",
       "analyticsSaveFailed": "Impossible d'enregistrer les paramètres des statistiques d'utilisation",
@@ -4172,6 +4173,25 @@
         "refreshFailed": "Impossible d'actualiser la liste des modèles : réessayez plus tard",
         "refreshReconnect": "La liste des modèles n’a pas pu être actualisée. Reconnectez ce fournisseur, puis réessayez.",
         "refreshFetchDisabled": "La récupération du catalogue de modèles distant est désactivée : actualisation ignorée",
+        "withdrawn": {
+          "refreshFound": "Modèles qui ne sont plus proposés : {{count}}",
+          "refreshAdded": "Nouveaux modèles : {{added}}. Plus proposés : {{count}}",
+          "refreshSuspicious": "Modèles non renvoyés cette fois : {{count}}. La liste est peut-être incomplète",
+          "refreshAddedSuspicious": "Nouveaux modèles : {{added}}. Non renvoyés cette fois : {{count}}. La liste est peut-être incomplète",
+          "review": "Examiner les modèles",
+          "heading": "Modèles qui ne sont plus proposés",
+          "intro": "Lors de l'actualisation de {{provider}}, le service n'a pas renvoyé ces modèles. Sélectionnez ceux à retirer. Les moteurs qui les proposent encore ne sont pas concernés.",
+          "suspicious": "Un nombre inhabituel de modèles manque. Le service a peut-être renvoyé une liste incomplète. Actualisez de nouveau plus tard pour confirmer, ou sélectionnez uniquement les modèles dont le retrait est certain.",
+          "selectAll": "Tout sélectionner",
+          "selected": "{{count}} sur {{total}} sélectionnés",
+          "consequence": "Les modèles retirés n'apparaissent plus dans la sélection de modèles et seront indiqués comme indisponibles là où ils sont utilisés. Si le service les propose de nouveau, actualisez pour les rajouter.",
+          "confirm": "Retirer les modèles ({{count}})",
+          "cancel": "Conserver les modèles",
+          "removed": "Modèles retirés : {{count}}",
+          "cleanupIncomplete": "Modèles retirés : {{count}}. Certains réglages d'affichage ou de désactivation n'ont pas pu être effacés",
+          "stale": "La connexion a changé : aucun modèle à retirer. Actualisez de nouveau pour vérifier",
+          "removeFailed": "Impossible de retirer les modèles"
+        },
         "disableModel": "Désactiver ce modèle",
         "paymentRequired": "Payant",
         "paymentUnlock": "Payer pour débloquer",
@@ -6871,6 +6891,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
         "peerSwitch": {
@@ -8015,6 +8038,7 @@
           "accessDenied": "Cette opération sur le plugin n'est pas autorisée ou a été annulée.",
           "notConfigured": "Le marketplace de plugins n'est pas disponible dans cet environnement.",
           "invalidPackage": "Ce paquet de plugin n'est pas valide et ne peut pas être installé. Contactez l'éditeur.",
+          "downloadAuthorizationExpired": "L’autorisation de téléchargement du plugin a expiré. Vérifiez la date et l’heure du système avant de lancer une nouvelle installation.",
           "downloadTimeout": "Le téléchargement du plugin a expiré. Veuillez réessayer plus tard.",
           "downloadFailed": "Échec du téléchargement du plugin. Vérifiez votre connexion et réessayez.",
           "brokerRedirectPortRequired": "Ce plugin déclare un broker d'autorisation mais redirectPort est absent de la même configuration OAuth : il ne peut donc pas être installé depuis le marketplace de plugins. Contactez l'éditeur pour qu'il ajoute ce champ et publie une nouvelle version.",
@@ -8335,6 +8359,8 @@
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentModelPreferences": "Lire et modifier vos modèles favoris, et lire vos modèles récemment utilisés",
         "agentModelPreferencesDetail": "Peut lire les modèles favoris et récemment utilisés sur cet ordinateur, y compris l’effort de raisonnement et Fast, et ajouter, modifier ou retirer des favoris. Les modifications apparaissent aussi dans le sélecteur de modèle de Cindy. Les modèles choisis dans le plugin ne sont pas ajoutés aux récents. Les modèles de vos autres ordinateurs ou partagés avec vous ne sont pas inclus, et aucun identifiant n’est transmis.",
+        "harnesses": "Fournit des moteurs d'exécution : {{names}}",
+        "harnessesDetail": "Dans vos tâches, peut lire et écrire dans le répertoire de travail, exécuter des commandes et utiliser les mêmes outils de Cindy que Pi intégré.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
@@ -9869,6 +9895,10 @@
     "cacheLine": "Détail du cache : lecture {{read}} · écriture {{create}} · taux de succès {{rate}}",
     "cacheLineNoRate": "Détail du cache : lecture {{read}} · écriture {{create}}",
     "stepsLine": "Requêtes ce tour : {{steps}} · env. {{context}} de contexte chacune",
+    "traceChartLabel": "Vitesse de génération et raisonnement par requête pour ce tour",
+    "traceRequests": "Requêtes ce tour : {{requests}}",
+    "traceThinkingShare": "Raisonnement : {{share}} de la sortie",
+    "traceThinkingTokens": "Raisonnement : {{thinking}} tokens",
     "modelLine": "Modèle : {{model}}",
     "multipleModels": "{{count}} modèles",
     "costBreakdownHeader": "Par modèle :",
@@ -13719,6 +13749,8 @@
         },
         "reply": {
           "unsupportedMedia": "Cette version ne prend pas encore en charge ce type de média WeChat.",
+          "delayedReply": "Réponse retardée, préparée le {{createdAt}} pour votre message reçu le {{receivedAt}}. Le contenu peut être obsolète.",
+          "delayedReplyQuestion": "Message d’origine : {{question}}",
           "stillProcessing": "Toujours en cours de traitement…",
           "ownerOnlyCommands": "Seul le propriétaire peut utiliser les commandes du bot.",
           "companionManagedCommand": "Ouvrez ce coéquipier dans Cindy : le modèle se règle dans les paramètres du coéquipier, et les autorisations sous le champ de saisie de la conversation.",
@@ -14309,6 +14341,32 @@
             "label": "Accès complet",
             "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmer à chaque fois",
+            "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
+          },
+          "default": {
+            "label": "Par défaut",
+            "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
+          },
+          "acceptEdits": {
+            "label": "Accepter les modifications",
+            "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
+          },
+          "auto": {
+            "label": "Automatique",
+            "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
+          },
+          "plan": {
+            "label": "Planifier uniquement",
+            "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
+          },
+          "bypassPermissions": {
+            "label": "Tout autoriser",
+            "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
+          }
         }
       }
     },
@@ -14783,6 +14841,16 @@
       "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
       "switchToQueue": "File d'attente par défaut"
+    },
+    "pluginEngines": {
+      "group": "Moteurs de plugins",
+      "genericName": "Moteur de plugin",
+      "defaultModel": "Modèle par défaut",
+      "defaultModelHint": "Utilise le réglage par défaut du moteur",
+      "unavailable": "Indisponible",
+      "engineMissing": "Le plugin qui fournit ce moteur est désactivé ou désinstallé.",
+      "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer.",
+      "modelChangeFailed": "Impossible de changer de modèle"
     }
   },
   "onboarding": {
@@ -15086,6 +15154,7 @@
       "rateHistory": "Historique de la vitesse de génération",
       "outputTotal": "Sortie",
       "observedPeak": "Pic",
+      "thinkingShare": "Raisonnement",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Dernier intervalle de génération. Hors outils et attentes.",
@@ -15949,6 +16018,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Cet Agent n'est pas disponible sur l'autre ordinateur. Installez-le ou connectez-vous-y sur cet ordinateur, ou choisissez un autre Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Cet ordinateur ne peut pas restaurer l’état précédent de la session. Choisissez un modèle d’un autre ordinateur ou fournisseur pour continuer avec un transfert de contexte. Les messages existants sont conservés.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Le moteur du plugin n’a pas pu restaurer la conversation précédente. Vos messages sont conservés. Choisissez un autre moteur ou démarrez une nouvelle tâche.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
@@ -16587,6 +16657,7 @@
       },
       "filterCreatorsHeading": "Amis",
       "filterCreatorsAny": "Tous",
+      "filterHideAutomations": "Masquer les tâches automatisées",
       "filterCreatorsNone": "Tout masquer",
       "filterSelectedCreators": "{{count}} sélectionnés",
       "filterProjectsHeading": "Projets",
@@ -17512,6 +17583,7 @@
       "promote": {
         "menu": "Convertir en automatisation de projet",
         "noWorkingDir": "Impossible de convertir une planification sans répertoire de travail",
+        "pluginEngine": "Les moteurs de plugin ne fonctionnent que sur cet ordinateur : impossible de convertir cette planification en automatisation de projet",
         "success": "Convertie en automatisation de projet"
       },
       "editProject": {
@@ -17788,6 +17860,7 @@
         "selectThread": "Sélectionnez une session cible",
         "selectProject": "Sélectionnez un répertoire de projet",
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
+        "pluginEngineUnavailable": "Le moteur de plugin sélectionné n’est pas disponible pour le moment. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
         "preRunPluginRequired": "Choisissez un plugin pour la vérification préalable",
@@ -19998,7 +20071,8 @@
         "validityValue_many": "{{count}} de jours après utilisation",
         "validityValue_other": "{{count}} jours après utilisation",
         "claimBy": "À utiliser avant le",
-        "destination": "Ajouté à"
+        "destination": "Ajouté à",
+        "validityPermanent": "Sans expiration"
       },
       "doneTitle": "{{amount}} ajoutés",
       "doneDescription": "Ajouté à votre Solde promotionnel. Valable jusqu’au {{date}}.",
@@ -20014,10 +20088,13 @@
         "alreadyClaimed": "Cette carte cadeau a déjà été utilisée.",
         "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
         "voided": "Cette carte cadeau a été annulée.",
+        "voidedPurchased": "Cette carte cadeau ne peut pas être utilisée pour le moment.",
         "rateLimited": "Trop de tentatives. Réessayez plus tard.",
         "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
         "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
-      }
+      },
+      "doneDescriptionPurchased": "Ajouté à votre solde rechargé. Il n’expire jamais.",
+      "pendingDescriptionPurchased": "{{amount}} est en cours d’ajout et apparaîtra bientôt dans votre solde rechargé. Inutile d’utiliser la carte à nouveau."
     },
     "usage": {
       "title": "Consommation du solde",
@@ -20063,7 +20140,10 @@
         "noPayment": "Aucun paiement requis",
         "page": "Page {{page}}",
         "previous": "Page précédente",
-        "next": "Page suivante"
+        "next": "Page suivante",
+        "giftCard_one": "Carte cadeau × {{count}}",
+        "giftCard_many": "Cartes cadeaux × {{count}}",
+        "giftCard_other": "Cartes cadeaux × {{count}}"
       },
       "count": "{{count}} commandes",
       "orderId": "N° {{id}}",
@@ -20292,6 +20372,125 @@
         "MONTH": "Inclut {{amount}} chaque mois",
         "YEAR": "Inclut {{amount}} chaque année",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Acheter une carte cadeau",
+      "title": "Acheter une carte cadeau",
+      "subtitle": "Offrez-la ou gardez-la pour vous. Une fois utilisée, elle s’ajoute à votre solde rechargé et n’expire jamais.",
+      "previewLabel": "Ce que la personne recevra",
+      "sameCards_one": "{{count}} carte avec son propre code",
+      "sameCards_many": "{{count}} cartes avec le même design, le même montant et le même message, chacune avec son propre code",
+      "sameCards_other": "{{count}} cartes avec le même design, le même montant et le même message, chacune avec son propre code",
+      "fields": {
+        "face": "Design",
+        "amount": "Montant",
+        "quantity": "Quantité",
+        "sender": "De la part de",
+        "senderHint": "Affiché « De la part de {{sender}} »",
+        "senderPlaceholder": "Votre nom",
+        "message": "Message (facultatif)",
+        "messagePlaceholder": "Un mot pour la personne",
+        "tooLong": "{{max}} caractères maximum",
+        "paymentMethod": "Moyen de paiement"
+      },
+      "decrease": "Une carte de moins",
+      "increase": "Une carte de plus",
+      "quantityHint": "Jusqu’à {{limit}} cartes toutes les {{hours}} heures · encore {{remaining}} possibles",
+      "quantityLimitReached": "Vous avez atteint le maximum de {{limit}} cartes en {{hours}} heures. Réessayez plus tard.",
+      "orderAmountCap": "Jusqu’à {{amount}} par commande",
+      "totalDetail_one": "{{count}} carte × {{amount}}",
+      "totalDetail_many": "{{count}} cartes × {{amount}}",
+      "totalDetail_other": "{{count}} cartes × {{amount}}",
+      "pay": "Continuer vers le paiement",
+      "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "cancel": "Annuler",
+      "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
+      "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",
+      "checkoutSubtitle_many": "Cartes cadeaux {{amount}} × {{count}} · émises dès le paiement réussi",
+      "checkoutSubtitle_other": "Cartes cadeaux {{amount}} × {{count}} · émises dès le paiement réussi",
+      "faces": {
+        "cindy": "Cindy · Rouge de marque",
+        "cat": "Chat noir · Nuit",
+        "bell": "Clochette · Festif",
+        "leap": "Bond · Ivoire"
+      },
+      "errors": {
+        "limitReached": "Vous avez atteint la limite d’achat de cartes cadeaux. Réessayez plus tard.",
+        "amountTooLarge": "Cette commande dépasse la limite de paiement par commande. Choisissez moins de cartes et réessayez."
+      },
+      "done": {
+        "title_one": "Votre carte cadeau est prête",
+        "title_many": "Vos {{count}} cartes cadeaux sont prêtes",
+        "title_other": "Vos {{count}} cartes cadeaux sont prêtes",
+        "pendingTitle": "Carte cadeau payée",
+        "loading": "Récupération des cartes de cette commande…",
+        "description": "Envoyez un lien de récupération à un proche : il pourra utiliser la carte dès qu’il l’ouvre. Vous pouvez aussi en garder une.",
+        "missing": "Le paiement est terminé. Vos cartes cadeaux apparaîtront bientôt dans Mes cartes cadeaux.",
+        "cardTitle": "Carte {{index}} · {{amount}}",
+        "cardMeta": "Se termine par {{tail}} · {{status}}",
+        "linkHint": "Le lien de récupération, c’est la carte : la première personne qui l’ouvre la récupère. Ne l’envoyez qu’à la personne à qui vous l’offrez.",
+        "viewAll": "Voir mes cartes cadeaux",
+        "finish": "Terminé"
+      },
+      "list": {
+        "title": "Mes cartes cadeaux",
+        "description": "Envoyez un lien de récupération à un proche : il pourra utiliser la carte dès qu’il l’ouvre. Les cartes non offertes n’expirent jamais et vous pouvez les utiliser vous-même. Une fois utilisées, elles s’ajoutent à votre solde rechargé.",
+        "count_one": "{{count}} carte",
+        "count_many": "{{count}} cartes",
+        "count_other": "{{count}} cartes",
+        "loadMore": "Charger plus",
+        "loadFailed": "Impossible de charger vos cartes cadeaux",
+        "retry": "Recharger",
+        "status": {
+          "unclaimed": "Non récupérée",
+          "claimedBy": "Récupérée par {{name}}",
+          "claimed": "Récupérée",
+          "redeemedByYou": "Utilisée par vous",
+          "refunded": "Remboursée",
+          "onHold": "En cours de traitement, indisponible pour le moment"
+        },
+        "meta": {
+          "purchased": "Achetée le {{date}} · se termine par {{tail}}",
+          "claimed": "Récupérée le {{date}} · se termine par {{tail}}",
+          "redeemed": "Utilisée le {{date}} · se termine par {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copier le lien de récupération",
+        "copied": "Copié",
+        "more": "Plus d’actions",
+        "copyCode": "Copier le code",
+        "redeemSelf": "L’utiliser moi-même",
+        "sendEmail": "Envoyer par e-mail"
+      },
+      "toasts": {
+        "linkCopied": "Lien de récupération copié",
+        "codeCopied": "Code copié",
+        "copyFailed": "Impossible de copier. Réessayez.",
+        "unavailable": "Cette carte a déjà été récupérée ou remboursée",
+        "revealFailed": "Impossible de récupérer le code. Réessayez plus tard.",
+        "emailQueued": "Envoi à {{email}} en cours"
+      },
+      "email": {
+        "title": "Envoyer par e-mail",
+        "description": "Envoyez le lien de récupération de cette carte à la personne à qui vous l’offrez. L’e-mail contient votre nom et votre message.",
+        "previewLabel": "Ce qu’elle recevra",
+        "previewWithMessage": "« {{message}} » · avec le lien de récupération et le code",
+        "previewLinkOnly": "Le lien de récupération et le code",
+        "recipient": "E-mail du destinataire",
+        "placeholder": "nom@exemple.com",
+        "hint": "Vous pouvez l’envoyer à n’importe quelle adresse. La première personne qui ouvre le lien récupère la carte.",
+        "cooldown": "Nouvel envoi possible dans {{seconds}} s",
+        "invalid": "Saisissez une adresse e-mail valide",
+        "failed": "Envoi impossible. Réessayez plus tard.",
+        "send": "Envoyer",
+        "status": {
+          "sending": "Envoi à {{email}} en cours",
+          "sent": "Envoyée à {{email}}",
+          "failed": "Échec de l’envoi à {{email}}",
+          "failedRetry": "Échec de l’envoi à {{email}}. Vous pouvez la renvoyer."
+        }
       }
     }
   },

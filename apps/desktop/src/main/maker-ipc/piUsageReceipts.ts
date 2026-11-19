@@ -2,6 +2,7 @@
 // functions it imported before bound to its ports (turnUsagePorts.ts), each resolved when called.
 // The core calls no port while its module loads (export * evaluates it before the binding below runs);
 // each port is resolved when it is called. This module's imports are the ones piUsageReceipts.ts had.
+import './turnUsageContext.js';
 import '../usage/referenceModelPricing.js';
 import '../usage/usageHistory.js';
 import { getGatewayModelPricing, getGatewayModelPricingForModel } from '../usage/modelPricing.js';

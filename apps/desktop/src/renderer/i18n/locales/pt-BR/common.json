@@ -882,8 +882,7 @@
         "loading": "Consultando cota…",
         "unavailable": "Não é possível consultar a cota deste computador agora",
         "none": "Este provedor não tem informações de cota",
-        "offline": "Este computador está offline, então não é possível consultar sua cota",
-        "share": "A cota não é exibida para computadores compartilhados por outras pessoas"
+        "offline": "Este computador está offline, então não é possível consultar sua cota"
       },
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
@@ -999,8 +998,8 @@
       "loading": "Carregando imagem…"
     },
     "moveToolbar": "Mover barra de ferramentas para a esquerda ou direita",
-    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: tela inteira · C: copiar cor · Esc: sair",
-    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: tela inteira · R: última área · C: copiar cor · Esc: sair",
+    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: selecionar a janela inteira · C: copiar cor · Esc: sair",
+    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Role para alterar o escopo · Espaço: selecionar a janela inteira · R: última área · C: copiar cor · Esc: sair",
     "copy": "Copiar",
     "cancel": "Sair da captura de tela",
     "captureFailed": "Não foi possível capturar a tela",
@@ -2841,6 +2840,8 @@
       "autoUpdateSaveFailed": "Não foi possível salvar as configurações de atualização automática",
       "analyticsLabel": "Estatísticas de uso",
       "analyticsDescription": "Ajuda a entender com que frequência Cindy é iniciado e permanece em uso. Envia informações do dispositivo e do ambiente de uso — como modelo do dispositivo, versão do sistema operacional, versão do aplicativo e identificador do dispositivo — além do ID da sua conta após entrar; nunca conversas, arquivos ou prompts. Desativar esta opção interrompe o envio imediatamente.",
+      "productTokenUsage": "Compartilhar uso de modelos",
+      "productTokenUsageHint": "Os novos tokens desta conta neste dispositivo são agrupados por origem e modelo na sua região antes do envio ao TapDB.",
       "analyticsEnabledToast": "Estatísticas de uso ativadas",
       "analyticsDisabledToast": "Estatísticas de uso desativadas",
       "analyticsSaveFailed": "Não foi possível salvar as configurações de estatísticas de uso",
@@ -4172,6 +4173,25 @@
         "refreshFailed": "Não foi possível atualizar a lista de modelos — tente novamente mais tarde",
         "refreshReconnect": "Não foi possível atualizar a lista de modelos. Reconecte este provedor e tente novamente.",
         "refreshFetchDisabled": "A busca no catálogo remoto de modelos está desativada — atualização ignorada",
+        "withdrawn": {
+          "refreshFound": "Modelos que não são mais oferecidos: {{count}}",
+          "refreshAdded": "Novos modelos: {{added}}. Não oferecidos mais: {{count}}",
+          "refreshSuspicious": "Modelos não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "refreshAddedSuspicious": "Novos modelos: {{added}}. Não retornados desta vez: {{count}}. A lista pode estar incompleta",
+          "review": "Revisar modelos",
+          "heading": "Modelos que não são mais oferecidos",
+          "intro": "Ao atualizar {{provider}}, o serviço não retornou estes modelos. Selecione os que deseja remover. Os motores que ainda os listam não são afetados.",
+          "suspicious": "Estão faltando muito mais modelos do que o normal. O serviço pode ter retornado uma lista incompleta. Atualize de novo mais tarde para confirmar ou selecione apenas os modelos que você sabe que foram retirados.",
+          "selectAll": "Selecionar todos",
+          "selected": "{{count}} de {{total}} selecionados",
+          "consequence": "Os modelos removidos deixam de aparecer na seleção de modelos e aparecerão como indisponíveis onde forem usados. Se o serviço voltar a oferecê-los, atualize para adicioná-los de novo.",
+          "confirm": "Remover modelos ({{count}})",
+          "cancel": "Manter modelos",
+          "removed": "Modelos removidos: {{count}}",
+          "cleanupIncomplete": "Modelos removidos: {{count}}. Não foi possível limpar algumas configurações de exibição ou desativação",
+          "stale": "A conexão mudou e não há modelos para remover. Atualize de novo para revisar",
+          "removeFailed": "Não foi possível remover os modelos"
+        },
         "disableModel": "Desativar este modelo",
         "paymentRequired": "Pago",
         "paymentUnlock": "Pague para desbloquear",
@@ -6871,6 +6891,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
         "peerSwitch": {
@@ -8015,6 +8038,7 @@
           "accessDenied": "Esta operação de plugin não é permitida ou foi cancelada.",
           "notConfigured": "O marketplace de plugins não está disponível neste ambiente.",
           "invalidPackage": "Este pacote de plugin é inválido e não pode ser instalado. Entre em contato com o publicador.",
+          "downloadAuthorizationExpired": "A autorização de download do plugin expirou. Verifique a data e a hora do sistema antes de iniciar uma nova instalação.",
           "downloadTimeout": "O tempo limite do download do plugin foi excedido. Tente novamente mais tarde.",
           "downloadFailed": "Falha no download do plugin. Verifique sua conexão e tente novamente.",
           "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas falta redirectPort na mesma configuração OAuth, por isso ele não pode ser instalado pelo marketplace de plugins. Entre em contato com o publicador para adicionar o campo e publicar uma nova versão.",
@@ -8335,6 +8359,8 @@
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentModelPreferences": "Ler e editar seus modelos favoritos e ler seus modelos usados recentemente",
         "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem compartilhados com você, e nenhuma credencial é compartilhada.",
+        "harnesses": "Fornece mecanismos de execução: {{names}}",
+        "harnessesDetail": "Nas suas tarefas, pode ler e gravar no diretório de trabalho, executar comandos e usar as mesmas ferramentas da Cindy que o Pi integrado.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
@@ -9869,6 +9895,10 @@
     "cacheLine": "Detalhamento do cache: leitura {{read}} · gravação {{create}} · taxa de acertos {{rate}}",
     "cacheLineNoRate": "Detalhamento do cache: leitura {{read}} · gravação {{create}}",
     "stepsLine": "Solicitações neste turno: {{steps}} · ~{{context}} de contexto cada uma",
+    "traceChartLabel": "Velocidade de geração e raciocínio por solicitação neste turno",
+    "traceRequests": "Solicitações neste turno: {{requests}}",
+    "traceThinkingShare": "Raciocínio: {{share}} da saída",
+    "traceThinkingTokens": "Raciocínio: {{thinking}} tokens",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -13719,6 +13749,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versão ainda não oferece suporte a este tipo de mídia do WeChat.",
+          "delayedReply": "Resposta atrasada, preparada em {{createdAt}} para sua mensagem recebida em {{receivedAt}}. O conteúdo pode estar desatualizado.",
+          "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda processando…",
           "ownerOnlyCommands": "Só o dono pode usar os comandos do bot.",
           "companionManagedCommand": "Abra este colega no Cindy: o modelo é alterado nas configurações do colega e as permissões, abaixo da caixa de entrada da conversa.",
@@ -14309,6 +14341,32 @@
             "label": "Acesso total",
             "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar sempre",
+            "description": "Você confirma quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
+          },
+          "default": {
+            "label": "Padrão",
+            "description": "O agente trabalha do jeito padrão dele; você confirma as solicitações de permissão."
+          },
+          "acceptEdits": {
+            "label": "Aceitar edições",
+            "description": "O agente edita arquivos diretamente; você confirma as outras solicitações de permissão."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "O agente decide o que precisa de confirmação; você confirma as solicitações que ele fizer."
+          },
+          "plan": {
+            "label": "Só planejar",
+            "description": "O agente só analisa e planeja; não edita arquivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir tudo",
+            "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
+          }
         }
       }
     },
@@ -14783,6 +14841,16 @@
       "nowDefault": "Agora é o padrão",
       "switchToSteer": "Orientar por padrão",
       "switchToQueue": "Colocar na fila por padrão"
+    },
+    "pluginEngines": {
+      "group": "Mecanismos de plugins",
+      "genericName": "Mecanismo de plugin",
+      "defaultModel": "Modelo padrão",
+      "defaultModelHint": "Usa o padrão do próprio mecanismo",
+      "unavailable": "Indisponível",
+      "engineMissing": "O plugin que fornece este mecanismo está desativado ou foi desinstalado.",
+      "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar.",
+      "modelChangeFailed": "Não foi possível trocar o modelo"
     }
   },
   "onboarding": {
@@ -15086,6 +15154,7 @@
       "rateHistory": "Histórico de velocidade de geração",
       "outputTotal": "Saída",
       "observedPeak": "Pico",
+      "thinkingShare": "Raciocínio",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Intervalo de geração mais recente. Exclui ferramentas e esperas.",
@@ -15949,6 +16018,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "O mecanismo do plug-in não conseguiu restaurar a conversa anterior. Suas mensagens foram preservadas. Escolha outro mecanismo ou inicie uma nova tarefa.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir uso remoto” neste provedor lá. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
@@ -16587,6 +16657,7 @@
       },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todas",
+      "filterHideAutomations": "Ocultar tarefas automatizadas",
       "filterCreatorsNone": "Ocultar tudo",
       "filterSelectedCreators": "{{count}} selecionadas",
       "filterProjectsHeading": "Projetos",
@@ -17512,6 +17583,7 @@
       "promote": {
         "menu": "Promover a automação de projeto",
         "noWorkingDir": "Não é possível promover um agendamento sem diretório de trabalho",
+        "pluginEngine": "Mecanismos de plugin só funcionam neste computador; não é possível promover este agendamento a automação do projeto",
         "success": "Promovido a automação de projeto"
       },
       "editProject": {
@@ -17788,6 +17860,7 @@
         "selectThread": "Selecione uma sessão de destino",
         "selectProject": "Selecione um diretório de projeto",
         "modelUnavailable": "O modelo {{model}} não está mais disponível. Selecione outro modelo.",
+        "pluginEngineUnavailable": "O mecanismo de plugin selecionado não está disponível agora. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio deve ser um de {{values}}",
         "preRunHookCommandRequired": "Insira o comando de verificação prévia",
         "preRunPluginRequired": "Escolha um plugin para a verificação prévia",
@@ -19998,7 +20071,8 @@
         "validityValue_many": "{{count}} de dias após o resgate",
         "validityValue_other": "{{count}} dias após o resgate",
         "claimBy": "Resgatar até",
-        "destination": "Adicionado a"
+        "destination": "Adicionado a",
+        "validityPermanent": "Não expira"
       },
       "doneTitle": "{{amount}} adicionados",
       "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
@@ -20014,10 +20088,13 @@
         "alreadyClaimed": "Este cartão-presente já foi resgatado.",
         "expired": "Este cartão-presente não pode mais ser resgatado porque o prazo terminou.",
         "voided": "Este cartão-presente foi anulado.",
+        "voidedPurchased": "Este cartão-presente não pode ser resgatado no momento.",
         "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
         "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
         "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
-      }
+      },
+      "doneDescriptionPurchased": "Adicionado ao seu Saldo de recarga. Não expira.",
+      "pendingDescriptionPurchased": "{{amount}} está sendo adicionado e vai aparecer em instantes no seu Saldo de recarga. Não é preciso resgatar de novo."
     },
     "usage": {
       "title": "Uso do saldo",
@@ -20063,7 +20140,10 @@
         "noPayment": "Nenhum pagamento necessário",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Próxima página"
+        "next": "Próxima página",
+        "giftCard_one": "Cartão-presente × {{count}}",
+        "giftCard_many": "Cartões-presente × {{count}}",
+        "giftCard_other": "Cartões-presente × {{count}}"
       },
       "count": "{{count}} pedidos",
       "orderId": "Nº {{id}}",
@@ -20292,6 +20372,125 @@
         "MONTH": "Inclui {{amount}} por mês",
         "YEAR": "Inclui {{amount}} por ano",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar cartão-presente",
+      "title": "Comprar cartão-presente",
+      "subtitle": "Dê de presente ou fique com ele. Ao resgatar, o valor vai para o seu Saldo de recarga e nunca expira.",
+      "previewLabel": "O que a pessoa vai receber",
+      "sameCards_one": "{{count}} cartão com o próprio código de resgate",
+      "sameCards_many": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "sameCards_other": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "fields": {
+        "face": "Design",
+        "amount": "Valor",
+        "quantity": "Quantidade",
+        "sender": "De",
+        "senderHint": "Aparece como “De {{sender}}”",
+        "senderPlaceholder": "Seu nome",
+        "message": "Mensagem (opcional)",
+        "messagePlaceholder": "Um recado para a pessoa",
+        "tooLong": "No máximo {{max}} caracteres",
+        "paymentMethod": "Forma de pagamento"
+      },
+      "decrease": "Um cartão a menos",
+      "increase": "Um cartão a mais",
+      "quantityHint": "Até {{limit}} cartões a cada {{hours}} horas · ainda dá para comprar {{remaining}}",
+      "quantityLimitReached": "Você já comprou o máximo de {{limit}} cartões em {{hours}} horas. Tente novamente mais tarde.",
+      "orderAmountCap": "Até {{amount}} por pedido",
+      "totalDetail_one": "{{count}} cartão × {{amount}}",
+      "totalDetail_many": "{{count}} cartões × {{amount}}",
+      "totalDetail_other": "{{count}} cartões × {{amount}}",
+      "pay": "Continuar para o pagamento",
+      "refundNote": "Cartões-presente não podem ser trocados por dinheiro. Cartões resgatados não são reembolsáveis. Para pedir o reembolso de um cartão não resgatado, entre em contato com o suporte.",
+      "cancel": "Cancelar",
+      "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
+      "checkoutSubtitle_one": "Cartão-presente {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
+      "checkoutSubtitle_many": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "checkoutSubtitle_other": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "faces": {
+        "cindy": "Cindy · Vermelho da marca",
+        "cat": "Gato preto · Noite",
+        "bell": "Sino · Festivo",
+        "leap": "Salto · Marfim"
+      },
+      "errors": {
+        "limitReached": "Você atingiu o limite de compra de cartões-presente. Tente novamente mais tarde.",
+        "amountTooLarge": "Este pedido passa do limite de pagamento por pedido. Escolha menos cartões e tente de novo."
+      },
+      "done": {
+        "title_one": "Seu cartão-presente está pronto",
+        "title_many": "Seus {{count}} cartões-presente estão prontos",
+        "title_other": "Seus {{count}} cartões-presente estão prontos",
+        "pendingTitle": "Cartão-presente pago",
+        "loading": "Buscando os cartões deste pedido…",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Você também pode ficar com um.",
+        "missing": "O pagamento foi concluído. Seus cartões vão aparecer em Meus cartões-presente em instantes.",
+        "cardTitle": "Cartão {{index}} · {{amount}}",
+        "cardMeta": "Final {{tail}} · {{status}}",
+        "linkHint": "O link de resgate é o próprio cartão: quem abrir primeiro fica com ele. Envie só para quem você vai presentear.",
+        "viewAll": "Ver meus cartões-presente",
+        "finish": "Concluir"
+      },
+      "list": {
+        "title": "Meus cartões-presente",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Os cartões que você não deu nunca expiram e você pode resgatá-los. Ao resgatar, o valor vai para o seu Saldo de recarga.",
+        "count_one": "{{count}} cartão",
+        "count_many": "{{count}} cartões",
+        "count_other": "{{count}} cartões",
+        "loadMore": "Carregar mais",
+        "loadFailed": "Não foi possível carregar seus cartões-presente",
+        "retry": "Recarregar",
+        "status": {
+          "unclaimed": "Não resgatado",
+          "claimedBy": "Resgatado por {{name}}",
+          "claimed": "Resgatado",
+          "redeemedByYou": "Resgatado por você",
+          "refunded": "Reembolsado",
+          "onHold": "Em processamento, indisponível no momento"
+        },
+        "meta": {
+          "purchased": "Comprado em {{date}} · final {{tail}}",
+          "claimed": "Resgatado em {{date}} · final {{tail}}",
+          "redeemed": "Resgatado em {{date}} · final {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar link de resgate",
+        "copied": "Copiado",
+        "more": "Mais ações",
+        "copyCode": "Copiar código de resgate",
+        "redeemSelf": "Resgatar para mim",
+        "sendEmail": "Enviar por e-mail"
+      },
+      "toasts": {
+        "linkCopied": "Link de resgate copiado",
+        "codeCopied": "Código de resgate copiado",
+        "copyFailed": "Não foi possível copiar. Tente novamente.",
+        "unavailable": "Este cartão já foi resgatado ou reembolsado",
+        "revealFailed": "Não foi possível obter o código de resgate. Tente novamente mais tarde.",
+        "emailQueued": "Enviando para {{email}}"
+      },
+      "email": {
+        "title": "Enviar por e-mail",
+        "description": "Envie o link para resgatar este cartão para o e-mail da pessoa que vai ganhá-lo. O e-mail inclui seu nome e sua mensagem.",
+        "previewLabel": "A pessoa vai receber",
+        "previewWithMessage": "“{{message}}” · com o link e o código de resgate",
+        "previewLinkOnly": "O link e o código de resgate",
+        "recipient": "E-mail do destinatário",
+        "placeholder": "nome@exemplo.com",
+        "hint": "Você pode enviar para qualquer endereço. Quem abrir o link primeiro fica com o cartão.",
+        "cooldown": "Você pode enviar de novo em {{seconds}} s",
+        "invalid": "Digite um e-mail válido",
+        "failed": "Não foi possível enviar. Tente novamente mais tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando para {{email}}",
+          "sent": "Enviado para {{email}}",
+          "failed": "Não foi possível enviar para {{email}}",
+          "failedRetry": "Não foi possível enviar para {{email}}. Você pode enviar de novo."
+        }
       }
     }
   },

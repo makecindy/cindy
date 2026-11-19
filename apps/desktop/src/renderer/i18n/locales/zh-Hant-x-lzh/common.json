@@ -866,8 +866,7 @@
         "loading": "方讀限額…",
         "unavailable": "此機之限額暫讀不得",
         "none": "此供方無限額資訊",
-        "offline": "此機不在線，讀不得限額",
-        "share": "他人分享之機不示限額"
+        "offline": "此機不在線，讀不得限額"
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
@@ -970,8 +969,8 @@
       "loading": "方載圖…"
     },
     "moveToolbar": "左右拖移工具列",
-    "hint": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵全螢幕 · C 錄顏色 · Esc 終",
-    "hintWithLast": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵全螢幕 · R 前次區域 · C 錄顏色 · Esc 終",
+    "hint": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵擇全窗 · C 錄顏色 · Esc 終",
+    "hintWithLast": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵擇全窗 · R 前次區域 · C 錄顏色 · Esc 終",
     "copy": "錄之",
     "cancel": "終截圖",
     "captureFailed": "不能擷取螢幕",
@@ -2773,6 +2772,8 @@
       "autoUpdateSaveFailed": "自更新之設未能存",
       "analyticsLabel": "使用統計",
       "analyticsDescription": "助吾等知 Cindy 之啟動與留存。所報者為裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登門後兼含君之名籍 ID；不含任何言談內容、卷或提示詞。闔之則即止上報。",
+      "productTokenUsage": "參與模型用量統計",
+      "productTokenUsageHint": "開啟後，本機上此帳號新增的 token 數按接入來源和模型計數。所屬區域彙總後傳送至 TapDB。",
       "analyticsEnabledToast": "已啟使用統計",
       "analyticsDisabledToast": "已闔使用統計",
       "analyticsSaveFailed": "使用統計之設未能存",
@@ -4076,6 +4077,25 @@
         "refreshFailed": "模型清單重整未成，請稍後再試",
         "refreshReconnect": "模型清單重整未成。請重連此供方，再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟，已略重整",
+        "withdrawn": {
+          "refreshFound": "上游已不復供 {{count}} 個模型",
+          "refreshAdded": "新得 {{added}} 個模型，另有 {{count}} 個上游已不復供",
+          "refreshSuspicious": "此番 {{count}} 個模型未見回傳，或上游一時未全",
+          "refreshAddedSuspicious": "新得 {{added}} 個模型，另有 {{count}} 個未見回傳，或上游一時未全",
+          "review": "觀其模型",
+          "heading": "上游不復供之模型",
+          "intro": "重整「{{provider}}」時，上游未再回傳下列模型。擇所欲除者；仍回傳之引擎不受影響。",
+          "suspicious": "此番未回傳之模型甚多，恐上游一時所傳未全。宜稍後再重整以覈之，或僅擇確已下架者。",
+          "selectAll": "盡選",
+          "selected": "已擇 {{count}} 個，共 {{total}} 個",
+          "consequence": "除之，則此等模型不復見於模型之選，已用之處將示為不可用。上游若復供之，再重整即可增回。",
+          "confirm": "除 {{count}} 個模型",
+          "cancel": "姑且不除",
+          "removed": "已除 {{count}} 個模型",
+          "cleanupIncomplete": "已除 {{count}} 個模型，然部分顯示或停用之設未能清除",
+          "stale": "連線之設已易，無可除之模型。請重整後再觀",
+          "removeFailed": "除模型未成"
+        },
         "disableModel": "停此模型",
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
@@ -6761,6 +6781,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。常例為闔。",
         "peerSwitch": {
@@ -7903,6 +7926,7 @@
           "accessDenied": "此法器操作不被允許，或已取消。",
           "notConfigured": "此環境未設法器坊。",
           "invalidPackage": "法器安裝包有異，不可納，請聯絡發布者。",
+          "downloadAuthorizationExpired": "法器下載授權已過期，無法續裝。請核對系統日期與時間後重新安裝",
           "downloadTimeout": "法器取下逾時，請稍後再試。",
           "downloadFailed": "法器取下未成，請查網路後再試。",
           "brokerRedirectPortRequired": "此法器宣告授權 broker，然同一 OAuth 設定缺 redirectPort，故不能自法器坊納之。請聯絡發布者補此欄位並重新發布。",
@@ -8206,6 +8230,8 @@
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentModelPreferences": "可讀改君之模型珍藏，並讀君近用之模型",
         "agentModelPreferencesDetail": "可讀此機之模型珍藏與近用之模型（含思之深淺與 Fast），並可增、改、去珍藏，所改亦見於 Cindy 之擇模。於法器中所擇之模型不記入近用。不含君他機之模型與人所分享者，亦不予憑證。",
+        "harnesses": "供執行引擎：{{names}}",
+        "harnessesDetail": "得於君之差事中讀寫工作目錄、行命令，並用與內建 Pi 同範之 Cindy 工具。",
         "agentErrand": "可立差事、行事並讀結果",
         "agentErrandDetail": "所立差事現於 Cindy 差事錄中，可觀其歷程並續言談。",
         "agentSchedule": "可請君新立自運",
@@ -9754,6 +9780,10 @@
     "cacheLine": "快取分項：讀 {{read}} · 寫 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取分項：讀 {{read}} · 寫 {{create}}",
     "stepsLine": "本輪共請 {{steps}} 次 · 每請約 {{context}} 上下文",
+    "traceChartLabel": "本輪生成之速與每請所思",
+    "traceRequests": "本輪共請 {{requests}} 次",
+    "traceThinkingShare": "思占所出 {{share}}",
+    "traceThinkingTokens": "思耗 {{thinking}} tokens",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "依模型分之：",
@@ -13551,6 +13581,8 @@
         },
         "reply": {
           "unsupportedMedia": "今版尚不能理此類微信媒體。",
+          "delayedReply": "此覆遲至，成於 {{createdAt}}，答 {{receivedAt}} 所收舊訊，所述或已過時。",
+          "delayedReplyQuestion": "原訊：{{question}}",
           "stillProcessing": "差事猶在理中…",
           "ownerOnlyCommands": "唯主人可用機器人之令。",
           "companionManagedCommand": "請於 Cindy 開此同僚：模型於同僚之設中調之，權柄於言談輸入框下易之。",
@@ -14140,6 +14172,32 @@
             "label": "完全存取",
             "description": "常規操作徑許，可存取工作區外之卷，亦可聯網執行命令。"
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐項確認",
+            "description": "Agent 求權時由君裁可；Agent 未求確認之舉，Cindy 無從攔阻。"
+          },
+          "default": {
+            "label": "常法",
+            "description": "依 Agent 之常法行事；其請權限，由君定之。"
+          },
+          "acceptEdits": {
+            "label": "許修改",
+            "description": "Agent 逕改文件；他事請權限，由君定之。"
+          },
+          "auto": {
+            "label": "自斷",
+            "description": "Agent 自斷何事須確認；其請權限，由君定之。"
+          },
+          "plan": {
+            "label": "但謀劃",
+            "description": "Agent 唯析事謀劃，不改文件。"
+          },
+          "bypassPermissions": {
+            "label": "盡許",
+            "description": "Agent 所求之權，一概自許。"
+          }
         }
       }
     },
@@ -14601,6 +14659,16 @@
       "nowDefault": "已立為默",
       "switchToSteer": "默改插話",
       "switchToQueue": "默改排隊"
+    },
+    "pluginEngines": {
+      "group": "法器引擎",
+      "genericName": "法器引擎",
+      "defaultModel": "預設模型",
+      "defaultModelHint": "從引擎自身之預設",
+      "unavailable": "暫不可用",
+      "engineMissing": "供此引擎之法器已停用或卸除",
+      "worktreeUnsupported": "法器引擎尚不能於 worktree 中新建差事，請先取消勾選 worktree 再發",
+      "modelChangeFailed": "未能易模型"
     }
   },
   "onboarding": {
@@ -14918,6 +14986,7 @@
       "rateHistory": "生成速率史",
       "outputTotal": "累出",
       "observedPeak": "至高",
+      "thinkingShare": "思占所出",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "近一段生成之速，不計器具執行與等候。",
@@ -15771,6 +15840,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 於彼機不可用。請於彼機安裝或登門後再試，或易一 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此機不能復差事舊態。請選他機或供方之模型，交接上下文以續行；舊訊皆存。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能復前話。訊息猶存。可擇他引擎續之，或新建任務。",
       "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。若為君之他機，於彼機為此供方開「許遠端呼叫」；若為他人所分享，請令機主於「遠端與分享」中調其開放之範圍。亦可易一模型。",
@@ -16357,6 +16427,7 @@
       },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
+      "filterHideAutomations": "隱自動之務",
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已擇 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17272,6 +17343,7 @@
       "promote": {
         "menu": "升為案之自運",
         "noWorkingDir": "無 workingDir 之差事，不可升",
+        "pluginEngine": "法器引擎唯行於此機，不可升為項目之差事",
         "success": "已升為案之自運"
       },
       "editProject": {
@@ -17529,6 +17601,7 @@
         "selectThread": "請擇所向差事",
         "selectProject": "請擇案之目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請另擇",
+        "pluginEngineUnavailable": "所擇法器引擎今不可用，請另擇模型",
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",
         "templateParamRequired": "請填{{label}}",
@@ -19736,7 +19809,8 @@
         "validity": "有效期",
         "validityValue_other": "領取後 {{count}} 天",
         "claimBy": "領取截止",
-        "destination": "存入"
+        "destination": "存入",
+        "validityPermanent": "永久有效"
       },
       "doneTitle": "{{amount}} 已到帳",
       "doneDescription": "已存入贈予餘資，{{date}} 前有效。",
@@ -19752,10 +19826,13 @@
         "alreadyClaimed": "這張禮品卡已被領取。",
         "expired": "這張禮品卡已過領取期限。",
         "voided": "這張禮品卡已作廢。",
+        "voidedPurchased": "這張禮品卡目前無法領取。",
         "rateLimited": "嘗試次數過多，請稍後再試。",
         "failed": "暫時無法兌換，請稍後重試。",
         "personalRequired": "禮品卡僅限個人使用者領取。"
-      }
+      },
+      "doneDescriptionPurchased": "已存入儲值餘資，永久有效。",
+      "pendingDescriptionPurchased": "{{amount}} 正在入帳，稍後會出現在儲值餘資中，無需再次領取。"
     },
     "usage": {
       "title": "餘資耗用",
@@ -19801,7 +19878,8 @@
         "noPayment": "無需付款",
         "page": "第 {{page}} 頁",
         "previous": "上一頁",
-        "next": "下一頁"
+        "next": "下一頁",
+        "giftCard_other": "禮品卡 × {{count}}"
       },
       "count": "{{count}} 筆",
       "orderId": "NO. {{id}}",
@@ -20030,6 +20108,115 @@
         "MONTH": "每月含 {{amount}}",
         "YEAR": "每年含 {{amount}}",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "購買禮品卡",
+      "title": "購買禮品卡",
+      "subtitle": "送給朋友，或者留給自己。兌換後存入儲值餘資，永久有效。",
+      "previewLabel": "對方收到的樣子",
+      "sameCards_other": "共 {{count}} 張，卡面、面額、留言相同，每張一個兌換碼",
+      "fields": {
+        "face": "卡面",
+        "amount": "面額",
+        "quantity": "數量",
+        "sender": "署名",
+        "senderHint": "顯示為「來自 {{sender}}」",
+        "senderPlaceholder": "你的名字",
+        "message": "留言（選填）",
+        "messagePlaceholder": "寫一句給對方的話",
+        "tooLong": "最多 {{max}} 個字",
+        "paymentMethod": "付款方式"
+      },
+      "decrease": "少一張",
+      "increase": "多一張",
+      "quantityHint": "{{hours}} 小時內最多買 {{limit}} 張，現在還能買 {{remaining}} 張",
+      "quantityLimitReached": "{{hours}} 小時內最多買 {{limit}} 張，已經買滿，請稍後再來",
+      "orderAmountCap": "單筆訂單最多 {{amount}}",
+      "totalDetail_other": "{{count}} 張 × {{amount}}",
+      "pay": "前往付款",
+      "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
+      "cancel": "取消",
+      "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
+      "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",
+      "faces": {
+        "cindy": "Cindy · 品牌紅",
+        "cat": "黑貓 · 夜色",
+        "bell": "鈴鐺 · 節日",
+        "leap": "躍 · 象牙白"
+      },
+      "errors": {
+        "limitReached": "購買的禮品卡已達上限，請稍後再試。",
+        "amountTooLarge": "這筆訂單超過單筆付款上限，請減少張數後再試。"
+      },
+      "done": {
+        "title_other": "{{count}} 張禮品卡已備好",
+        "pendingTitle": "禮品卡已付款",
+        "loading": "正在取回這一單的禮品卡…",
+        "description": "把領取連結傳給朋友，對方打開就能領取；也可以留一張兌換給自己。",
+        "missing": "付款已完成，禮品卡稍後會出現在「我買的禮品卡」裡。",
+        "cardTitle": "第 {{index}} 張 · {{amount}}",
+        "cardMeta": "末四碼 {{tail}} · {{status}}",
+        "linkHint": "領取連結就是這張卡：誰先打開領取就歸誰，請只傳給要送的人。",
+        "viewAll": "查看我買的禮品卡",
+        "finish": "完成"
+      },
+      "list": {
+        "title": "我買的禮品卡",
+        "description": "把領取連結傳給朋友，對方打開就能領取；沒送出去的卡不會過期，也可以兌換給自己。兌換後存入儲值餘資。",
+        "count_other": "{{count}} 張",
+        "loadMore": "載入更多",
+        "loadFailed": "禮品卡列表未能載入",
+        "retry": "重新載入",
+        "status": {
+          "unclaimed": "未領取",
+          "claimedBy": "{{name}} 已領取",
+          "claimed": "已被領取",
+          "redeemedByYou": "已兌換給自己",
+          "refunded": "已退款",
+          "onHold": "處理中，暫不可用"
+        },
+        "meta": {
+          "purchased": "{{date}} 購買 · 末四碼 {{tail}}",
+          "claimed": "{{date}} 領取 · 末四碼 {{tail}}",
+          "redeemed": "{{date}} 兌換 · 末四碼 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "複製領取連結",
+        "copied": "已複製",
+        "more": "更多操作",
+        "copyCode": "複製兌換碼",
+        "redeemSelf": "兌換給自己",
+        "sendEmail": "傳送到電子郵件"
+      },
+      "toasts": {
+        "linkCopied": "領取連結已複製",
+        "codeCopied": "兌換碼已複製",
+        "copyFailed": "複製失敗，請重試",
+        "unavailable": "這張卡已被領取或已退款",
+        "revealFailed": "暫時無法取回兌換碼，請稍後重試",
+        "emailQueued": "正在傳送到 {{email}}"
+      },
+      "email": {
+        "title": "傳送到電子郵件",
+        "description": "把這張卡的領取連結傳到對方的電子郵件，郵件裡會附上你的署名和留言。",
+        "previewLabel": "對方會收到",
+        "previewWithMessage": "「{{message}}」，附領取連結和兌換碼",
+        "previewLinkOnly": "附領取連結和兌換碼",
+        "recipient": "收件電子郵件",
+        "placeholder": "name@example.com",
+        "hint": "可以傳到任何電子郵件；領取連結誰先打開就歸誰。",
+        "cooldown": "{{seconds}} 秒後可以再傳送",
+        "invalid": "電子郵件格式不正確",
+        "failed": "暫時無法傳送，請稍後重試",
+        "send": "傳送",
+        "status": {
+          "sending": "正在傳送到 {{email}}",
+          "sent": "已傳送到 {{email}}",
+          "failed": "傳送到 {{email}} 失敗",
+          "failedRetry": "傳送到 {{email}} 失敗，可以重新傳送"
+        }
       }
     }
   },

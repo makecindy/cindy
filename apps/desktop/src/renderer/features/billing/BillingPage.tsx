@@ -9,6 +9,7 @@ import {
   Copy,
   CreditCard,
   ExternalLink,
+  Gift,
   Mail,
   PackageOpen,
   RefreshCcw,
@@ -44,6 +45,7 @@ import {
   type BillingPaymentHistory,
   type BillingPaymentHistoryRecord,
   type BillingPendingPlanChange,
+  type BillingPurchasedGiftCard,
   type BillingSubscription,
 } from '../../../shared/billing';
 import type {
@@ -63,7 +65,13 @@ import {
   type SupportedPurchaseOption,
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { GiftCardPurchaseDialog } from './GiftCardPurchaseDialog';
+import { GiftCardEmailDialog } from './GiftCardEmailDialog';
+import { GiftCardPurchasedDialog } from './GiftCardPurchasedDialog';
 import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
+import { giftCardOffersOf } from './giftCardPurchase';
+import { PurchasedGiftCardsCard } from './PurchasedGiftCardsCard';
+import { usePurchasedGiftCards } from './usePurchasedGiftCards';
 import { takePendingGiftCardCode } from './giftCardIntent';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
@@ -71,7 +79,7 @@ import {
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { useBillingCheckout } from './useBillingCheckout';
+import { isGiftCardCheckout, useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
 import appI18n from 'i18next';
@@ -270,18 +278,32 @@ function balanceIssue(error: unknown): Exclude<BalanceIssue, null> {
   return 'UNAVAILABLE';
 }
 
+/** 付款成功后取回这一单礼品卡的间隔（毫秒）：首读立即进行，之后逐次退避，最多 5 次。 */
+export const PURCHASED_CARDS_RETRY_DELAYS_MS = [0, 2_000, 4_000, 8_000, 16_000] as const;
+
 /**
  * Kept as a compatibility export for focused tests and old imports.
  * The actual product entry now lives in Settings.
  */
 export function BillingPage() {
-  const { dataOwnerId } = useAuth();
+  const { dataOwnerId, user } = useAuth();
   return (
-    <BillingSettingsSection key={`billing:${dataOwnerId ?? 'none'}`} accountId={dataOwnerId} />
+    <BillingSettingsSection
+      key={`billing:${dataOwnerId ?? 'none'}`}
+      accountId={dataOwnerId}
+      accountName={user?.name ?? null}
+    />
   );
 }
 
-export function BillingSettingsSection({ accountId }: { accountId: string | null }) {
+export function BillingSettingsSection({
+  accountId,
+  accountName = null,
+}: {
+  accountId: string | null;
+  /** 账号昵称，礼品卡署名默认用它。 */
+  accountName?: string | null;
+}) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -315,6 +337,28 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     open: false,
     code: null,
   });
+  const [giftCardPurchaseOpen, setGiftCardPurchaseOpen] = useState(false);
+  // 付款成功后的「N 张礼品卡已备好」：cards 为 null 表示还在取回这一单的卡。
+  const [purchasedDialog, setPurchasedDialog] = useState<{
+    open: boolean;
+    orderId: string | null;
+    cards: BillingPurchasedGiftCard[] | null;
+  }>({ open: false, orderId: null, cards: null });
+  const giftCards = usePurchasedGiftCards();
+  const giftCardsSectionRef = useRef<HTMLDivElement>(null);
+  /** 正在发到邮箱的那张卡（弹窗打开）；按 cardId 记，弹窗里始终显示列表里的最新状态。 */
+  const [emailCardId, setEmailCardId] = useState<string | null>(null);
+  const openGiftCardEmail = giftCards.state.emailSupported
+    ? (card: BillingPurchasedGiftCard) => setEmailCardId(card.cardId)
+    : undefined;
+  const latestGiftCard = (card: BillingPurchasedGiftCard) =>
+    giftCards.state.cards.find((item) => item.cardId === card.cardId) ?? card;
+  const emailCard =
+    emailCardId === null
+      ? null
+      : (giftCards.state.cards.find((card) => card.cardId === emailCardId) ??
+        purchasedDialog.cards?.find((card) => card.cardId === emailCardId) ??
+        null);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -460,8 +504,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       loadBalance(),
       // 进入页面和手动刷新都回到最新一页，自动续费的账单也从同一服务端历史读取。
       loadOrders(),
+      giftCards.reload(),
     ]);
-  }, [loadBalance, loadOrders, loadSubscription]);
+  }, [giftCards.reload, loadBalance, loadOrders, loadSubscription]);
 
   const refreshXdModelsAfterEntitlementChange = useCallback(async () => {
     // 订阅权益会改变 Model Access 按当前用户返回的模型集合。这里必须走 XD 的
@@ -505,6 +550,37 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     void loadOrders();
   }, [checkout, loadOrders, loadSubscription]);
 
+  // 付款成功后取回这一单的卡。发卡与支付成功同事务，但列表请求可能失败，或在发卡结果可见之前
+  // 就到了：按 0、2、4、8、16 秒最多读 5 次（共约 30 秒），读到这一单的卡就停；仍没有才显示
+  // 「稍后会出现在我买的礼品卡」。弹窗关闭、计费页卸载（含切换账号）即停，不再读取。
+  const purchasedWaitRef = useRef(0);
+  useEffect(() => {
+    if (!purchasedDialog.open) purchasedWaitRef.current += 1;
+  }, [purchasedDialog.open]);
+  const waitForOrderCards = useCallback(
+    async (orderId: string | null) => {
+      const token = ++purchasedWaitRef.current;
+      const live = () => sectionMountedRef.current && purchasedWaitRef.current === token;
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!live()) return;
+        const cards = await giftCards.reload();
+        if (!live()) return;
+        const mine = (cards ?? []).filter((card) => card.orderId === orderId);
+        if (mine.length > 0 || orderId === null) {
+          setPurchasedDialog((current) =>
+            current.open && current.orderId === orderId ? { ...current, cards: mine } : current,
+          );
+          return;
+        }
+      }
+      setPurchasedDialog((current) =>
+        current.open && current.orderId === orderId ? { ...current, cards: [] } : current,
+      );
+    },
+    [giftCards.reload],
+  );
+
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
@@ -520,6 +596,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       void loadOrders();
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
+      if (isGiftCardCheckout(checkout.state)) {
+        // 买礼品卡不改变买家自己的余额和分组：支付弹窗换成「礼品卡已备好」，取回这一单的卡。
+        const orderId = checkout.state.order?.orderId ?? null;
+        checkout.close();
+        setPurchasedDialog({ open: true, orderId, cards: null });
+        void waitForOrderCards(orderId);
+        return;
+      }
       void loadBalance();
       // 服务端的 paid tier 认有效订阅、兑换过的礼品卡和未全额退款的成功充值订单；两类支付
       // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
@@ -531,6 +615,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }
     }
   }, [
+    checkout.close,
+    checkout.state,
     checkout.state.kind,
     checkout.state.phase,
     checkout.state.subscription,
@@ -538,6 +624,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     loadOrders,
     loadSubscription,
     refreshXdModelsAfterEntitlementChange,
+    waitForOrderCards,
   ]);
 
   const handlePlanChangeSettled = useCallback(
@@ -577,6 +664,18 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const topupOffers = useMemo(
     () => offers.filter(({ product }) => product.kind === 'CREDIT_TOPUP'),
     [offers],
+  );
+  const giftCardOffers = useMemo(() => giftCardOffersOf(catalog), [catalog]);
+
+  /** 兑换给自己：取回兑换码后走已有的兑换弹窗（预览 → 确认领取）。 */
+  const redeemPurchasedGiftCard = useCallback(
+    async (card: BillingPurchasedGiftCard) => {
+      const result = await giftCards.reveal(card);
+      if (!result) return;
+      setPurchasedDialog((current) => ({ ...current, open: false }));
+      setGiftCardDialog({ open: true, code: result.code });
+    },
+    [giftCards],
   );
 
   const subscriptionPurchaseBlocked =
@@ -1164,8 +1263,35 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               loading={loadingBalance}
               onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
               onRedeemGiftCard={() => setGiftCardDialog({ open: true, code: null })}
+              onBuyGiftCard={
+                giftCardOffers.length > 0 ? () => setGiftCardPurchaseOpen(true) : undefined
+              }
             />
           </BillingGroup>
+
+          {/* 没买过卡（成功读到空列表，或旧服务端没有这个接口）才不显示；读取失败要显示错误与重试。 */}
+          {(giftCards.state.cards.length > 0 || giftCards.state.error) && (
+            <div ref={giftCardsSectionRef}>
+              <BillingGroup
+                titleId="billing-gift-cards-title"
+                title={t('billing.giftCardPurchase.list.title')}
+                description={t('billing.giftCardPurchase.list.description')}
+                badge={
+                  giftCards.state.nextCursor === null ? (
+                    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                      {t('billing.giftCardPurchase.list.count', { count: giftCards.state.cards.length })}
+                    </span>
+                  ) : undefined
+                }
+              >
+                <PurchasedGiftCardsCard
+                  giftCards={giftCards}
+                  onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+                  onSendEmail={openGiftCardEmail}
+                />
+              </BillingGroup>
+            </div>
+          )}
 
           {(creditUsage || balance) && (
             <BillingGroup
@@ -1299,11 +1425,60 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         open={giftCardDialog.open}
         initialCode={giftCardDialog.code}
         onClose={() => setGiftCardDialog({ open: false, code: null })}
-        onRedeemed={() => {
+        onCodeUnusable={(code) => {
+          // 查询或领取时发现码已用不了（比如在另一台设备上兑换过）：同样清掉缓存并重读列表。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+        }}
+        onRedeemed={(code) => {
           void loadBalance();
+          // 兑换的可能是自己买的卡：先清掉缓存的这张卡的码（重读列表失败时也不能再复制出已兑换的码），
+          // 再重读列表让这张卡的状态随之变化。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
           // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
           // AIGateway access group，模型选择器当场解锁付费模型。
           void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+        }}
+      />
+
+      <GiftCardPurchaseDialog
+        open={giftCardPurchaseOpen}
+        offers={giftCardOffers}
+        accountName={accountName}
+        onClose={() => setGiftCardPurchaseOpen(false)}
+        onSubmit={(request, unitAmount) => {
+          setGiftCardPurchaseOpen(false);
+          void checkout.startGiftCard(request, unitAmount);
+        }}
+      />
+
+      <GiftCardPurchasedDialog
+        open={purchasedDialog.open}
+        // 这一单的卡按列表里的最新状态显示（发到邮箱后的状态随列表刷新）。
+        cards={purchasedDialog.cards?.map(latestGiftCard) ?? null}
+        giftCards={giftCards}
+        onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+        onSendEmail={openGiftCardEmail}
+        onViewAll={() => {
+          setPurchasedDialog({ open: false, orderId: null, cards: null });
+          window.requestAnimationFrame(() =>
+            giftCardsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+          );
+        }}
+        onClose={() => setPurchasedDialog({ open: false, orderId: null, cards: null })}
+      />
+
+      <GiftCardEmailDialog
+        card={emailCard}
+        onClose={() => setEmailCardId(null)}
+        onSend={async (card, email) => {
+          const result = await giftCards.sendEmail(card, email);
+          // 已离开计费页（含切换账号）就不再提示。
+          if (result.ok && sectionMountedRef.current) {
+            toast.success(t('billing.giftCardPurchase.toasts.emailQueued', { email: result.card.email?.recipient ?? email }));
+          }
+          return result;
         }}
       />
 
@@ -1644,6 +1819,7 @@ function BalanceOverviewCard({
   loading,
   onPurchase,
   onRedeemGiftCard,
+  onBuyGiftCard,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
@@ -1651,6 +1827,8 @@ function BalanceOverviewCard({
   loading: boolean;
   onPurchase: () => void;
   onRedeemGiftCard: () => void;
+  /** 目录里有可买的礼品卡时才出现「购买礼品卡」。 */
+  onBuyGiftCard?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1703,6 +1881,19 @@ function BalanceOverviewCard({
           >
             {t('billing.giftCard.action')}
           </Button>
+          {onBuyGiftCard && (
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              type="button"
+              onClick={onBuyGiftCard}
+              className="shrink-0 select-none"
+            >
+              <Gift size={13} aria-hidden="true" />
+              {t('billing.giftCardPurchase.action')}
+            </Button>
+          )}
           <Button
             variant="secondary"
             size="md"
@@ -2037,6 +2228,12 @@ export function OrderHistoryCard({
             >
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
                 {order.paidAt ? formatLedgerTimestamp(order.paidAt, billingLocale) : t('billing.orders.history.unknownPaidAt')}
+                {order.sourceType === 'GIFT_CARD' && (
+                  <span className="font-normal text-[var(--text-secondary)]">
+                    {' · '}
+                    {t('billing.orders.history.giftCard', { count: order.quantity })}
+                  </span>
+                )}
               </p>
               {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
               <button

@@ -236,8 +236,9 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
-    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 四处受理点。
-    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(4);
+    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 / 插件引擎首条 五处受理点。
+    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(5);
+    expect(newMakerDraftRouteSource).toContain('if (accepted) opts?.onAccepted?.();\n              else restoreEngineFirstMessageDraft();');
     expect(worktreeSendBlock).toContain('if (accepted) {');
     expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
     expect(worktreeSendBlock).toContain(

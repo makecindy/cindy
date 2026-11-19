@@ -39,6 +39,8 @@ import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-accou
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
+import { installPluginEngines } from './acp-host.js';
+import { builtinAgentKindOrNull, requireBuiltinAgentKind } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -924,7 +926,7 @@ export async function listBotRuntimeMcpServers({ agentKind, remoteHostId }: { ag
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
-    listMcpServers: listBotRuntimeMcpServers,
+    listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools') }),
     markOfficialSkills: markCindyOfficialSkills,
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
@@ -2426,8 +2428,9 @@ export function getMaker(): Maker {
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
-      listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
+      listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
+        const agentKind = requireBuiltinAgentKind(engineKind, 'teammate runtime');
         const result = await _maker.listAgentSkills(agentKind, {
           workingDir,
           remoteHostId,
@@ -2435,7 +2438,7 @@ export function getMaker(): Maker {
         });
         return markCindyOfficialSkills(result.skills, remoteHostId);
       },
-      listMcpServers: listBotRuntimeMcpServers,
+      listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate runtime') }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
       listBotImChannels: ({ botId }) =>
         [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
@@ -2453,7 +2456,7 @@ export function getMaker(): Maker {
                 isBotToolsetAvailable({
                   botId,
                   workingDir,
-                  agentKind,
+                  agentKind: requireBuiltinAgentKind(agentKind, 'teammate runtime'),
                   remoteHostId,
                   toolsetId: plugin.id,
                 }),
@@ -2580,7 +2583,8 @@ export function getMaker(): Maker {
               });
             }
           }
-          const providerReady = await ensureCurrentAccountProviderReadiness();
+          // Plugin engines bring their own models and sign-in; Cindy account providers are not involved.
+          const providerReady = opts.agentKind === 'acp' ? true : await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
             // message 两个字符串，所以稳定标记必须写进 message 本身：调用方据此把
@@ -2597,14 +2601,17 @@ export function getMaker(): Maker {
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
           const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
-          const interfaceModel = interfaceProvider?.models[opts.agentKind]?.find(m => m.id === opts.model);
-          if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, opts.agentKind,
+          // Plugin engines are not catalog providers: no model interface to record.
+          const interfaceKind = builtinAgentKindOrNull(opts.agentKind);
+          const interfaceModel = interfaceKind ? interfaceProvider?.models[interfaceKind]?.find(m => m.id === opts.model) : undefined;
+          if (interfaceKind && interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, interfaceKind,
             interfaceModel, getActiveCatalog().modelRegistry,
-            opts.resumeSessionId ? interfaceProvider.routing[opts.agentKind]?.wireProtocol : undefined);
+            opts.resumeSessionId ? interfaceProvider.routing[interfaceKind]?.wireProtocol : undefined);
 
-          if (!opts.remoteHostId && !opts.agentDeviceId) {
+          const fastPolicyKind = builtinAgentKindOrNull(opts.agentKind);
+          if (fastPolicyKind && !opts.remoteHostId && !opts.agentDeviceId) {
             opts.fastModePolicy = createSubscriptionFastPolicy(sessionId, () => getSessionProvider(sessionId)
-              ?? resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), opts.agentKind, null, opts.model));
+              ?? resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), fastPolicyKind, null, opts.model));
           }
           // 任务级工作上下文预算：调用方显式带值时同样按目录上限与模型级上限重新收敛；
           // 未带则读本任务已保存的档位。口径见 applySessionContextWindowBudgetToCreateOpts
@@ -2623,7 +2630,7 @@ export function getMaker(): Maker {
             if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
           }
           if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
-            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
+            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId, true);
           }
           // 主干新增:pi 的价格档跟随会话 Fast 开关。
           if (opts.agentKind === 'pi') {
@@ -2691,7 +2698,7 @@ export function getMaker(): Maker {
             // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
             ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
-                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[requireBuiltinAgentKind(createOpts.agentKind, 'teammate runtime')] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
                     .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
@@ -2832,6 +2839,15 @@ export function getMaker(): Maker {
         skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
     });
     installLocalAgentHost(_maker);
+    // Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md): registered only
+    // once a plugin provides one; the built-in engines are untouched either way.
+    installPluginEngines({
+      maker: _maker,
+      logger: desktopMakerLogger,
+      appVersion: app.getVersion(),
+      mcpProviders: piMcpProviders,
+      makerMemory: makerMemoryManager,
+    });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
       return hydrateBotProfileRuntime(preflightOpts, buildBotRuntimeDeps(), {
