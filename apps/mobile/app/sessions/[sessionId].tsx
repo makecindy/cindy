@@ -1911,7 +1911,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const pluginEngineSwitchIntent = currentSession?.pluginEngineSwitchIntent ?? null;
   // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && !sessionAgentRunsOnOtherComputer(currentSession)
+    // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
+    && !currentSession.remoteHostId
     && !currentSession.orcaRole && !currentSession.orcaRemoteLead
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';

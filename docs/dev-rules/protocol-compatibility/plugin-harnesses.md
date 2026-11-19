@@ -42,7 +42,7 @@ ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消�
 任务中换引擎（2026-11-19，第二期）：`sessions:patched` 的 `agentSwitchIntent`（`PublicAgentSwitchIntent`）与
 `maker:get-session-agent-switch-intent` 的 `targetAgentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>`）。
 这是既有字段的新取值。被控端仅向声明 `plugin-engine-switch-intent-v1` 的控制端推送和返回插件引擎意图，旧控制端收到空意图。
-新端遇到不带引擎标识的 `acp` 同样按无意图处理。`maker:switch-session-agent` 新接受 `targetAgentKind = acp`；旧控制端不会发出，
+新端遇到不带引擎标识的 `acp` 同样按无意图处理。`maker:switch-session-agent` 新接受 `targetAgentKind = acp`（Agent 原在另一台电脑时意图的 `agentDeviceId` 为 `null`，即回到被控端本机；请求点名别的电脑时拒绝）；旧控制端不会发出，
 新控制端对旧被控端发出时旧端以 INVALID_PARAMS 拒绝。`agent_switch` 边界行的 `fromAgentKind` / `toAgentKind` 可为 `acp`，
 追加可选 `fromEngineName` / `toEngineName`；旧端把 `acp` 显示为 Claude Code，停泊会话查找只匹配内置引擎，不会误续接。
 回归见 `pluginEngineSessionSwitch.test.ts`、`pluginEngineSessionAdmission.test.ts` 与 renderer `sessionAgentSwitchRemoteRouting.test.ts`。
