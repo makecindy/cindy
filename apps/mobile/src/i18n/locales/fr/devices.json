@@ -1,9 +1,7 @@
 {
   "widgetGuideAction": "Ajouter un widget",
   "widgetGuideIntro": "Les widgets sont de petites cartes sur l’écran d’accueil. Consultez votre quota restant et les tokens utilisés aujourd’hui sans ouvrir Cindy.",
-  "widgetGuideExample": "Exemple sur l’écran d’accueil",
-  "widgetGuideQuota": "Quota des abonnements",
-  "widgetGuideDaily": "Usage quotidien",
+  "widgetGuideExample": "Un widget Cindy à côté des icônes des apps sur l’écran d’accueil.",
   "widgetGuidePicker": "Modifier → Ajouter un widget",
   "widgetGuideIOS": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez {{picker}}.\n\nRecherchez Cindy, choisissez « Quota des abonnements » ou « Usage quotidien », puis touchez « Ajouter le widget ».",
   "widgetGuideAndroid": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez « Widgets ».\n\nTrouvez Cindy et faites glisser « Quota des abonnements » ou « Usage quotidien » sur l’écran d’accueil.",

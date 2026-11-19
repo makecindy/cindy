@@ -1,9 +1,7 @@
 {
   "widgetGuideAction": "Añadir widget",
   "widgetGuideIntro": "Los widgets son tarjetas en la pantalla de inicio. Puedes ver tu cuota restante y los tokens usados hoy sin abrir Cindy.",
-  "widgetGuideExample": "Ejemplo en la pantalla de inicio",
-  "widgetGuideQuota": "Cuota de suscripciones",
-  "widgetGuideDaily": "Uso diario",
+  "widgetGuideExample": "Un widget de Cindy junto a los iconos de las apps en la pantalla de inicio.",
   "widgetGuidePicker": "Editar → Añadir widget",
   "widgetGuideIOS": "Mantén pulsado un espacio vacío de la pantalla de inicio y toca {{picker}}.\n\nBusca Cindy, elige «Cuota de suscripciones» o «Uso diario» y toca «Añadir widget».",
   "widgetGuideAndroid": "Mantén pulsado un espacio vacío de la pantalla de inicio y toca «Widgets».\n\nBusca Cindy y arrastra «Cuota de suscripciones» o «Uso diario» a la pantalla de inicio.",

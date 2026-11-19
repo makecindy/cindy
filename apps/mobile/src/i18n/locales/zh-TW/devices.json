@@ -1,9 +1,7 @@
 {
   "widgetGuideAction": "加入小工具",
   "widgetGuideIntro": "小工具是放在主畫面上的小卡片。不用打開 Cindy，就能查看訂閱餘量和今天的 Token 用量。",
-  "widgetGuideExample": "主畫面範例",
-  "widgetGuideQuota": "訂閱餘量",
-  "widgetGuideDaily": "每日用量",
+  "widgetGuideExample": "主畫面上，Cindy 小工具和 App 圖示排在一起。",
   "widgetGuidePicker": "「編輯」→「加入小工具」",
   "widgetGuideIOS": "按住主畫面空白處，點{{picker}}。\n\n搜尋 Cindy，選擇「訂閱餘量」或「每日用量」，點「加入小工具」。",
   "widgetGuideAndroid": "按住主畫面空白處，開啟「小工具」。\n\n找到 Cindy，將「訂閱餘量」或「每日用量」拖曳到主畫面。",

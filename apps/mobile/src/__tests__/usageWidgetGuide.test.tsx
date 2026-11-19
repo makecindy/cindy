@@ -13,7 +13,8 @@ const mock = vi.hoisted(() => ({
   action: undefined as { onPress(): void } | undefined,
 }));
 
-vi.mock('react-native', () => ({ Platform: mock.platform, View: ({ children }: { children?: ReactNode }) => <div>{children}</div>, StyleSheet: { create: (s: unknown) => s }, ScrollView: () => null }));
+vi.mock('react-native', () => ({ Platform: mock.platform, View: ({ children, accessibilityRole, accessibilityLabel }: { children?: ReactNode; accessibilityRole?: string; accessibilityLabel?: string }) =>
+  <div role={accessibilityRole === 'image' ? 'img' : undefined} aria-label={accessibilityLabel}>{children}</div>, StyleSheet: { create: (s: unknown) => s }, ScrollView: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('expo-router', () => ({
   useRouter: () => ({}),
@@ -24,7 +25,7 @@ vi.mock('expo-router', () => ({
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
-vi.mock('@/session/MobileProviderMark', () => ({ MobileProviderMark: () => null }));
+vi.mock('react-native-svg', () => ({ default: 'svg', G: 'g', Rect: 'rect', Path: 'path', Text: 'text' }));
 vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowActionButton: ({ action }: { action: { onPress(): void; label: string } }) =>
     <button onClick={action.onPress}>{action.label}</button>,
@@ -72,9 +73,10 @@ it.each([
   expect(mock.nativeButton).toBe(OS === 'ios');
   act(() => mock.action!.onPress());
   const guide = host.querySelector('section')!;
-  for (const text of [zh.widgetGuideIntro, zh.widgetGuideExample, zh.widgetGuideQuota, zh.widgetGuideDaily, expected]) {
+  for (const text of [zh.widgetGuideIntro, '订阅余量', '每日用量', expected]) {
     expect(guide.textContent).toContain(text);
   }
+  expect(guide.querySelector('[role=img]')?.getAttribute('aria-label')).toBe(zh.widgetGuideExample);
   act(() => guide.querySelector('button')!.click());
   expect(host.querySelector('section')).toBeNull();
 });
