@@ -460,6 +460,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下週",
+        "indefinite": "無期",
         "custom": "自定…",
         "invalidTime": "請選擇來歲以內之未來日期時辰。"
       },

@@ -464,6 +464,7 @@
         "thisEvening": "Hoje à noite",
         "tomorrow": "Amanhã",
         "nextWeek": "Na próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
       },

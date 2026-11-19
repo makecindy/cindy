@@ -16663,6 +16663,7 @@
         "thisEvening": "오늘 저녁",
         "tomorrow": "내일",
         "nextWeek": "다음 주",
+        "indefinite": "무기한",
         "custom": "직접 설정…",
         "wakeAt": "다시 표시할 날짜와 시간",
         "timeZone": "현지 시간 ({{zone}})",

@@ -460,6 +460,7 @@
         "thisEvening": "오늘 저녁",
         "tomorrow": "내일",
         "nextWeek": "다음 주",
+        "indefinite": "무기한",
         "custom": "직접 설정…",
         "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요."
       },

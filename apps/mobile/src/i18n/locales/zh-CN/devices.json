@@ -460,6 +460,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "invalidTime": "请选择未来一年内的日期和时间。"
       },

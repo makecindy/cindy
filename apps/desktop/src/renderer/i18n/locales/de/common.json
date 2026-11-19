@@ -16737,6 +16737,7 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
         "timeZone": "Ortszeit ({{zone}})",

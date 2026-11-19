@@ -16899,6 +16899,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",

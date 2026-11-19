@@ -460,6 +460,7 @@
         "thisEvening": "今夜",
         "tomorrow": "明日",
         "nextWeek": "来週",
+        "indefinite": "無期限",
         "custom": "カスタム…",
         "invalidTime": "1年以内の未来の日時を選択してください。"
       },

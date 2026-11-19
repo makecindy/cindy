@@ -31,6 +31,11 @@ it('saves exactly the time previewed when the menu opened, even after time passe
   act(() => model.choose(option.until));
   expect(confirm).toHaveBeenCalledWith(new Date('2026-11-13T11:00:00').toISOString());
 });
+it('confirms indefinite deferral without selecting a date', () => {
+  render(true);
+  act(() => model.chooseIndefinite());
+  expect(confirm).toHaveBeenCalledWith('9999-12-31T23:59:59.999Z');
+});
 it('rejects stale presets and invalid or over-one-year custom values without writing', () => {
   render(true);
   const option = model.options[0];

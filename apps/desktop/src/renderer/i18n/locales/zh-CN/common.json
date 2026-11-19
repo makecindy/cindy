@@ -16663,6 +16663,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "wakeAt": "唤回日期和时间",
         "timeZone": "本地时间（{{zone}}）",
