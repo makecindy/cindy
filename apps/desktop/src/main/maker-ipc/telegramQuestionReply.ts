@@ -78,10 +78,17 @@ export async function withTelegramQuestionPolicy(
     const result = await send({
       turnPermissionPolicy: permissions.policy,
       afterTurnReserved: async () => {
+        const generation = permissions.session.getTurnGeneration();
         await beginTemporaryImPermission(permissions.session, cleanup => { restore = cleanup; },
           () => log.warn('temporary question permission cleanup failed'));
         unsubscribe = permissions.session.onEvent(event => {
-          if (event.turnOrigin === origin && event.turnScope !== 'background' && !event.agentMeta?.parentUuid &&
+          // Session owns terminal attribution. Origins are shared across answers and
+          // cannot prove that a late terminal belongs to this send's reservation.
+          const terminal = permissions.session.getObservedCurrentTurnTerminal();
+          if (permissions.session.getTurnGeneration() === generation &&
+              event.sessionInstanceId === permissions.session.instanceId &&
+              event.sessionTurnGeneration === generation && terminal.generation === generation &&
+              terminal.kind !== 'none' && event.turnScope !== 'background' && !event.agentMeta?.parentUuid &&
               (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event))) cleanup();
         });
         unsubscribeStatus = permissions.session.onStatusChange(status => {

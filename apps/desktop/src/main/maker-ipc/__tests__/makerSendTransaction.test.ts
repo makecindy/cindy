@@ -1,3 +1,4 @@
+import { createChannelTurnObserver, onChannelTurn } from '../channelTurnSignal';
 import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps } from '../sharedSessionResumeRecovery.js';
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
@@ -502,6 +503,8 @@ it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy a
   const { deps, session } = createDeps();
   let mode = { mode: 'bypassPermissions', generation: 0 };
   const listeners = new Set<(event: AgentEvent) => void>();
+  let generation = 2;
+  let terminal: { kind: 'none' | 'done'; generation?: number } = { kind: 'none' };
   const setMode = vi.fn(async (previous: { mode: string; generation: number }, next: string) => {
     if (mode.mode !== previous.mode || mode.generation !== previous.generation) return false;
     mode = { mode: next, generation: mode.generation + 1 };
@@ -513,6 +516,8 @@ it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy a
     get stablePermissionModeState() { return mode; },
     setPermissionModeIfUnchanged: setMode,
     acquireTurnLease: () => release,
+    getTurnGeneration: () => generation,
+    getObservedCurrentTurnTerminal: () => terminal,
     onStatusChange: () => () => {},
     onEvent: (listener: (event: AgentEvent) => void) => {
       listeners.add(listener);
@@ -540,11 +545,52 @@ it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy a
   if (outcome === 'done' || outcome === 'user-change') {
     for (const listener of [...listeners]) listener({ type: 'done', data: {} } as AgentEvent);
     expect(release).not.toHaveBeenCalled();
+    // A prior answer shares this exact origin. Neither a provider's old generation
+    // nor an event stamped current before Session verifies a terminal may restore Full access.
+    for (const listener of [...listeners]) {
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 1, sessionInstanceId: session.instanceId });
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mode.mode).toBe('auto');
+    expect(release).not.toHaveBeenCalled();
+    terminal = { kind: 'done', generation: 2 };
+    generation = 3;
+    for (const listener of [...listeners]) listener({
+      type: 'done', data: {}, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId,
+    });
+    expect(release).not.toHaveBeenCalled();
+    generation = 2;
     if (outcome === 'user-change') mode = { mode: 'ask', generation: mode.generation + 1 };
-    for (const listener of [...listeners]) listener({ type: 'done', data: {}, turnOrigin: origin } as AgentEvent);
+    for (const listener of [...listeners]) listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
   }
   await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
   expect(mode.mode).toBe(outcome === 'user-change' ? 'ask' : 'bypassPermissions');
+});
+
+
+// Unit regression: only the host's live question route qualifies an App-looking
+// answer for the existing provider-wake delivery path.
+it('inherits provider-wake delivery from an admitted question answer and clears it on local input', async () => {
+  const { session } = createDeps();
+  const route = telegramQuestionOrigin(() => {});
+  const item = { text: 'answer', clientId: 'q', persistedContent: 'answer' } as AgentInputQueuedMessage;
+  stampTelegramQuestionAnswer(item, route);
+  let origin = telegramQuestionAnswerOrigin(item);
+  Object.assign(session, { getCurrentTurnOrigin: () => origin });
+  const observer = createChannelTurnObserver(session as unknown as Session);
+  const seen = vi.fn();
+  const unsubscribe = onChannelTurn(seen);
+  try {
+    for (const input of [origin, { ...origin! }, undefined]) {
+      origin = input;
+      await observer.beforeProviderStart();
+      observer.onDispatching();
+      observer.onProviderInitiatedTurn();
+    }
+    expect(seen.mock.calls.filter(call => call[2]?.startsWith('provider-wake')).map(call => call[2]))
+      .toEqual(['provider-wake', 'provider-wake-local', 'provider-wake-local']);
+  } finally { unsubscribe(); }
 });
 
 // Host recovery must durably mark a turn before the provider starts, or a crash
