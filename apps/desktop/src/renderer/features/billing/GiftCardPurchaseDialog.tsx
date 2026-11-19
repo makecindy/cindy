@@ -179,7 +179,7 @@ export function GiftCardPurchaseDialog({
               <Dialog.Title className="text-lg font-medium">
                 {t('billing.giftCardPurchase.title')}
               </Dialog.Title>
-              <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+              <p className="mt-1 text-12 leading-[1.667] text-[var(--text-secondary)]">
                 {t('billing.giftCardPurchase.subtitle')}
               </p>
             </div>
@@ -209,17 +209,17 @@ export function GiftCardPurchaseDialog({
                 label={cardLabel}
               />
               <div className="mt-3 text-center">
-                <p className="text-12 leading-5 text-[var(--text-secondary)]">
+                <p className="text-12 leading-[1.667] text-[var(--text-secondary)]">
                   {t('billing.giftCard.from', { sender: senderName || '—' })}
                 </p>
                 {message.trim() && (
-                  <p className="mt-1.5 text-13 leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
+                  <p className="mt-1.5 text-13 leading-[1.54] text-[var(--text-primary)] [overflow-wrap:anywhere]">
                     {message.trim()}
                   </p>
                 )}
               </div>
               {effectiveQuantity > 1 && (
-                <p className="mt-3.5 text-center text-11 leading-4 text-[var(--text-tertiary)]">
+                <p className="mt-3.5 text-center text-11 leading-[1.455] text-[var(--text-tertiary)]">
                   {t('billing.giftCardPurchase.sameCards', { count: effectiveQuantity })}
                 </p>
               )}
@@ -327,7 +327,7 @@ export function GiftCardPurchaseDialog({
                   </div>
                   {policyState.kind === 'loading' && <Spinner size={14} className="text-[var(--text-tertiary)]" />}
                   {quantityHint && (
-                    <span className="min-w-0 text-12 leading-5 text-[var(--text-tertiary)]">{quantityHint}</span>
+                    <span className="min-w-0 text-12 leading-[1.667] text-[var(--text-tertiary)]">{quantityHint}</span>
                   )}
                 </div>
               </section>

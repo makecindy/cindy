@@ -43,6 +43,7 @@ export function GiftCardPurchasedDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[500px] flex-col',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
@@ -57,7 +58,7 @@ export function GiftCardPurchasedDialog({
                   ? t('billing.giftCardPurchase.done.title', { count: cards!.length })
                   : t('billing.giftCardPurchase.done.pendingTitle')}
               </Dialog.Title>
-              <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+              <p className="mt-1 text-12 leading-[1.667] text-[var(--text-secondary)]">
                 {cards === null
                   ? t('billing.giftCardPurchase.done.loading')
                   : first
@@ -93,7 +94,7 @@ export function GiftCardPurchasedDialog({
                   count={cards!.length}
                   label={t('billing.giftCard.cardLabel', { amount: amountOf(first) })}
                 />
-                <p className="mt-2.5 text-center text-12 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                <p className="mt-2.5 text-center text-12 leading-[1.667] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                   {t('billing.giftCard.from', { sender: first.senderName })}
                   {first.message ? ` · ${first.message}` : ''}
                 </p>
@@ -120,7 +121,7 @@ export function GiftCardPurchasedDialog({
                     </li>
                   ))}
                 </ul>
-                <p className="mx-0.5 mt-2.5 text-11 leading-4 text-[var(--text-tertiary)]">
+                <p className="mx-0.5 mt-2.5 text-11 leading-[1.455] text-[var(--text-tertiary)]">
                   {t('billing.giftCardPurchase.done.linkHint')}
                 </p>
               </>
