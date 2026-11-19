@@ -71,6 +71,8 @@ export interface AwayGuardServiceDeps {
   computerInUse(): boolean;
   /** Fires when Computer Use sessions open or close. */
   onComputerInUseChange(listener: () => void): () => void;
+  /** A remote viewer is connected to this desktop (control or view-only) right now. */
+  remoteInUse(): boolean;
   seedScreenLocked(locked: boolean): void;
   msSinceOwnerInput(): number | null;
   /** Work needs the screen awake (see displayDemand.ts); otherwise the system sleeps and locks. */
@@ -394,8 +396,10 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   const syncOwnerPrompt = (awake: boolean) => {
     displayRequested = awake;
     // Computer Use reads the whole display and clicks desktop coordinates, so the system
-    // prompt is never in its way (2026-11-18 user decision).
-    if (awake && !deps.computerInUse()) armOwnerPrompt();
+    // prompt is never in its way (2026-11-18 user decision). A remote viewer gets the same
+    // screen in its video and its clicks land on desktop coordinates, so a live lease keeps
+    // the prompt off too (docs/product-rules/privacy-screen.md「远程控制」).
+    if (awake && !deps.computerInUse() && !deps.remoteInUse()) armOwnerPrompt();
     else disarmOwnerPrompt();
   };
   // A session that opens mid-cover takes the prompt down at once, not on the next tick.

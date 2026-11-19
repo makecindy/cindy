@@ -182,6 +182,8 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   let needsDisplay = true;
   // Computer Use: the Agent reads the whole display and clicks desktop coordinates.
   let computerInUse = false;
+  // A remote viewer: the same screen goes into its video, its clicks are desktop clicks.
+  let remoteInUse = false;
   const sessionChanges: Array<() => void> = [];
   startAwayGuard({
     excludedWindows: () => {},
@@ -194,6 +196,7 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
       sessionChanges.push(listener);
       return () => {};
     },
+    remoteInUse: () => remoteInUse,
     seedScreenLocked: () => {},
     msSinceOwnerInput: () => Infinity,
   });
@@ -243,5 +246,30 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   for (const listener of sessionChanges) listener();
   await settle();
   expect(prompt.stop).toHaveBeenCalledTimes(2);
+  expect(mask.level).toBe('screen-saver');
+
+  // A remote viewer gets this same screen in its video and its clicks are desktop clicks,
+  // so a live lease keeps the system sheet off just like Computer Use.
+  computerInUse = false;
+  remoteInUse = true;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(prompt.watch).toHaveBeenCalledTimes(2);
+  expect(mask.level).toBe('screen-saver');
+
+  // The viewer disconnected: the prompt is back for the owner standing at this Mac.
+  remoteInUse = false;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(prompt.watch).toHaveBeenCalledTimes(3);
+  expect(mask.level).toBe('pop-up-menu');
+  prompt.resolve({ stop: prompt.stop });
+  await settle();
+
+  // A viewer that connects while the cover is up takes the prompt down on the next tick.
+  remoteInUse = true;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(prompt.stop).toHaveBeenCalledTimes(3);
   expect(mask.level).toBe('screen-saver');
 });

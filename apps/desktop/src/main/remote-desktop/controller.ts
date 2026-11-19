@@ -380,6 +380,10 @@ export class RemoteDesktopController {
     this.tick();
     return this.active ? { peer: this.active.peer, controlling: this.active.controlling } : null;
   }
+  /** A viewer holds a lease on this desktop now, whether it controls it or only watches. */
+  get hasActiveLease(): boolean {
+    return this.active !== null;
+  }
   get displayId(): string | null {
     return this.active?.display.id ?? null;
   }

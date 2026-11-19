@@ -105,15 +105,21 @@ it('takes the prompt down through the helper and waits for the process to end', 
   expect(f.answers).toEqual([]);
 });
 
-it('cancels a start that is still waiting for the helper, without an answer', async () => {
+it('cancels a still-starting prompt through the helper, not by killing it', async () => {
+  vi.useFakeTimers();
   const f = fixture();
   const cancel = new AbortController();
   const starting = f.start(cancel.signal);
   await Promise.resolve();
-  // The cover released the display before the prompt came up: kill it at once rather
-  // than let it stay on screen and flash the Touch ID sheet seconds later.
+  // The cover released the display before the prompt came up. The helper owns the system
+  // sheet: only its own `stop` runs `context.invalidate()`, and killing it leaves the
+  // prompt on screen for about ten seconds (macos-input.swift, macos-input.swift:1116).
   cancel.abort();
   await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  expect(f.child.stdin.write).toHaveBeenCalledWith('stop\n');
+  expect(f.child.kill).not.toHaveBeenCalled();
+  // A helper that ignores the stop command is still killed, just no longer as step one.
+  await vi.advanceTimersByTimeAsync(2000);
   expect(f.child.kill).toHaveBeenCalledOnce();
   expect(f.answers).toEqual([]);
   f.child.emit('close');

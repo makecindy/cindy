@@ -660,6 +660,7 @@ import { markStartupMilestone } from './startupTimeline';
 import {
   isLinuxAwayCoverUp,
   registerRemoteDesktopIpc,
+  remoteDesktop,
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
@@ -5257,6 +5258,9 @@ const registerIpcHandlers = () => {
       // or under its desktop clicks (2026-11-18 user decision).
       computerInUse: () => openComputerUseSessions() > 0,
       onComputerInUseChange: onComputerUseSessionsChange,
+      // A remote viewer receives this same screen: the system sheet must not sit in its
+      // video or under its injected clicks (docs/product-rules/privacy-screen.md).
+      remoteInUse: () => remoteDesktop.hasActiveLease,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });

@@ -52,12 +52,22 @@ export async function watchOwnerPrompt(
   };
   child.stderr.resume();
   child.stdin.on('error', () => {});
+  // The system owns the sheet: only the helper's own `stop` runs `context.invalidate()`,
+  // and killing it here leaves the prompt on screen for about ten seconds. Main is gone
+  // means a closed stdin, so every path that takes a prompt down uses this protocol, also
+  // while the helper is still starting (`stop` waits in the pipe until it reads stdin).
+  const requestStop = () => {
+    child.stdin.write('stop\n');
+    const kill = setTimeout(() => child.kill(), 2000);
+    kill.unref();
+    return () => clearTimeout(kill);
+  };
   // A prompt cancelled before it came up must not flash on screen afterwards.
   const onAbort = () => {
     if (done) return;
     done = true;
     clearTimeout(timer);
-    child.kill();
+    requestStop();
     settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
     settle = undefined;
   };
@@ -92,8 +102,12 @@ export async function watchOwnerPrompt(
   try {
     await ready;
   } catch (error) {
-    // An abort already killed the helper; only a helper that never came up is killed here.
-    if (!done) child.kill();
+    // An abort already took the helper down; a helper that never came up is stopped here.
+    if (!done) {
+      done = true;
+      requestStop();
+    }
+    signal?.removeEventListener('abort', onAbort);
     throw error;
   }
   signal?.removeEventListener('abort', onAbort);
@@ -101,10 +115,7 @@ export async function watchOwnerPrompt(
     stop: () => {
       if (done) return closed;
       done = true;
-      child.stdin.write('stop\n');
-      const kill = setTimeout(() => child.kill(), 2000);
-      kill.unref();
-      return closed.finally(() => clearTimeout(kill));
+      return closed.finally(requestStop());
     },
   };
 }
