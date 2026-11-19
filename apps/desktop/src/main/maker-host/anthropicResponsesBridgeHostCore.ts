@@ -13,6 +13,7 @@ import {
   hostedProviderOffersModel,
 } from './guest-provider-route-store.js';
 import { hasHostedSessionModelAccess } from './session-provider-store.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
@@ -827,16 +828,17 @@ function getPiNativeSubscriptionHandler(
     let requestedModel = '';
     const modelAllowed = async (): Promise<boolean> => {
       if (!guest && !hostedModelAccess) return true;
+      const scopeDenied = !!guest && guest.providerId !== providerId;
       const allowed = guest
-        ? guest.providerId === providerId && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
+        ? !scopeDenied && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
         : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
       if (allowed) return true;
-      const denial = guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
+      const denial = !scopeDenied && guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
       res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ type: 'error', error: {
         type: 'authorization_error',
         code: denial?.code ?? (guest ? 'shared_provider_only' : 'remote_model_not_allowed'),
-        message: denial?.message ?? (guest
+        message: scopeDenied ? SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE : denial?.message ?? (guest
           ? `model '${requestedModel}' is not available from the provider shared with you`
           : 'This model is not available for this remote task.'),
       } }));

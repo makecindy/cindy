@@ -872,8 +872,7 @@
         "loading": "Kontingent wird gelesen…",
         "unavailable": "Das Kontingent dieses Computers kann gerade nicht gelesen werden",
         "none": "Für diesen Anbieter liegen keine Kontingentinformationen vor",
-        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden",
-        "share": "Für Computer, die andere freigegeben haben, wird kein Kontingent angezeigt"
+        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden"
       },
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
@@ -982,8 +981,8 @@
       "loading": "Bild wird geladen…"
     },
     "moveToolbar": "Symbolleiste nach links oder rechts verschieben",
-    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · C: Farbe kopieren · Esc: Beenden",
-    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
+    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · C: Farbe kopieren · Esc: Beenden",
+    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
     "copy": "Kopieren",
     "cancel": "Screenshot-Modus verlassen",
     "captureFailed": "Bildschirm konnte nicht aufgenommen werden",
@@ -1132,14 +1131,14 @@
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine beliebige Taste oder die Touch ID-Taste zum Sperren und entsperre dann mit Fingerabdruck oder Passwort",
+    "hint": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
       "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
       "hintWindows": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Windows Hello oder deiner PIN, um den Sichtschutz zu entfernen. Du kannst auch Windows-Logo-Taste + L drücken."
     },
-    "hintWindows": "Zum Sperren eine beliebige Taste drücken; entsperren mit Windows Hello oder deinem Passwort",
-    "hintLinux": "Zum Sperren eine beliebige Taste drücken; entsperren mit deinem Passwort",
+    "hintWindows": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
+    "hintLinux": "Drücke eine beliebige Taste, um den Entsperrbildschirm zu öffnen",
     "verifyReason": "den Sichtschutz entfernen"
   },
   "appBadge": {
@@ -2803,6 +2802,8 @@
       "autoUpdateSaveFailed": "Einstellungen für automatische Updates konnten nicht gespeichert werden",
       "analyticsLabel": "Nutzungsstatistiken",
       "analyticsDescription": "Hilft uns zu verstehen, wie oft Cindy gestartet und weiter genutzt wird. Übermittelt Informationen zum Gerät und zur Nutzungsumgebung — etwa Gerätemodell, Betriebssystemversion, App-Version und Gerätekennung — sowie nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts. Wenn du dies deaktivierst, wird die Übermittlung sofort beendet.",
+      "productTokenUsage": "Modellnutzung teilen",
+      "productTokenUsageHint": "Neue Token dieses Kontos auf diesem Gerät werden regional nach Quelle und Modell zusammengefasst und an TapDB gesendet.",
       "analyticsEnabledToast": "Nutzungsstatistiken aktiviert",
       "analyticsDisabledToast": "Nutzungsstatistiken deaktiviert",
       "analyticsSaveFailed": "Einstellungen für Nutzungsstatistiken konnten nicht gespeichert werden",
@@ -3483,7 +3484,7 @@
         "end": "Alles darüber wurde aus {{source}} importiert",
         "endHandoff": "Alles darüber wurde aus {{source}} importiert. {{harness}} setzt hier fort."
       },
-      "projectMenu": "Sitzungen dieses Projekts aus anderen Werkzeugen importieren…"
+      "projectMenu": "Aufgaben importieren…"
     },
     "connections": {
       "codex": {
@@ -4116,6 +4117,7 @@
         "refreshSpeechAdded": "Modelle aktualisiert; 1 empfohlenes Sprachmodell hinzugefügt",
         "refreshNoNew": "Modellliste ist aktuell – nichts Neues",
         "refreshFailed": "Modellliste konnte nicht aktualisiert werden – versuche es später erneut",
+        "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
         "disableModel": "Dieses Modell deaktivieren",
         "paymentRequired": "Kostenpflichtig",
@@ -6074,7 +6076,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatischer Modellwechsel für Aufgaben",
-        "description": "Nach wiederholten Verbindungs- oder Kapazitätsfehlern wird zunächst eine andere verbundene Quelle für dasselbe Modell versucht, dann ein ausdrücklich für den aktuellen Agent empfohlenes Modell. Dabei wird weder der Agent gewechselt noch deine gespeicherte Auswahl geändert. Standardmäßig deaktiviert."
+        "description": "Bei einem Fehler versucht eine Modellgruppe andere verfügbare Modelle der Gruppe. Bei einem Agentenwechsel wird die Aufgabe übergeben und die neue Auswahl gespeichert. Andere Aufgaben versuchen nach wiederholten Fehlern eine andere Quelle oder ein empfohlenes Modell desselben Agenten. Standardmäßig aus."
       },
       "toggleAria": "Automatischen Modellwechsel für Aufgaben umschalten",
       "toast": {
@@ -6802,6 +6804,9 @@
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
@@ -8203,6 +8208,7 @@
         "cindyEmbedText": "Kann Text zur Umwandlung in Vektoren senden (für die semantische Suche)",
         "cindyModelsDecisions": "Kann Entscheidungsmodelle aufrufen (verbraucht dein Modellkontingent)",
         "cindyModelsRerank": "Kann Neusortierungsmodelle aufrufen (verbraucht dein Modellkontingent)",
+        "cindyModelsMediaRequest": "Kann Bilder, Videos, Sprachsynthese und Transkription über Cindy AI anfordern (verbraucht dein Modellkontingent)",
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
@@ -8261,6 +8267,8 @@
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentModelPreferences": "Deine Modellfavoriten lesen und bearbeiten sowie zuletzt verwendete Modelle lesen",
         "agentModelPreferencesDetail": "Kann die Modellfavoriten und zuletzt verwendeten Modelle auf diesem Computer lesen, einschließlich Denkintensität und Fast, und Favoriten hinzufügen, ändern oder entfernen. Änderungen erscheinen auch in der Modellauswahl von Cindy. Im Plugin gewählte Modelle werden nicht unter „Zuletzt verwendet“ erfasst. Modelle auf deinen anderen Computern oder mit dir geteilte Modelle sind nicht enthalten, und es werden keine Zugangsdaten weitergegeben.",
+        "harnesses": "Stellt Ausführungs-Engines bereit: {{names}}",
+        "harnessesDetail": "Kann in deinen Aufgaben das Arbeitsverzeichnis lesen und schreiben, Befehle ausführen und dieselben Cindy-Werkzeuge wie das integrierte Pi nutzen.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
         "agentErrandDetail": "Erstellte Aufgaben erscheinen in der Aufgabenliste von Cindy. Dort kannst du den Fortschritt ansehen und das Gespräch fortsetzen.",
         "agentSchedule": "Kann dich bitten, eine Automatisierung zu erstellen",
@@ -9500,6 +9508,31 @@
     "preparing": "Anmeldung wird vorbereitet",
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
     "unavailable": "Anmeldung derzeit nicht möglich",
+    "hostUnavailable": {
+      "title": "Cindy-Hintergrunddienst startet nicht",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Diese Daten gehören zu einem anderen Konto als die Anmeldung, die der Cindy-Hintergrunddienst gespeichert hat.",
+          "action": "Führe cindy-host login mit dem ursprünglichen Konto aus, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Ein anderes Cindy-Programm verwendet diese Daten.",
+          "action": "Beende es, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Die Daten dieses Kontos lassen sich nicht öffnen.",
+          "action": "Falls du zuletzt eine neuere Cindy-Version genutzt hast, aktualisiere Cindy auf diesem Computer, starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Sonst zeigt cindy-host status den Grund."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Der Cindy-Hintergrunddienst konnte beim Start den Anmeldedienst nicht erreichen.",
+          "action": "Prüfe deine Netzwerkverbindung, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_START_FAILED": {
+          "body": "Beim Start des Cindy-Hintergrunddienstes ist ein Fehler aufgetreten.",
+          "action": "Starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Wenn es wieder passiert, führe cindy-host status aus, um den Grund zu sehen."
+        }
+      }
+    },
     "retry": "Erneut versuchen",
     "browserWaiting": "Bestätigung im Browser abschließen",
     "browserCallback": {
@@ -9770,6 +9803,10 @@
     "cacheLine": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}} · Trefferquote {{rate}}",
     "cacheLineNoRate": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}}",
     "stepsLine": "Anfragen in dieser Runde: {{steps}} · je ca. {{context}} Kontext",
+    "traceChartLabel": "Generierungsgeschwindigkeit und Denken je Anfrage in dieser Runde",
+    "traceRequests": "Anfragen in dieser Runde: {{requests}}",
+    "traceThinkingShare": "Denken: {{share}} der Ausgabe",
+    "traceThinkingTokens": "Denken: {{thinking}} Tokens",
     "modelLine": "Modell: {{model}}",
     "multipleModels": "{{count}} Modelle",
     "costBreakdownHeader": "Nach Modell:",
@@ -11482,7 +11519,7 @@
         "projectDirChoose": "Ordner auswählen",
         "projectDirChange": "Ordner ändern",
         "projectDirClear": "Ordner entfernen",
-        "projectDirNote": "Hier arbeiten Freunde bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
+        "projectDirNote": "Wähle ein vorhandenes Projekt auf diesem Computer. Ohne Auswahl wird das passende Repository-Projekt oder das Projekt des ausführenden Begleiters verwendet. Für die Arbeitsteilung mit Git wird ein eigener Worktree angelegt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
         "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
@@ -11810,15 +11847,15 @@
           "replyModeAssistant": "Cindy antwortet",
           "replyModeAssistantNote": "Die Gruppen-Cindy antwortet.",
           "work": "Arbeitsaufteilung",
-          "ownFolder": "Gruppeneigener Ordner",
+          "ownFolder": "Automatisch",
           "projectDirHint": "Gilt nur auf diesem Computer.",
-          "projectDirClearHint": "Stattdessen den gruppeneigenen Ordner verwenden",
+          "projectDirClearHint": "Projekt wieder automatisch auswählen",
           "project": "Projekt",
           "projectCaption": "Freunde antworten und arbeiten bei Arbeitsteilungen in diesem Projekt. Das Repository teilt die ganze Gruppe; der Ordner bleibt auf diesem Computer.",
           "githubRepo": "GitHub-Repository",
-          "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repository",
-          "repositoryHint": "GitHub: owner/name eingeben. GitLab (auch selbst gehostet), CNB und andere: den Repository-Link einfügen. Computer ohne gewählten Ordner nutzen ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repositoryHint": "Für GitHub owner/name eingeben oder die Repository-URL einfügen. Cindy sucht auf diesem Computer nach einem eindeutig passenden Projekt.",
           "repositoryPlaceholder": "owner/name oder Repository-Link",
           "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
           "folderRepoFilled": "Das Repository {{repo}} wurde aus diesem Ordner übernommen. Die Computer der anderen Mitglieder verwenden es ebenfalls.",
@@ -13578,6 +13615,8 @@
         },
         "reply": {
           "unsupportedMedia": "Diese Version kann diese Art von WeChat-Medien noch nicht verarbeiten.",
+          "delayedReply": "Verzögerte Antwort, erstellt am {{createdAt}} auf deine am {{receivedAt}} empfangene Nachricht. Der Inhalt ist möglicherweise veraltet.",
+          "delayedReplyQuestion": "Ursprüngliche Nachricht: {{question}}",
           "stillProcessing": "Wird noch bearbeitet…",
           "ownerOnlyCommands": "Nur der Besitzer kann Bot-Befehle verwenden.",
           "companionManagedCommand": "Öffne dieses Teammitglied in Cindy: Das Modell änderst du in den Einstellungen des Teammitglieds, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",
@@ -14167,6 +14206,32 @@
             "label": "Vollzugriff",
             "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Jedes Mal bestätigen",
+            "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
+          },
+          "default": {
+            "label": "Standard",
+            "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
+          },
+          "acceptEdits": {
+            "label": "Änderungen akzeptieren",
+            "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
+          },
+          "auto": {
+            "label": "Automatisch",
+            "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
+          },
+          "plan": {
+            "label": "Nur planen",
+            "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
+          },
+          "bypassPermissions": {
+            "label": "Alles erlauben",
+            "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."
+          }
         }
       }
     },
@@ -14626,12 +14691,24 @@
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
     },
-    "followUpHint": {
-      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
-      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+    "sendDelivery": {
+      "menuAria": "So wird diese Nachricht gesendet",
+      "queueHint": "Nach dieser Antwort",
+      "steerHint": "Beim nächsten Schritt",
+      "setDefault": "Als Standard setzen",
+      "nowDefault": "Jetzt Standard",
       "switchToSteer": "Standardmäßig steuern",
-      "switchToQueue": "Standardmäßig einreihen",
-      "dismiss": "Hinweis schließen"
+      "switchToQueue": "Standardmäßig einreihen"
+    },
+    "pluginEngines": {
+      "group": "Plugin-Engines",
+      "genericName": "Plugin-Engine",
+      "defaultModel": "Standardmodell",
+      "defaultModelHint": "Verwendet die Standardeinstellung der Engine",
+      "unavailable": "Nicht verfügbar",
+      "engineMissing": "Das Plugin, das diese Engine bereitstellt, ist deaktiviert oder deinstalliert.",
+      "worktreeUnsupported": "Plugin-Engines können noch keine Aufgaben in einem Worktree starten. Schalte Worktree aus, um zu senden.",
+      "modelChangeFailed": "Modell konnte nicht gewechselt werden"
     }
   },
   "onboarding": {
@@ -14925,6 +15002,7 @@
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
       "outputTotal": "Ausgabe",
       "observedPeak": "Spitzenwert",
+      "thinkingShare": "Denkanteil",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Letztes Generierungsintervall. Ohne Tools und Wartezeiten.",
@@ -14970,6 +15048,7 @@
       "credentialSwitchBusy": "Eine andere Codex-Aufgabe läuft noch. Daher kann der Anbieter für diese Sitzung noch nicht angewendet werden (der gemeinsam genutzte Codex-Prozess muss neu gestartet werden). Versuch es erneut, sobald diese Aufgaben abgeschlossen sind.",
       "accountBoundaryPending": "Cindy stellt den Kontostatus noch um. Daher kann diese Aufgabe noch nicht starten. Warte kurz und klicke dann auf „Erneut versuchen“. Falls das weiterhin passiert, starte Cindy neu.",
       "codexThreadStale": "Der Codex-Authentifizierungsmodus wurde geändert – diese Sitzung kann nicht fortgesetzt werden. Starte eine neue Sitzung, um ihn anzuwenden.",
+      "codexSharedAuthLinkUnavailable": "Codex ist auf diesem Computer angemeldet, aber diese Sitzung kann diese Anmeldung nicht erreichen: der Link darauf lässt sich nicht erstellen (unter einem Windows-Standardkonto geht das in der Regel nicht). Sorge dafür, dass {{appName}} auf diesem Computer den Link erstellen darf (unter Windows einmal als Administrator ausführen oder den Entwicklermodus aktivieren), und klicke dann auf „Erneut versuchen“. Du kannst auch auf „Erneut bei ChatGPT anmelden“ klicken, damit Cindy für diese Sitzung eine eigene Anmeldung verwendet.",
       "codexResumeNotReady": "Codex kann diese Aufgabe gerade nicht fortsetzen. Versuch es in Kürze erneut.",
       "claudeGatewayOpusPlanMismatch": "Diese Opus-Anfrage lief über XD Gateway, nicht über dein Claude.ai-Abonnement. Diese Gateway-Route hat das Modell abgelehnt. Wechsle zu deinem Claude.ai-Abonnement und versuch es erneut oder wähle ein anderes Modell.",
       "claudeSubscriptionOpusPlanMismatch": "Opus ist im verbundenen Claude Pro-Tarif nicht verfügbar. Wechsle zu einem Modell, das in deinem Tarif enthalten ist. Wenn du kürzlich ein Upgrade durchgeführt hast, verbinde Anthropic in den Einstellungen erneut und versuch es dann noch einmal.",
@@ -15778,6 +15857,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Dieser Agent ist auf dem anderen Computer nicht verfügbar. Installiere ihn dort oder melde dich dort an, oder wähle einen anderen Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Dieser Computer kann den bisherigen Zustand der Sitzung nicht wiederherstellen. Wähle ein Modell von einem anderen Computer oder Anbieter, um den Kontext zu übergeben und fortzufahren. Bestehende Nachrichten bleiben erhalten.",
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Die Plugin-Engine konnte das vorherige Gespräch nicht wiederherstellen. Deine Nachrichten bleiben erhalten. Wähle eine andere Engine oder starte eine neue Aufgabe.",
       "REMOTE_AGENT_RESUME_REJECTED": "Der Computer, auf dem das Modell läuft, kann diese Sitzung nicht fortsetzen. Erstelle über die Sitzungsliste eine neue Sitzung und kopiere die benötigten Inhalte dorthin. Die ursprüngliche Sitzung und die Nachrichten in der Warteschlange bleiben erhalten.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort beim Anbieter „Remote-Nutzung erlauben“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
@@ -16401,6 +16481,7 @@
       },
       "filterCreatorsHeading": "Freunde",
       "filterCreatorsAny": "Alle",
+      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
       "filterCreatorsNone": "Alle ausblenden",
       "filterSelectedCreators": "{{count}} ausgewählt",
       "filterProjectsHeading": "Projekte",
@@ -16490,7 +16571,7 @@
       "confirmArchive": {
         "title": "Sitzung archivieren",
         "description": "Diese Sitzung archivieren? Sie wird aus der Liste entfernt.",
-        "dirtyWorktreeWarning": "Nicht committete Änderungen werden vor dem Archivieren gespeichert. Du kannst sie über die Aufgabe wiederherstellen.",
+        "dirtyWorktreeWarning": "Diese Aufgabe enthält noch nicht committete Dateiänderungen. Beim Archivieren werden sie standardmäßig gespeichert. Du kannst sie später in der Aufgabe wiederherstellen.",
         "discardChanges": "Nicht committete Änderungen verwerfen",
         "discardWarning": "Nicht committete Änderungen und neue Dateien gehen verloren.",
         "discardAndArchive": "Verwerfen und archivieren",
@@ -16529,6 +16610,7 @@
         "empty": "Diese Automatisierung hat keine Sitzungen zum Archivieren."
       },
       "archiveAll": {
+        "projectTitle": "Alle Aufgaben in „{{name}}“ archivieren?",
         "title": "Alle Sitzungen archivieren",
         "confirm": "Alle archivieren",
         "cancel": "Abbrechen",
@@ -16673,18 +16755,28 @@
         }
       },
       "projectAction": {
+        "menu": "Projektmenü für {{name}}",
+        "previewFailed": "Die Aufgaben dieses Projekts konnten nicht geladen werden. Versuche es erneut.",
+        "remotePreviewFailed": "Die Aufgaben des Remote-Projekts konnten nicht geladen werden. Prüfe die Verbindung und die Cindy-Version auf dem anderen Computer.",
         "rename": "Projekt umbenennen",
         "pin": "Projekt anheften",
         "unpin": "Projekt lösen",
-        "removeFromSidebar": "Projekt aus Seitenleiste entfernen",
-        "removeFromSidebarConfirmTitle": "{{name}} entfernen?",
-        "removeFromSidebarConfirmDescription": "Dadurch wird das Projekt aus der Seitenleiste entfernt. Dateien auf deinem Computer werden nicht gelöscht. Bestehende Sitzungen werden in den Bereich „Chat“ verschoben und bleiben verfügbar.",
+        "removeFromSidebar": "Projekt aus Cindy entfernen…",
+        "removeFromSidebarConfirmTitle": "{{name}} aus Cindy entfernen?",
+        "removeFromSidebarConfirmDescription": "Aktive Aufgaben: {{count}}. Sie bleiben unter Unterhaltungen verfügbar.",
         "removeFromSidebarConfirmAction": "Projekt entfernen",
-        "removeFromSidebarFailed": "Projekt konnte nicht aus der Seitenleiste entfernt werden – versuche es erneut.",
-        "showFiles": "Dateien anzeigen",
-        "archivedAll": "Alle archivieren",
-        "unarchiveAll": "Alle wiederherstellen",
-        "openInExplorer": "Im Dateimanager öffnen",
+        "removeFromSidebarFailed": "Projekt konnte nicht entfernt werden.",
+        "archiveOnRemove": "Aufgaben auch archivieren ({{count}})",
+        "keepSkippedOnRemove": "Diese Aufgaben bleiben in den Unterhaltungen ({{skip}}).",
+        "removedArchived": "Aufgaben, die ins Archiv verschoben werden: {{count}}.",
+        "removeAndArchive": "Projekt entfernen und Aufgaben archivieren",
+        "removeKeepFiles": "Anheftung, eigener Name und Symbol werden entfernt. Dateien und Ordner bleiben erhalten.",
+        "showFiles": "Aufgabendateien in der Seitenleiste anzeigen",
+        "archivedAll": "Alle Aufgaben archivieren",
+        "unarchiveAll": "Alle Aufgaben wiederherstellen",
+        "openInFinder": "Projektordner im Finder öffnen",
+        "openInExplorer": "Projektordner im Explorer öffnen",
+        "openInFileManager": "Projektordner im Dateimanager öffnen",
         "newInDirectory": "Neue Sitzung in diesem Verzeichnis",
         "copyDeepLink": "Projektlink kopieren",
         "search": "Sitzungen in diesem Projekt durchsuchen"
@@ -16722,6 +16814,7 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
         "timeZone": "Ortszeit ({{zone}})",
@@ -17304,6 +17397,7 @@
       "promote": {
         "menu": "In Projektautomatisierung umwandeln",
         "noWorkingDir": "Zeitplan kann ohne Arbeitsverzeichnis nicht zur Projektautomatisierung gemacht werden",
+        "pluginEngine": "Plugin-Engines laufen nur auf diesem Computer und können nicht zur Projektautomatisierung gemacht werden",
         "success": "Zur Projektautomatisierung gemacht"
       },
       "editProject": {
@@ -17580,6 +17674,7 @@
         "selectThread": "Wähle eine Zielsitzung",
         "selectProject": "Wähle ein Projektverzeichnis",
         "modelUnavailable": "Modell {{model}} ist nicht mehr verfügbar. Wähle ein anderes Modell.",
+        "pluginEngineUnavailable": "Die ausgewählte Plugin-Engine ist gerade nicht verfügbar. Wähle ein anderes Modell.",
         "reasoningInvalid": "Denkintensität muss einer der Werte {{values}} sein",
         "preRunHookCommandRequired": "Gib den Befehl für die Vorabprüfung ein",
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
@@ -19178,6 +19273,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
+      "hostProfileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+      "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Cindy-Hintergrunddienst nicht gestartet. Beende sie, starte den Cindy-Hintergrunddienst neu und öffne dann dieses Cindy-Fenster erneut.",
+      "hostProfileInUseByDesktopRetry": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher ist das gerade nicht möglich. Beende sie und versuche es dann erneut.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",
       "turnFailed": "Die Aufgabe ist fehlgeschlagen (das Modell hat keine Fehlerdetails zurückgegeben) — versuche es erneut.",
@@ -19466,6 +19564,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Diese Runde ist fehlgeschlagen.",
+    "blockedReasonUnknown": "Es wurde kein konkreter Grund für die Blockierung angegeben.",
+    "blockedNextStep": "Du kannst in dieser Aufgabe Informationen ergänzen. Sobald die Ursache behoben ist, klicke auf „{{action}}“, um fortzufahren.",
     "status": {
       "active": "Ziel wird weiterverfolgt",
       "paused": "Pausiert",
@@ -19765,7 +19866,8 @@
         "validityValue_one": "{{count}} Tag nach dem Einlösen",
         "validityValue_other": "{{count}} Tage nach dem Einlösen",
         "claimBy": "Einlösen bis",
-        "destination": "Gutgeschrieben auf"
+        "destination": "Gutgeschrieben auf",
+        "validityPermanent": "Unbegrenzt gültig"
       },
       "doneTitle": "{{amount}} gutgeschrieben",
       "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
@@ -19781,10 +19883,13 @@
         "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
         "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
         "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+        "voidedPurchased": "Diese Geschenkkarte kann derzeit nicht eingelöst werden.",
         "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
         "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
         "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
-      }
+      },
+      "doneDescriptionPurchased": "Deinem Aufladeguthaben gutgeschrieben. Es verfällt nie.",
+      "pendingDescriptionPurchased": "{{amount}} wird gutgeschrieben und erscheint gleich in deinem Aufladeguthaben. Du musst die Karte nicht erneut einlösen."
     },
     "usage": {
       "title": "Guthabenverbrauch",
@@ -19801,6 +19906,7 @@
         "empty": "Keine Aktionsgutschriften verfügbar.",
         "incomplete": "Es gibt viele Gutschriften. Nur die neuesten {{count}} werden angezeigt.",
         "unnamed": "Aktionsgutschrift",
+        "rolloverName": "Übertrag",
         "giftCard": "Geschenkkarte · von {{sender}}",
         "original": "Ursprünglich",
         "used": "Verwendet",
@@ -19829,7 +19935,9 @@
         "noPayment": "Keine Zahlung erforderlich",
         "page": "Seite {{page}}",
         "previous": "Vorherige Seite",
-        "next": "Nächste Seite"
+        "next": "Nächste Seite",
+        "giftCard_one": "Geschenkkarte × {{count}}",
+        "giftCard_other": "Geschenkkarten × {{count}}"
       },
       "count": "{{count}} Bestellungen",
       "orderId": "Nr. {{id}}",
@@ -20038,6 +20146,8 @@
       "basicModels": "Zugriff auf einige Modelle",
       "subscription": "Abotarif",
       "rollover": "Bis zu {{amount}} ungenutztes Guthaben für {{period}} behalten",
+      "rolloverMonthly": "Bis zu {{amount}} ungenutztes Guthaben als Aktionsguthaben übertragen\n1 Monat gültig, ohne weiteren Übertrag\nVor Tarifguthaben und Aufladeguthaben genutzt",
+      "rolloverMonthlySummary": "Bis zu {{amount}} ungenutztes Guthaben übertragen, 1 Monat gültig",
       "nextPeriod": {
         "MONTH": "den nächsten Monat",
         "YEAR": "das nächste Jahr",
@@ -20056,6 +20166,120 @@
         "MONTH": "Enthält {{amount}} pro Monat",
         "YEAR": "Enthält {{amount}} pro Jahr",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Geschenkkarte kaufen",
+      "title": "Geschenkkarte kaufen",
+      "subtitle": "Verschenke sie oder behalte sie selbst. Eingelöste Karten landen in deinem Aufladeguthaben und verfallen nie.",
+      "previewLabel": "So sieht die Karte für die beschenkte Person aus",
+      "sameCards_one": "{{count}} Karte mit eigenem Einlösecode",
+      "sameCards_other": "{{count}} Karten mit gleichem Motiv, Betrag und Gruß, jede mit eigenem Einlösecode",
+      "fields": {
+        "face": "Motiv",
+        "amount": "Betrag",
+        "quantity": "Anzahl",
+        "sender": "Von",
+        "senderHint": "Wird als „Von {{sender}}“ angezeigt",
+        "senderPlaceholder": "Dein Name",
+        "message": "Grußbotschaft (optional)",
+        "messagePlaceholder": "Ein paar Worte für die beschenkte Person",
+        "tooLong": "Höchstens {{max}} Zeichen",
+        "paymentMethod": "Zahlungsmethode"
+      },
+      "decrease": "Eine Karte weniger",
+      "increase": "Eine Karte mehr",
+      "quantityHint": "Bis zu {{limit}} Karten in {{hours}} Stunden · noch {{remaining}} möglich",
+      "quantityLimitReached": "Du hast das Maximum von {{limit}} Karten in {{hours}} Stunden erreicht. Bitte versuche es später erneut.",
+      "orderAmountCap": "Höchstens {{amount}} pro Bestellung",
+      "totalDetail_one": "{{count}} Karte × {{amount}}",
+      "totalDetail_other": "{{count}} Karten × {{amount}}",
+      "pay": "Weiter zur Zahlung",
+      "refundNote": "Geschenkkarten lassen sich nicht in Bargeld umtauschen. Eingelöste Karten werden nicht erstattet. Für eine noch nicht eingelöste Karte kannst du dich wegen einer Erstattung an den Support wenden.",
+      "cancel": "Abbrechen",
+      "loadFailed": "Die Kauflimits für Geschenkkarten konnten nicht geladen werden. Bitte versuche es später erneut.",
+      "checkoutSubtitle_one": "Geschenkkarte {{amount}} × {{count}} · wird direkt nach der Zahlung erstellt",
+      "checkoutSubtitle_other": "Geschenkkarten {{amount}} × {{count}} · werden direkt nach der Zahlung erstellt",
+      "faces": {
+        "cindy": "Cindy · Markenrot",
+        "cat": "Schwarze Katze · Nacht",
+        "bell": "Glocke · Festlich",
+        "leap": "Sprung · Elfenbein"
+      },
+      "errors": {
+        "limitReached": "Du hast das Kauflimit für Geschenkkarten erreicht. Bitte versuche es später erneut.",
+        "amountTooLarge": "Diese Bestellung überschreitet das Zahlungslimit pro Bestellung. Wähle weniger Karten und versuche es erneut."
+      },
+      "done": {
+        "title_one": "Deine Geschenkkarte ist bereit",
+        "title_other": "Deine {{count}} Geschenkkarten sind bereit",
+        "pendingTitle": "Geschenkkarte bezahlt",
+        "loading": "Karten dieser Bestellung werden abgerufen…",
+        "description": "Schick den Einlöselink an eine Freundin oder einen Freund – geöffnet, kann die Karte sofort eingelöst werden. Du kannst auch eine für dich behalten.",
+        "missing": "Die Zahlung ist abgeschlossen. Deine Geschenkkarten erscheinen gleich unter „Meine Geschenkkarten“.",
+        "cardTitle": "Karte {{index}} · {{amount}}",
+        "cardMeta": "Endet auf {{tail}} · {{status}}",
+        "linkHint": "Der Einlöselink ist die Karte: Wer ihn zuerst öffnet, bekommt sie. Schick ihn nur an die Person, die du beschenken möchtest.",
+        "viewAll": "Meine Geschenkkarten ansehen",
+        "finish": "Fertig"
+      },
+      "list": {
+        "title": "Meine Geschenkkarten",
+        "description": "Schick einen Einlöselink an eine Freundin oder einen Freund – geöffnet, kann die Karte sofort eingelöst werden. Nicht verschenkte Karten verfallen nie und du kannst sie selbst einlösen. Eingelöste Karten landen im Aufladeguthaben.",
+        "count_one": "{{count}} Karte",
+        "count_other": "{{count}} Karten",
+        "loadMore": "Mehr laden",
+        "loadFailed": "Deine Geschenkkarten konnten nicht geladen werden",
+        "retry": "Neu laden",
+        "status": {
+          "unclaimed": "Nicht eingelöst",
+          "claimedBy": "Von {{name}} eingelöst",
+          "claimed": "Eingelöst",
+          "redeemedByYou": "Von dir eingelöst",
+          "refunded": "Erstattet",
+          "onHold": "In Bearbeitung, derzeit nicht verfügbar"
+        },
+        "meta": {
+          "purchased": "Gekauft am {{date}} · endet auf {{tail}}",
+          "claimed": "Eingelöst am {{date}} · endet auf {{tail}}",
+          "redeemed": "Eingelöst am {{date}} · endet auf {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Einlöselink kopieren",
+        "copied": "Kopiert",
+        "more": "Weitere Aktionen",
+        "copyCode": "Einlösecode kopieren",
+        "redeemSelf": "Selbst einlösen",
+        "sendEmail": "Per E-Mail senden"
+      },
+      "toasts": {
+        "linkCopied": "Einlöselink kopiert",
+        "codeCopied": "Einlösecode kopiert",
+        "copyFailed": "Kopieren fehlgeschlagen. Bitte erneut versuchen.",
+        "unavailable": "Diese Karte wurde bereits eingelöst oder erstattet",
+        "revealFailed": "Der Einlösecode konnte nicht abgerufen werden. Bitte versuche es später erneut.",
+        "emailQueued": "Wird an {{email}} gesendet"
+      },
+      "email": {
+        "title": "Per E-Mail senden",
+        "description": "Sende den Einlöselink dieser Karte an die Person, der du sie schenkst. Die E-Mail enthält deinen Namen und deine Nachricht.",
+        "previewLabel": "Empfänger erhält",
+        "previewWithMessage": "„{{message}}“ · mit Einlöselink und Code",
+        "previewLinkOnly": "Einlöselink und Code",
+        "recipient": "E-Mail des Empfängers",
+        "placeholder": "name@beispiel.de",
+        "hint": "Du kannst sie an jede Adresse senden. Wer den Einlöselink zuerst öffnet, erhält die Karte.",
+        "cooldown": "Erneutes Senden in {{seconds}} s möglich",
+        "invalid": "Gib eine gültige E-Mail-Adresse ein",
+        "failed": "Senden nicht möglich. Versuche es später erneut.",
+        "send": "Senden",
+        "status": {
+          "sending": "Wird an {{email}} gesendet",
+          "sent": "An {{email}} gesendet",
+          "failed": "Senden an {{email}} fehlgeschlagen",
+          "failedRetry": "Senden an {{email}} fehlgeschlagen. Du kannst sie erneut senden."
+        }
       }
     }
   },
@@ -21507,14 +21731,14 @@
     },
     "taskInbox": {
       "title": "Der Posteingang",
-      "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",
+      "lead": "Wenn du mehrere Aufgaben gleichzeitig betreust, ordnet der Posteingang sie nach Status. Unter „Offen“ findest du neue Ergebnisse und Aufgaben, die auf deine Antwort warten.",
       "pending": {
         "title": "Offen",
         "body": "Aufgaben erscheinen hier, sobald sie ein Ergebnis haben oder auf deine Antwort warten."
       },
       "done": {
         "title": "Erledigt",
-        "body": "Erledigt? Ein Klick auf Erledigt verschiebt die Aufgabe. Gibt es Neues, kommt sie von selbst zurück."
+        "body": "Leere regelmäßig deinen Posteingang. Klicke auf Erledigt, sobald du eine Aufgabe bearbeitet hast."
       },
       "snooze": {
         "title": "Zurückgestellt",
@@ -21849,14 +22073,14 @@
     "openFailed": "GitHub konnte nicht geöffnet werden."
   },
   "hostConnection": {
-    "connecting": "Verbindung mit Cindy wird hergestellt…",
+    "connecting": "Verbindung mit dem Cindy-Hintergrunddienst wird hergestellt…",
     "restoring": "Aufgabenstatus wird wiederhergestellt…",
     "retrying": "Aufgabenstatus noch nicht synchronisiert. Neuer Versuch…",
     "pairing": "Verbindung erneut autorisieren",
-    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du Cindy Host gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
+    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du den Cindy-Hintergrunddienst gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
     "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
     "retry": "Erneut verbinden",
-    "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
+    "desktopAuthHelp": "Aktualisiere die Verbindungseinstellungen für den Cindy-Hintergrunddienst im Startterminal und öffne diesen experimentellen Client erneut."
   },
   "remoteControlConsent": {
     "title": "Fernsteuerung dieses Computers erlauben?",

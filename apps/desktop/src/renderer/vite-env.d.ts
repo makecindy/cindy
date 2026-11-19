@@ -2359,6 +2359,8 @@ interface ElectronAPI {
     accountDeletionRestored: boolean;
     /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687)。 */
     credentialStoreUnavailable?: boolean;
+    /** Client mode only: why the Host serving this window did not start (shared/hostStartFailure.ts). */
+    hostUnavailable?: { reason: string } | null;
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
@@ -2386,6 +2388,7 @@ interface ElectronAPI {
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
+  setProductTokensEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
@@ -5157,7 +5160,8 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex' | 'pi';
+        /** 'acp' = plugin engine task: main requires an `acp-plugin:` providerId and no remote fields. */
+        agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -5175,6 +5179,8 @@ interface ElectronAPI {
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        Promise<import('../shared/projectArchive').ProjectArchiveMember[] | import('../shared/projectArchive').ProjectArchiveReceipt>;
       restoreIfArchived: (
         id: string,
         expected: {
@@ -5791,6 +5797,20 @@ interface ElectronAPI {
    */
   maker: {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
+    /**
+     * Plugin-provided task engines (docs/plans/acp-plugin-bridge.md). Local only: not
+     * tunnelled over device-link, so remote drafts and tasks never call it.
+     */
+    listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /**
+     * Asks engine plugins to republish their models, like the provider model refresh when the picker
+     * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
+     */
+    refreshPluginEngines?: () => Promise<void>;
+    /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
+    onPluginEnginesChanged: (
+      cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
+    ) => () => void;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
     /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
@@ -6799,7 +6819,8 @@ interface ElectronAPI {
      */
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      // 'acp' = 插件引擎(providerId 为 acp-plugin:<插件>:<引擎>，只限本机任务)。
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -6809,7 +6830,7 @@ interface ElectronAPI {
       thinking?: boolean,
     ) => Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       model: string;
       engineReady: boolean;
       deferred?: boolean;

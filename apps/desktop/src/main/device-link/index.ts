@@ -47,6 +47,7 @@ import {
   sharedTaskTopics,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -185,14 +186,16 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime, authorizeSharedTaskTransportRequest } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
-import { providerShareGuestPeer, shortDeviceRef } from '@cindy/device-link';
+import { providerShareGuestPeer, providerShareHostPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied, isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
 import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
 import {
   isProviderShareRefusal,
+  findReceivedShareForExecution,
   getReceivedShares,
+  parseProviderShareAgentDeviceId,
   providerShareAccessEpoch,
   noteProviderShareAccessFailure,
   PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
@@ -694,6 +697,8 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // renderer 认识「待切到插件引擎」的意图(makerChatStore.normalizeAgentSwitchIntent)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   // renderer 只用 resolvedContent 显示工具结果(makerChatStore tool_result / tool_result_full),
   // 事件里的 data.fullText / summary 是同一正文的重复副本,被控端对声明者省掉。
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
@@ -2619,7 +2624,14 @@ export async function remoteBackgroundInvoke(
   assertCurrent();
   options?.preSend?.();
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
-  const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  // The bounded metadata reader can use the existing catalog during a
+  // temporary business-list outage while the signed Agent Net link is valid.
+  const shareId = !options?.liveProviderMetadata && isShareAvailabilityRead(channel, args)
+    ? parseProviderShareAgentDeviceId(agentDeviceId) : null;
+  const retained = shareId ? findReceivedShareForExecution(shareId) : null;
+  const deviceId = retained?.status === 'active'
+    ? providerShareHostPeer(retained.shareId, retained.hostDeviceId)
+    : await resolveRemoteAgentTargetWhenReady(agentDeviceId);
   assertCurrent();
   options?.preSend?.();
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
@@ -2780,10 +2792,10 @@ export async function remoteSubscribe(
       liveTopics = liveTopicsNow();
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
-    assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while restoring subscriptions');
     }
+    assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, {
       channel: DL_SUBSCRIBE_CHANNEL,

@@ -167,9 +167,13 @@ const desktopGuardInclude = [
   'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
+  // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.
+  'src/main/__tests__/usageCorePortWiring.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
+  // User copy rule (2026-11-18): the Cindy background service is never called "Host" in any locale.
+  'src/renderer/i18n/__tests__/hostWordInCopy.guard.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.

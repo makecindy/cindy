@@ -48,7 +48,11 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
 return env;
 }
 
-export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolean): NodeWorkerProcess {
+export function adaptPluginNodeProcess(
+  child: PluginNodeProcess,
+  isChild: boolean,
+  probeProcess: (pid: number, signal: 0) => unknown = process.kill,
+): NodeWorkerProcess {
   const stdout = child.stdout;
   const stderr = child.stderr;
   if (!stdout || !stderr) {
@@ -63,6 +67,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
   >();
   let nativeSpawnObservation: NodeWorkerStartupObservation | null = null;
   let destroyed = false;
+  let exited = false;
   let killed = false;
   let ready = false;
   let messageCount = 0;
@@ -77,6 +82,9 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
       return undefined;
     }
   };
+  // Keep lifecycle identity separate from diagnostic observer state. An observed
+  // PID may disappear from utilityProcess before its exit notification arrives.
+  let processPid = readNativePid();
   const publishNativeSpawnObservation = (pid = readNativePid()): void => {
     try {
       if (nativeSpawnObservation) return;
@@ -97,6 +105,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     }
   };
   const onMessage = (message: unknown) => {
+    if (exited) return;
     messageCount += 1;
     if (
       !ready &&
@@ -119,7 +128,10 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     }
   };
   try {
-    child.on('spawn', () => publishNativeSpawnObservation());
+    child.on('spawn', () => {
+      processPid ??= readNativePid();
+      publishNativeSpawnObservation();
+    });
   } catch {
     // native spawn observer 安装失败不得影响 adapter 构造。
   }
@@ -130,12 +142,16 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     // PID 只用于诊断；getter 异常不得影响 adapter 构造。
   }
   child.on('message', onMessage);
-  child.on('exit', (code) => {
+  const settleExit = (code: number | null): void => {
+    if (exited) return;
+    exited = true;
     destroyed = true;
     killed = true;
     events.emit('exit', code, null);
-  });
+  };
+  child.on('exit', settleExit);
   child.on('error', (type, location) => {
+    if (exited) return;
     events.emit('error', new Error(`Node utilityProcess ${type} at ${location}`));
   });
 
@@ -181,6 +197,21 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
     get killed() {
       return killed;
     },
+    reconcileExit(): boolean {
+      // A kill request, unknown PID or permission error does not prove absence.
+      // A reused PID also remains charged: existence cannot establish its identity.
+      processPid ??= readNativePid();
+      if (!exited && processPid !== undefined) {
+        try {
+          probeProcess(processPid, 0);
+        } catch (error) {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH') {
+            settleExit(null);
+          }
+        }
+      }
+      return exited;
+    },
     on(event: 'exit' | 'error', listener: (...args: unknown[]) => void) {
       events.on(event, listener);
       return adapter;
@@ -190,6 +221,7 @@ export function adaptPluginNodeProcess(child: PluginNodeProcess, isChild: boolea
       return adapter;
     },
     kill(signal?: NodeJS.Signals): boolean {
+      if (exited) return false;
       destroyed = true;
       killed = true;
       if (signal === 'SIGKILL' && child.pid !== undefined) {

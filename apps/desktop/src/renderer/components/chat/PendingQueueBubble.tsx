@@ -87,16 +87,15 @@ export function PendingQueueBubble({
       : presentation.isPlugin
         ? t('newChat.pendingQueue.pluginSenderFallback')
         : null);
+  // Plugin attribution can also be stamped by an edit of a composer item. Its
+  // chatMessage already has the display body, including ranges for UserMessage.
   const body = presentation.isSyntheticTrigger
     ? t(
         presentation.syntheticKind === 'continue'
           ? 'newChat.pendingQueue.syntheticContinueLabel'
           : 'newChat.pendingQueue.syntheticTriggerLabel',
       )
-    : presentation.isOrca ||
-        presentation.isScheduler ||
-        presentation.isSession ||
-        presentation.isPlugin
+    : presentation.isOrca || presentation.isScheduler || presentation.isSession
       ? (presentation.rangedSourceText ?? presentation.displayText)
       : entry.chatMessage.content;
   const status = (

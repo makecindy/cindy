@@ -18,6 +18,11 @@ const names = new Set([
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
+// defaultDecisionForPending moved from register.ts into the preparation steps the Node Host shares.
+const stepsSource = readFileSync(new URL('../maker-ipc/sessionEventPreparationSteps.ts', import.meta.url), 'utf8');
+const stepsAst = ts.createSourceFile('sessionEventPreparationSteps.ts', stepsSource, ts.ScriptTarget.ES2022, true);
+functions.push(...stepsAst.statements.filter((node) => ts.isFunctionDeclaration(node)
+  && node.name && names.has(node.name.text)).map(node => node.getText(stepsAst).replace(/^export /, '')));
 let resolveHandlerSource = '';
 let interactionReaderSource = '';
 function visit(node: ts.Node): void {

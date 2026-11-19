@@ -2939,6 +2939,15 @@ export function registerProviderHandlers(
         modelSourceRequestSignature(request.url, request.init), true) };
     }
     if (!current() || (id && providerConfigMutationCounts.has(id))) return { ok: false, code: 'UNKNOWN', detail: 'model discovery context changed' };
+    if (id && !result.ok) {
+      // Deliberately omit connection IDs, URLs, headers and raw detail: upstream
+      // errors may echo credentials. The stable classification is enough to triage.
+      log.warn('saved provider model refresh failed', {
+        agent: parsed.agent,
+        code: result.code ?? 'UNKNOWN',
+        ...(result.status !== undefined ? { status: result.status } : {}),
+      });
+    }
     bindModelSourceSnapshot(result.models, id ?? undefined, current);
     return result;
   };

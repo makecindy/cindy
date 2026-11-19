@@ -1,5 +1,6 @@
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 
 import {
   getSessionProvider,
@@ -18,7 +19,7 @@ import {
 } from '../maker-host/codex-credential-switch.js';
 
 interface RuntimeSetModelSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   codexThreadModelProviderId?: string | null;
@@ -45,7 +46,7 @@ interface RuntimeSetModelSession {
 
 interface RuntimeSetModelActiveSession {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }
@@ -190,7 +191,15 @@ export async function applyRuntimeSetModelChange(
 ): Promise<ApplyRuntimeSetModelChangeResult> {
   const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;
   const normalizedProviderId = normalizeSessionProviderId(providerId);
-  const sess = maker.getSession(sessionId);
+  const pluginEngineSession = maker.getSession(sessionId);
+  if (pluginEngineSession && pluginEngineSession.agentKind === 'acp') {
+    // Plugin engines list and switch their own models (ACP config option); there is
+    // no catalog route, credential family or rebuild decision to make here.
+    await pluginEngineSession.setModel(model, effort ? { effort } : undefined);
+    logger?.info('runtime set-model applied to plugin engine', { sessionId, model });
+    return { status: 'applied' };
+  }
+  const sess = pluginEngineSession && hasBuiltinAgentKind(pluginEngineSession) ? pluginEngineSession : undefined;
   const currentProviderId = getSessionProvider(sessionId);
   // model-only 调用以 pending 的 providerId 为「当前来源意图」:用户先 deferred 选了
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
@@ -503,7 +512,8 @@ export async function refreshActiveModelContextSettings(input: {
     await input.withSessionLock(active.id, async () => {
       assertCurrent();
       const session = runtime.maker.getSession(active.id);
-      if (!session) return;
+      // Plugin engines have no catalog route or context settings to refresh.
+      if (!session || !hasBuiltinAgentKind(session)) return;
       const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
       if (targets && !targets.some((t) => t.agent === session.agentKind &&
         (source === null || t.providerId === source) && t.modelId === session.model)) return;

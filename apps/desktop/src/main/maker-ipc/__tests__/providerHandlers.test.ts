@@ -25,6 +25,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
@@ -4142,7 +4143,62 @@ describe('provider:test-connection handler', () => {
   });
 });
 
+// #9619: exercise the real IPC + fetch classification. Existing cases did not inspect
+// failure diagnostics. Synthetic upstream text contains secrets to catch accidental
+// logging of detail, headers, connection IDs, or URL parameters. Unit tier, no socket.
+const modelRefreshDiagnostics = vi.hoisted(() => vi.fn());
+vi.mock('../../logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../logger.js')>();
+  return { ...actual, createLogger: (scope: string) => ({
+    ...actual.createLogger(scope), warn: (...args: unknown[]) => modelRefreshDiagnostics(scope, ...args),
+  }) };
+});
+
 describe('provider:models-fetch handler', () => {
+  it.each([401, 503])('records safe saved-refresh diagnostics for HTTP %s', async status => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(
+        'synthetic-secret-response', { status })),
+    }));
+    modelRefreshDiagnostics.mockClear();
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'synthetic-secret-connection',
+      baseUrl: 'https://provider.example/v1?key=synthetic-secret-query',
+      modelsUrl: 'https://provider.example/models?key=synthetic-secret-query',
+      authMethod: 'oauth', apiKey: 'synthetic-secret-token',
+      headers: { 'X-Secret': 'synthetic-secret-header' },
+    });
+    expect(result).toMatchObject({ ok: false, status, code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR' });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed',
+      { agent: 'codex', code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR', status },
+    ]]);
+    expect(JSON.stringify(modelRefreshDiagnostics.mock.calls)).not.toContain('synthetic-secret');
+  });
+
+  it('records a local authentication failure without inventing an HTTP status', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ fetchModels: async () => ({ ok: false, code: 'AUTH_INVALID' }) }));
+    modelRefreshDiagnostics.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'pi', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'oauth',
+    });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed', { agent: 'pi', code: 'AUTH_INVALID' },
+    ]]);
+  });
+
+  it('does not report successful discovery as a failure', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    modelRefreshDiagnostics.mockClear();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'apiKey',
+    })).toMatchObject({ ok: true, models: [{ id: 'm1' }] });
+    expect(modelRefreshDiagnostics).not.toHaveBeenCalled();
+  });
+
   it('rejects an untrusted sender before issuing a credentialed model request', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {

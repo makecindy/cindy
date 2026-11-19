@@ -1,3 +1,5 @@
+import { normalizeGenerationTrace, type GenerationTrace } from './generationTrace.js';
+
 interface RateCounters {
   durationMs: number;
   outputTokens: number;
@@ -13,6 +15,15 @@ export interface RateSample extends RateCounters {
 const MIN_SAMPLE_DURATION_MS = 1000;
 export const RATE_SAMPLE_FRESH_MS = 60_000;
 
+/** A finished model request on the chart's time axis (cumulative generation time). */
+export interface RateMark {
+  durationMs: number;
+  /** Reasoning tokens the provider reported for it; null when it reported no split. */
+  thinkingTokens: number | null;
+  /** How many requests this mark stands for. */
+  requests: number;
+}
+
 export interface RateHistory {
   startedAt: number | null;
   baseline: RateCounters | null;
@@ -25,6 +36,17 @@ export interface RateHistory {
   /** Host speed mode: chart x-offset of the current turn and its last elapsed time. */
   speedOffsetMs?: number;
   speedElapsedMs?: number;
+  /** Host speed mode: requests that finished, oldest first. Old hosts never report any. */
+  marks?: RateMark[];
+  /** Turn and request index of the newest mark, so a repeated snapshot adds nothing. */
+  markStartedAt?: number | null;
+  markIndex?: number;
+  /**
+   * Reasoning and output tokens of this turn's finished requests that reported a
+   * reasoning split: the turn's reasoning share so far. Unset until one did.
+   */
+  turnThinkingTokens?: number;
+  turnThinkingOutputTokens?: number;
 }
 
 export function emptyRateHistory(startedAt: number | null): RateHistory {
@@ -39,6 +61,7 @@ export function emptyRateHistory(startedAt: number | null): RateHistory {
 }
 
 const MAX_RATE_SAMPLES = 60;
+const MAX_RATE_MARKS = 240;
 
 /** Real usage reports are sparse: this is the latest measured interval, not an instantaneous rate. */
 export function recordRunningTokenRate(
@@ -188,6 +211,32 @@ export interface TokenSpeedSnapshot {
   peak?: number;
   /** Display-only cumulative output when some reported tokens had no matching model time. */
   totalOutputTokens?: number;
+  /** The newest finished request of this turn; old hosts omit it. */
+  request?: TokenSpeedRequestMark;
+  /** Bounded host-owned turn history, restores requests missed while this view was absent. */
+  trace?: GenerationTrace;
+}
+
+/** One finished model request, placed on the same axis as `elapsedMs`. */
+export interface TokenSpeedRequestMark {
+  /** 1-based position of the request in its turn. */
+  index: number;
+  /** `elapsedMs` when it finished. */
+  atMs: number;
+  /** Reasoning tokens the provider reported for it; absent when it reported no split. */
+  thinkingTokens?: number;
+  /** Its output tokens, reasoning included. */
+  outputTokens?: number;
+}
+
+function readRequestMark(value: unknown): TokenSpeedRequestMark | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const mark = value as Partial<TokenSpeedRequestMark>;
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  if (!finite(mark.index) || mark.index < 1 || !finite(mark.atMs)) return undefined;
+  return { index: Math.floor(mark.index), atMs: mark.atMs,
+    ...(finite(mark.thinkingTokens) ? { thinkingTokens: Math.floor(mark.thinkingTokens) } : {}),
+    ...(finite(mark.outputTokens) ? { outputTokens: Math.floor(mark.outputTokens) } : {}) };
 }
 
 export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | undefined {
@@ -196,11 +245,14 @@ export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | und
   const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
   if (!finite(speed.rate) || !finite(speed.average) || !finite(speed.tokens) ||
     !finite(speed.elapsedMs) || typeof speed.streaming !== 'boolean') return undefined;
+  const trace = normalizeGenerationTrace(speed.trace);
   return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
+    ...(trace ? { trace } : {}),
     elapsedMs: speed.elapsedMs, streaming: speed.streaming,
     ...(finite(speed.totalOutputTokens) && speed.totalOutputTokens >= speed.tokens
       ? { totalOutputTokens: speed.totalOutputTokens } : {}),
-    ...(finite(speed.peak) ? { peak: speed.peak } : {}) };
+    ...(finite(speed.peak) ? { peak: speed.peak } : {}),
+    ...(readRequestMark(speed.request) ? { request: readRequestMark(speed.request) } : {}) };
 }
 
 /** Record a host speed snapshot into the same chart model as counter samples. */
@@ -223,8 +275,48 @@ export function recordTokenSpeed(
     baseOffset + speed.elapsedMs < lastSampleDuration
     ? lastSampleDuration - speed.elapsedMs
     : baseOffset;
+  const request = speed.request;
+  const newMark = request !== undefined && startedAt !== null &&
+    (history.markStartedAt !== startedAt || request.index > (history.markIndex ?? 0));
+  const previousMarks = history.marks ?? [];
+  const sameMarkTurn = history.markStartedAt === startedAt;
+  // A share needs both numbers from the same request.
+  const shareTokens = newMark && request.thinkingTokens !== undefined && (request.outputTokens ?? 0) > 0
+    ? { thinking: request.thinkingTokens, output: request.outputTokens! } : undefined;
   const next: RateHistory = {
     ...history,
+    ...(newMark ? {
+      marks: [
+        ...previousMarks.slice(-(MAX_RATE_MARKS - 1)),
+        {
+          // A settle can trim earlier provisional time; a mark never moves left of the one before it.
+          durationMs: Math.max(offset + request.atMs, previousMarks.at(-1)?.durationMs ?? 0),
+          thinkingTokens: request.thinkingTokens ?? null,
+          requests: 1,
+        },
+      ],
+      markStartedAt: startedAt,
+      markIndex: request.index,
+      turnThinkingTokens: shareTokens
+        ? (sameMarkTurn ? history.turnThinkingTokens ?? 0 : 0) + shareTokens.thinking
+        : sameMarkTurn ? history.turnThinkingTokens : undefined,
+      turnThinkingOutputTokens: shareTokens
+        ? (sameMarkTurn ? history.turnThinkingOutputTokens ?? 0 : 0) + shareTokens.output
+        : sameMarkTurn ? history.turnThinkingOutputTokens : undefined,
+    } : {}),
+    ...(speed.trace ? {
+      marks: [
+        ...(sameMarkTurn ? previousMarks.filter((mark) => mark.durationMs <= baseOffset) : previousMarks),
+        ...speed.trace.marks.map(([atMs, thinking, requests]) => ({
+          durationMs: offset + atMs, thinkingTokens: thinking < 0 ? null : thinking, requests,
+        })),
+      ].slice(-MAX_RATE_MARKS),
+      markStartedAt: startedAt,
+      markIndex: speed.trace.requests,
+      turnThinkingTokens: speed.trace.reportedOutputTokens > 0
+        ? speed.trace.marks.reduce((sum, mark) => sum + Math.max(0, mark[1]), 0) : undefined,
+      turnThinkingOutputTokens: speed.trace.reportedOutputTokens || undefined,
+    } : {}),
     startedAt,
     baseline: null,
     lastReport: null,
