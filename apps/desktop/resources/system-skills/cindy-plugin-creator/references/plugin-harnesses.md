@@ -122,6 +122,8 @@ agent.on('exit', (code) => process.exit(code ?? 1));
 agent.on('error', (error) => { console.error(String(error)); process.exit(1); });
 ```
 
-`findDsh()` 由你实现:在 `PATH` 中查找,找不到就向 stderr 写明原因并退出。Windows 上 npm 装的命令
-通常是 `.cmd`,Node 启动 `.cmd` 需要 `shell: true`;参数保持常量,不要拼接用户输入。
-目前执行引擎只在本机任务里可用;定时任务、伙伴、多 Agent 协同、远程与手机发起的任务看不到它。
+`findDsh()` 由你实现。在 `PATH` 中查找可执行程序，找不到就向 stderr 写明原因并退出。Windows 上若只有
+npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScript 入口，再用独立安装的 `node.exe` 和参数
+数组启动入口。上例中的参数为固定值。
+
+引擎在安装插件的电脑上运行。手机可以选择被控电脑提供的引擎来新建普通任务。每次新建本机任务的自动化也可以选择插件引擎。
