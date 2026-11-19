@@ -2921,3 +2921,36 @@ it('keeps cross-line code math literal after an invalid reference header', () =>
     expect(parseMobileMarkdownDocument(source, { srcLines }).source).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
   }
 });
+
+
+describe('reference comment checkpoint and markup scanning regressions', () => {
+  it('keeps an open HTML comment across code and math fence checkpoints', () => {
+    for (const fence of ['```\nx\n```', '$$\nx\n$$']) {
+      const prefix = '[s]: https://example.com\n\n<!--\n' + fence + '\n';
+      let previous = parseMobileMarkdownIncremental(prefix);
+      for (const tail of ['[s]', '\n-->\n\n[s]']) {
+        const source = previous.source + tail;
+        previous = parseMobileMarkdownIncremental(source, previous);
+        expect(previous.blocks).toEqual(parseMobileMarkdownDocument(source).blocks);
+      }
+    }
+  });
+
+  it('scans HTML tag markup once per reference paragraph while retaining guards', () => {
+    const paragraph = '<b>x</b> [s] <!-- [s] --> '.repeat(200);
+    const source = '[s]: https://example.com\n\n' + paragraph;
+    const original = RegExp.prototype.exec;
+    let tagScans = 0;
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source.startsWith('<\\/?[A-Za-z]')) tagScans++;
+      return original.call(this, input);
+    });
+    let result: ReturnType<typeof parseMobileMarkdown>;
+    try { result = parseMobileMarkdown(source); } finally { spy.mockRestore(); }
+    const links = result.flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
+    expect(links).toHaveLength(200);
+    expect(tagScans).toBeLessThan(1000);
+    const guarded = parseMobileMarkdown('[s]: https://example.com\n\n<span title="[s]">[s]</span> <!-- [s] --> [s]');
+    expect(guarded.flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
+  });
+});

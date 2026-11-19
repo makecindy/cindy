@@ -107,7 +107,28 @@ function continuationDefinitionEnd(text: string, start: number): number | null {
 /** Read complete literal definitions before inline-code or fence segmentation. */
 function findReferenceDefinitionRanges(text: string, completeOnly = false): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
+  let lineCursor = 0;
+  let paragraph = false;
+  let fence: string | null = null;
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
+    // A definition cannot interrupt prose. Advance through physical lines once
+    // so a header in an open paragraph cannot claim the following math line.
+    while (lineCursor < match.index) {
+      const newline = text.indexOf('\n', lineCursor);
+      const end = newline === -1 ? text.length : newline;
+      const line = text.slice(lineCursor, end);
+      const marker = line.match(FENCE_OPEN_RE)?.[1];
+      if (fence) {
+        if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
+        paragraph = false;
+      } else if (marker) {
+        fence = marker;
+        paragraph = false;
+      } else {
+        paragraph = !!line.trim() && !/^(?: {0,3}#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s| {0,3}(?:[-*_]\s*){3,}$)/.test(line);
+      }
+      lineCursor = end + 1;
+    }
     if (!match[1].trim() || (ranges.length && match.index < ranges[ranges.length - 1][1])) continue;
     let lineEnd = text.indexOf('\n', match.index);
     // An empty definition header can put its destination on the next line.
@@ -115,12 +136,16 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
     // Invalid definitions must not suppress math on the following line.
     const headerEnd = match.index + match[0].length;
     const destinationStart = lineEnd !== -1 && !text.slice(headerEnd, lineEnd).trim() ? lineEnd + 1 : headerEnd;
-    const destinationEnd = continuationDefinitionEnd(text, destinationStart);
+    const destinationEnd = !paragraph && !fence ? continuationDefinitionEnd(text, destinationStart) : null;
     // Coarse header shielding can protect URL-shaped text, but only complete
     // definitions may take precedence over real code spans or fence lines.
     if (completeOnly && destinationEnd === null) continue;
     if (destinationEnd !== null) lineEnd = Math.max(lineEnd, destinationEnd);
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
+    if (destinationEnd !== null) {
+      lineCursor = (lineEnd === -1 ? text.length : lineEnd) + 1;
+      paragraph = false;
+    }
   }
   return ranges;
 }
@@ -132,7 +157,7 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
  * `[log](./run\(1\).md)` / `[r]: ./run\(1\).md` 里的 URL 转义括号都不能被
  * 当成数学定界符改写。单调推进,线性复杂度;结果按起点排序供单指针消费。
  */
-function findLinkDestinationRanges(text: string): Array<[number, number]> {
+function findLinkDestinationRanges(text: string, references: Array<[number, number]>): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   let i = 0;
   while (i < text.length) {
@@ -155,7 +180,7 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
     // 无论是否闭合都推进到已扫过的位置,不回头重扫
     i = Math.max(open + 2, j);
   }
-  for (const range of findReferenceDefinitionRanges(text)) ranges.push(range);
+  for (const range of references) ranges.push(range);
   return ranges.sort((a, b) => a[0] - b[0]);
 }
 
@@ -164,12 +189,12 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
  * 双指针:consumed 是 out 已覆盖到的位置,scan 是扫描位置——跳过分支只推进
  * scan、不动 consumed,被跳过的文本由下一次成功替换或结尾统一搬运。
  */
-function transformMathInText(text: string, preserveLineCount: boolean): string {
+function transformMathInText(text: string, preserveLineCount: boolean, references = findReferenceDefinitionRanges(text)): string {
   if (!text.includes('\\(') && !text.includes('\\[')) return text;
   // link destination 内的 \( \) \[ \] 是 URL 转义,整段保护不参与转换。
   // 惰性条件覆盖两种形态:inline 的 `](` 与 reference 定义的 `]:`。
   const protectedRanges =
-    text.includes('](') || text.includes(']:') ? findLinkDestinationRanges(text) : [];
+    text.includes('](') || text.includes(']:') ? findLinkDestinationRanges(text, references) : [];
   let rangeIndex = 0;
   const inProtectedRange = (pos: number): number => {
     while (rangeIndex < protectedRanges.length && protectedRanges[rangeIndex][1] <= pos) rangeIndex += 1;
@@ -250,6 +275,18 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
   let out = '';
   let cursor = 0;
   const definitions = findReferenceDefinitionRanges(segment, true);
+  const references = findReferenceDefinitionRanges(segment);
+  let referenceIndex = 0;
+  const transformText = (start: number, end: number): string => {
+    // Keep the original paragraph context when inline-code segmentation slices
+    // away earlier prose. Consume intersecting masks in source order.
+    while (referenceIndex < references.length && references[referenceIndex][1] <= start) referenceIndex++;
+    const masks: Array<[number, number]> = [];
+    for (let at = referenceIndex; at < references.length && references[at][0] < end; at++) {
+      masks.push([Math.max(start, references[at][0]) - start, Math.min(end, references[at][1]) - start]);
+    }
+    return transformMathInText(segment.slice(start, end), preserveLineCount, masks);
+  };
   let definitionIndex = 0;
   // 等长闭合缺席记忆化:某长度的闭合运行在位置 p 之后不存在,则更靠后也不
   // 存在(与 transformMathInText 的 closer 记忆化同理,防对抗性输入二次扫描)。
@@ -261,7 +298,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
     // Definition titles are literal, so their backticks must not split the
     // destination/title validation or open a code span in following prose.
     if (definition && (tick === -1 || definition[0] <= tick)) {
-      out += transformMathInText(segment.slice(cursor, definition[0]), preserveLineCount);
+      out += transformText(cursor, definition[0]);
       out += segment.slice(definition[0], definition[1]);
       cursor = definition[1];
       definitionIndex++;
@@ -290,7 +327,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
       }
       if (closeStart === -1) noCloserForLength.add(runLength);
     }
-    out += transformMathInText(segment.slice(cursor, tick), preserveLineCount);
+    out += transformText(cursor, tick);
     if (closeStart === -1) {
       // 无闭合:开序列按字面输出,其后文本继续参与转换
       out += segment.slice(tick, openEnd);
@@ -300,7 +337,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
     out += segment.slice(tick, closeEnd);
     cursor = closeEnd;
   }
-  return out + (cursor < segment.length ? transformMathInText(segment.slice(cursor), preserveLineCount) : '');
+  return out + (cursor < segment.length ? transformText(cursor, segment.length) : '');
 }
 
 export function normalizeMathDelimiters(

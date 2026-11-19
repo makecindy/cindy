@@ -451,3 +451,14 @@ it('keeps code spans literal after invalid reference-shaped headers', () => {
   const source = '[f]: invalid `code\n\\(x\\)`\n\n\\(z\\)';
   expect(normalizeMathDelimiters(source)).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
 });
+
+
+it('normalizes continuation prose after a header inside an open paragraph', () => {
+  for (const preserveLineCount of [false, true]) {
+    for (const prefix of ['text', 'text `code`', '**text** `code`']) {
+      expect(normalizeMathDelimiters(prefix + '\n[id]:\n\\(x\\)', { preserveLineCount })).toBe(prefix + '\n[id]:\n$x$');
+    }
+    const root = 'text\n\n[id]:\n docs/a\\(1\\).md';
+    expect(normalizeMathDelimiters(root, { preserveLineCount })).toBe(root);
+  }
+});

@@ -502,7 +502,7 @@ export function parseMobileMarkdownDocument(
           index + 1,
         );
         code = null;
-        checkpoints.push({
+        if (!inHtmlComment) checkpoints.push({
           charOffset: lineEndOffset(index),
           lineIndex: lineNumber(index + 1),
           blockCount: blockNumber(),
@@ -530,7 +530,7 @@ export function parseMobileMarkdownDocument(
             math.start,
             index + 1,
           );
-          checkpoints.push({
+          if (!inHtmlComment) checkpoints.push({
             charOffset: lineEndOffset(index),
             lineIndex: lineNumber(index + 1),
             blockCount: blockNumber(),
@@ -1482,15 +1482,54 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
+  let tagSpans: Array<[number, number]> | undefined;
+  let commentSpans: Array<[number, number]> | undefined;
+  const contains = (spans: Array<[number, number]>, index: number) => {
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (spans[middle][0] <= index) low = middle + 1;
+      else high = middle;
+    }
+    return low > 0 && index < spans[low - 1][1];
+  };
+  const needsCommentCheck = startsInsideHtmlComment || input.includes('<!--');
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
   return {
     startsInsideHtmlComment,
     references,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
-    needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
+    needsCommentCheck,
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
     commentProbe,
+    referenceInsideMarkup: (index: number) => {
+      if (!tagSpans) {
+        tagSpans = [];
+        HTML_TAG_SPAN_RE.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = HTML_TAG_SPAN_RE.exec(input)) !== null) {
+          tagSpans.push([match.index, match.index + match[0].length]);
+        }
+      }
+      if (contains(tagSpans, index)) return true;
+      if (!needsCommentCheck) return false;
+      if (!commentSpans) {
+        commentSpans = [];
+        const text = commentProbe();
+        let cursor = 0;
+        let open = startsInsideHtmlComment ? 0 : text.indexOf('<!--');
+        while (open !== -1) {
+          const close = text.indexOf('-->', startsInsideHtmlComment && cursor === 0 ? open : open + 4);
+          const end = close === -1 ? text.length : close + 3;
+          commentSpans.push([open, end]);
+          cursor = end;
+          open = text.indexOf('<!--', cursor);
+        }
+      }
+      return contains(commentSpans, index);
+    },
     nextBareUrl: (from: number) => {
       // parseInlines advances monotonically. Reuse only this paragraph's pending
       // candidate (including a miss), never a token whose start was consumed.
@@ -1528,8 +1567,7 @@ function matchMarkdownReference(input: string, from: number, context: InlinePars
       continue;
     }
     if (isBackslashEscaped(input, reference.index)
-      || isInsideHtmlTagMarkup(input, reference.index)
-      || (context.needsCommentCheck && isInsideHtmlComment(context.commentProbe(), reference.index, context.startsInsideHtmlComment))) continue;
+      || context.referenceInsideMarkup(reference.index)) continue;
     const url = reference.url;
     // Entity decoding must not introduce controls into a native URL/path target.
     if (/[\x00-\x1f\x7f]/.test(url)) continue;
