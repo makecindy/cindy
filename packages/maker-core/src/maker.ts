@@ -50,6 +50,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
 } from './agents/base-agent.js';
 import type {
@@ -493,7 +494,7 @@ export interface MakerShutdownReport {
 }
 
 interface FailedHandleCleanup {
-  handle: AgentSessionHandle;
+  handle: Pick<AgentSessionHandle, 'close'>;
   promise: Promise<void> | null;
   onCleaned?: () => void;
 }
@@ -834,16 +835,20 @@ export class Maker {
         });
       }
     };
-    const notifyStartCleanupSucceeded = (): void => {
+    let startCleanupNotification: Promise<void> | undefined;
+    const notifyStartCleanupSucceeded = (): Promise<void> => {
+      if (startCleanupNotification) return startCleanupNotification;
       const cleanup = Promise.resolve()
         .then(() => this.lifecycleHooks.onStartCleanupSucceeded?.(id, startOpts))
         .catch((error) => this.logger.warn('lifecycleHooks.onStartCleanupSucceeded threw', {
           sessionId: id, error: String(error),
         }));
       this.pendingLifecycleCloses.add(cleanup);
+      startCleanupNotification = cleanup;
       void cleanup.then(() => {
         this.pendingLifecycleCloses.delete(cleanup);
       });
+      return cleanup;
     };
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
@@ -954,16 +959,24 @@ export class Maker {
     } catch (error) {
       codexThreadClaim?.release();
       // A generic adapter error does not prove its process stopped. Preserve
-      // host guards; only pre-adapter failure or explicit exit evidence releases them.
+      // host guards; only pre-adapter failure or explicit process/task-release proof releases them.
       const runtimeStopped = error instanceof AgentStartupStoppedError;
+      const resourcesReleased = runtimeStopped || error instanceof AgentStartupResourcesReleasedError;
       const authenticationFailed = error instanceof AgentNotAuthenticatedError;
-      const startupError = runtimeStopped ? error.cause : error;
+      const startupError = resourcesReleased ? error.cause : error;
       await notifyStartFailed(
         'agent-start',
         startupError,
-        agentStartAttempted && !runtimeStopped && !authenticationFailed,
+        agentStartAttempted && !resourcesReleased && !authenticationFailed,
       );
       if (error instanceof AgentStartupCleanupPendingError) {
+        if (error.retryCleanup) {
+          const retryCleanup = error.retryCleanup;
+          this.failedHandleCleanups.set(id, {
+            handle: { close: async () => { await retryCleanup(); await notifyStartCleanupSucceeded(); } },
+            promise: null,
+          });
+        }
         // The adapter still owns this unpublished process. Its eventual close
         // must release only this startup's resources, even after a rebuild.
         void error.whenStopped.then(notifyStartCleanupSucceeded).catch((cleanupError) => {
