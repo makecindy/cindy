@@ -34,7 +34,7 @@ import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwit
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
-import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
+import { groupLines, layoutTopology, LINK_LABEL_TILE_GAP, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { LinkTransport, TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
@@ -201,14 +201,15 @@ const PILL_H = 16;
 const INLINE_PILL_MIN_W = 92;
 const STACKED_PILL_MIN_W = 52;
 const PILL_COLUMN_GAP = 4;
-/** Keep at least 2px of the usual 14px clearance next to a computer tile. */
-const PILL_MAX_SHIFT = 12;
+/** Keep at least 2px of clearance next to a computer tile. */
+const PILL_MAX_SHIFT = LINK_LABEL_TILE_GAP - 2;
 
 /** 链路标签(底层传输协议 · 延迟):at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
 function LatencyPill({
   at,
   side,
   maxWidth,
+  stacked,
   transport,
   ms,
   strong,
@@ -217,6 +218,7 @@ function LatencyPill({
   at: Point;
   side: 1 | -1;
   maxWidth: number;
+  stacked: boolean;
   transport: LinkTransport | null;
   ms: number | null;
   strong: boolean;
@@ -226,10 +228,6 @@ function LatencyPill({
   const transportLabel = linkTransportLabel(transport, t);
   const latency = ms === null ? null : formatRtt(ms, t);
   if (!transportLabel && !latency) return null;
-  // WebRTC is wider than UDP or WS and needs more room beside the latency.
-  const inlineWidth = transport === 'webrtc' ? PILL_W : INLINE_PILL_MIN_W;
-  const compact = maxWidth < inlineWidth;
-  const stacked = compact && transportLabel !== null && latency !== null;
   return (
     <div
       className={cn('pointer-events-none flex items-center', side === 1 ? 'justify-end' : 'justify-start')}
@@ -239,15 +237,14 @@ function LatencyPill({
       <span
         className={cn(
           'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5 text-11 leading-none tabular-nums',
-          compact ? 'px-px' : 'px-1.5',
-          stacked && 'flex flex-col items-center gap-0.5',
+          stacked ? 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px' : 'px-1.5',
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
         style={{ maxWidth }}
       >
         {stacked ? (
           <>
-            <span>{transportLabel}</span>
+            <span className="max-w-full truncate">{transportLabel}</span>
             <span className="max-w-full truncate">{latency}</span>
           </>
         ) : [transportLabel, latency].filter(Boolean).join(' · ')}
@@ -349,6 +346,11 @@ export function RemoteConnectionTopology({
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
   const relaySide = layout.groups.find((group) => group.relay)?.side;
+  const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
+  const hubPillRoom = labelReach - HUB_TEXT_W / 2;
+  const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
+  // Both columns use the tighter side's room so a protocol or latency update cannot change the line count.
+  const stackPills = (relaySide === undefined ? hubPillRoom : relayPillRoom) < INLINE_PILL_MIN_W;
   const selfName = model.self?.name || t('settings.devices.thisDevice');
   const selfProtocol = selfProtocolKind(model, linkStatus);
   const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
@@ -394,7 +396,8 @@ export function RemoteConnectionTopology({
     const g = layout.groups.find((x) => x.id === group.id);
     if (!g) continue;
     // Keep the entire column outside the hub text and the relay caption on this side.
-    const captionEdge = Math.max(HUB_TEXT_W / 2, group.side === relaySide ? m.relay + RELAY_LABEL_OUTER : 0);
+    const pillRoom = group.side === relaySide ? relayPillRoom : hubPillRoom;
+    const shift = Math.min(PILL_MAX_SHIFT, Math.max(0, STACKED_PILL_MIN_W - pillRoom));
     const { toRelay, rows } = groupLines(layout, group, (id) => (isPhone(id) ? PHONE_W / 2 : m.half));
     if (toRelay && g.relay) {
       const emphasis = emphasisFor(group.ids, model.relay.flow !== null);
@@ -539,14 +542,13 @@ export function RemoteConnectionTopology({
       const transport = reconnecting ? null : peerTransport(node);
       const displayName = deviceLabel(node, t);
       const description = [displayName, protocol, linkTransportLabel(transport, t), sub.text].filter(Boolean).join(' · ');
-      const pillRoom = Math.abs(row.at.x - hub.x) - captionEdge - PILL_COLUMN_GAP;
-      const shift = Math.min(PILL_MAX_SHIFT, Math.max(0, STACKED_PILL_MIN_W - pillRoom));
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
           at={{ ...row.at, x: row.at.x + group.side * shift }}
           side={group.side}
           maxWidth={Math.min(PILL_W, pillRoom + shift)}
+          stacked={stackPills}
           transport={transport}
           ms={node.rttMs}
           strong={emphasis !== 'rest' && emphasis !== 'dim'}

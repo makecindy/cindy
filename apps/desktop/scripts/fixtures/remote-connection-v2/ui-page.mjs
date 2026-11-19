@@ -309,6 +309,19 @@ export default {
       await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 1 })}`, { exact: true }).waitFor();
       await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 97 })}`, { exact: true }).waitFor();
       await page.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).waitFor();
+      // Browser layout regression: the wide and minimum-width fixtures alone miss the
+      // intermediate width where WebRTC and UDP on opposite sides used different line counts.
+      const viewport = ui.viewport;
+      await page.setViewportSize({ ...viewport, width: 860 });
+      for (const [transport, value] of [[webrtc, 3], [udp, 1], [udp, 97]]) {
+        const latency = await ui.t('settings.remoteControl.v2.ms', { value });
+        const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${latency}$`));
+        const protocolBox = await pill.getByText(transport, { exact: true }).boundingBox({ timeout: 1000 });
+        const latencyBox = await pill.getByText(latency, { exact: true }).boundingBox({ timeout: 1000 });
+        assert.ok(protocolBox && latencyBox && latencyBox.y >= protocolBox.y + protocolBox.height, 'all peer labels stack');
+      }
+      await ui.capture('stacked-links');
+      await page.setViewportSize(viewport);
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
