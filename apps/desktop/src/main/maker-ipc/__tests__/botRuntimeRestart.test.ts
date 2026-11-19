@@ -14,6 +14,7 @@ afterEach(() => vi.useRealTimers());
 
 function harness() {
   return {
+    ensureQueueRestored: vi.fn(async () => {}),
     stopInput: vi.fn(),
     flushStopPersistence: vi.fn(async () => {}),
     withSessionLock: async <T>(_id: string, run: () => Promise<T>) => run(),
@@ -140,6 +141,33 @@ describe('Bot runtime restart', () => {
     });
     await restartBotRuntime('canonical', vi.fn(), deps);
     expect(order).toEqual(['flush', 'rebuild']);
+  });
+
+  it('restores the queue before stopping so the stop cause can be persisted at all', async () => {
+    // #7512 review P1:未恢复的会话上 stop 只能标内存态,maybePersistQueueSnapshot
+    // 因「未恢复不写」早退,flush 空转 —— 重启报成功而快照里没有暂停来源。
+    // 与 explicitStopImpl 同序:恢复 → stop → 落盘。
+    const deps = harness();
+    const order: string[] = [];
+    deps.ensureQueueRestored.mockImplementation(async () => { order.push('restore'); });
+    deps.stopInput.mockImplementation(() => { order.push('stop'); });
+    deps.flushStopPersistence.mockImplementation(async () => { order.push('flush'); });
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      order.push('rebuild');
+      assertCurrent();
+    });
+    await restartBotRuntime('canonical', vi.fn(), deps);
+    expect(order).toEqual(['restore', 'stop', 'flush', 'rebuild']);
+  });
+
+  it('fails the restart before stopping when the queue snapshot cannot be restored', async () => {
+    const deps = harness();
+    deps.ensureQueueRestored.mockImplementation(async () => { throw new Error('snapshot read failed'); });
+    await expect(restartBotRuntime('canonical', vi.fn(), deps)).rejects.toThrow('snapshot read failed');
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(deps.flushStopPersistence).not.toHaveBeenCalled();
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(deps.onClosed).not.toHaveBeenCalled();
   });
 
   it('fails the restart when the stop cause cannot be persisted', async () => {
