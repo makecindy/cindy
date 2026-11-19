@@ -1,3 +1,4 @@
+import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 import { isTaskBusyForArchive } from '../../task-management/service.js';
 import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
@@ -224,7 +225,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
-  registerBotIpc();
+  registerBotIpc((id, subject, initialTitle) => { void refineCreatedTaskTitle(id, subject, { initialTitle }); });
   registerBotSkillSettingsIpc();
   registerCompanionImport();
   registerBotRemoteResourceProvider(botRemoteManagement);

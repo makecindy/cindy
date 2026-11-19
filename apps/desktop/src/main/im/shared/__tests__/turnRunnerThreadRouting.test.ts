@@ -569,6 +569,8 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
       'slack_T1_U1_100_1',
       'hello',
       'Slack · ',
+      'Slack · U1',
+      undefined,
     );
   });
 
@@ -615,6 +617,8 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
       'desktop-new-1',
       '帮我做个新功能',
       'Slack · ',
+      'FBot · New',
+      undefined,
     );
   });
 });
