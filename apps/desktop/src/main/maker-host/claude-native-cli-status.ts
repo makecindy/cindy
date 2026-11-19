@@ -46,6 +46,7 @@ function sameLoginStatus(a: ClaudeCliLoginStatus | null, b: ClaudeCliLoginStatus
     a.loginExpiresAt === b.loginExpiresAt &&
     a.subscriptionType === b.subscriptionType &&
     a.planTier === b.planTier &&
+    a.planDisplayName === b.planDisplayName &&
     a.authMethod === b.authMethod
   );
 }
