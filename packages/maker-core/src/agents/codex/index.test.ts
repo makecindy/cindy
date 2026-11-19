@@ -27600,6 +27600,8 @@ describe('CodexAgent turn lifecycle', () => {
   it.each([
     { additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 },
     { additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model', status: 403 },
+    // #11484: same current-turn/late-event guards must protect the nested 407.
+    { additionalDetails: 'HTTP 407: ' + JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }) } }), status: 407 },
   ])('interrupts a retrying turn on explicit model rejection ($status)', async ({ additionalDetails, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
@@ -27633,8 +27635,8 @@ describe('CodexAgent turn lifecycle', () => {
       expect(await nextEvent(iterator)).toMatchObject({
         type: 'error',
         data: {
-          message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
-          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+          message: expect.stringContaining(status === 407 ? 'https://example.invalid/apply' : '[MODEL_SELECTION_UNAVAILABLE]'),
+          reason: status === 407 ? 'account_access_denied' : 'model_unavailable', isTerminal: true, willRetry: false,
         },
       });
       expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
