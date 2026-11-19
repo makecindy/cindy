@@ -465,7 +465,7 @@ it('normalizes continuation prose after a header inside an open paragraph', () =
 
 
 it('protects continuation targets after table and HTML block boundaries', () => {
-  for (const prefix of ['name | value\n--- | ---', '| name | value |\n| one | two |', '<!-- complete -->', '<!DOCTYPE html>', '<?xml version="1"?>']) {
+  for (const prefix of ['name | value\n--- | ---', '| name | value |\n| one | two |', '<!-- complete -->', '<!DOCTYPE html>', '<?xml version="1"?>', '<![CDATA[<!--]]>\n', '<?xml value="<!--"?>\n', '<!DOCTYPE x "a <!-- b">\n']) {
     const source = prefix + '\n[f]:\n docs/a\\(1\\).md\n\n\\(x\\)';
     for (const preserveLineCount of [false, true]) {
       expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source.slice(0, -5) + '$x$');

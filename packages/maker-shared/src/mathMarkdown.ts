@@ -8,6 +8,7 @@ import {
 export {
   parseMarkdownTableBlock,
   advanceMarkdownHtmlCommentState,
+  markdownLiteralMarkupSpans,
   COMPLETE_MARKDOWN_HTML_TAG_LINE,
   MARKDOWN_BLOCK_HTML_LINE,
   markdownRawHtmlEnd,

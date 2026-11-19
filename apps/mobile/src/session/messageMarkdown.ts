@@ -6,6 +6,7 @@ import {
   COMPLETE_MARKDOWN_HTML_TAG_LINE as COMPLETE_HTML_TAG_LINE,
   MARKDOWN_BLOCK_HTML_LINE,
   markdownRawHtmlEnd,
+  markdownLiteralMarkupSpans,
 } from '@cindy/maker-shared/math-markdown';
 import {
   BARE_HTTP_URL_RE_SOURCE,
@@ -1512,41 +1513,9 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
       }
       if (contains(tagSpans, index)) return true;
       if (!markupSpans) {
-        markupSpans = [];
-        const text = commentProbe();
-        // Recognize comments and declarations in source order. Markers inside
-        // CDATA, processing instructions or quoted DTD text are literal, so
-        // blanking comments first could hide their real closing delimiter.
-        const opening = /<!--|<!\[CDATA\[|<!(?!--)|<\?/g;
-        if (startsInsideHtmlComment) {
-          const close = text.indexOf('-->');
-          const end = close === -1 ? text.length : close + 3;
-          markupSpans.push([0, end]);
-          opening.lastIndex = end;
-        }
-        let match: RegExpExecArray | null;
-        while ((match = opening.exec(text)) !== null) {
-          if (contains(tagSpans, match.index)) continue;
-          let end = text.length;
-          if (match[0] === '<?' || match[0] === '<![CDATA[' || match[0] === '<!--') {
-            const close = match[0] === '<?' ? '?>' : match[0] === '<!--' ? '-->' : ']]>';
-            const at = text.indexOf(close, opening.lastIndex);
-            if (at !== -1) end = at + close.length;
-          } else {
-            let quote = '';
-            let brackets = 0;
-            for (let at = opening.lastIndex; at < text.length; at++) {
-              const char = text[at];
-              if (quote) { if (char === quote) quote = ''; continue; }
-              if (char === '"' || char === "'") quote = char;
-              else if (char === '[') brackets++;
-              else if (char === ']') brackets = Math.max(0, brackets - 1);
-              else if (char === '>' && brackets === 0) { end = at + 1; break; }
-            }
-          }
-          markupSpans.push([match.index, end]);
-          opening.lastIndex = end;
-        }
+        markupSpans = markdownLiteralMarkupSpans(
+          commentProbe(), startsInsideHtmlComment, at => contains(tagSpans!, at),
+        ).map(span => [span.start, span.end]);
       }
       return contains(markupSpans, index);
     },

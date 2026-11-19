@@ -2979,6 +2979,11 @@ describe('unresolved references and raw declaration regressions', () => {
       const links = parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
       expect(links).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
     }
+    for (const markup of ['<![CDATA[<!--]]>', '<?xml value="<!--"?>', '<!DOCTYPE x "a <!-- b">']) {
+      for (const source of ['[s]: https://example.com/\n\n' + markup + '\n\n[site][s]', markup + '\n\n[s]: https://example.com/\n\n[site][s]']) {
+        expect(parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
+      }
+    }
     const literal = '[s]: https://example.com/\n\n`<?` [site][s] <!-- <? --> [site][s]';
     expect(parseMobileMarkdown(literal).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
   });

@@ -19,24 +19,52 @@ export function markdownRawHtmlEnd(line: string): RegExp | null {
   return tag ? new RegExp(`</${tag[1]}\\s*>`, 'i') : null;
 }
 
+/** Source-ordered literal spans; comment markers inside declarations are data. */
+export function markdownLiteralMarkupSpans(
+  text: string,
+  startsInComment = false,
+  ignoreOpening: (index: number) => boolean = () => false,
+): Array<{ start: number; end: number; comment: boolean; closed: boolean }> {
+  const spans: Array<{ start: number; end: number; comment: boolean; closed: boolean }> = [];
+  const opening = /<!--|<!\[CDATA\[|<!(?!--)|<\?/g;
+  if (startsInComment) {
+    const close = text.indexOf('-->');
+    const end = close === -1 ? text.length : close + 3;
+    spans.push({ start: 0, end, comment: true, closed: close !== -1 });
+    opening.lastIndex = end;
+  }
+  let match: RegExpExecArray | null;
+  while ((match = opening.exec(text)) !== null) {
+    if (ignoreOpening(match.index)) continue;
+    let end = text.length;
+    let closed = false;
+    const comment = match[0] === '<!--';
+    if (match[0] === '<?' || match[0] === '<![CDATA[' || comment) {
+      const delimiter = match[0] === '<?' ? '?>' : comment ? '-->' : ']]>';
+      const at = text.indexOf(delimiter, opening.lastIndex);
+      if (at !== -1) { end = at + delimiter.length; closed = true; }
+    } else {
+      let quote = '';
+      let brackets = 0;
+      for (let at = opening.lastIndex; at < text.length; at++) {
+        const char = text[at];
+        if (quote) { if (char === quote) quote = ''; continue; }
+        if (char === '"' || char === "'") quote = char;
+        else if (char === '[') brackets++;
+        else if (char === ']') brackets = Math.max(0, brackets - 1);
+        else if (char === '>' && brackets === 0) { end = at + 1; closed = true; break; }
+      }
+    }
+    spans.push({ start: match.index, end, comment, closed });
+    opening.lastIndex = end;
+  }
+  return spans;
+}
+
 export function advanceMarkdownHtmlCommentState(line: string, inComment: boolean): boolean {
   const scan = line.replace(/`[^`]*`/g, span => ' '.repeat(span.length));
-  let pos = 0;
-  let state = inComment;
-  while (pos < scan.length) {
-    if (state) {
-      const close = scan.indexOf('-->', pos);
-      if (close === -1) return true;
-      state = false;
-      pos = close + 3;
-    } else {
-      const open = scan.indexOf('<!--', pos);
-      if (open === -1) return false;
-      state = true;
-      pos = open + 4;
-    }
-  }
-  return state;
+  const last = markdownLiteralMarkupSpans(scan, inComment).at(-1);
+  return Boolean(last?.comment && !last.closed);
 }
 
 
