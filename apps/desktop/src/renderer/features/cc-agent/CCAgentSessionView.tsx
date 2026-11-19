@@ -1014,11 +1014,12 @@ function CCAgentSessionContent({
   // Split panes stay mounted together; only the route-owning pane may consume
   // hardware commands. The compact files rail is not a split pane.
   const ownsHardwareTaskActions =
-    ownsRoute ||
-    (Boolean(sessionId) &&
-      viewVisible &&
-      navigationMode !== 'sidebar-embedded' &&
-      navigationMode !== 'split-pane');
+    paneFocused &&
+    (ownsRoute ||
+      (Boolean(sessionId) &&
+        viewVisible &&
+        navigationMode !== 'sidebar-embedded' &&
+        navigationMode !== 'split-pane'));
   const showComposerControlledBanner = viewVisible && (ownsRoute || showControlledBanner);
   const controlledBy = useControlledBy();
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
