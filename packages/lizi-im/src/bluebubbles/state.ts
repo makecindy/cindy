@@ -178,6 +178,10 @@ export class BlueBubblesReceipts {
     if (!previous) throw new Error('BLUEBUBBLES_RECEIPT_MISSING');
     this.update({ kind: 'inbox', id: guid, value: { ...previous, state } });
   }
+  hasSentMessage(chatId: string, messageId: string): boolean {
+    return Object.values(this.state.outbox).some(entry =>
+      entry.state === 'sent' && entry.chatId === chatId && entry.messageId === messageId);
+  }
   confirmedSend(id: string): string | undefined {
     const row = this.state.outbox[id];
     return row?.state === 'sent' ? row.messageId : undefined;

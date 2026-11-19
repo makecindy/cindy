@@ -65,12 +65,28 @@ class BlueBubblesReceiveError extends Error {
 }
 export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token', 'bluebubbles-echo-key'] as const;
 
+function iMessageAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 320) return;
+  if (/^\+[1-9]\d{1,14}$/.test(value)) return value;
+  if (/^[^@\s:]+@[^@\s:]+$/.test(value)) return value.toLowerCase();
+}
+
+function mentionsSelf(body: unknown, addresses: ReadonlySet<string>): boolean {
+  if (!addresses.size || !Array.isArray(body)) return false;
+  return body.some(part => Array.isArray(part?.runs) && part.runs.some((run: unknown) => {
+    const attribute = (run as { attributes?: Record<string, unknown> } | null)?.attributes?.__kIMMentionConfirmedMention;
+    const address = iMessageAddress(attribute);
+    return address !== undefined && addresses.has(address);
+  }));
+}
+
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private status: IMStatus = { kind: 'idle' };
   private readonly messages = new Set<Handler>();
   private readonly statuses = new Set<(status: IMStatus) => void>();
   private config: BlueBubblesConfig | null = null;
   private api: BlueBubblesApi | null = null;
+  private selfAddresses: ReadonlySet<string> = new Set();
   private receipts: BlueBubblesReceipts | null = null;
   private pendingEdit: object | null = null;
   private readonly chats = new Map<string, BlueBubblesChat>();
@@ -320,6 +336,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
 
   async dispose(): Promise<void> {
     ++this.generation;
+    this.selfAddresses = new Set();
     if (this.timer) clearTimeout(this.timer);
     if (this.deferredTimer) clearTimeout(this.deferredTimer);
     this.timer = null;
@@ -404,7 +421,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     // Finish or park preparation already in progress before enumerating history.
     await this.pumping?.catch(error => { if (!(error instanceof BlueBubblesReceiveError)) throw error; });
     this.assertLive(generation);
-    await api.info(); this.assertLive(generation);
+    this.selfAddresses = new Set();
+    const info = await api.info(); this.assertLive(generation);
+    // This endpoint reports the signed-in Apple account on this BlueBubbles
+    // server. The configured ownerAddress instead identifies a remote sender.
+    const account = info.private_api === true && info.helper_connected === true
+      && config.chatGuids.some(chat => this.isGroup(chat))
+      ? await api.iMessageAccount().catch(() => null) : null;
+    this.assertLive(generation);
+    const addresses = new Set<string>();
+    if (Array.isArray(account?.vetted_aliases)) {
+      for (const entry of account.vetted_aliases) {
+        const address = iMessageAddress(entry?.Alias);
+        if (address) addresses.add(address);
+      }
+    }
+    this.selfAddresses = addresses;
     const before = this.now();
     // All chats share this scan's upper watermark. A later POST must await its own scan.
     const inactive = receipts.inactiveCorrelationsByChat(this.activeSends);
@@ -587,13 +619,18 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (receipts.wasStopped(guid, chat.guid, message.dateCreated)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
+          const group = this.isGroup(chat.guid);
+          // The Apple thread root can point to our message even when the direct
+          // reply targets someone else. Leave it to context, never activation.
+          const invoked = group && (this.isGroupInvocation(message.text ?? '')
+            || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
+            || mentionsSelf(message.attributedBody, this.selfAddresses));
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
             speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
             ...(typeof message.threadOriginatorGuid === 'string' && message.threadOriginatorGuid !== guid ? { imessageReplyGuid: message.threadOriginatorGuid } : {}),
             interactionSource: { chatName: chat.displayName, senderName: sender },
-            ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
-              invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
+            ...(group ? { ambient: !invoked, invoked } : {}) };
           this.eventSentAt.set(event, message.dateCreated);
           this.pendingInputs.set(guid, event);
           preparing = true;
