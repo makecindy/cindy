@@ -40,18 +40,24 @@ function makeProvider(options: HarnessOptions) {
 }
 
 describe('xAI video provider · capabilities', () => {
+  it('rejects mixing classic and 1.5 contracts in one provider', () => {
+    expect(() => makeProvider({ fetchImplementation: vi.fn<typeof fetch>(),
+      modelAliases: [XAI_VIDEO_CATALOG_MODEL_ID, 'xai/grok-imagine-video-1.5'] })).toThrow('分别注册');
+  });
+
   // #11243 / unit: verify the serialized first/last frame request through
   // submit, not just the advertised image count; classic inputs stay rejected.
   it('submits both frame pins for 1.5 and never silently drops the last image', async () => {
     const fetchImplementation = vi.fn<typeof fetch>(async () => Response.json({ request_id: 'frames-task' }));
     const alias = 'xai/grok-imagine-video-1.5';
-    const provider = makeProvider({ fetchImplementation, modelAliases: [alias, XAI_VIDEO_CATALOG_MODEL_ID] });
+    const provider = makeProvider({ fetchImplementation, modelAliases: [alias] });
+    const classic = makeProvider({ fetchImplementation });
     const request = { prompt: 'move', duration: 6, resolution: '720p', images: ['data:image/png;base64,AAAA', 'data:image/png;base64,BBBB'] };
     await provider.submit(request, alias);
     expect(JSON.parse(fetchImplementation.mock.calls[0]![1]!.body as string)).toMatchObject({
       model: 'grok-imagine-video-1.5', image: { url: request.images[0] }, last_frame: { url: request.images[1] },
     });
-    await expect(provider.submit(request, XAI_VIDEO_CATALOG_MODEL_ID)).rejects.toThrow();
+    await expect(classic.submit(request, XAI_VIDEO_CATALOG_MODEL_ID)).rejects.toThrow();
     await expect(provider.submit({ ...request, resolution: '1080p' }, alias)).rejects.toThrow('720p');
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });

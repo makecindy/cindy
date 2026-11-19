@@ -5,6 +5,8 @@
  * adapter translates Cindy's normalized request into xAI's async video API and
  * keeps the originating account scope attached to the opaque in-memory handle,
  * so an account switch cannot continue or download another owner's task.
+ * Classic and 1.5 aliases use separate providers because capabilities belong
+ * to the provider, as with the existing Seedance generations.
  */
 
 import { Buffer } from 'node:buffer';
@@ -306,6 +308,13 @@ async function readBoundedVideo(
   return Buffer.concat(chunks, total);
 }
 
+export function createXaiVideoProviders(opts: CreateXaiVideoProviderOptions): VideoProvider[] {
+  const aliases = opts.modelAliases ?? [XAI_VIDEO_CATALOG_MODEL_ID];
+  return [aliases.filter(alias => !isXaiVideo15(alias)), aliases.filter(isXaiVideo15)]
+    .filter(group => group.length > 0)
+    .map(modelAliases => createXaiVideoProvider({ ...opts, modelAliases }));
+}
+
 export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): VideoProvider {
   const doFetch = opts.fetchImplementation ?? fetch;
   const requestedLimit = opts.maxVideoDownloadBytes;
@@ -323,10 +332,15 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     }
     upstreamByAlias.set(alias, alias.slice('xai/'.length));
   }
+  const supportsFrameControls = aliases.some(isXaiVideo15);
+  if (supportsFrameControls && aliases.some(alias => !isXaiVideo15(alias))) {
+    throw new Error('xAI 经典型号与 1.5 需要分别注册视频执行器');
+  }
+  const providerId = supportsFrameControls ? 'xai-video-1.5' : 'xai-video';
   const expectedSecondsByAlias = Object.fromEntries(aliases.map((alias) => [alias, 180]));
   const capabilities: VideoProviderCapabilities = {
     ...BASE_CAPABILITIES,
-    ...(aliases.some(isXaiVideo15) ? { maxImagesByRefMode: GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE } : {}),
+    ...(supportsFrameControls ? { maxImagesByRefMode: GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE } : {}),
     modelAliases: aliases.map((alias) => ({
       alias,
       internalModel: upstreamByAlias.get(alias)!,
@@ -440,7 +454,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     }
     assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     return {
-      providerId: 'xai-video',
+      providerId,
       taskId: response.request_id,
       modelUsed: upstreamModelId,
       submittedAt: Date.now(),
@@ -454,7 +468,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     signal?: AbortSignal,
   ): Promise<VideoTaskStatus> {
     if (
-      handle.providerId !== 'xai-video' ||
+      handle.providerId !== providerId ||
       !handle.ownerScopeKey ||
       !Number.isSafeInteger(handle.credentialGeneration) ||
       handle.credentialGeneration! < 0
@@ -540,7 +554,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
   }
 
   return {
-    id: 'xai-video',
+    id: providerId,
     capabilities,
     submit,
     poll,
