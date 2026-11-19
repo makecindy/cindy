@@ -2,7 +2,7 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useProportionalWidth } from '../useProportionalWidth';
+import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../useProportionalWidth';
 
 const BREAKPOINTS = [560, 600, 700] as const;
 
@@ -49,8 +49,8 @@ describe('useProportionalWidth resize hot path', () => {
     let latestBand = -1;
     let latestCompact = false;
 
-    function Harness({ paneLayout = true }: { paneLayout?: boolean }) {
-      const width = useProportionalWidth(914, { paneLayout, responsiveBreakpoints: BREAKPOINTS });
+    function Harness() {
+      const width = useProportionalWidth(914, { expandTo: TASK_MESSAGE_MAX_WIDTH, responsiveBreakpoints: BREAKPOINTS });
       renders += 1;
       latestBand = width.inputWidthBand;
       latestCompact = width.isCompact;
@@ -66,11 +66,10 @@ describe('useProportionalWidth resize hot path', () => {
     expect(latestBand).toBe(3);
     expect(latestCompact).toBe(false);
 
-    // Feedback #12, unit tier, real hook. The previous centered cap also
-    // capped the composer. Minimum failure:1200px pane must retain914px
-    // reading width while its input uses1120px and content starts at50px.
-    // Existing hot-path coverage never exercised independent input sizing.
-    for (const [pane, message, input] of [[1200, 914, 1120], [1400, 914, 1320], [1600, 914, 1520], [2400, 914, 2320]]) {
+    // Feedback #12, unit tier, real hook. A fixed cap never covered the
+    // laptop-to-large-pane transition: preserve914 through1200, interpolate,
+    // then bound text and wide blocks together, without session rerenders.
+    for (const [pane, message, input] of [[1200, 914, 934], [1400, 1017, 1037], [1600, 1120, 1140], [2400, 1120, 1140]]) {
       measuredWidth = pane;
       act(() => {
         notifyResize?.(
@@ -80,7 +79,6 @@ describe('useProportionalWidth resize hot path', () => {
       });
       expect(container.style.getPropertyValue('--cindy-message-width')).toBe(`${message}px`);
       expect(container.style.getPropertyValue('--cindy-input-width')).toBe(`${input}px`);
-      expect(container.style.getPropertyValue('--cindy-message-margin-start')).toBe('50px');
       expect(renders).toBe(initialRenderCount);
     }
 
@@ -119,13 +117,5 @@ describe('useProportionalWidth resize hot path', () => {
     });
     expect(container.style.getPropertyValue('--cindy-input-width')).toBe('620px');
     expect(renders).toBe(renderCountAfterBreakpoint);
-
-    // Shared-hook consumers that do not opt into the task pane keep their
-    // existing centered composer; switching modes also clears the inherited inset.
-    measuredWidth = 1400;
-    view.rerender(<Harness paneLayout={false} />);
-    expect(container.style.getPropertyValue('--cindy-message-width')).toBe('914px');
-    expect(container.style.getPropertyValue('--cindy-input-width')).toBe('934px');
-    expect(container.style.getPropertyValue('--cindy-message-margin-start')).toBe('auto');
   });
 });

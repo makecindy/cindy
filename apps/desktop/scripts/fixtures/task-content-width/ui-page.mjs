@@ -28,7 +28,7 @@ export default {
     'text-width-large': { about: 'Plain paragraphs at the same1920px window as the mixed content', data: { textOnly: true } },
     'text-width-notebook': { about: 'Plain paragraphs retain the914px laptop baseline', data: { textOnly: true }, viewport: { width: 1440, height: 900 } },
     'text-width-normal': { about: 'Plain paragraphs at1280px effective width', data: { textOnly: true }, viewport: { width: 1280, height: 900 } },
-    'text-width-ultrawide': { about: 'Plain paragraphs keep the reading width and start edge on an ultrawide pane', data: { textOnly: true }, viewport: { width: 3440, height: 1440 } },
+    'text-width-ultrawide': { about: 'Plain paragraphs remain bounded on an ultrawide pane', data: { textOnly: true }, viewport: { width: 3440, height: 1440 } },
     'text-width-scale125': { about: 'Plain paragraphs at1536px effective scaled width', data: { textOnly: true }, viewport: { width: 1536, height: 864 } },
     'text-width-scale150': { about: 'Plain paragraphs at1280px effective scaled width', data: { textOnly: true }, viewport: { width: 1280, height: 720 } },
   },
@@ -51,8 +51,7 @@ export default {
       const prose = paragraph.getBoundingClientRect();
       const lineHeight = parseFloat(getComputedStyle(paragraph).lineHeight);
       return { pane: pane.width, column: column.width, composer: composer.width, prose: prose.width,
-        paneLayout: !['', 'auto'].includes(document.querySelector('[data-task-width]').style.getPropertyValue('--cindy-message-margin-start')),
-        start: column.left - pane.left, inputStart: composer.left - pane.left,
+        supportedWideCap: Number(document.querySelector('[data-task-width]').dataset.wideCap),
         proseLines: Math.round(prose.height / lineHeight),
         table: markdown.querySelector('table')?.getBoundingClientRect().width,
         code: markdown.querySelector('pre')?.getBoundingClientRect().width,
@@ -68,24 +67,22 @@ export default {
         return parseFloat(el.style.getPropertyValue('--cindy-message-width')) <= pane.getBoundingClientRect().width;
       });
       const m = await measure();
-      // --compare replays the original centered hook. Only the new pane layout
-      // anchors the actual message column and independently fills the input row.
-      assert.ok(m.withinPane && m.overflow <= 1, JSON.stringify(m));
+      // --compare loads the original production hook, with no wide-cap export.
+      // Preserve its known6px one-sided gutter in before evidence; the new
+      // ordinary-task layout must share the composer's exact center axis.
+      const original = m.supportedWideCap === 914;
+      assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= (original ? 6.1 : 1), JSON.stringify(m));
+      assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
       assert.ok(Math.abs(m.prose - m.column) <= 1, `Prose and blocks share one content edge: ${JSON.stringify(m)}`);
       for (const width of [m.table, m.code].filter(value => value !== undefined)) {
         assert.ok(Math.abs(width - m.column) <= 1, `Wide blocks share the prose column: ${JSON.stringify(m)}`);
       }
       assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
-      if (m.pane >= 1014) {
-        assert.ok(Math.abs(m.column - 914) <= 1, `Reading width stays bounded: ${JSON.stringify(m)}`);
+      if (!original && !ui.data.legacy && m.pane >= 1600) {
+        assert.ok(Math.abs(m.column - 1120) <= 1, `Pure text and wide blocks use the bounded wide column: ${JSON.stringify(m)}`);
       }
-      if (m.paneLayout) {
-        const pad = m.pane < 700 ? 20 : 50;
-        assert.ok(Math.abs(m.start - pad) <= 1, `Work column follows the pane start: ${JSON.stringify(m)}`);
-        assert.ok(Math.abs(m.inputStart - (pad - 10)) <= 1, `Input shares the start hierarchy: ${JSON.stringify(m)}`);
-        assert.ok(Math.abs(m.composer - (m.pane - 2 * (pad - 10))) <= 1, `Input uses available pane: ${JSON.stringify(m)}`);
-      } else {
-        assert.ok(Math.abs(m.composer - m.column - 20) <= 1 && Math.abs(m.centerDelta) <= 6.1, JSON.stringify(m));
+      if (m.pane >= 1014 && m.pane <= 1200) {
+        assert.ok(Math.abs(m.column - 914) <= 1, `Laptop reading width remains unchanged: ${JSON.stringify(m)}`);
       }
       console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, ...m }));
     };
