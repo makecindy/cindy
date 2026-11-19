@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { createRoot } from 'react-dom/client';
@@ -1137,6 +1138,7 @@ function GhostCardCanvas({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            <DownloadImageMenuItem src={imgMenu.src} />
             <DropdownMenuItem onClick={() => void copyMenuImage()}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyImage')}

@@ -250,9 +250,10 @@ export function BotGroupSidebarRow({
             {timestamp}
           </span>
         </span>
-        <span id={subtitleId} className="flex min-w-0 items-center gap-2">
+        {/* 未读数字/状态点占自己的列：副标题横贯整行，绝对定位的角标会压在预览文字上。 */}
+        <span id={subtitleId} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
           {renderSubtitle(group, mutedClass)}
-          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} inline />
         </span>
       </span>
     </div>
