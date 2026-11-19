@@ -1,12 +1,14 @@
 /**
- * Plugin icons where task identity is monochrome (sidebar rows, task lists).
+ * Plugin icons where idle task identity is monochrome (sidebar rows, task lists).
  *
  * Built-in Agent marks are single-colour glyphs that take the row's state colour: grey when idle,
- * the selected row's foreground, Thinking Orange while running. A plugin's own icon keeps its brand
- * colours, which breaks that rule (2026-11-19 user report: the DeepSeek whale stays blue in the
- * sidebar). An icon whose shape sits on a transparent background is therefore used as a silhouette
- * filled with the surrounding text colour; an icon with an opaque background would turn into a
- * filled block, so it is shown in greyscale instead. Each icon is measured once and remembered.
+ * the selected row's foreground, Thinking Orange while running. A plugin's own icon keeps its own
+ * colours while running and breathing, and turns monochrome only when not running (2026-11-19 user
+ * decisions: idle tasks should be grey rather than a blue whale, while running tasks should breathe
+ * in the plugin's own colours). An idle icon whose shape sits on a transparent background is drawn
+ * as a silhouette filled with the surrounding neutral text colour; an icon with an opaque
+ * background would turn into a filled block, so it is shown in greyscale instead. Each icon is
+ * measured once and remembered.
  */
 import { useEffect, useReducer } from 'react';
 

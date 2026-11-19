@@ -11,8 +11,9 @@
  *   - idle (默认)   : Stone 灰 #737373 / dark #a3a3a3
  *   - running=true  : Thinking Orange(--warning-accent,全主题同值)+ session-breathing 呼吸;选中态同样橙(用户拍板 2026-07-20)
  *
- * 插件引擎(2026-11-19 用户反馈:插件图标在侧栏一直是品牌色):插件图标按剪影用同一套状态色画
- * (透明底的图标);不透明底的图标改为灰度图，不再显示插件的品牌色。见 pluginIconSilhouette。
+ * 插件引擎(2026-11-19 用户裁决):运行中(running=true)随外层呼吸动画保留插件图标自身配色;
+ * 仅非运行时(running=false)显示灰色(透明底图标按剪影取行色，不透明底图标作灰度图)。无插件
+ * 图标回落通用拼图，走内置同套状态色。见 pluginIconSilhouette。
  *
  * Agent 在另一台电脑运行(remote):右上角加模型选择器同款的单波纹 + 点,波纹随图标
  * 取色与呼吸;glyph 大小与位置不变(2026-10-07 用户裁决，替代标题后的芯片图标)。
@@ -78,18 +79,43 @@ interface VendorIconProps {
   /** 悬停说明(如 Agent 在哪台电脑上运行)。 */
   title?: string;
   /**
-   * 仅 vendor = 'acp'：提供该引擎的插件自己的图标(清单 icon)。缺省画通用拼图。插件图标保留自身
-   * 配色；运行中仍随外层呼吸动画明暗变化。
+   * 仅 vendor = 'acp'：提供该引擎的插件自己的图标(清单 icon)。缺省画通用拼图。运行中保留自身
+   * 配色并随外层呼吸动画明暗变化；非运行时显示灰色(透明底走剪影，不透明底走灰度图)。
    */
   iconDataUrl?: string;
 }
 
 /**
- * A plugin engine's own icon drawn like the built-in marks: as a silhouette in the row's state
- * colour when it has a transparent background, else in greyscale (also while not measured yet).
+ * A plugin engine's own icon: keeps its own brand colours while running (breathing via the outer
+ * wrapper), and turns monochrome only while idle — as a silhouette in the row's neutral colour
+ * when it has a transparent background, else in greyscale (also while not measured yet).
  */
-function PluginIdentityMark({ iconDataUrl, size }: { iconDataUrl: string; size: number }) {
+function PluginIdentityMark({
+  iconDataUrl,
+  size,
+  running,
+}: {
+  iconDataUrl: string;
+  size: number;
+  running: boolean;
+}) {
+  // Always measure so the silhouette cache is warm the moment a running task becomes idle.
   const silhouette = usePluginIconSilhouette(iconDataUrl);
+  if (running) {
+    return (
+      <img
+        src={iconDataUrl}
+        alt=""
+        aria-hidden
+        draggable={false}
+        width={size}
+        height={size}
+        data-plugin-icon="original"
+        style={{ width: size, height: size }}
+        className="shrink-0 rounded-[3px] object-contain"
+      />
+    );
+  }
   if (silhouette) {
     const mask = `url("${iconDataUrl}")`;
     return (
@@ -123,7 +149,7 @@ function PluginIdentityMark({ iconDataUrl, size }: { iconDataUrl: string; size: 
       height={size}
       data-plugin-icon="greyscale"
       style={{ width: size, height: size }}
-      className="rounded-[3px] object-contain opacity-80 grayscale"
+      className="shrink-0 rounded-[3px] object-contain opacity-80 grayscale"
     />
   );
 }
@@ -153,7 +179,7 @@ export function VendorIcon({
     <span className={wrapperClassName} title={title}>
       {vendor === 'acp' ? (
         iconDataUrl ? (
-          <PluginIdentityMark iconDataUrl={iconDataUrl} size={size} />
+          <PluginIdentityMark iconDataUrl={iconDataUrl} size={size} running={running} />
         ) : (
           <Puzzle size={size} aria-hidden strokeWidth={1.75} />
         )
