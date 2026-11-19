@@ -1276,8 +1276,11 @@ export function editLocalProviderImport(
       e.protocol === prior.protocol &&
       authHeaders.some(([, value]) => !!value);
     const retainsUnboundHeaders = completingClaudeHeaderAuth && replacement === undefined;
-    needsDestinationConsent ||= retainsUnboundHeaders ||
-      (same && replacement === undefined && local.needsDestinationConsent === true);
+    needsDestinationConsent ||=
+      retainsUnboundHeaders ||
+      (same &&
+        local.needsDestinationConsent === true &&
+        (replacement === undefined || Object.keys(ordinaryHeaders).length > 0));
     const headerAuth =
       !oldKey &&
       e.protocol === prior.protocol &&
@@ -1301,9 +1304,7 @@ export function editLocalProviderImport(
       baseUrl,
       protocol: e.protocol as ProviderWireProtocol,
       ...(same ? { apiKey: oldKey, headers, modelsUrl, requestPath } : {}),
-      ...(retainsUnboundHeaders
-        ? { headers: Object.fromEntries(authHeaders) }
-        : {}),
+      ...(retainsUnboundHeaders ? { headers } : {}),
       ...(replacement !== undefined
         ? {
             apiKey: headerAuth ? undefined : replacement || undefined,

@@ -363,9 +363,11 @@ describe('local API configuration import IPC', () => {
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
     expect(await listCustomProviders()).toHaveLength(1);
   });
-  it('imports saved Claude authentication headers after the user fills in the missing URL', async () => {
+  it.each([undefined, 'FAKE-REPLACEMENT'])('imports saved Claude headers after destination consent (replacement: %s)', async (replacement) => {
     const { harness, deps } = await setup({
-      env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN' },
+      env: {
+        ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN\nX-Tenant: FAKE-TENANT',
+      },
     });
     const approveDestination = vi.fn(async () => false);
     deps.confirmLocalProviderDestination = approveDestination;
@@ -375,27 +377,42 @@ describe('local API configuration import IPC', () => {
       endpoints: [{ baseUrl: '', hasCredential: true }],
     });
     const baseUrl = 'https://relay.test/prefix';
-    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+    const edit = {
       name: item.name,
       endpoints: [{ baseUrl, protocol: 'anthropic-messages' }],
-    });
+    };
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, edit);
     expect(edited).toMatchObject({ endpoints: [{ baseUrl, hasCredential: true }] });
     expect(edited).not.toHaveProperty('issue');
-    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    let preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
     expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-TENANT');
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
     expect(approveDestination).toHaveBeenCalledWith(expect.anything(), baseUrl);
     expect(deps.fetchModels).not.toHaveBeenCalled();
     expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
     expect(await listCustomProviders()).toHaveLength(0);
+    if (replacement) {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+        ...edit,
+        endpoints: [{ ...edit.endpoints[0], apiKey: replacement }],
+      });
+      preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+      expect(deps.fetchModels).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+    }
     approveDestination.mockResolvedValueOnce(true);
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
       ok: true,
       providerId: preview.providerId,
     });
-    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'claude-code', {
-      Authorization: 'Bearer FAKE-STATIC-TOKEN',
-    });
+    const headers = {
+      Authorization: `Bearer ${replacement ?? 'FAKE-STATIC-TOKEN'}`,
+      'X-Tenant': 'FAKE-TENANT',
+    };
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl, headers }));
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'claude-code', headers);
     expect((await getCustomProvider(preview.providerId))?.runtimes['claude-code']?.baseUrl).toBe(baseUrl);
   });
   it.each([
