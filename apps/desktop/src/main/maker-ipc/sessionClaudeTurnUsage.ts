@@ -257,6 +257,7 @@ export function recordSessionClaudeTurnUsage(
             billingRoute,
             region: CURRENT_CINDY_REGION,
             accessKind: turnContext.accessKind,
+            opaqueModelIds: turnContext.opaqueModelIdsByAgent?.['claude-code'],
           },
           claudeUsageSegments,
           claudeUsageSegmentsComplete,
@@ -457,6 +458,16 @@ export function recordSessionClaudeTurnUsage(
         // explicitly selected provider API. Remote/unknown routing cannot
         // be attributed to this local account and must stay usage-only.
         if (route !== 'provider-api' || turnContext.accessKind === 'managed') {
+          await recordUsageOnly();
+          return;
+        }
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const normalizedFallbackModel = normalizeModelIdForPricing(resolvedModel);
+        if (
+          claudeOpaqueModelIds?.length &&
+          (normalizedFallbackModel === 'unknown' ||
+            claudeOpaqueModelIds.includes(normalizedFallbackModel))
+        ) {
           await recordUsageOnly();
           return;
         }

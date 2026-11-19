@@ -933,16 +933,80 @@ describe('provider share usage estimates', () => {
     expect(usageStores.priceOverrides).toHaveBeenCalledTimes(1);
   });
 
-  // PR #8489 review: ordinary provider APIs keep the SDK-reported amount, as local turn
-  // accounting does; only DeepSeek (whose SDK cost ignores cache-hit pricing) is recomputed.
+  // PR #8489 review & #11456: non-Anthropic providers prioritize valid quotes (including
+  // discoveredCost-backed provider-reference and user-override) over SDK fallback estimates;
+  // Anthropic only allows explicit user-override to supersede its SDK amount.
   it.each([
-    { providerId: 'anthropic', expected: 0.25 },
-    { providerId: 'deepseek', expected: 0.0034 },
-  ])('keeps SDK cost for token-bearing $providerId rows unless the route is recomputed', async ({ providerId, expected }) => {
-    usageStores.referencePricing.mockReturnValue({ [providerId]: { 'gpt-6.1-sol': { ...quote, providerId } } });
+    { providerId: 'anthropic', source: 'provider-reference' as const, hasOverride: false, expected: 0.25 },
+    { providerId: 'anthropic', source: 'user-override' as const, hasOverride: true, expected: 0.0034 },
+    { providerId: 'custom-magpie', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+    { providerId: 'deepseek', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+  ])('applies quote precedence over SDK cost for $providerId ($source)', async ({ providerId, source, hasOverride, expected }) => {
+    if (hasOverride) {
+      usageStores.priceOverrides.mockReturnValue({
+        anthropic_override: {
+          providerId: 'anthropic',
+          agent: 'codex',
+          modelId: 'gpt-6.1-sol',
+          values: { inputPerMtok: 2 },
+          baseReference: null,
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      });
+    }
+    usageStores.referencePricing.mockReturnValue({
+      [providerId]: { 'gpt-6.1-sol': { ...quote, providerId, source } },
+    });
     const amount = await readEstimate(providerId, 0.25);
     expect(amount?.amount).toBeCloseTo(expected, 8);
     expect(amount?.currency).toBe('USD');
+  });
+
+  // 回归价值：2026-11-19 #11456；供应商分享账单估算对齐本地记账：不透明模型缺少报价时不得把
+  // SDK 兜底金额算进用量历史（含无 token 行），有发现价/覆写时按报价计算。tier: unit。
+  it.each([
+    { hasTokens: true, hasQuote: false, expected: null },
+    { hasTokens: false, hasQuote: false, expected: null },
+    { hasTokens: true, hasQuote: true, expected: { amount: 0.0034, currency: 'USD' } },
+  ])('withholds SDK cost for unpriced opaque models while using quotes when present (%j)', async ({
+    hasTokens,
+    hasQuote,
+    expected,
+  }) => {
+    listProviders.mockResolvedValue([
+      {
+        id: 'custom-magpie',
+        name: 'Magpie',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-6.1-sol', name: 'Group', opaqueModelId: true }] },
+      },
+    ]);
+    usageStores.referencePricing.mockReturnValue(
+      hasQuote ? { 'custom-magpie': { 'gpt-6.1-sol': { ...quote, providerId: 'custom-magpie' } } } : {},
+    );
+    usageStores.ownHistory.mockReturnValue({
+      self: {
+        lastUsedAt: null,
+        days: [{
+          ...row(),
+          providerId: 'custom-magpie',
+          sdkCostUsd: 0.25,
+          ...(hasTokens ? {} : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 }),
+        }],
+      },
+      relays: [],
+    });
+    const result = await executeProviderShareManagementCommand({
+      action: 'usage-history',
+      providerId: 'custom-magpie',
+    }) as ProviderUsageHistoryView;
+    if (expected === null) {
+      expect(result.self.days[0]?.amount).toBeNull();
+    } else {
+      expect(result.self.days[0]?.amount?.amount).toBeCloseTo(expected.amount, 8);
+      expect(result.self.days[0]?.amount?.currency).toBe(expected.currency);
+    }
   });
 
   // PR #8489 review: cost-only deltas are valid ledger rows; a found quote must not turn them into $0.

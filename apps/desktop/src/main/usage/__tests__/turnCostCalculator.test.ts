@@ -676,6 +676,134 @@ describe('resolveTurnCost', () => {
     expect(result).toEqual({ model: 'deepseek-v4-pro', source: 'reference', money: null });
   });
 
+  // 回归价值：2026-11-19 #11456；此前仅 deepseek 优先用供应商报价，其余第三方在 Claude Code 下都被
+  // SDK 客户端估值覆盖；Anthropic 官方参考价仍保留 SDK 账单，仅用户覆盖可改写。tier: unit。
+  it.each([
+    {
+      providerId: 'custom-magpie',
+      quoteSource: 'provider-reference' as const,
+      expectedSource: 'reference' as const,
+      expectedKind: 'value-estimate' as const,
+      expectedAmount: 1.5,
+    },
+    {
+      providerId: 'custom-proxy',
+      quoteSource: 'user-override' as const,
+      expectedSource: 'reference' as const,
+      expectedKind: 'value-estimate' as const,
+      expectedAmount: 1.5,
+    },
+    {
+      providerId: 'anthropic',
+      quoteSource: 'provider-reference' as const,
+      expectedSource: 'sdk' as const,
+      expectedKind: 'actual-cost' as const,
+      expectedAmount: 9.99,
+    },
+    {
+      providerId: 'anthropic',
+      quoteSource: 'user-override' as const,
+      expectedSource: 'reference' as const,
+      expectedKind: 'value-estimate' as const,
+      expectedAmount: 1.5,
+    },
+  ])(
+    'applies quote precedence over sdkCostDelta for $providerId ($quoteSource)',
+    ({ providerId, quoteSource, expectedSource, expectedKind, expectedAmount }) => {
+      const result = resolveTurnCost({
+        rawModel: 'claude-sonnet-4-6',
+        tokens: {
+          inputTokens: 100_000,
+          outputTokens: 100_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        sdkCostDelta: 9.99,
+        pricing: catalog(
+          quote('claude-sonnet-4-6', 3, 12, {
+            providerId,
+            source: quoteSource,
+            approximate: true,
+          }),
+        ),
+        context: { providerId, billingRoute: 'provider-api', region: 'global' },
+      });
+      expect(result.source).toBe(expectedSource);
+      expect(result.money).toMatchObject({
+        amount: expectedAmount,
+        currency: 'USD',
+        kind: expectedKind,
+      });
+    },
+  );
+
+  // 回归价值：2026-11-19 #11456；opaqueModelId（如网关混合分组）缺少报价时不得把 SDK 兜底
+  // 估值记成 actual-cost，有报价时仍按报价估价。最小失效输入：unpriced vs quoted opaque model。tier: unit。
+  it.each([
+    {
+      name: 'unpriced via opaqueModelId flag with tokens',
+      tokens: { inputTokens: 10_000, outputTokens: 1_000, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      opaqueModelId: true,
+      opaqueModelIds: undefined,
+      hasQuote: false,
+      expectedAmount: null,
+      expectedKind: undefined,
+    },
+    {
+      name: 'unpriced via opaqueModelIds list without tokens',
+      tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      opaqueModelId: undefined,
+      opaqueModelIds: ['mix-group'],
+      hasQuote: false,
+      expectedAmount: null,
+      expectedKind: undefined,
+    },
+    {
+      name: 'priced opaqueModelId uses provider quote',
+      tokens: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      opaqueModelId: true,
+      opaqueModelIds: undefined,
+      hasQuote: true,
+      expectedAmount: 2,
+      expectedKind: 'value-estimate' as const,
+    },
+  ])('handles opaqueModelId billing guard ($name)', ({
+    tokens,
+    opaqueModelId,
+    opaqueModelIds,
+    hasQuote,
+    expectedAmount,
+    expectedKind,
+  }) => {
+    const result = resolveTurnCost({
+      rawModel: 'mix-group[1m]',
+      tokens,
+      sdkCostDelta: 9.99,
+      pricing: hasQuote
+        ? catalog(
+            quote('mix-group', 2, 10, {
+              providerId: 'custom-magpie',
+              source: 'provider-reference',
+              approximate: true,
+            }),
+          )
+        : null,
+      context: {
+        providerId: 'custom-magpie',
+        billingRoute: 'provider-api',
+        region: 'global',
+        opaqueModelId,
+        opaqueModelIds,
+      },
+    });
+    expect(result).toMatchObject({ model: 'mix-group', source: 'reference' });
+    if (expectedAmount === null) {
+      expect(result.money).toBeNull();
+    } else {
+      expect(result.money).toMatchObject({ amount: expectedAmount, kind: expectedKind });
+    }
+  });
+
   it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
     const result = resolveTurnCost({
       rawModel: 'custom-model',

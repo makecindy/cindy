@@ -263,6 +263,7 @@ export function recordSessionPiTurnUsage(
                   billingRoute,
                   region: CURRENT_CINDY_REGION,
                   accessKind: turnContext.accessKind,
+                  opaqueModelIds: turnContext.opaqueModelIdsByAgent?.pi,
                 },
                 segments: pricingSegments,
               }).money;

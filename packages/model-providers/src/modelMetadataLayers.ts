@@ -532,9 +532,10 @@ export function mergeDiscoveredRuntimeModels(
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
       });
-    else
+    else {
+      const { discoveredCost: _staleCost, ...existingModel } = models[index];
       models[index] = {
-        ...models[index],
+        ...existingModel,
         ...accountCapabilities,
         discoveredSource: model.discoveredSource,
         ...((model.opaqueModelId || models[index].opaqueModelId) ? { opaqueModelId: true as const } : {}),
@@ -543,6 +544,7 @@ export function mergeDiscoveredRuntimeModels(
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
+    }
   }
   return [...added, ...models];
 }

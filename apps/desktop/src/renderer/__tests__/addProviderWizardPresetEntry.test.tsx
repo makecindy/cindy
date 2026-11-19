@@ -437,19 +437,21 @@ describe('Magpie sources through preset discovery', () => {
     }
   });
 
-  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+  it.each(['finish', 'return'] as const)('lets refreshed sources and pricing replace old draft fields on %s, including successful removal', async action => {
     const agents = ['codex', 'pi'] as const;
     const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
     const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
-        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource,
+          discoverySnapshotId: 'old-receipt', discoveredCost: { input: 2, output: 8 } },
       ] }]),
     ) };
     const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
     ) };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
-      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`,
+        ...(agent === 'pi' ? { discoveredSource: source(agent), discoveredCost: { input: 3, output: 15 } } : {}) },
     ] }));
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
@@ -472,6 +474,7 @@ describe('Magpie sources through preset discovery', () => {
       expect(model.opaqueModelId).toBe(true);
       expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
       expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+      expect(model.discoveredCost).toEqual(agent === 'pi' ? { input: 3, output: 15 } : undefined);
     }
   });
 });

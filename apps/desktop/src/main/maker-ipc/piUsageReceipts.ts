@@ -129,7 +129,8 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
       : resolveTurnCost({ rawModel: model, agent: 'pi', tokens: row,
         sdkCostDelta: route === 'provider-api' || unpriced ? undefined : segment.costUsd,
         pricing, context: { providerId: context.providerId, billingRoute: route,
-          region: CURRENT_CINDY_REGION, accessKind: context.accessKind }, segments }).money;
+          region: CURRENT_CINDY_REGION, accessKind: context.accessKind,
+          opaqueModelIds: context.opaqueModelIdsByAgent?.pi }, segments }).money;
     // BYOM reference estimates stay message-only, as in the legacy turn path.
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
     // A resolved message-only estimate is final without ledger spend. Only a

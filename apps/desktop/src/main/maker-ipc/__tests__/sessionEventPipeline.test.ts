@@ -2953,6 +2953,115 @@ describe('usage through the production event pipeline', () => {
     }));
     await h.dispose();
   });
+
+  // 回归价值：2026-11-19 #11456；真走 handleSessionEvent -> captureTurnUsageContext -> sessionClaudeTurnUsage
+  // 验证不透明分组在主路径（modelUsage）与窄兜底（total_cost_usd）均不把 SDK 兜底写成 actual-cost。tier: unit。
+  it.each(['unpriced-main', 'unpriced-fallback', 'priced-main'] as const)(
+    'routes opaqueMagpie Claude Code turns safely (%s)',
+    async (scenario) => {
+      const h = harness();
+      effects.fn('getSessionProvider').mockReturnValue('custom-magpie');
+      effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+      effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+      h.deps.readSessionModelForUsage = vi.fn(async () => 'magpie-mix');
+      effects.fn('getActiveCatalog').mockReturnValue({
+        providers: [
+          {
+            id: 'custom-magpie',
+            auth: { method: 'api_key' },
+            access: { kind: 'api' },
+            models: {
+              'claude-code': [
+                {
+                  id: 'magpie-mix',
+                  name: 'Magpie Mix',
+                  opaqueModelId: true,
+                },
+              ],
+            },
+          },
+        ],
+      });
+      effects.fn('getReferenceModelPricing').mockReturnValue(
+        scenario === 'priced-main'
+          ? {
+              'custom-magpie': {
+                'magpie-mix\u0000claude-code': {
+                  providerId: 'custom-magpie',
+                  modelId: 'magpie-mix',
+                  currency: 'USD',
+                  source: 'provider-reference',
+                  approximate: true,
+                  inputPerMtok: 2,
+                  outputPerMtok: 10,
+                },
+              },
+            }
+          : {},
+      );
+
+      if (scenario === 'unpriced-fallback') {
+        h.deps.lastReportedCostUsdBySession.set('task', 10);
+        h.emit(event('done', {
+          total_cost_usd: 12,
+          duration_ms: 500,
+          usage: { input_tokens: 100, output_tokens: 20 },
+        }, { source: 'claude-code' }));
+      } else {
+        h.emit(event('done', {
+          total_cost_usd: 9.99,
+          modelUsageCumulativeStartsAtZero: true,
+          modelUsage: {
+            'magpie-mix': { inputTokens: 1_000_000, outputTokens: 0, costUSD: 9.99 },
+          },
+          usageSegmentsComplete: true,
+          usageSegments: [{
+            id: 'req-1',
+            model: 'magpie-mix',
+            inputTokens: 1_000_000,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreateTokens: 0,
+            complete: true,
+          }],
+        }, { source: 'claude-code' }));
+      }
+      await microtasks();
+
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+      if (scenario === 'priced-main') {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: 'magpie-mix',
+          inputTokensDelta: 1_000_000,
+          money: null,
+        }));
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          money: expect.objectContaining({ amount: 2, kind: 'value-estimate' }),
+          turnUsageDetails: expect.objectContaining({ model: 'magpie-mix', inputTokens: 1_000_000 }),
+        }));
+      } else if (scenario === 'unpriced-main') {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: 'magpie-mix',
+          inputTokensDelta: 1_000_000,
+          money: null,
+        }));
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          turnUsageDetails: expect.objectContaining({ model: 'magpie-mix', inputTokens: 1_000_000 }),
+        }));
+      } else {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          turnUsageDetails: expect.objectContaining({ model: 'magpie-mix' }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
 });
 
 
