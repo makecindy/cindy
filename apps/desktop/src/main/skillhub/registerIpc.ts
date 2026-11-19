@@ -72,6 +72,8 @@ interface ScannedSkillGrantEntry {
   root: string;
   projectRootKey?: string;
   builtIn?: boolean;
+  /** Scan-attested Claude Code plugin root; bypasses the lexical whitelist. */
+  pluginSkill?: boolean;
 }
 
 interface ScannedSkillGrant {
@@ -267,8 +269,10 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (grant) scannedSkillRootsBySender.delete(event.sender.id);
       return null;
     }
-    const matchingEntries = grant.entries.filter(({ root, builtIn }) => (
-      builtIn
+    const matchingEntries = grant.entries.filter(({ root, builtIn, pluginSkill }) => (
+      // Built-in and plugin roots were attested by the scan itself; the
+      // user-skill whitelist does not cover their layouts.
+      (builtIn || pluginSkill)
         ? isSameOrInside(realPathOrResolved(targetPath), root)
         : isExistingSkillPathGranted(targetPath, new Set([root]))
     ));
@@ -300,7 +304,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     if (!grant) return null;
     const raw = await readSkillRawFile({
       filePath,
-      ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+      ...((grant.builtIn || grant.pluginSkill) ? { attestedRoot: grant.root } : {}),
     });
     return raw.success ? raw.content ?? null : null;
   };
@@ -517,7 +521,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (!grant) return scanGrantDenied();
       return readSkillContent({
         mdPath: params.mdPath,
-        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+        ...((grant.builtIn || grant.pluginSkill) ? { attestedRoot: grant.root } : {}),
       });
     },
   );
@@ -532,7 +536,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (!grant) return scanGrantDenied();
       return listSkillFolderChildren({
         dirPath: params.dirPath,
-        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+        ...((grant.builtIn || grant.pluginSkill) ? { attestedRoot: grant.root } : {}),
       });
     },
   );
@@ -546,7 +550,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (!grant) return scanGrantDenied();
       return readSkillSiblingFile({
         filePath: params.filePath,
-        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+        ...((grant.builtIn || grant.pluginSkill) ? { attestedRoot: grant.root } : {}),
       });
     },
   );
@@ -563,7 +567,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (!grant) return scanGrantDenied();
       return readSkillRawFile({
         filePath: params.filePath,
-        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+        ...((grant.builtIn || grant.pluginSkill) ? { attestedRoot: grant.root } : {}),
       });
     },
   );

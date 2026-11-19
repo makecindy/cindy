@@ -46,6 +46,13 @@ export interface AgentCustomization {
   /** 入参列表无前导 `/`。 */
   name: string;
 
+  /**
+   * Claude Code 插件提供的 Skill: 所属插件名（命名空间前缀）。
+   * 有值时 `name` 形如 `<pluginName>:<skill>`，且启停/卸载由插件自己管理——
+   * Claude 忽略插件 Skill 的 `skillOverrides`。
+   */
+  pluginName?: string;
+
   /** 摘要描述 (frontmatter description / codex shortDescription, 截断 ~500 字)。 */
   description?: string;
 
@@ -95,6 +102,13 @@ export interface ListCustomizationsOptions {
 
   /** Codex 透传 `forceReload`; Claude 不消费 (每次都重扫)。 */
   forceReload?: boolean;
+
+  /**
+   * Session runtime's config directory, when it differs from the default
+   * `~/.claude` — a non-default subscription account or an overridden
+   * `CLAUDE_CONFIG_DIR`. Host-resolved; discovery never guesses it.
+   */
+  runtimeConfigDir?: string;
 
   /**
    * 可选过滤; 调用方只关心某几种 kind 时减少传输。

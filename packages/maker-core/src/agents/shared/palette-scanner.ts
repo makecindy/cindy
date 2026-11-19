@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import type {
@@ -7,6 +6,7 @@ import type {
   AtResourceItem,
   ScanAtResourcesResult,
 } from '../../types/palette.js';
+import { scanClaudePluginSkills } from './claude-plugin-skills.js';
 import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const MAX_SCAN_ITEMS = 2_000;
@@ -345,18 +345,66 @@ async function scanClaudeSkillDirs(
   return results;
 }
 
-export async function scanClaudeSlashCommands(workingDir?: string): Promise<AgentSlashCommand[]> {
-  const home = os.homedir();
+export interface ClaudePaletteScanContext {
+  /** Omit to list only agent-global skills without a project scope. */
+  workingDir?: string;
+  /** Config directory the session's Claude runtime actually uses. */
+  configDir: string;
+  /**
+   * Project directories to match project-scoped plugin installs against. A
+   * session started in a subdirectory should try both the working directory
+   * and its Git root; callers pass every applicable root.
+   */
+  projectRoots?: readonly string[];
+  /**
+   * Partner (bot) sessions start Claude with `settingSources: []` and mount only
+   * their own plugin roots, so they never load the user's plugins. Offering
+   * those Skills in a partner catalog would be a choice that does nothing.
+   */
+  excludePluginSkills?: boolean;
+}
+
+export async function scanClaudeSlashCommands(
+  context: ClaudePaletteScanContext,
+): Promise<AgentSlashCommand[]> {
+  const { configDir, workingDir } = context;
   const merged = new Map<string, AgentSlashCommand>();
   const discovered = [
-    ...(await scanClaudeCommandFiles(path.join(home, '.claude', 'commands'), 'global')),
-    ...(await scanClaudeSkillDirs(path.join(home, '.claude', 'skills'), 'global')),
+    ...(await scanClaudeCommandFiles(path.join(configDir, 'commands'), 'global')),
+    ...(await scanClaudeSkillDirs(path.join(configDir, 'skills'), 'global')),
   ];
   if (workingDir && path.isAbsolute(workingDir) && await isDirectory(workingDir)) {
     discovered.push(
       ...(await scanClaudeCommandFiles(path.join(workingDir, '.claude', 'commands'), 'project')),
       ...(await scanClaudeSkillDirs(path.join(workingDir, '.claude', 'skills'), 'project')),
     );
+  }
+
+  // Enabled Claude Code plugins expose their Skills with a `plugin:skill`
+  // namespace. Claude Code's own runtime loads them; the Desktop palette used
+  // to scan only user/project folders, so plugin Skills never showed up here.
+  if (!context.excludePluginSkills) {
+    // Project-scoped installs may live under the working directory or its Git
+    // root; run one pass per root plus a user-only pass, then let the merged
+    // map keep the first (most specific) entry per name.
+    const roots = context.projectRoots && context.projectRoots.length > 0
+      ? context.projectRoots
+      : [undefined];
+    for (const root of roots) {
+      for (const skill of scanClaudePluginSkills({
+        configDir,
+        ...(root ? { projectRoot: root } : {}),
+      })) {
+        discovered.push({
+          name: skill.name,
+          description: await readMarkdownDescription(skill.mdPath),
+          source: 'skill',
+          path: skill.mdPath,
+          // managed 与 user 同为全局生效，区别只在来源。
+          scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
+        });
+      }
+    }
   }
 
   for (const cmd of discovered) {

@@ -21,7 +21,12 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from '../../types/customizations.js';
-import { scanCustomizationSources, type SourceDef } from '../shared/customization-scanner.js';
+import { scanClaudePluginSkills } from '../shared/claude-plugin-skills.js';
+import {
+  readFolderSkill,
+  scanCustomizationSources,
+  type SourceDef,
+} from '../shared/customization-scanner.js';
 
 type Kind = 'skill' | 'command' | 'agent';
 type Scope = 'global' | 'project';
@@ -58,21 +63,103 @@ const KIND_ORDER: Record<Kind, number> = { skill: 0, command: 1, agent: 2 };
  *
  * 排序: scope (global 先) → kind (skill, command, agent) → name 字母序。
  */
+interface PluginScanTarget {
+  /** Directory matched against `installed_plugins.json#projectPath` and settings. */
+  scanRoot: string;
+  /** Project identity SkillHub groups by. Defaults to `scanRoot`. */
+  ownerRoot?: string;
+}
+
 export async function scanClaudeCustomizations(
   opts: ListCustomizationsOptions,
 ): Promise<ListCustomizationsResult> {
-  return scanClaudeCustomizationsAtConfig(opts, path.join(os.homedir(), '.claude'));
+  // Each working dir contributes its own project; SkillHub passes the whole
+  // catalogue, not just the active one. Two projects inside one repository
+  // share a scan root but remain distinct owners, so both keep an entry.
+  const seen = new Set<string>();
+  const targets: PluginScanTarget[] = [];
+  for (const dir of opts.workingDirs ?? []) {
+    const ownerRoot = path.resolve(dir);
+    if (seen.has(ownerRoot)) continue;
+    seen.add(ownerRoot);
+    targets.push({ scanRoot: ownerRoot, ownerRoot });
+  }
+  return scanClaudeCustomizationsAtConfig(
+    opts,
+    opts.runtimeConfigDir ?? path.join(os.homedir(), '.claude'),
+    targets,
+    // Aggregate listing: keep the global view even when a project disables the
+    // plugin, because other projects (and no-project sessions) still load it.
+    { includeUserPass: true },
+  );
 }
 
 function scanClaudeCustomizationsAtConfig(
   opts: ListCustomizationsOptions,
   configDir: string,
+  targets?: readonly PluginScanTarget[],
+  scanOptions?: {
+    /**
+     * Aggregate listings keep a global pass so a plugin disabled by one project
+     * still appears; runtime views must not, because they describe exactly what
+     * the live session loads.
+     */
+    includeUserPass?: boolean;
+  },
 ): ListCustomizationsResult {
   const workingDirs = opts.workingDirs ?? [];
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
 
   const sources = buildClaudeSources(workingDirs, configDir);
   const result = scanCustomizationSources(sources, kindFilter);
+
+  // Enabled Claude Code plugins contribute Skills with a `plugin:skill`
+  // namespace. They are not part of the user/project folder sources above.
+  //
+  // SkillHub can ask about several projects at once, and each project may have
+  // its own installs and settings overrides. Scan every project root and keep
+  // the most specific entry per Skill name, so reordering recent projects never
+  // changes what the page shows.
+  if (!kindFilter || kindFilter.has('skill')) {
+    // Aggregate listings run a user-only pass first: a plugin enabled globally
+    // but disabled by every listed project must still appear in the global
+    // list. Runtime views skip it — they describe the live project context.
+    const passes: (PluginScanTarget | undefined)[] = scanOptions?.includeUserPass === false
+      ? [...(targets ?? [])]
+      : [undefined, ...(targets ?? [])];
+    const seen = new Set<string>();
+    for (const target of passes) {
+      const scanRoot = target?.scanRoot;
+      for (const skill of scanClaudePluginSkills({
+        configDir,
+        ...(scanRoot ? { projectRoot: scanRoot } : {}),
+      })) {
+        const ownerRoot = skill.scope === 'user'
+          ? undefined
+          : (target?.ownerRoot ?? scanRoot);
+        // Project-scoped entries stay distinct per project; user entries from
+        // different passes collapse into one.
+        const key = `${skill.name}\u0000${ownerRoot ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.items.push(
+          readFolderSkill(
+            {
+              engine: 'claude-code',
+              kind: 'skill',
+              // managed 与 user 同为全局生效，区别只在来源。
+              scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
+              dir: skill.folder,
+              namePrefix: skill.pluginName,
+              ...(ownerRoot ? { workingDir: ownerRoot } : {}),
+            },
+            skill.folder,
+            skill.mdPath,
+          ),
+        );
+      }
+    }
+  }
 
   result.items.sort((a, b) => {
     const sa = SCOPE_ORDER[a.scope as Scope] ?? 99;
@@ -106,8 +193,16 @@ export async function scanClaudeRuntimeSkills(
     if (parent === current) break;
     current = parent;
   }
+  // The walk stops at the nearest Git root (or filesystem root), so the first
+  // entry is the project root iff a `.git` was actually found there. Claude
+  // projects do not require a repository, so without one the working directory
+  // itself is the project context.
+  const ownerRoot = path.resolve(workingDir);
   return scanClaudeCustomizationsAtConfig(
     { workingDirs, kinds: ['skill', 'command'] },
     configDir,
+    [{ scanRoot: ownerRoot, ownerRoot }],
+    // Runtime view: only what this project actually loads.
+    { includeUserPass: false },
   );
 }

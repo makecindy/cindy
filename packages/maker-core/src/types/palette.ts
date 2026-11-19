@@ -95,13 +95,29 @@ export interface ListAgentSkillsOptions {
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+  /**
+   * Host-owned: omit Claude Code plugin Skills from the result.
+   *
+   * Partner (bot) sessions start Claude with `settingSources: []` and mount only
+   * their own plugin roots, so they never load the user's `~/.claude/plugins`.
+   * Listing those Skills in a partner's capability catalog would offer choices
+   * that silently do nothing. Normal `/` palette discovery keeps them.
+   */
+  excludePluginSkills?: boolean;
+  /**
+   * Exact config directory the session's Claude runtime uses, when it differs
+   * from the default `~/.claude` — a non-default subscription account, or an SSH
+   * host whose cc-manager keeps state under its own `claude-home`.
+   *
+   * Host-owned: renderer input must not set this directly. Discovery never
+   * falls back to `~/.claude` when a session's directory is known, because
+   * showing a Skill the runtime does not load is worse than showing nothing.
+   */
+  runtimeConfigDir?: string;
 }
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */
-export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
-  /** Exact config directory passed to the local runtime process, when it differs from its default. */
-  runtimeConfigDir?: string;
-}
+export type ListRuntimeSkillsOptions = ListAgentSkillsOptions;
 
 export interface ListAgentSkillsResult {
   skills: AgentSkillCommand[];
