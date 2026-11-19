@@ -863,8 +863,10 @@ is forwarded explicitly to Terminal and stale inherited values are cleared for p
 Process discovery binds the physical executable to its installation receipt and business
 checkout; a changed location must not make a live instance invisible or another checkout ready.
 
-Continue using the personal launcher to supply the selected business release and its interface
-server. The fixed runtime is not a standalone packaged business app; double-click-only cold
+Continue using the personal launcher to supply the selected business release and its verified
+interface assets. Supervised signed-runtime launches use the candidate's prebuilt `.vite` files;
+ordinary development launches still use the interface development server. The fixed runtime is
+not a standalone packaged business app; double-click-only cold
 startup without the personal launcher is not implemented. Automatic switching stays opt-in;
 preparation never authorizes a restart or enables it. Moving from an ad-hoc shell to a developer
 identity can require macOS permission approval once; signature verification does not prove
@@ -872,13 +874,16 @@ privacy permission or remote login works. This is local signing, not notarized p
 
 The supervisor passes live stdin and `--reuse-terminal` to the runner and writes coordinator
 output to the generation's `console.log`. With redirected output, the fixed shared app runs its
-dev server in a separate Terminal tab. The isolated smoke can reuse the caller's terminal and
+launch runner in a separate Terminal tab. The isolated smoke can reuse the caller's terminal and
 its environment. Both paths use a single `script` PTY with a bounded
-`apps/desktop/logs/dev-terminal.log` drain. Keep the dev server's terminal open while the
+`apps/desktop/logs/dev-terminal.log` drain. Keep the launch runner's terminal open while the
 app is running. A failed or cancelled generation cannot start the fixed app after a late build.
 A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
-A successful wrapper exit means readiness only, not the end of the running app. The interface
-still uses the development server; prebuilt static UI delivery is not part of this change.
+A successful wrapper exit means readiness only, not the end of the running app. For supervised
+prebuilt launches, Forge disables `VitePlugin` and the main window loads the verified local page;
+there is no interface development server to inspect. Ordinary development retains `VitePlugin`
+and its server. See [the Forge selection](../../../apps/desktop/forge.config.ts) and
+[interface verification](../../../scripts/personal-build/interface-assets.mjs).
 
 
 Manual shutdown retains the observed original PID until the OS reports it gone, in addition to
@@ -916,8 +921,9 @@ and the target phone before calling delivery successful.
 
 ## 个人版交接与故障验收（2026-11-10）
 
-这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；目前仍运行签名外壳加源码
-开发服务，不是面向普通用户的独立分发包，也不承诺升级后自动继承 macOS 授权。
+这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；受监督的签名运行时加载
+候选源码预构建的本地产物，普通开发启动仍使用开发服务。它不是面向普通用户的独立
+分发包，也不承诺升级后自动继承 macOS 授权。
 
 - 每次新的升级请求重新 `prepare`，冻结 main、全部选中 PR（含草稿）的最新 SHA、插件仓
   与本地补丁。用户等待确认期间不暗中改候选。确认前可运行 `freshness --config FILE
@@ -935,7 +941,7 @@ and the target phone before calling delivery successful.
   应用。也可显式用 `supervisor-release --config FILE --expected-pid PID` 单独交出监督。
   旧版监督程序不支持此协议时明确阻断，不通过 kill/删锁兼容；升级工具自身仍需独立验收。
   交出锁后旧进程仍持有 runner 子进程引用，终端在 runner 退出前不可关闭或复用；
-  释放监督权不等于释放界面服务所在的终端。
+  释放监督权不等于释放启动器所在的终端；普通开发路径的界面服务也仍依赖该终端。
 - 签名要求变化在退出旧版前阻断。证书续期/身份迁移尚无自动命令，须单独准备和审核，
   不接受静默换证或放宽校验。遗留安装事务可显式 `install-recover --config FILE --report
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
