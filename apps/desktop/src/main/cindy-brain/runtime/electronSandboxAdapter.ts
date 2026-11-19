@@ -211,7 +211,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
     : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
-    : path === '/models' ? ghostModelsHandler : null;
+    : path === '/models' ? ghostModelsHandler
+    : path === '/harnesses' ? ghostHarnessesHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -322,6 +323,13 @@ let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
 /** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
 export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostModelsHandler = handler;
+}
+
+let ghostHarnessesHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /harnesses：插件发布执行引擎可用状态(index.ts 注入，形态同 /models)。 */
+export function setGhostHarnessesHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostHarnessesHandler = handler;
 }
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
@@ -537,6 +545,7 @@ function registerGhostProtocol(
     get ghostModelPreferencesProvider() { return ghostModelPreferencesProvider; },
     get ghostMediaModelsProvider() { return ghostMediaModelsProvider; },
     get ghostModelsHandler() { return ghostModelsHandler; },
+    get ghostHarnessesHandler() { return ghostHarnessesHandler; },
     get ghostSecretsHandler() { return ghostSecretsHandler; },
     get ghostOauthHandler() { return ghostOauthHandler; },
     get ghostConnectionsHandler() { return ghostConnectionsHandler; },

@@ -97,6 +97,113 @@ function listResult(rows: number, changed = -1) {
 }
 
 describe('AgentNetSessionLinks', () => {
+  // Unit #11345: sharing uses the session adapter too. Earlier saturation tests
+  // reserved only control slots; 12 held metadata reads still blocked ordinary
+  // model/context calls. Exercise both actual admission and SessionPeer lanes
+  // with the existing scoped pair, without importing the renderer or real I/O.
+  it('keeps shared catalog preloads inside background capacity while model calls proceed', async () => {
+    const hostKey = providerShareHostPeer('share', 'host'), controllerKey = providerShareGuestPeer('share', 'member', 'controller');
+    const { links, controllerLanes } = pair({ hostKey, controllerKey });
+    const metadata = ['maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents', 'maker:agent:status'];
+    const held: Envelope[] = [], visible: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const channel = (env.payload as { channel: string }).channel;
+      if (metadata.includes(channel)) held.push(env);
+      else {
+        visible.push(((env.payload as { args: [{ method: string }] }).args[0]).method);
+        links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'visible' });
+      }
+    });
+    await links.controller.openLink(hostKey, openPayload);
+    controllerLanes.length = 0;
+    for (let n = 0; n < 12; n++) pending.push(links.controller.invoke(hostKey, { channel: metadata[n % metadata.length], args: [] }).catch(error => error));
+    const reads = ['setModel', 'getContextUsage'].map(method => links.controller.invoke(hostKey, {
+      channel: 'maker:remote-agent:v1', args: [{ op: 'call', method }],
+    }));
+    pending.push(...reads.map(request => request.catch(error => error)));
+    for (let n = 0; n < 20; n++) await Promise.resolve();
+    try {
+      expect(held).toHaveLength(4);
+      expect(visible).toEqual(['setModel', 'getContextUsage']);
+      expect(controllerLanes.slice(0, 4)).toEqual(['background', 'background', 'background', 'background']);
+      await expect(Promise.all(reads)).resolves.toEqual([{ ok: true, result: 'visible' }, { ok: true, result: 'visible' }]);
+    } finally {
+      links.controller.closeLink(hostKey, 'user');
+      for (const env of held) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: null });
+      await Promise.allSettled(pending);
+      links.controller.stop(); links.host.stop();
+    }
+    expect(held).toHaveLength(4);
+  });
+
+  // Unit #11345: the session route must execute the dispatch-only guard after
+  // admission, never after a result. Twelve polls + one cancelled queued poll
+  // cover the boundary without changing admission constants or real-time waits.
+  it('drops a cancelled queued invoke and preserves an already dispatched result', async () => {
+    const { links } = pair();
+    const sent: Envelope[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') sent.push(env);
+    });
+    await links.controller.openLink('a-host', openPayload);
+    const payload = { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] };
+    let cancelled = false;
+    const guard = () => { if (cancelled) throw new DOMException('cancelled', 'AbortError'); };
+    const active = Array.from({ length: 12 }, () => links.controller.invoke('a-host', payload, undefined, { beforeDispatch: guard }));
+    await vi.waitFor(() => expect(sent).toHaveLength(12));
+    const queued = links.controller.invoke('a-host', payload, undefined, { beforeDispatch: guard }).catch(error => error);
+    cancelled = true;
+    try {
+      for (const env of sent) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'accepted' });
+      expect(await queued).toMatchObject({ name: 'AbortError' });
+      expect(await Promise.all(active)).toEqual(Array.from({ length: 12 }, () => ({ ok: true, result: 'accepted' })));
+      expect(sent).toHaveLength(12);
+    } finally { links.controller.stop(); links.host.stop(); await Promise.allSettled([...active, queued]); }
+  });
+
+  // Unit regression #11345: DeviceLinkClient admission coverage did not exercise
+  // the Agent-Net route or its wire lane. With 12 polls pending + a full bounded
+  // queue, two controls must reach the host on control, the third must fail, and
+  // closing must cancel queued uploads without dispatching them on a later link.
+  it('admits remote agent controls on their wire lane under bounded saturation', async () => {
+    const { links, controllerLanes } = pair();
+    const held: Envelope[] = [];
+    const controls: Envelope[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const request = (env.payload as { args: [{ op: string }] }).args[0];
+      if (request.op === 'call') controls.push(env);
+      else held.push(env);
+    });
+    await links.controller.openLink('a-host', openPayload);
+    const channel = 'maker:remote-agent:v1';
+    const active = Array.from({ length: 12 }, () => links.controller.invoke('a-host', { channel, args: [{ op: 'poll' }] }));
+    await vi.waitFor(() => expect(held).toHaveLength(12));
+    const queued = Array.from({ length: 128 }, () => links.controller.invoke('a-host', { channel, args: [{ op: 'upload' }] }).catch(error => error));
+    controllerLanes.length = 0;
+    const control = () => links.controller.invoke('a-host', { channel, args: [{ op: 'call', method: 'abort' }] });
+    const admitted = [control(), control()];
+    // Flush only microtasks; failing classification must not turn into a real 30s wait.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    try {
+      expect(controls).toHaveLength(2);
+      expect(controllerLanes).toEqual(['control', 'control']);
+      await expect(control()).rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    } finally {
+      links.controller.closeLink('a-host', 'user');
+      for (const env of [...held, ...controls]) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: null });
+      await Promise.allSettled([...active, ...admitted, ...queued]);
+      links.controller.stop(); links.host.stop();
+    }
+    expect(held).toHaveLength(12);
+    expect(await Promise.all(queued)).toEqual(Array.from({ length: 128 }, () => expect.objectContaining({ code: 'LINK_NOT_OPEN' })));
+  });
+
   it('opens a control link and reads a list through the same result compression and delta as Device Link', async () => {
     const { links, bytes } = pair();
     let result: unknown = listResult(200);
@@ -446,6 +553,20 @@ describe('AgentNetSessionLinks', () => {
     await Promise.all([write(0, 1_398_104), write(1, 1_398_104), write(2, 4_096)]);
     expect(order).toEqual([0, 1, 2]);
     expect([...new Set(controllerLanes)]).toEqual(['background']);
+  });
+
+  // 2026-11-19 公网对照（xdt-server 中转，250 KB/s、往返 220 ms）：远程任务启动时上传块一次 2～4 块在途，走普通通道时停止要排在它们后面，
+  // 往返从 0.4 秒涨到 1.3 秒，64 KB/s 时到 5.5 秒。上传块走后台通道，同一任务的其他远程任务调用照旧走普通通道。
+  it('sends remote-agent upload chunks on the background lane and the other remote-agent calls on the normal lane', async () => {
+    const { links, controllerLanes } = pair();
+    answerOnSession(links.host);
+    await links.controller.openLink('a-host', openPayload);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'upload', uploadId: 'u1', index: 0, data: 'AAAA' }] });
+    expect(controllerLanes).toEqual(['background']);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [], waitMs: 0 }] });
+    expect(controllerLanes).toEqual(['normal']);
   });
 
   // 2026-11-17 排查：会话上的建链总报同一个流标识，共享任务的主人电脑重启后来源代次不前进，界面把新推送当旧的丢掉；会话断开时先清链路

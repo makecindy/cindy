@@ -31,6 +31,10 @@ export function getEffectiveAuxiliaryModelRefs(...args: Parameters<Instance['get
 
 export { isAuxiliaryModelCustomized };
 
+export function getEffectiveAuxiliaryModelLabel(): string | null {
+  return desktopResolver.getEffectiveAuxiliaryModelLabel();
+}
+
 export function formatAuxiliaryModelRefLabel(...args: Parameters<Instance['formatAuxiliaryModelRefLabel']>): ReturnType<Instance['formatAuxiliaryModelRefLabel']> {
   return desktopResolver.formatAuxiliaryModelRefLabel(...args);
 }

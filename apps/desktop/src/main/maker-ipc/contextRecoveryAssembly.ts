@@ -1,3 +1,4 @@
+import { handoffPreviewText } from './agentHandoff.js';
 import type { ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
@@ -148,7 +149,11 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
             role: 'assistant',
             content: '',
             agentKind: cardAgentKind,
-            agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
+            agentMeta: { contextRebuild: {
+              reason: meta.reason,
+              handoff: handoffPreviewText(handoff),
+              handoffCoverage: meta.handoffCoverage,
+            } } as AgentMeta,
           },
           {
             broadcastOwnerScope: ownerScope,
@@ -203,7 +208,8 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         .from(ports.sessions)
         .where(ports.eq(ports.sessions.id, sessionId))
         .limit(1);
-      if (!row?.workingDir) return { accepted: false };
+      // Plugin engines manage their own context; Cindy does not replay into a new native session.
+      if (!row?.workingDir || row.agentKind === 'acp') return { accepted: false };
       if (recovery?.signal?.aborted) return { accepted: false };
       const createOpts = ports.buildCreateOptsWithStderr({
         id: sessionId,

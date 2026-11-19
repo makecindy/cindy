@@ -1,6 +1,6 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
-import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { collectModelDiscoveryPagesWithStatus } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -102,6 +102,13 @@ export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
+  /**
+   * true only when every advertised page was read (no failed, refused or capped page).
+   * Absent means unknown: callers must not infer that a missing model was withdrawn.
+   */
+  complete?: boolean;
+  /** Saved-provider fetches only: opaque receipt binding this listing to the credential generation. */
+  listingReceipt?: string;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -362,7 +369,7 @@ export async function fetchProviderModels(
     };
   }
   const pageDeadline = Date.now() + 30_000;
-  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+  const { models, complete } = await collectModelDiscoveryPagesWithStatus(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
@@ -407,5 +414,9 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  return {
+    ok: true,
+    models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)),
+    complete,
+  };
 }

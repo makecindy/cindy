@@ -1192,7 +1192,7 @@ function DatabaseCleanupDialog({
                       </Button>
                     </AlertDialog.Cancel>
                     <Button data-settings-search-action="Confirm the selected database cleanup"
-                      variant="secondary"
+                      variant="primary"
                       size="lg"
                       tone="danger-solid"
                       ref={confirmButtonRef}

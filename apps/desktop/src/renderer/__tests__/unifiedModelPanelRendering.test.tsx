@@ -60,7 +60,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.railAll': '全部',
         'newChat.modelSelector.unified.railRecent': '最近',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
-        'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
+        'newChat.modelSelector.unified.crossEngineWarning': '下一条消息将切换引擎并接续对话，较早的部分可能会压缩',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
         'newChat.modelSelector.category.gpt': 'OpenAI',
         'effortLevels.low': '低',
@@ -1573,7 +1573,7 @@ describe('统一面板 · 会话内形态', () => {
     });
     expect(
       screen.getByRole('listbox').querySelector('[data-cross-engine-warning]')?.textContent,
-    ).toContain('切换引擎会重建上下文');
+    ).toContain('下一条消息将切换引擎并接续对话');
   });
 
   it('选中跨引擎行走 onCrossEngineSelect,不走普通 onSelect', async () => {

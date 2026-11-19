@@ -209,6 +209,22 @@ it('exposes read-only subscription usage to the common validated tool registry',
   } finally { await server.close(); }
 });
 
+// #11274: only the target task ID is accepted and the existing usage group admits the read.
+it('exposes session quota without accepting caller-supplied routing', async () => {
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read: vi.fn(), readSession } },
+    { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_session_quota')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target' })))
+      .toMatchObject({ ok: true, status: 'unavailable' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target', deviceId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(readSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostCaller }), 'target');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and
@@ -458,6 +474,33 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Unit through MCP discovery and call_tool. A shared-task link must reach the guest reader
+  // for an owner task, and stay outside a bot's local-only history even if the session IDs match.
+  it('discovers shared progress and checks the live history scope before reading the link', async () => {
+    const context = { agentKind: 'codex' as const, workingDir: '', sessionId: 'mine', sessionInstanceId: 'instance' };
+    const link = 'cindy://session/session?device=fixture';
+    const progress = { ok: true as const, title: 'Build', inTurn: true, observedAt: '2026-11-19T00:00:00Z', events: [], nextBefore: null };
+    const readSharedTaskProgress = vi.fn(async () => progress);
+    let allowedSessionIds: string[] | null = null;
+    const server = createXdtHelperMcpServer({ history: {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn(), readSharedTaskProgress,
+      resolveSessionScope: async () => ({ ok: true, sessionIds: allowedSessionIds }),
+    } }, context);
+    const client = new Client({ name: 'shared-task-progress', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '监控共享任务进度' } }));
+      expect(found.items).toContainEqual(expect.objectContaining({ key: 'tasks.shared-progress', availability: 'available' }));
+      const read = async () => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_shared_task_progress', args: { task_link: link } } }));
+      expect(await read()).toEqual(progress);
+      expect(readSharedTaskProgress).toHaveBeenCalledWith({ task_link: link }, expect.objectContaining(context));
+      allowedSessionIds = ['session'];
+      expect(await read()).toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+      expect(readSharedTaskProgress).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
   // Unit through real MCP wire. Shared-task mode requires an authoritative current
   // task, never a selected window or caller-supplied target. Existing control tests
   // did not cover invitation discovery, live context loss or transferable receipts.
@@ -531,6 +574,13 @@ describe("cindy_helper MCP server", () => {
     try {
       const owner = (await client.listTools()).tools.find((tool) => tool.name === 'request_input_handoff')!;
       expect(owner.description).toContain('password');
+      // #11508: tools/list must disclose the host restriction before any call.
+      // Existing discovery coverage only checked purpose/schema. Minimal input:
+      // a fresh client's tools/list (unit, in-memory transport; all three harnesses).
+      expect(owner.description).toContain('only on a macOS host');
+      expect(owner.description).toContain('Windows and Linux hosts are unsupported');
+      expect(owner.description).toContain('both window targets and screenshot QR codes');
+      expect(owner.description).toContain('phone or another computer');
       expect(owner.inputSchema).toMatchObject({
         required: ['purpose'],
         properties: {

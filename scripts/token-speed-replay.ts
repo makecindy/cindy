@@ -25,10 +25,13 @@ import {
 import {
   beginCodexGenerationTurn,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   finalizeCodexGenerationTurn,
   newCodexRuntimeState,
   settleCodexSpeedUsage,
   translateAgentMessageDelta,
+  translateReasoningSummaryTextDelta,
+  translateReasoningTextDelta,
   translateItemNotification,
 } from '../packages/maker-core/src/agents/codex/translator.js';
 import { estimateWordTokens } from '../packages/maker-core/src/agents/shared/calibrated-token-speed.js';
@@ -176,6 +179,7 @@ const codex: Harness = {
     const queue = { push: () => true } as never;
     const ctx = { rt, log } as never;
     let lastRefresh = -Infinity;
+    let publishedLiveRate = false;
     return {
       feed(line) {
         const { t, msg } = line;
@@ -188,18 +192,26 @@ const codex: Harness = {
           case 'item/started':
           case 'item/completed':
             translateItemNotification(msg.method === 'item/started' ? 'started' : 'completed', params as never, queue, ctx);
-            return false;
+            if (msg.method === 'item/completed') return false;
+            break;
+          case 'item/updated':
+            translateItemNotification('updated', params as never, queue, ctx);
+            if (!['agentMessage', 'reasoning'].includes(String(codexItem(line)?.type))) return false;
+            break;
           case 'item/agentMessage/delta':
             translateAgentMessageDelta(params as never, queue, ctx);
-            // The agent refreshes its status after a delta, a few times a second at most.
-            if (t - lastRefresh < 250) return false;
-            lastRefresh = t;
-            return true;
+            break;
+          case 'item/reasoning/summaryTextDelta':
+            translateReasoningSummaryTextDelta(params as never, queue, ctx);
+            break;
+          case 'item/reasoning/textDelta':
+            translateReasoningTextDelta(params as never, queue, ctx);
+            break;
           case 'thread/tokenUsage/updated': {
             const last = codexUsage(line);
             if (!last || !((last.outputTokens ?? 0) > 0)) return false;
             settleCodexSpeedUsage(rt, { outputTokens: last.outputTokens ?? 0, reasoningOutputTokens: last.reasoningOutputTokens }, t);
-            return true;
+            break;
           }
           case 'turn/completed':
             finalizeCodexGenerationTurn(rt, turnId, t);
@@ -208,6 +220,12 @@ const codex: Harness = {
           default:
             return false;
         }
+        const boundary = msg.method === 'item/started' ||
+          (msg.method === 'thread/tokenUsage/updated' && rt.generationPendingToolIds.size > 0);
+        if (!boundary && !codexUsageRefreshDue(rt, lastRefresh, publishedLiveRate, t)) return false;
+        publishedLiveRate = rt.generationTimingReliable && rt.tokenSpeed.hasLiveRate;
+        lastRefresh = t;
+        return true;
       },
       snapshot: (now) => codexSpeedSnapshot(rt, now),
     };

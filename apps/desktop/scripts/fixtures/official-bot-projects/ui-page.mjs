@@ -15,6 +15,9 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
   },
   cases: {
+    'model-layout': { about: 'Feedback reproduction: a narrow official-bot model field with multiple rich sources', viewport: { width: 800, height: 760 }, storage, data: { kind: 'no-projects' } },
+    'model-layout-narrow': { about: 'The same field picker in a 360px viewport', viewport: { width: 360, height: 840 }, storage, data: { kind: 'no-projects' } },
+    'model-layout-config': { about: 'Configuration remains usable beside the readable model list', viewport: { width: 800, height: 760 }, storage, data: { kind: 'no-projects' } },
     default: { about: '四个机器人都开着: 区块只出现一次, 默认项目选中某个项目, 部分项目单独配置过', storage, data: { kind: 'all-bots' } },
     'default-chat': { about: '默认项目是「对话」(没设过默认项目)', storage, data: { kind: 'default-chat' } },
     'slack-only': { about: '只开 Slack: 没有默认项目单选(Slack 在每个频道里各自选项目)', storage, data: { kind: 'slack-only' } },
@@ -31,6 +34,57 @@ export default {
     await page.locator('#cindy-im-telegram, #cindy-im-slack').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('model-layout')) {
+      const heading = page.locator('#cindy-im-projects-heading');
+      await heading.evaluate(element => element.scrollIntoView({ block: 'start' }));
+      const trigger = page.getByRole('button', { name: /DeepSeek/ }).first();
+      const triggerWidth = (await trigger.boundingBox()).width;
+      await trigger.click();
+      await page.getByRole('listbox').waitFor();
+      await page.mouse.move(0, 0);
+      await ui.capture('model-list');
+      const geometry = await page.locator('[data-unified-model-panel]').evaluate(panel => {
+        const list = panel.querySelector('[role="listbox"]');
+        const bounds = panel.getBoundingClientRect();
+        const names = Array.from(panel.querySelectorAll('[data-unified-anchor] [title="DeepSeek V4.1 Flash"]'));
+        const longName = panel.querySelector('[data-unified-anchor] [title="GPT-6.2 Astra Extended Context"]');
+        return {
+          width: bounds.width,
+          longNameReadable: longName && longName.scrollWidth <= longName.clientWidth + 1,
+          longNameWraps: longName && longName.clientHeight > parseFloat(getComputedStyle(longName).lineHeight),
+          insideViewport: bounds.left >= 11 && bounds.right <= innerWidth - 11,
+          available: innerWidth - 24,
+          listOverflow: list.scrollWidth > list.clientWidth + 1,
+          namesReadable: names.length > 0 && names.every(name => name.clientWidth > 80 && name.scrollWidth <= name.clientWidth + 1),
+        };
+      });
+      assert.ok(
+        geometry.width >= Math.min(Math.max(440, triggerWidth), geometry.available) - 3,
+        'Rich model picker collapsed to its narrow field',
+      );
+      assert.ok(geometry.insideViewport, 'Model picker extends beyond the viewport');
+      assert.equal(geometry.listOverflow, false, 'Model list requires horizontal scrolling');
+      assert.ok(geometry.namesReadable, 'Model names collapsed behind controls');
+      assert.ok(geometry.longNameReadable, 'Long model name is clipped');
+      if (ui.case === 'model-layout-narrow') {
+        assert.ok(geometry.longNameWraps, 'Long model name must wrap in the narrow view');
+      }
+      if (ui.case !== 'model-layout') {
+        await page.locator('[data-row-customize]').first().click();
+        const config = page.getByTestId('unified-model-config-flyout');
+        await config.waitFor();
+        assert.ok(await config.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.left >= -1 && bounds.right <= innerWidth + 1 &&
+            bounds.top >= -1 && bounds.bottom <= innerHeight + 1;
+        }), 'Model configuration extends beyond the viewport');
+        await ui.capture('model-config');
+        await page.keyboard.press('Escape');
+        await config.waitFor({ state: 'hidden' });
+        await page.getByRole('listbox').waitFor();
+      }
+      return;
+    }
     const blocks = page.locator('#cindy-im-projects-heading');
     if (ui.data.kind === 'none-enabled') {
       assert.equal(await blocks.count(), 0);

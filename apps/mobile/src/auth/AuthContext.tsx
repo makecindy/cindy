@@ -962,6 +962,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     org: string,
     did: string,
     expectedLoginFlowEpoch: number,
+    options: { allowPartialSuccess?: boolean } = {},
   ): Promise<SsoOrgDiscovery> => {
     const realmConfig = getMobileEndpointRealmConfig();
     let discovery: SsoOrgDiscovery;
@@ -985,7 +986,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const selected = await discoverSsoOrgRealm(org, {
         cn: authClientFor(did, 'cn'),
         global: authClientFor(did, 'global'),
-      });
+      }, options);
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
       discovery = selected.discovery;
     } else {
@@ -2137,9 +2138,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             throw authCodeError('USER_CANCELLED');
           };
 
-          const discoverOrganization = async (org: string): Promise<SsoOrgDiscovery> => {
+          const discoverOrganization = async (
+            org: string,
+            options: { allowPartialSuccess?: boolean } = {},
+          ): Promise<SsoOrgDiscovery> => {
             pendingAuthRealmRef.current = null;
-            const discovery = await lookupOrganizationRealm(org, did, expectedLoginFlowEpoch);
+            const discovery = await lookupOrganizationRealm(org, did, expectedLoginFlowEpoch, options);
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             pendingAuthRealmRef.current = discovery.region;
             return discovery;
@@ -2315,7 +2319,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
-            const discovery = await discoverOrganization(org);
+            const discovery = await discoverOrganization(org, { allowPartialSuccess: true });
             const methods = ssoOrgDiscoveryToMethods(discovery);
             // A sole same-region connection auto-starts browser authorization
             // below. Persist the successful discovery first so cancel/timeout

@@ -287,6 +287,7 @@ export type IpcErrorCode =
   | 'TERMINAL_ALREADY_DISPOSED' // 在已 dispose 的 session 上调 restart 等操作
   // 意识(.cindy 装入)
   | 'GHOST_FILE_INVALID' // 不是合法 zip / 缺 ghost.json / 清单不合格 / 超限
+  | 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED' // 下载授权无效或已到期，未开始下载
   | 'GHOST_DOWNLOAD_TIMEOUT' // 市场包下载总时限或无进展超时
   | 'GHOST_DOWNLOAD_FAILED' // 市场包下载网络失败
   | 'GHOST_HOST_UNSUPPORTED' // 插件包使用了当前 Cindy 不认识的未来 schema
@@ -313,6 +314,8 @@ export type IpcErrorCode =
   | 'PLAN_CHANGE_RENEWAL_PREPAID' // 下一期已付未生效，等待本期结束后升级
   | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
   | 'RESUME_NOT_AVAILABLE' // 当前订阅已到期、渠道协议失效或状态不可恢复
+  | 'GIFT_CARD_PURCHASE_LIMIT_REACHED' // 礼品卡购买已达上限（滚动 24 小时）
+  | 'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE' // 礼品卡订单总额超过单笔上限（如支付宝）
   // 钉钉机器人连接
   | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
   | 'DINGTALK_NETWORK_FAILED' // 钉钉凭证校验接口不可达
@@ -529,6 +532,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'TERMINAL_SHELL_NOT_FOUND',
   'TERMINAL_ALREADY_DISPOSED',
   'GHOST_FILE_INVALID',
+  'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED',
   'GHOST_DOWNLOAD_TIMEOUT',
   'GHOST_DOWNLOAD_FAILED',
   'GHOST_HOST_UNSUPPORTED',
@@ -553,6 +557,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'PLAN_CHANGE_RENEWAL_PREPAID',
   'PLAN_CHANGE_NOT_AVAILABLE',
   'RESUME_NOT_AVAILABLE',
+  'GIFT_CARD_PURCHASE_LIMIT_REACHED',
+  'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE',
   'DINGTALK_AUTH_FAILED',
   'DINGTALK_NETWORK_FAILED',
   'DINGTALK_STREAM_CONNECTION_FAILED',

@@ -42,6 +42,24 @@
         return SharePayload(type: .text, value: text, mimeType: "text/plain", metadata: nil)
       }
     }
+    for identifier in provider.registeredTypeIdentifiers {
+      guard let type = UTType(identifier), type.conforms(to: .plainText),
+            let data = await loadShareData(provider, identifier: identifier) else { continue }
+      let encoding: String.Encoding
+      switch type {
+      case .utf16PlainText:
+        // Without a BOM, this representation uses the native iOS byte order.
+        let hasBOM = data.starts(with: [0xff, 0xfe]) || data.starts(with: [0xfe, 0xff])
+        encoding = hasBOM ? .utf16 : .utf16LittleEndian
+      case .utf16ExternalPlainText:
+        encoding = .utf16
+      default:
+        encoding = .utf8
+      }
+      if let text = String(data: data, encoding: encoding), !text.isEmpty {
+        return SharePayload(type: .text, value: text, mimeType: "text/plain", metadata: nil)
+      }
+    }
     // PDF, Office, archives, vCard, calendar, HTML/RTF, models and custom exports.
     return await loadShareFile(provider, format: .data, kind: .file)
   }
@@ -50,6 +68,14 @@
     await withCheckedContinuation { continuation in
       provider.loadItem(forTypeIdentifier: identifier, options: nil) { value, _ in
         continuation.resume(returning: value)
+      }
+    }
+  }
+
+  private func loadShareData(_ provider: NSItemProvider, identifier: String) async -> Data? {
+    await withCheckedContinuation { continuation in
+      provider.loadDataRepresentation(forTypeIdentifier: identifier) { data, _ in
+        continuation.resume(returning: data)
       }
     }
   }
@@ -85,37 +111,45 @@
   }
 
   private func loadSharePayload(_ provider: NSItemProvider, identifier: String, kind: ShareType? = nil) async -> SharePayload? {
-    await withCheckedContinuation { continuation in
+    func receive(_ value: NSSecureCoding?) -> SharePayload? {
+      // URL lifetime belongs to this callback, including loadItem fallbacks.
+      // Only an explicitly advertised file-URL representation grants a data
+      // value URL semantics; ordinary file/image bytes are never paths.
+      let encodedURL = identifier == UTType.fileURL.identifier
+        ? (value as? Data).flatMap { String(data: $0, encoding: .utf8) }.flatMap(URL.init(string:)) : nil
+      if let url = (value as? URL) ?? encodedURL {
+        return self.copyAndProcessFile(url: url, type: kind ?? self.fileShareType(url))
+      }
+      guard let kind, let data = (value as? Data) ?? (value as? UIImage)?.pngData() else {
+        return nil
+      }
+      let isRenderedImage = value is UIImage
+      var type = isRenderedImage ? UTType.png : UTType(identifier)
+      if !isRenderedImage, identifier == UTType.image.identifier {
+        // UIKit can vend a keyed archive for public.image. Only save actual image bytes.
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let identifier = CGImageSourceGetType(source),
+              let imageType = UTType(identifier as String), imageType.conforms(to: .image) else { return nil }
+        type = imageType
+      }
+      let ext = type?.preferredFilenameExtension ?? "bin"
+      let suggested = provider.suggestedName.map { URL(fileURLWithPath: $0).lastPathComponent } ?? UUID().uuidString
+      let name = suggested.isEmpty || suggested == "." || suggested == ".." ? UUID().uuidString : suggested
+      let filename = isRenderedImage ? (name as NSString).deletingPathExtension + ".png"
+        : (name as NSString).pathExtension.isEmpty ? name + "." + ext : name
+      return self.saveDataToAppGroup(data: data, fileName: filename, type: kind, mimeType: type?.preferredMIMEType)
+    }
+    let payload: SharePayload? = await withCheckedContinuation { continuation in
       provider.loadItem(forTypeIdentifier: identifier, options: nil) { value, _ in
-        // URL lifetime belongs to this callback, including loadItem fallbacks.
-        // Only an explicitly advertised file-URL representation grants a data
-        // value URL semantics; ordinary file/image bytes are never paths.
-        let encodedURL = identifier == UTType.fileURL.identifier
-          ? (value as? Data).flatMap { String(data: $0, encoding: .utf8) }.flatMap(URL.init(string:)) : nil
-        if let url = (value as? URL) ?? encodedURL {
-          continuation.resume(returning: self.copyAndProcessFile(url: url, type: kind ?? self.fileShareType(url)))
-          return
-        }
-        guard let kind, let data = (value as? Data) ?? (value as? UIImage)?.pngData() else {
-          continuation.resume(returning: nil)
-          return
-        }
-        let isRenderedImage = value is UIImage
-        var type = isRenderedImage ? UTType.png : UTType(identifier)
-        if !isRenderedImage, identifier == UTType.image.identifier,
-           let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-           let identifier = CGImageSourceGetType(source),
-           let imageType = UTType(identifier as String), imageType.conforms(to: .image) {
-          type = imageType
-        }
-        let ext = type?.preferredFilenameExtension ?? "bin"
-        let suggested = provider.suggestedName.map { URL(fileURLWithPath: $0).lastPathComponent } ?? UUID().uuidString
-        let name = suggested.isEmpty || suggested == "." || suggested == ".." ? UUID().uuidString : suggested
-        let filename = isRenderedImage ? (name as NSString).deletingPathExtension + ".png"
-          : (name as NSString).pathExtension.isEmpty ? name + "." + ext : name
-        continuation.resume(returning: self.saveDataToAppGroup(data: data, fileName: filename, type: kind, mimeType: type?.preferredMIMEType))
+        continuation.resume(returning: receive(value))
       }
     }
+    if let payload { return payload }
+    // The generic file pass can see media too. Keep these exports file-backed.
+    guard let kind, let type = UTType(identifier), !type.conforms(to: .audiovisualContent),
+          !type.conforms(to: .directory), !type.conforms(to: .url),
+          let data = await loadShareData(provider, identifier: identifier) else { return nil }
+    return receive(data as NSData)
   }
 
   private func fileShareType(_ url: URL) -> ShareType {

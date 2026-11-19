@@ -13,7 +13,7 @@ import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
-import { Check } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -37,11 +37,13 @@ import {
   flowLabel,
   formatRtt,
   pathLabel,
+  peerTransportLabel,
   platformLabel,
   protocolKind,
   protocolKindLabel,
   protocolLabel,
   relativeTime,
+  relayTransportLabel,
   selfProtocolKind,
 } from './topologyPresentation';
 
@@ -72,7 +74,7 @@ function Row({
   );
 }
 
-/** 路径:「协议 · 怎么连」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色)。 */
+/** 路径:「协议 · 怎么连 · 传输协议」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色);长中转名只截断中间路径,不截掉末尾的 UDP / WS / WebRTC。 */
 function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayName: string; reconnecting: boolean }) {
   const { t } = useTranslation();
   const label = t('settings.remoteControl.v2.popover.path');
@@ -80,13 +82,15 @@ function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayN
   const kind = protocolKind(node);
   const protocol = protocolLabel(node, t);
   const path = pathLabel(routeOf(node), relayName, t);
-  const text = [protocol, path].filter(Boolean).join(' · ');
+  const transport = peerTransportLabel(node, t);
+  const text = [protocol, path, transport].filter(Boolean).join(' · ');
   if (!kind || !protocol) return <Row label={label} value={text} />;
   return (
     <Row label={label} value={text}>
       <span className="inline-flex max-w-full items-baseline justify-end gap-1">
         <ProtocolMark kind={kind} label={protocol} className="shrink-0 self-center" />
         <span className="min-w-0 truncate">· {path}</span>
+        {transport ? <span className="shrink-0">· {transport}</span> : null}
       </span>
     </Row>
   );
@@ -269,12 +273,14 @@ function useSwitchArea(
 export function DeviceNodePopover({
   node,
   relayName,
+  onDelete,
   onRemoteDesktop,
   switchEntry = null,
   onSwitch,
 }: {
   node: TopologyNode;
   relayName: string;
+  onDelete?: () => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
@@ -307,6 +313,7 @@ export function DeviceNodePopover({
       : node.status !== 'offline' && node.busy
         ? 'text-[var(--warning-accent)]'
         : undefined;
+  const canDelete = node.status === 'offline' && !running && !!onDelete;
   const canRemoteDesktop =
     node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
   return (
@@ -347,8 +354,14 @@ export function DeviceNodePopover({
       {switchArea.body ? (
         <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">{switchArea.body}</div>
       ) : null}
-      {canRemoteDesktop || switchArea.action ? (
+      {canDelete || canRemoteDesktop || switchArea.action ? (
         <div className="flex justify-end gap-2">
+          {canDelete ? (
+            <Button tone="danger-surface" size="sm" compact onClick={onDelete}>
+              <Trash2 size={14} aria-hidden />
+              {t('settings.devices.delete')}
+            </Button>
+          ) : null}
           {canRemoteDesktop ? (
             <Button variant={switchArea.action ? 'secondary' : 'primary'} size="sm" compact onClick={() => onRemoteDesktop(node)}>
               {t('remoteDesktop.title')}
@@ -378,10 +391,17 @@ export function HubNodePopover({
   // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
   const kind = selfProtocolKind(model, linkStatus);
   const protocol = protocolKindLabel(kind, t);
+  // 与中转的连接：在线时写经中转的数据走 UDP 还是 WS,往返是那条路的(用户要求 2026-11-18)。
+  const online = linkStatus === 'online';
+  const relayStatus = [
+    t(`settings.devices.linkStatus.${linkStatus}`),
+    online ? relayTransportLabel(model.relay, t) : null,
+    online && model.relay.rttMs !== null ? formatRtt(model.relay.rttMs, t) : null,
+  ].filter(Boolean).join(' · ');
   return (
     <div className="flex flex-col gap-3">
       <Heading
-        name={model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer')}
+        name={model.self?.name || t('settings.devices.thisDevice')}
         sub={platformLabel(model.self?.platform ?? null)}
         platform={model.self?.platform ?? null}
         isMobile={false}
@@ -392,14 +412,7 @@ export function HubNodePopover({
             <ProtocolMark kind={kind} label={protocol} className="justify-end" />
           </Row>
         ) : null}
-        <Row
-          label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })}
-          value={
-            model.relay.rttMs !== null && linkStatus === 'online'
-              ? `${t(`settings.devices.linkStatus.${linkStatus}`)} · ${formatRtt(model.relay.rttMs, t)}`
-              : t(`settings.devices.linkStatus.${linkStatus}`)
-          }
-        />
+        <Row label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })} value={relayStatus} />
         {issue ? <span className="text-12 text-[var(--error-fg)]">{issue}</span> : null}
         {standby ? <span className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.standbyHint')}</span> : null}
       </div>

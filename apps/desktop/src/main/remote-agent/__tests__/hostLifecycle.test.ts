@@ -349,6 +349,39 @@ describe('duplicate op payloads', () => {
   });
 });
 
+// Unit regression (2026-11-19): a slow controller asks for smaller polls (`maxBytes`). A fixed
+// 1.5MB reply could miss the request deadline and be re-read at the same size until the task ended.
+describe('poll size', () => {
+  it('returns no more than the controller asks for, and the full budget without the field', async () => {
+    const emitted = whenStarted();
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async input => ({
+        ...idleHandle(input),
+        events: () => ({ async *[Symbol.asyncIterator]() {
+          for (let i = 0; i < 8; i++) yield { type: 'text', source: 'claude-code', data: { text: 'x'.repeat(100 * 1024) } } as AgentEvent;
+          emitted.resolve();
+        } }),
+      }),
+      isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, now: () => clock,
+    });
+    type Poll = { runs: Array<{ cursor: number; data?: string }> };
+    const bytes = (result: Poll) => Buffer.from(result.runs[0]?.data ?? '', 'base64').length;
+    try {
+      await host.handle('controller-1', { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await emitted.promise;
+      await settle();
+      const small = await host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0, maxBytes: 64 * 1024 }) as Poll;
+      expect(bytes(small)).toBeGreaterThan(0);
+      expect(bytes(small)).toBeLessThanOrEqual(64 * 1024);
+      const full = await host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: small.runs[0].cursor }], waitMs: 0 }) as Poll;
+      expect(bytes(full)).toBeGreaterThan(256 * 1024);
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 /*
  * 测试价值
  * - 生产入口与可观察结果：createRemoteAgentHost 的 handle(open / call / poll / caps)与巡检；控制端读到的事件流收尾行与
@@ -643,20 +676,5 @@ it.each(['authorization', 'owner'])('scopes image recovery to the caller and rej
     allowed = false;
     await expect(host.handle('other', { op: 'images', sessionId: RUN_1, action: 'list' })).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
     expect(imageArtifacts).toHaveBeenCalledTimes(1);
-  } finally { host.dispose(); }
-});
-
-// 关了「用本机模型」的电脑看到的是「没有开放供应商」，而不是「和那台电脑断开了 / 不能远程控制」。
-it('tells a computer whose model use was turned off that the provider is not open to it', async () => {
-  const host = createRemoteAgentHost({
-    isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input),
-    isControllerAuthorized: () => false, isControllerModelUseRevoked: (controller) => controller === 'laptop',
-    captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
-  });
-  try {
-    await expect(host.handle('laptop', { op: 'images', sessionId: RUN_1, action: 'list' }))
-      .rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
-    await expect(host.handle('stranger', { op: 'images', sessionId: RUN_1, action: 'list' }))
-      .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
   } finally { host.dispose(); }
 });

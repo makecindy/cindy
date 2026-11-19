@@ -1,3 +1,4 @@
+import { receivedWindowImages } from '../shared/receivedImageHistory';
 import fs from 'node:fs';
 import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
@@ -161,7 +162,11 @@ export function buildDingTalkAdapter(
         return null;
       });
       if (!assembly) return { agentText: `${speakerLine}${event.text}` };
+      const images = await receivedWindowImages({ provider: DINGTALK_PERSONAL_GROUP_WINDOW.providerOf(event.contextId),
+        chatId: lane.conversationId, threadId: '' }, assembly.attachmentMessageIds ?? [], event.attachments)
+        .catch(() => { log.warn('dingtalk history images unavailable'); return []; });
       return {
+        ...(images.length ? { contextAttachments: images } : {}),
         agentText: `${assembly.prefix}${speakerLine}${event.text}`,
         contextSnapshot: captureImContext({
           groupPrefix: assembly.prefix,

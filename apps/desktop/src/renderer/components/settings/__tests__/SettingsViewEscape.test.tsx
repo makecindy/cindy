@@ -31,8 +31,12 @@ vi.mock('react-i18next', async (importOriginal) => ({
     'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
   }[key] ?? key) }),
 }));
+const auth = vi.hoisted(() => ({
+  mode: 'local' as 'local' | 'cloud',
+  user: null as { name: string; membershipKind: 'personal' } | null,
+}));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
+  useAuth: () => ({ mode: auth.mode, dataOwnerId: null, user: auth.user }),
 }));
 vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
@@ -63,7 +67,6 @@ vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
 } }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
 vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
@@ -98,7 +101,11 @@ vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));
 vi.mock('../CindyMakeSection', () => ({ CindyMakeSection: Stub }));
 vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));
-vi.mock('@/features/billing/BillingPage', () => ({ BillingSettingsSection: Stub }));
+vi.mock('@/features/billing/BillingPage', () => ({
+  BillingSettingsSection: ({ accountName }: { accountName?: string | null }) => (
+    <p data-testid="billing-account-name">{accountName ?? 'none'}</p>
+  ),
+}));
 vi.mock('@/features/bots/BotsGlobalSettingsSection', () => ({ BotsGlobalSettingsSection: Stub }));
 vi.mock('../usage/UsageHistorySection', () => ({ UsageHistorySection: Stub }));
 vi.mock('../ImBotSection', () => ({
@@ -168,6 +175,8 @@ const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
   voicePage.real = false;
+  auth.mode = 'local';
+  auth.user = null;
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
@@ -431,4 +440,12 @@ describe('SettingsView Escape', () => {
     pressEscape();
     expect(location()).toBe('/');
   });
+});
+
+// 设置页「计费」是账单的主入口：要把账号昵称交给计费分区，购买礼品卡时署名才能默认填昵称。
+it('passes the account nickname into the billing section', async () => {
+  auth.mode = 'cloud';
+  auth.user = { name: '小鱼', membershipKind: 'personal' };
+  await act(async () => { renderSettings('/settings?tab=billing'); });
+  expect((await screen.findByTestId('billing-account-name')).textContent).toBe('小鱼');
 });

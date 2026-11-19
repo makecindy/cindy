@@ -179,7 +179,9 @@ interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
-  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到主 relay 的往返，取数据实际走的那条路;离线 / 未测得为 null */
   relayRttMs: number | null;
 }
 
@@ -338,8 +340,6 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
-type VisionBridgeSettingsPatch = import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
-type VisionBridgeSettingsState = import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -775,7 +775,7 @@ interface CCAgentStreamEvent {
     | 'thinking'
     | 'compact_boundary';
   data: unknown;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi';
   /**
    * agent-meta: SDK 元信息（按 session.agentKind 解析）。当事件来自一条 SDK
    * message（assistant / tool_use / thinking final / done 等）时由 main 透传过来。
@@ -1456,6 +1456,11 @@ interface ElectronAPI {
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
+    githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
+    onGithubReleaseProgress: (callback: (event: import('../shared/githubPluginRelease').GithubPluginReleaseProgress, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean>;
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
     /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */
     inspect: (
@@ -1818,6 +1823,13 @@ interface ElectronAPI {
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
     onUpdateConsentHoldsChanged: (callback: () => void) => () => void;
+    /** `ownerStamp` names the data owner that started the install (shared/dataOwnerPush.ts). */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -2347,6 +2359,8 @@ interface ElectronAPI {
     accountDeletionRestored: boolean;
     /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687)。 */
     credentialStoreUnavailable?: boolean;
+    /** Client mode only: why the Host serving this window did not start (shared/hostStartFailure.ts). */
+    hostUnavailable?: { reason: string } | null;
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
@@ -2374,6 +2388,7 @@ interface ElectronAPI {
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
+  setProductTokensEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
@@ -2737,6 +2752,7 @@ interface ElectronAPI {
   /** 被控端本地 main → 自身 renderer:控制端写穿的草稿「模型 effort/fast」pref(调本地 setter)。 */
   onMakerDraftPrefApply: (
     cb: (payload: {
+      selectDraftAgent?: true;
       appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
       agent: 'claude-code' | 'codex' | 'pi';
       providerId: string;
@@ -4332,6 +4348,7 @@ interface ElectronAPI {
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
   };
   providerShare: {
+    exportRoster(providerId: string, owner: import('../shared/dataOwnerPush').DataOwnerPushStamp): Promise<void>;
     command<C extends import('../shared/providerShare').ProviderShareCommand>(
       command: C,
     ): Promise<import('../shared/providerShare').ProviderShareCommandResult[C['action']]>;
@@ -4369,8 +4386,6 @@ interface ElectronAPI {
       standby: boolean;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
-      /** 单独关掉「用本机模型」的同账号电脑(旧主进程不返回)。 */
-      modelUseRevokedControllers?: string[];
       disabledControlDeviceIds: string[];
       unresponsiveDeviceIds: string[];
     }>;
@@ -4408,7 +4423,6 @@ interface ElectronAPI {
     revoke: (deviceId: string) => Promise<{ ok: true }>;
     /** 被控端:恢复某控制端的访问权限 */
     restore: (deviceId: string) => Promise<{ ok: true }>;
-    setModelUse: (deviceId: string, allowed: boolean) => Promise<{ ok: true }>;
     /** 同账号某设备 presence 变化(上线/下线/开关/busy) */
     onPresenceChanged: (cb: (snap: DeviceLinkPresenceSnapshot) => void) => () => void;
     /** 本机 relay 连接状态变化 */
@@ -4684,7 +4698,7 @@ interface ElectronAPI {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
   // P1: 删除/归档确认预检
-  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean }>;
+  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }>;
   // P1: worktree 回收后的可恢复状态 + 一键恢复
   worktreeRestoreStatus: (
     sessionId: string,
@@ -5146,7 +5160,8 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex' | 'pi';
+        /** 'acp' = plugin engine task: main requires an `acp-plugin:` providerId and no remote fields. */
+        agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -5164,6 +5179,8 @@ interface ElectronAPI {
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        Promise<import('../shared/projectArchive').ProjectArchiveMember[] | import('../shared/projectArchive').ProjectArchiveReceipt>;
       restoreIfArchived: (
         id: string,
         expected: {
@@ -5420,7 +5437,7 @@ interface ElectronAPI {
       autoIcon: (input: { projectKey: string }) => Promise<unknown>;
       iconImage: (input: { projectKey: string }) => Promise<string | null>;
       snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
-      updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
+      updateInfo: (input: {projectKey: string; create?: boolean; repositoryUrl?: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null; directories?: readonly import('@cindy/maker-shared/project-alias-sync').ProjectDirectory[]}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
         projectKey: string;
@@ -5742,7 +5759,11 @@ interface ElectronAPI {
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
   dialog: {
     /** 打开系统目录选择对话框，返回用户选中的目录路径（取消时 path=null）。 */
-    showOpenDirectory: (params?: { defaultPath?: string; writableGrantScope?: string }) => Promise<{
+    showOpenDirectory: (params?: {
+      defaultPath?: string;
+      writableGrantScope?: string;
+      projectGrantScope?: string;
+    }) => Promise<{
       success: boolean;
       path: string | null;
     }>;
@@ -5776,6 +5797,22 @@ interface ElectronAPI {
    */
   maker: {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
+    /**
+     * Plugin-provided task engines (docs/plans/acp-plugin-bridge.md). Local only: not
+     * tunnelled over device-link, so remote drafts and tasks never call it.
+     */
+    listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /** Read the private account snapshot of one approved plugin engine. */
+    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
+    /**
+     * Asks engine plugins to republish their models, like the provider model refresh when the picker
+     * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
+     */
+    refreshPluginEngines?: () => Promise<void>;
+    /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
+    onPluginEnginesChanged: (
+      cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
+    ) => () => void;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
     /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
@@ -6013,6 +6050,10 @@ interface ElectronAPI {
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      /** true only when every catalog page was read; absent = unknown. */
+      complete?: boolean;
+      /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
+      listingReceipt?: string;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
@@ -6193,9 +6234,6 @@ interface ElectronAPI {
       providerId: string;
       enabled: boolean;
     }) => Promise<{ ok: true; enabled: boolean }>;
-    /** 「远程连接」里的「让我的其他电脑用本机模型」：默认关闭，与供应商分享无关。 */
-    getOwnComputerModelUse: () => Promise<{ enabled: boolean }>;
-    setOwnComputerModelUse: (input: { enabled: boolean }) => Promise<{ ok: true; enabled: boolean }>;
     /** 供应商「运行于」：deviceId、'local'，或 null 回到默认；写入后经 PROVIDER_CHANGED 刷新。 */
     setProviderRunLocation: (input: { providerId: string; location: string | null }) => Promise<{ ok: true }>;
     /** Persist the visible provider order only if the active owner still matches. */
@@ -6787,7 +6825,8 @@ interface ElectronAPI {
      */
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      // 'acp' = 插件引擎(providerId 为 acp-plugin:<插件>:<引擎>，只限本机任务)。
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -6797,7 +6836,7 @@ interface ElectronAPI {
       thinking?: boolean,
     ) => Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -6819,7 +6858,7 @@ interface ElectronAPI {
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     /** 输入框开始打字时提前启动 Agent；尽力而为。 */
-    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean }>;
+    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean; piRuntimePrepared?: true }>;
     /** 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。 */
     discardProvisionalSession?: (sessionId: string) => Promise<{ discarded: boolean; remaining?: boolean }>;
     commitProvisionalSession?: (sessionId: string) => Promise<{ committed: boolean }>;
@@ -6945,13 +6984,6 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
-
-    /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
-    visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (
-      patch: VisionBridgeSettingsPatch,
-    ) => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

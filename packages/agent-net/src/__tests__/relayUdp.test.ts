@@ -8,8 +8,10 @@
  *   （docs/dev-rules/remote-and-mobile-adaptation.md「中转数据报走 UDP」的故障半径三问）。
  *   2026-11-17 审查：重放或晚到的旧确认会让本机以为 UDP 还通；中转要地址凭证后，换了地址的设备要马上带上新凭证；
  *   中转地址启动时解析失败就一直不再解析。
+ *   2026-11-18 用户要求：中转走 UDP 时远程连接页显示 UDP 的往返（`rttMs`，登记到确认），原来显示的是 WebSocket 心跳的。
  * - 覆盖缺口：中转集成测试只验证中转一侧；压测只交换公网地址，不会出现直连包；连接号随机，集成测试不一定撞上。
- * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败。
+ * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败；
+ *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
@@ -95,6 +97,27 @@ it('falls back to the WebSocket within seconds when relay acks stop, tells the r
   ackLatest();
   expect(registrations().at(-1)!.receiving).toBe(true);
   expect(path.send('member', datagram)).toBe(true);
+});
+
+it('measures the UDP round trip from each registration to its ack, and reports none once UDP is down (2026-11-18)', async () => {
+  fakeTimers();
+  const credentials = { session: new Uint8Array(8).fill(5), key: new Uint8Array(32).fill(6) };
+  const { path, registrations } = open(credentials);
+  await vi.waitFor(() => expect(registrations()).toHaveLength(1));
+  expect(path.rttMs).toBeNull();
+  const waited = performance.now() - registrations()[0].at;
+  vi.advanceTimersByTime(37);
+  path.intercept(encodeUdpRegisterAck(credentials, 1n, true, COOKIE));
+  expect(path.rttMs).toBe(Math.round(waited + 37));
+  // 刚通马上又登记一次（带「收得到」）；它 12 毫秒后确认，往返跟着更新。
+  expect(registrations()).toHaveLength(2);
+  vi.advanceTimersByTime(12);
+  path.intercept(encodeUdpRegisterAck(credentials, 2n, true, COOKIE));
+  expect(path.rttMs).toBe(12);
+  // 之后的保活登记不再被确认：退回 WebSocket，不再报 UDP 的旧往返。
+  vi.advanceTimersByTime(20_000);
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+  expect(path.rttMs).toBeNull();
 });
 
 it('registers again at once with the new cookie when the relay has not taken its new address', async () => {

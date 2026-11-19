@@ -14,7 +14,7 @@ import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helpe
 import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
-import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
+import { registerSharedTaskProgressTool, registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
@@ -136,6 +136,7 @@ import { registerTeammateSkillReader } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
+import { registerControlSessionTool } from './xdt-helper/session_control.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
@@ -208,11 +209,11 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'Grok 设备码登录、状态查询与取消（支持远程任务）。',
   ].join(''),
   control: [
-    'list_projects(device) 可查询远程项目。',
+    'list_projects(device)、create_project、get_project_info、update_project_info 支持本机及同账号跨电脑：按名称分配目录、导入 GitHub/GitLab 仓库、读写名称/图标/多个项目目录；创建与目录授权走任务权限流程。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
     '原生任务包导入（import_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；加密包与未指定目录的项目包交原生向导完成；',
-    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目移除（remove_project）、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
@@ -225,6 +226,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
+    '分析或跟进同事共享给你的任务，用 get_shared_task_progress 传入复制的完整任务链接，每次查询最新进展。',
     '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
     '原生任务包导出（export_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 output_path。插件只收到本实例 attachment_ref。',
@@ -235,7 +237,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
   storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
   discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
-  usage: '只读查询订阅额度、已记录供应商用量与供应组状态。get_subscription_usage 仅查询执行电脑当前 Cindy 账号的本机订阅，返回套餐、额度窗口与更新时间；供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
+  usage: '只读查询订阅额度、任务额度、已记录供应商用量与供应组状态。get_subscription_usage 查询本机订阅；get_session_quota 按任务读取实际执行来源的额度，包含已授权的同账号电脑和供应商分享。供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -773,6 +775,7 @@ export function createXdtHelperMcpServer(
       ...(deps.sessionQueue ? { sessionQueue: deps.sessionQueue } : {}),
     });
     registerGetChatHistoryTool(registry, historyDeps);
+    registerSharedTaskProgressTool(registry, historyDeps);
     registerSearchChatHistoryTool(registry, historyDeps);
     registerGetTaskDigestTool(registry, historyDeps);
   }
@@ -792,6 +795,7 @@ export function createXdtHelperMcpServer(
     registerStopSessionTurnTool(registry, controlDeps);
     registerGetSessionRuntimeTool(registry, controlDeps);
     registerSetSessionRuntimeTool(registry, controlDeps);
+    registerControlSessionTool(registry, controlDeps);
   }
 
   if (deps.mcpSetup) registerMcpSetupTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpSetup);

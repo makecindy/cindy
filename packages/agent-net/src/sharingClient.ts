@@ -16,6 +16,7 @@ export interface SharingClientOptions {
   memberAuthorization?(method: string, path: string, bytes: string): string | Promise<string>;
   fetch?: typeof fetch;
   ownerPinnedHttp?: boolean;
+  privateSharing?: boolean;
 }
 export class AgentNetSharingError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
@@ -58,27 +59,30 @@ export class AgentNetSharingClient {
     this.current(options.isCurrent);
     // Existing business adapters keep their public contract; only this scoped
     // transport maps it to the selected V2 service. No arbitrary URL is accepted.
-    const path = /^\/api\/device-link\/(shared-tasks|provider-shares)(\/|$)/.test(resource)
+    const resourcePath = /^\/api\/device-link\/(shared-tasks|provider-shares)(\/|$)/.test(resource)
       ? resource.replace('/api/device-link/', '/api/agent-net/sharing/')
       : /^\/api\/agent-net\/sharing\/transport(?:\/status)?$/.test(resource) ? resource : '';
+    const path = this.options.privateSharing ? resourcePath.replace('/api/agent-net/sharing/', '/api/agent-net/private-sharing/') : resourcePath;
     if (!path || path.includes('?') || path.includes('#') || new URL(this.base + path).pathname !== path
       || !['GET', 'POST'].includes(options.method)) throw new Error('INVALID_AGENT_NET_SHARING_RESOURCE');
     const body = options.body === undefined ? '' : JSON.stringify(options.body);
     if (utf8(body).length > 16_384) throw new Error('SHARING_REQUEST_TOO_LARGE');
-    const card = await this.card(); this.current(options.isCurrent);
+    const card = this.options.privateSharing ? undefined : await this.card(); this.current(options.isCurrent);
     const { signer } = this.options;
     const entropy = await signer.random(); this.current(options.isCurrent);
     const proof = { at: Date.now(), nonce: entropy.slice(0, 24) };
     if (!/^[A-Za-z0-9_-]{24}$/.test(proof.nonce)) throw new Error('INVALID_NATIVE_RANDOM');
-    const signature = await signer.sign(requestPayload(options.method, path, toBase64Url(this.options.hash(utf8(body))), proof));
+    const signature = await signer.sign(requestPayload(options.method, this.options.privateSharing
+      ? JSON.stringify(['private-sharing/1', this.options.networkId, this.options.rootPublicKey, path]) : path, toBase64Url(this.options.hash(utf8(body))), proof));
     this.current(options.isCurrent);
-    const authorization = 'AgentNetIdentity ' + toBase64Url(utf8(JSON.stringify({ networkId: this.options.networkId,
-      deviceId: signer.identity.deviceId, signingKey: signer.identity.signingKey, card, proof: { ...proof, signature } })));
+    const authorization = (this.options.privateSharing ? 'AgentNetPrivate ' : 'AgentNetIdentity ') + toBase64Url(utf8(JSON.stringify({ networkId: this.options.networkId,
+      ...(this.options.privateSharing ? {} : { deviceId: signer.identity.deviceId, card }),
+      signingKey: signer.identity.signingKey, proof: { ...proof, signature } })));
     const member = await this.options.memberAuthorization?.(options.method, path, body); this.current(options.isCurrent);
     let applicant: string | undefined;
     if (options.applicant) {
       const signer = options.applicant;
-      if (signer.identity.deviceId !== this.options.signer.identity.deviceId) throw new Error('APPLICANT_DEVICE_MISMATCH');
+      if (signer.identity.deviceId !== (this.options.privateSharing ? 'guest:' + this.options.signer.identity.signingKey : this.options.signer.identity.deviceId)) throw new Error('APPLICANT_DEVICE_MISMATCH');
       const entropy = await signer.random(); this.current(options.isCurrent);
       const proof = { at: Date.now(), nonce: entropy.slice(0, 24) };
       if (!/^[A-Za-z0-9_-]{24}$/.test(proof.nonce)) throw new Error('INVALID_NATIVE_RANDOM');

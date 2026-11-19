@@ -5,25 +5,25 @@ import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverri
 
 const current = 'deepseek-flash';
 const old = 'deepseek-v4-flash';
-function provider(): Provider {
+function provider(listed: readonly string[] = []): Provider {
   const model = (id: string): CatalogModel => ({ id, name: id,
     contextWindow: id === old ? 1_000_000 : 1_048_576,
     maxOutput: id === old ? 384_000 : 393_216,
     efforts: ['low', 'high', 'max'], defaultEffort: 'high',
     modalities: { input: ['text'], output: ['text'] },
-    userModelConfig: { id, name: id, discoveredMetadata: {} },
+    userModelConfig: { id, name: id, discoveredMetadata: {}, ...(listed.includes(id) ? { listedUpstream: true as const } : {}) },
   });
   return { id: 'test-ds', name: 'DS', source: 'user', auth: { method: 'apiKey' },
     agents: ['codex'], routing: { codex: { upstream: 'https://api.deepseek.com', wireProtocol: 'openai-chat', authStrategy: 'api-key-header' } },
     models: { codex: [model(current), model(old)] } };
 }
-function setup() {
+function setup(listed: readonly string[] = []) {
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
   setActiveCatalog({ ...BUNDLED_CATALOG, providers: [], modelRegistry: {
     schemaVersion: 5, updatedAt: '2026-11-04T00:00:00Z', models: [],
     baseModels: [{ id: 'deepseek/deepseek-v4.1-flash', aliases: [current, old], defaults: {} }],
   } } as Catalog);
-  setCustomProviders([provider()]);
+  setCustomProviders([provider(listed)]);
 }
 afterEach(() => { setCustomProviders([]); setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setActiveCatalog(BUNDLED_CATALOG); });
 const actual = () => getActiveCatalog().providers.find((p) => p.id === 'test-ds')!;
@@ -35,6 +35,13 @@ describe('active catalog verified aliases and user metadata', () => {
     expect(actual().models.codex!.map((m) => m.id)).toEqual([current, old]);
     expect(actual().models.codex!.map((m) => m.contextWindow)).toEqual([1_048_576, 1_000_000]);
     expect(actual().models.codex!.every((m) => m.supportsImageInput && m.maxOutput === 393_216)).toBe(true);
+  });
+  // #11298 review P1: the refresh bookkeeping marker on only one member is not a user
+  // override; before excluding it the pair stopped merging and lost its correction.
+  it('still merges when only one member carries the upstream listing marker', () => {
+    setup([current]);
+    expect(actual().models.codex!.map((m) => m.selectionAliasKey)).toEqual([current, current]);
+    expect(actual().models.codex!.every((m) => m.maxOutput === 393_216)).toBe(true);
   });
   it.each(['public', 'member', 'agent'] as const)('retains %s user overrides rather than correcting or merging them away', (kind) => {
     setup();

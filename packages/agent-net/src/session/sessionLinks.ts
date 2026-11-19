@@ -14,7 +14,7 @@ import {
   InvokeResultCache, InvokeScheduler, PROTOCOL_VERSION, SessionMessageReuse, acceptedPushDeflateDictionaries,
   bypassInvokeScheduling, decodeModelSpeedPayload, decodePushTransfer, decodeSessionTagCatalog, encodeInvokeResultTransfer,
   encodeModelSpeedPayload, encodePushTransfer, isEncodedPushPayload, isHistoryViewDeltaMiss, pushDeflateCapabilities,
-  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
+  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
   type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
   type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
@@ -36,7 +36,8 @@ export function agentNetSessionLane(channel: string, background?: boolean): Sess
  */
 export function agentNetRequestLane(channel: string, args: unknown[] | undefined): SessionLane | undefined {
   const op = (args?.[0] as { op?: unknown } | undefined)?.op;
-  return channel === REMOTE_DESKTOP_CHANNEL && (op === 'heartbeat' || op === 'input' || op === 'stop') ? 'control' : undefined;
+  return (channel === REMOTE_DESKTOP_CHANNEL && (op === 'heartbeat' || op === 'input' || op === 'stop'))
+    || resolveInvokePriority(channel, undefined, args) === 'interactive' ? 'control' : undefined;
 }
 type FrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
@@ -440,14 +441,15 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   }
 
   async invoke(dst: string, payload: InvokePayload, timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
+    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' }): Promise<InvokeResultPayload> {
     if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
     if (!this.live(dst)) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const queuedAt = performance.now();
-    const priority = resolveInvokePriority(payload.channel, options?.background);
+    const priority = resolveInvokePriority(payload.channel, options?.background, payload.args);
     const slotBudgetMs = Math.min(timeoutMs ?? this.requestTimeout(), 30_000);
     const send = async (): Promise<InvokeResultPayload> => {
       options?.preSend?.();
+      options?.beforeDispatch?.();
       const peer = this.peer(dst);
       if (payload.channel === 'git-context:github-read' && !peer.githubRead) {
         return { ok: false, error: { code: 'IPC_ERROR', message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
@@ -466,7 +468,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           || (isFilePeerStreamTransfer(tagged) && (tagged.args?.[0] as { body?: unknown } | undefined)?.body !== undefined);
         // noResultCache：和 Device Link 一样不缓存这条的结果（MCP App 的 open／poll）。
         const transfer = scoped || fileBlock ? null : this.invokeResultCache.prepare(dst, tagged, options?.noResultCache);
-        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, options?.background || fileBlock);
+        // 远程任务的上传块也走后台通道：控制端一次有几块在途，停止等交互请求不该排在它们后面（2026-11-19 实测，慢线路上停止要等 5 秒多）。
+        // 只改通道，排队仍按原优先级，和 Device Link 同一套名额。
+        const backgroundLane = fileBlock || isRemoteAgentUploadChunk(tagged);
+        // Pass the resolved policy too: an explicit false would otherwise undo
+        // a channel's default background lane after admission used its cap.
+        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || backgroundLane);
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
         if (!result.ok) return { result };
@@ -484,6 +491,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         const remainingMs = slotBudgetMs - Math.round(performance.now() - sentAt);
         if (outcome.retry === 'full-timeout' || remainingMs >= 100) {
           options?.preSend?.();
+          options?.beforeDispatch?.();
           outcome = await attempt(outcome.retry === 'full-timeout', outcome.retry === 'full-timeout' ? timeoutMs : remainingMs);
         }
       }

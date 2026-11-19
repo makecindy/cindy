@@ -27,6 +27,8 @@ export {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createEmptyThinkingRecoveryRule,
