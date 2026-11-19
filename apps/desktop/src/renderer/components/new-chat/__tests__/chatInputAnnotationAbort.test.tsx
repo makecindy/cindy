@@ -208,6 +208,22 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   return { ...view, props };
 }
 
+// Unit, project-settings.md: the panel-only tests cannot catch the project
+// shortcut replacing the task picker when a local task supports both.
+it('offers the task directory picker just before project settings in the + menu', async () => {
+  const openSettings = vi.fn();
+  renderComposer({ writableGrantScope: 'composer-regression', onWritableDirsChange: vi.fn(),
+    onOpenProjectSettings: openSettings });
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  await waitFor(() => expect(h.atPanel?.embedded).toBe(true));
+  expect(h.atPanel!.entries.slice(-2)).toMatchObject([
+    { kind: 'action', action: { label: 'extraDirs.add', opensPanelPage: true } },
+    { kind: 'action', action: { label: 'projectSettings.title' } },
+  ]);
+  await act(async () => h.atPanel!.onSelect(h.atPanel!.entries.at(-1)!));
+  expect(openSettings).toHaveBeenCalledOnce();
+});
+
 // #8941 / #10257 mentions subscope. Unit: the shared production roster hook and
 // real ChatInput/Tiptap must offer a buddy beside its same-name task through both
 // @ and +, then serialize the selected stable bot ID. Existing serializer tests

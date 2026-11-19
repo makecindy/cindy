@@ -5134,14 +5134,7 @@ export function ChatInput({
     }
     // A new directory uses the existing Main-issued writable grant. The local
     // picker cannot authorize paths on an SSH or device-link execution host.
-    if (onOpenProjectSettings) {
-      actions.push({
-        id: 'add-extra-dir',
-        label: t('projectSettings.title'),
-        disabled: settingsLocked,
-        run: onOpenProjectSettings,
-      });
-    } else if (
+    if (
       onWritableDirsChange &&
       writableGrantScope &&
       !remoteHostId &&
@@ -5157,10 +5150,18 @@ export function ChatInput({
           totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
-        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
+        disabled: settingsLocked || composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
         opensPanelPage: true,
         run: () => openAddDirectoryViewRef.current(),
+      });
+    }
+    if (onOpenProjectSettings) {
+      actions.push({
+        id: 'project-settings',
+        label: t('projectSettings.title'),
+        disabled: settingsLocked,
+        run: onOpenProjectSettings,
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -10065,7 +10066,7 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    addDirViewOpen ? (
+                    addDirViewOpen && !settingsLocked ? (
                       <AddDirectoryPanel
                         addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
                         workingDir={workingDir}
