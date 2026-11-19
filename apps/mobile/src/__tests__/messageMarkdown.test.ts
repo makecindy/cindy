@@ -2510,6 +2510,28 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / review 4624073426: block boundaries can end a prior list.
+  // Unit production entry; prior list cases did not cross these boundaries.
+  it('ends list scope at root blocks while preserving nested block ancestors', () => {
+    for (const indent of ['', '  ']) {
+      for (const lines of [
+        ['name | value', '--- | ---', 'a | b'],
+        ['~~~md', 'code', '~~~'],
+        ['$$', 'x', '$$'],
+      ]) {
+        const block = lines.map(line => indent + line).join('\n');
+        const source = '[site][s]\n\n- item\n\n' + block + '\n  [s]: https://example.com/';
+        expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(indent ? [] : [link]);
+        let result = parseMobileMarkdownIncremental('');
+        for (let end = 1; end <= source.length; end++) {
+          const value = source.slice(0, end);
+          result = parseMobileMarkdownIncremental(value, result);
+          expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+        }
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

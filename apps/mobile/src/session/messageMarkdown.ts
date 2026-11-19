@@ -130,6 +130,11 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
   let html = false;
   let rawHtmlEnd: RegExp | undefined;
   const listContentIndents: number[] = [];
+  const leaveListScopes = (indent: number) => {
+    while (listContentIndents.length && indent < listContentIndents[listContentIndents.length - 1]) {
+      listContentIndents.pop();
+    }
+  };
   let paragraph = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
@@ -146,6 +151,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     // cannot become hidden reference definitions after an internal blank line.
     const opening = parseOpeningCodeFence(line);
     if (opening) {
+      leaveListScopes(leadingIndentColumns(line));
       fence = { ...opening, start: index, lines: [] };
       html = false;
       rawHtmlEnd = undefined;
@@ -153,12 +159,14 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       continue;
     }
     if (/^\$\$(?:(?!\$\$).)+\$\$$/.test(line.trim())) {
+      leaveListScopes(leadingIndentColumns(line));
       html = false;
       rawHtmlEnd = undefined;
       paragraph = false;
       continue;
     }
     if (isOpeningMathFence(line)) {
+      leaveListScopes(leadingIndentColumns(line));
       math = true;
       html = false;
       rawHtmlEnd = undefined;
@@ -172,6 +180,13 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     if (!comment && !html && line.trim()) {
       const table = parseTableBlock(lines, index);
       if (table && !/^(?:#{1,6}\s|\s*>)/.test(line)) {
+        // Match pushBlock: a table can leave an earlier list, while a nested
+        // table retains any ancestor whose content column it still reaches.
+        let tableIndent = Infinity;
+        for (let row = index; row <= table.endIndex; row++) {
+          if (lines[row].trim()) tableIndent = Math.min(tableIndent, leadingIndentColumns(lines[row]));
+        }
+        leaveListScopes(tableIndent);
         // Consume the body parser's span before interpreting inline comments.
         for (let row = index; row <= table.endIndex; row++) {
           comment = advanceHtmlCommentState(lines[row], comment);
@@ -184,9 +199,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       const indent = leadingIndentColumns(line);
       // Retain enclosing items, but replace siblings: marker width can change
       // (for example 9. to 10.) and therefore changes the content column.
-      while (listContentIndents.length && indent < listContentIndents[listContentIndents.length - 1]) {
-        listContentIndents.pop();
-      }
+      leaveListScopes(indent);
       if (list) listContentIndents.push(leadingIndentColumns(list[0].replace(/\S/g, ' ')));
     }
     const startsInComment = comment;
