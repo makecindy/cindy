@@ -62,7 +62,7 @@ beta 存量同意范围扩展及维护者确认要求见[平台契约的授权�
 | `ghost.json` 身份卡字段与校验                        | `packages/plugin-protocol/src/manifest.ts` 是跨消费者协议正本；`apps/desktop/src/shared/ghost.ts` 是 Desktop 运行时 validator。除下文登记的 Desktop-only 能力外，两端必须同步维护                                                                                                                                 |
 | 管子协议类型                                         | `apps/desktop/src/shared/ghost.ts`（`cindy.send` / `cindy.onHostMessage` 类型）                                                                                                                                                                                                                                   |
 | 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                    |
-| 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                    |
+| 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`；宿主退出链见 `lifecycle.ts`                                                                                                                                                                                                                                                                    |
 | 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                |
 | 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
 | 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                 |
@@ -379,6 +379,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   宿主的 TCC 责任归属，为插件开放底层系统能力；具体访问仍由系统授权、签名和用途声明
   决定，不自动授予宿主尚未取得的权限。实现见 `nodeRuntimeBroker.ts` 的
   `createUtilityNodeWorkerProcess`。浏览器沙箱、Host 能力守门和宿主环境变量过滤继续生效。
+- **插件收尾生命周期（正常关闭的通知与回执，#11045，契约待维护者确认后实现）**：**范围仅 Desktop**——正常关闭面板与正常退出前，宿主向插件页面发「即将关闭」通知并给一次**有界**回执窗口，插件在窗口内完成最后保存与租约释放后回 ACK；窗口到点未回执，按固定分类 `PLUGIN_SHUTDOWN_TIMEOUT` 记诊断并强制收尾，**绝不无限等待**。
+  - 通知属 `ghost-page:*` 页面通道家族，与管子（agent 工具调用派发）分离：`ghost-page:shutdown-notice` 携带 `noticeId`、`instanceId`、`partition` 与 `reason`（`app-quit` / `panel-close`），页面以 `ghost-page:shutdown-ack` 回 `{ noticeId, instanceId, saved }`。宿主只认「发给谁的从谁那儿回」：ACK 发送方必须与被通知的 guest webContents 一致，不信任页面自报身份（与模型选择器同一验身口径）。
+  - 页面侧入口必须是**插件真的能用**的公开接口，不能只描述内部通道名：插件页 preload 目前只暴露 `window.cindyUI.pickModel`（`apps/desktop/src/preload/ghostPagePreload.ts`），沙箱页没有 `ipcRenderer`。因此本契约要求在 `ghostPagePreload` 上补出明确的 contextBridge 接口（订阅通知 + 回 ACK，例如 `window.cindyUI.onShutdownNotice(cb)` 与 `window.cindyUI.ackShutdown({ noticeId, saved })`），实现时必须同时落地这个桥；只写 `ghost-page:*` 通道名不算契约。
+  - 向后兼容靠加法：旧版插件页面不认识这两个通道，收不到也不会回。宿主在通知前先做**能力协商**：只有已声明支持回执的页面才进入等待窗口；不支持的旧页面按现状立即销毁，**不占用等待窗口**。因此退出时长不因旧插件变长，也不随插件数量累加；协议只增通道与字段，不改旧字段，不要求插件做任何迁移。（若实现阶段无法可靠判定页面是否支持，则旧页面最多占用**一次**有界等待窗口，默认 5s——这一兼容代价必须在实现说明里写明，不得写成「退出时长不变」。）
+  - 只对**真实关闭**发通知：窗口隐藏、切后台、切页签、面板停放（#8081 的 parked）与重载都不是关闭；崩溃与强退不发通知，也不得把崩溃后的清理伪报成「正常收尾成功」。
+  - 退出顺序：先并发通知所有**已声明支持回执**的活页面（各自计时）→ 有界等待 → 记录 ACK / 超时诊断 → 才销毁沙箱与 Node 工作进程；`before-quit` 里的同步 `destroyAll()`（`apps/desktop/src/main/cindy-brain/index.ts`）让位给这条异步链。
+  - 崩溃路径不发通知：当前 `lifecycle.ts` 的 `beginShutdown(reason)`（`before-quit` / `SIGTERM` / `uncaughtException` / `render-process-gone`）共用同一个 `onQuit` disposer registry，且 `onQuit` 回调拿不到 reason。通知链必须挂在**能区分正常与崩溃**的钩子上（给 `onQuit` 增加 shutdown context，或另立 graceful-only 阶段）；崩溃与强退路径只做直接销毁，不发通知、不记「正常收尾成功」。
+  - 预算默认 5 秒（覆盖画布类插件的释放宽限），可配置；作者侧只保证「窗口内落盘」，长任务必须在运行期内完成，不得把保存做成关不掉的后台活。
 
 ## 3. 权限即授权边界
 
