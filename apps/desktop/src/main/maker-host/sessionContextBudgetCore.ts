@@ -16,7 +16,8 @@ import type { ModelContextProviderResolver } from './routeModelEfforts.js';
 
 export interface SessionContextBudgetOpts {
   contextWindowBudget?: number | null;
-  agentKind: AgentKind;
+  /** 'acp' = plugin engine task: it reports its own window, so no Cindy budget applies. */
+  agentKind: AgentKind | 'acp';
   providerId?: string | null;
   model?: string | null;
 }
@@ -75,12 +76,17 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     sessionId: string,
     opts: {
       contextWindowBudget?: number | null;
-      agentKind: AgentKind;
+      agentKind: AgentKind | 'acp';
       providerId?: string | null;
       model?: string | null;
     },
     catalog: Pick<Catalog, 'providers'>,
   ): Promise<void> {
+    // Plugin engines (docs/plans/acp-plugin-bridge.md) are not catalog routes.
+    if (opts.agentKind === 'acp') {
+      delete opts.contextWindowBudget;
+      return;
+    }
     const explicitBudget = normalizeContextWindowBudget(opts.contextWindowBudget);
     const requestedBudget = explicitBudget ?? await readStoredSessionContextWindowBudget(sessionId);
     if (requestedBudget === null) {

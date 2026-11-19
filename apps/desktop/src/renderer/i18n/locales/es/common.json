@@ -8359,6 +8359,8 @@
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
         "agentModelPreferences": "Leer y editar tus modelos favoritos, y leer tus modelos usados recientemente",
         "agentModelPreferencesDetail": "Puede leer los modelos favoritos y los usados recientemente en esta computadora, incluida la intensidad de razonamiento y Fast, y añadir, cambiar o quitar favoritos. Los cambios también aparecen en el selector de modelo de Cindy. Los modelos elegidos en el complemento no se añaden a los recientes. No incluye modelos de tus otras computadoras ni compartidos contigo, y no comparte credenciales.",
+        "harnesses": "Proporciona motores de ejecución: {{names}}",
+        "harnessesDetail": "En tus tareas, puede leer y escribir en el directorio de trabajo, ejecutar comandos y usar las mismas herramientas de Cindy que el Pi integrado.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
@@ -14339,6 +14341,32 @@
             "label": "Acceso completo",
             "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar cada vez",
+            "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
+          },
+          "default": {
+            "label": "Predeterminado",
+            "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
+          },
+          "acceptEdits": {
+            "label": "Aceptar ediciones",
+            "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
+          },
+          "plan": {
+            "label": "Solo planificar",
+            "description": "El agente solo analiza y planifica; no edita archivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir todo",
+            "description": "Todos los permisos que pida el Agent se conceden automáticamente."
+          }
         }
       }
     },
@@ -14813,6 +14841,16 @@
       "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
       "switchToQueue": "Poner en cola por defecto"
+    },
+    "pluginEngines": {
+      "group": "Motores de complementos",
+      "genericName": "Motor de complemento",
+      "defaultModel": "Modelo predeterminado",
+      "defaultModelHint": "Usa la configuración predeterminada del motor",
+      "unavailable": "No disponible",
+      "engineMissing": "El complemento que proporciona este motor está desactivado o desinstalado.",
+      "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar.",
+      "modelChangeFailed": "No se pudo cambiar el modelo"
     }
   },
   "onboarding": {
@@ -15980,6 +16018,7 @@
       "REMOTE_AGENT_BUSY": "Se están ejecutando demasiadas sesiones en la otra computadora. Termina algunas y vuelve a intentarlo.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
@@ -17550,6 +17589,7 @@
       "promote": {
         "menu": "Convertir en automatización del proyecto",
         "noWorkingDir": "No se puede convertir una programación sin directorio de trabajo",
+        "pluginEngine": "Los motores de complemento solo funcionan en este equipo; esta programación no se puede convertir en automatización del proyecto",
         "success": "Se convirtió en automatización del proyecto"
       },
       "editProject": {
@@ -17826,6 +17866,7 @@
         "selectThread": "Selecciona una sesión de destino",
         "selectProject": "Selecciona un directorio de proyecto",
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
+        "pluginEngineUnavailable": "El motor de complemento seleccionado no está disponible ahora. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",

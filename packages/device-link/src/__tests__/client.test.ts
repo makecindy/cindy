@@ -12267,11 +12267,15 @@ describe('host-triggered recovery of previously reliable links', () => {
       expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
       relay.disconnect('phone', closeCode);
       const other = healthy.invoke('host', { channel: 'local-db:sessions:list', args: [] });
+      await vi.advanceTimersByTimeAsync(30);
       await pump();
       await expect(other).resolves.toEqual({ ok: true, result: 'ready' });
-      // The first 1012 service-restart retry has 1–5s of jitter. Use its
-      // deterministic lower bound, within the original write's 2s deadline.
-      await vi.advanceTimersByTimeAsync(closeCode === 1012 ? 1_000 : 30); await pump();
+      if (closeCode === 1012) {
+        // A service restart applies the 1–5 second reconnect spread even with a short test backoff.
+        expect(phone.getStatus()).toBe('connecting');
+        await vi.advanceTimersByTimeAsync(1_000);
+        await pump();
+      }
       expect(phone.getStatus()).toBe('online');
       expect(phone.needsLinkRecovery('host')).toBe(true);
       // The adapters use this query before admitting fresh work, including a
@@ -12293,7 +12297,12 @@ describe('host-triggered recovery of previously reliable links', () => {
       expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
       phone.closeLink('host', 'user');
       expect(phone.needsLinkRecovery('host')).toBe(false);
-    } finally { for (const c of [host, phone, healthy]) c.stop(); sockets.mockRestore(); random.mockRestore(); vi.useRealTimers(); }
+    } finally {
+      for (const c of [host, phone, healthy]) c.stop();
+      sockets.mockRestore();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 
