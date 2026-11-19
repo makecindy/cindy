@@ -882,8 +882,7 @@
         "loading": "Lecture du quota…",
         "unavailable": "Impossible de lire le quota de cet ordinateur pour le moment",
         "none": "Ce fournisseur ne dispose d'aucune information de quota",
-        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu",
-        "share": "Le quota n'est pas affiché pour les ordinateurs partagés par d'autres personnes"
+        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu"
       },
       "runningCount_one": "{{count}} tâche en cours d'exécution",
       "runningCount_other": "{{count}} tâches en cours d'exécution",
@@ -13726,6 +13725,8 @@
         },
         "reply": {
           "unsupportedMedia": "Cette version ne prend pas encore en charge ce type de média WeChat.",
+          "delayedReply": "Réponse retardée, préparée le {{createdAt}} pour votre message reçu le {{receivedAt}}. Le contenu peut être obsolète.",
+          "delayedReplyQuestion": "Message d’origine : {{question}}",
           "stillProcessing": "Toujours en cours de traitement…",
           "ownerOnlyCommands": "Seul le propriétaire peut utiliser les commandes du bot.",
           "companionManagedCommand": "Ouvrez ce coéquipier dans Cindy : le modèle se règle dans les paramètres du coéquipier, et les autorisations sous le champ de saisie de la conversation.",
@@ -20012,7 +20013,8 @@
         "validityValue_many": "{{count}} de jours après utilisation",
         "validityValue_other": "{{count}} jours après utilisation",
         "claimBy": "À utiliser avant le",
-        "destination": "Ajouté à"
+        "destination": "Ajouté à",
+        "validityPermanent": "Sans expiration"
       },
       "doneTitle": "{{amount}} ajoutés",
       "doneDescription": "Ajouté à votre Solde promotionnel. Valable jusqu’au {{date}}.",
@@ -20028,10 +20030,13 @@
         "alreadyClaimed": "Cette carte cadeau a déjà été utilisée.",
         "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
         "voided": "Cette carte cadeau a été annulée.",
+        "voidedPurchased": "Cette carte cadeau ne peut pas être utilisée pour le moment.",
         "rateLimited": "Trop de tentatives. Réessayez plus tard.",
         "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
         "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
-      }
+      },
+      "doneDescriptionPurchased": "Ajouté à votre solde rechargé. Il n’expire jamais.",
+      "pendingDescriptionPurchased": "{{amount}} est en cours d’ajout et apparaîtra bientôt dans votre solde rechargé. Inutile d’utiliser la carte à nouveau."
     },
     "usage": {
       "title": "Consommation du solde",
@@ -20077,7 +20082,10 @@
         "noPayment": "Aucun paiement requis",
         "page": "Page {{page}}",
         "previous": "Page précédente",
-        "next": "Page suivante"
+        "next": "Page suivante",
+        "giftCard_one": "Carte cadeau × {{count}}",
+        "giftCard_many": "Cartes cadeaux × {{count}}",
+        "giftCard_other": "Cartes cadeaux × {{count}}"
       },
       "count": "{{count}} commandes",
       "orderId": "N° {{id}}",
@@ -20306,6 +20314,125 @@
         "MONTH": "Inclut {{amount}} chaque mois",
         "YEAR": "Inclut {{amount}} chaque année",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Acheter une carte cadeau",
+      "title": "Acheter une carte cadeau",
+      "subtitle": "Offrez-la ou gardez-la pour vous. Une fois utilisée, elle s’ajoute à votre solde rechargé et n’expire jamais.",
+      "previewLabel": "Ce que la personne recevra",
+      "sameCards_one": "{{count}} carte avec son propre code",
+      "sameCards_many": "{{count}} cartes avec le même design, le même montant et le même message, chacune avec son propre code",
+      "sameCards_other": "{{count}} cartes avec le même design, le même montant et le même message, chacune avec son propre code",
+      "fields": {
+        "face": "Design",
+        "amount": "Montant",
+        "quantity": "Quantité",
+        "sender": "De la part de",
+        "senderHint": "Affiché « De la part de {{sender}} »",
+        "senderPlaceholder": "Votre nom",
+        "message": "Message (facultatif)",
+        "messagePlaceholder": "Un mot pour la personne",
+        "tooLong": "{{max}} caractères maximum",
+        "paymentMethod": "Moyen de paiement"
+      },
+      "decrease": "Une carte de moins",
+      "increase": "Une carte de plus",
+      "quantityHint": "Jusqu’à {{limit}} cartes toutes les {{hours}} heures · encore {{remaining}} possibles",
+      "quantityLimitReached": "Vous avez atteint le maximum de {{limit}} cartes en {{hours}} heures. Réessayez plus tard.",
+      "orderAmountCap": "Jusqu’à {{amount}} par commande",
+      "totalDetail_one": "{{count}} carte × {{amount}}",
+      "totalDetail_many": "{{count}} cartes × {{amount}}",
+      "totalDetail_other": "{{count}} cartes × {{amount}}",
+      "pay": "Continuer vers le paiement",
+      "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "cancel": "Annuler",
+      "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
+      "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",
+      "checkoutSubtitle_many": "Cartes cadeaux {{amount}} × {{count}} · émises dès le paiement réussi",
+      "checkoutSubtitle_other": "Cartes cadeaux {{amount}} × {{count}} · émises dès le paiement réussi",
+      "faces": {
+        "cindy": "Cindy · Rouge de marque",
+        "cat": "Chat noir · Nuit",
+        "bell": "Clochette · Festif",
+        "leap": "Bond · Ivoire"
+      },
+      "errors": {
+        "limitReached": "Vous avez atteint la limite d’achat de cartes cadeaux. Réessayez plus tard.",
+        "amountTooLarge": "Cette commande dépasse la limite de paiement par commande. Choisissez moins de cartes et réessayez."
+      },
+      "done": {
+        "title_one": "Votre carte cadeau est prête",
+        "title_many": "Vos {{count}} cartes cadeaux sont prêtes",
+        "title_other": "Vos {{count}} cartes cadeaux sont prêtes",
+        "pendingTitle": "Carte cadeau payée",
+        "loading": "Récupération des cartes de cette commande…",
+        "description": "Envoyez un lien de récupération à un proche : il pourra utiliser la carte dès qu’il l’ouvre. Vous pouvez aussi en garder une.",
+        "missing": "Le paiement est terminé. Vos cartes cadeaux apparaîtront bientôt dans Mes cartes cadeaux.",
+        "cardTitle": "Carte {{index}} · {{amount}}",
+        "cardMeta": "Se termine par {{tail}} · {{status}}",
+        "linkHint": "Le lien de récupération, c’est la carte : la première personne qui l’ouvre la récupère. Ne l’envoyez qu’à la personne à qui vous l’offrez.",
+        "viewAll": "Voir mes cartes cadeaux",
+        "finish": "Terminé"
+      },
+      "list": {
+        "title": "Mes cartes cadeaux",
+        "description": "Envoyez un lien de récupération à un proche : il pourra utiliser la carte dès qu’il l’ouvre. Les cartes non offertes n’expirent jamais et vous pouvez les utiliser vous-même. Une fois utilisées, elles s’ajoutent à votre solde rechargé.",
+        "count_one": "{{count}} carte",
+        "count_many": "{{count}} cartes",
+        "count_other": "{{count}} cartes",
+        "loadMore": "Charger plus",
+        "loadFailed": "Impossible de charger vos cartes cadeaux",
+        "retry": "Recharger",
+        "status": {
+          "unclaimed": "Non récupérée",
+          "claimedBy": "Récupérée par {{name}}",
+          "claimed": "Récupérée",
+          "redeemedByYou": "Utilisée par vous",
+          "refunded": "Remboursée",
+          "onHold": "En cours de traitement, indisponible pour le moment"
+        },
+        "meta": {
+          "purchased": "Achetée le {{date}} · se termine par {{tail}}",
+          "claimed": "Récupérée le {{date}} · se termine par {{tail}}",
+          "redeemed": "Utilisée le {{date}} · se termine par {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copier le lien de récupération",
+        "copied": "Copié",
+        "more": "Plus d’actions",
+        "copyCode": "Copier le code",
+        "redeemSelf": "L’utiliser moi-même",
+        "sendEmail": "Envoyer par e-mail"
+      },
+      "toasts": {
+        "linkCopied": "Lien de récupération copié",
+        "codeCopied": "Code copié",
+        "copyFailed": "Impossible de copier. Réessayez.",
+        "unavailable": "Cette carte a déjà été récupérée ou remboursée",
+        "revealFailed": "Impossible de récupérer le code. Réessayez plus tard.",
+        "emailQueued": "Envoi à {{email}} en cours"
+      },
+      "email": {
+        "title": "Envoyer par e-mail",
+        "description": "Envoyez le lien de récupération de cette carte à la personne à qui vous l’offrez. L’e-mail contient votre nom et votre message.",
+        "previewLabel": "Ce qu’elle recevra",
+        "previewWithMessage": "« {{message}} » · avec le lien de récupération et le code",
+        "previewLinkOnly": "Le lien de récupération et le code",
+        "recipient": "E-mail du destinataire",
+        "placeholder": "nom@exemple.com",
+        "hint": "Vous pouvez l’envoyer à n’importe quelle adresse. La première personne qui ouvre le lien récupère la carte.",
+        "cooldown": "Nouvel envoi possible dans {{seconds}} s",
+        "invalid": "Saisissez une adresse e-mail valide",
+        "failed": "Envoi impossible. Réessayez plus tard.",
+        "send": "Envoyer",
+        "status": {
+          "sending": "Envoi à {{email}} en cours",
+          "sent": "Envoyée à {{email}}",
+          "failed": "Échec de l’envoi à {{email}}",
+          "failedRetry": "Échec de l’envoi à {{email}}. Vous pouvez la renvoyer."
+        }
       }
     }
   },
