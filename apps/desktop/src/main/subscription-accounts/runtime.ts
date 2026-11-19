@@ -2048,11 +2048,12 @@ export interface SubscriptionAccountLease {
  * binding or advancing either cursor. Quota previews deliberately remain separate. */
 export async function readSubscriptionPoolScheduling(
   providerId: string, model: string,
-  options: { remote?: boolean; ownComputer?: boolean } = {},
+  options: { remote?: boolean; ownComputer?: boolean; capability?: 'image.generate' } = {},
 ): Promise<SubscriptionPoolScheduling | null> {
   let summary: SubscriptionPoolScheduling | null = null;
-  await acquireSubscriptionAccount(providerId, model, [], false, {
-    ...options, resuming: false, dryRun: true,
+  const { capability, ...admission } = options;
+  await acquireSubscriptionAccount(providerId, capability === 'image.generate' ? undefined : model, [], false, {
+    ...admission, resuming: false, dryRun: true,
     reportScheduling: value => { summary = value; },
   });
   return summary;

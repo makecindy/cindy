@@ -68,7 +68,7 @@ export interface ProviderGroupRouterDeps {
   /** ownComputer：选电脑请求来自自己的其他电脑，本机账号池里的旧 Codex 连接按同账号授权核对(与实际启动一致)。 */
   readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<boolean | null>;
   /** Owner-only anonymous new-assignment facts. Old/unknown peers remain one physical member. */
-  readPoolScheduling?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<SubscriptionPoolScheduling | null>;
+  readPoolScheduling?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean; capability?: 'image.generate' }): Promise<SubscriptionPoolScheduling | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -371,7 +371,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const summary = await Promise.race([
-              deps.readPoolScheduling!(r.member, input.model, poolReadOptions(input, r.member)).catch(() => null),
+              deps.readPoolScheduling!(r.member, input.model, {
+                ...poolReadOptions(input, r.member),
+                ...(input.capability ? { capability: input.capability } : {}),
+              }).catch(() => null),
               new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS); }),
             ]);
             if (summary) schedules.set(r.member.key, summary);

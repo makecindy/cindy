@@ -834,6 +834,8 @@ describe('duplicate subscription account profiles', () => {
       ? { data: [{ id: directory.endsWith('/other') ? 'model-b' : 'gpt-6' }], nextCursor: null } : undefined);
     expect(await readSubscriptionPoolScheduling('openai', 'gpt-6')).toMatchObject({ accounts: 1, totalRunning: 0 });
     expect(await readSubscriptionPoolScheduling('openai', 'model-b')).toMatchObject({ accounts: 1, totalRunning: 0 });
+    expect(await readSubscriptionPoolScheduling('openai', 'openai/gpt-image-2', { capability: 'image.generate' }))
+      .toMatchObject({ accounts: 2, totalRunning: 0 });
   });
 
   it('merges into two accounts, empties the source and retains the old task directory', async () => {
