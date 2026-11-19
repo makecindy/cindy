@@ -13558,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "当前版本暂不支持处理这类微信媒体。",
+          "delayedReply": "这条延迟回复于 {{createdAt}} 生成，对应 {{receivedAt}} 收到的旧消息，内容可能已过时。",
+          "delayedReplyQuestion": "原消息：{{question}}",
           "stillProcessing": "任务仍在处理中…",
           "ownerOnlyCommands": "只有主人可以使用机器人命令。",
           "companionManagedCommand": "请在 Cindy 中打开这位伙伴：模型在伙伴设置中调整，权限在对话输入框下方切换。",

@@ -13726,6 +13726,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versión todavía no admite este tipo de contenido multimedia de WeChat.",
+          "delayedReply": "Respuesta retrasada, preparada el {{createdAt}} para tu mensaje recibido el {{receivedAt}}. El contenido puede estar desactualizado.",
+          "delayedReplyQuestion": "Mensaje original: {{question}}",
           "stillProcessing": "Sigo trabajando en ello…",
           "ownerOnlyCommands": "Solo el propietario puede usar los comandos del bot.",
           "companionManagedCommand": "Abre a este compañero en Cindy: el modelo se cambia en la configuración del compañero y los permisos, debajo del cuadro de entrada de la conversación.",

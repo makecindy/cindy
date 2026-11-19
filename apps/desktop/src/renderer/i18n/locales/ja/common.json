@@ -13558,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "このバージョンでは、この種類の WeChat メディアにはまだ対応していません。",
+          "delayedReply": "この返信は遅れて届きました。{{receivedAt}} に受信したメッセージへの返信として、{{createdAt}} に作成されました。内容が古くなっている可能性があります。",
+          "delayedReplyQuestion": "元のメッセージ：{{question}}",
           "stillProcessing": "まだ処理中です…",
           "ownerOnlyCommands": "ボットのコマンドを使えるのはオーナーだけです。",
           "companionManagedCommand": "Cindy でこの仲間を開いてください。モデルは仲間の設定で変更し、権限は会話の入力欄の下で切り替えます。",

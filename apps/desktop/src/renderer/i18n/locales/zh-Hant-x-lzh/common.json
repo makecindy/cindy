@@ -13558,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "今版尚不能理此類微信媒體。",
+          "delayedReply": "此覆遲至，成於 {{createdAt}}，答 {{receivedAt}} 所收舊訊，所述或已過時。",
+          "delayedReplyQuestion": "原訊：{{question}}",
           "stillProcessing": "差事猶在理中…",
           "ownerOnlyCommands": "唯主人可用機器人之令。",
           "companionManagedCommand": "請於 Cindy 開此同僚：模型於同僚之設中調之，權柄於言談輸入框下易之。",
