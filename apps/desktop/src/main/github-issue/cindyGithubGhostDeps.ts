@@ -11,6 +11,10 @@
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import {
+  installedGhostStoragePart,
+  resolveInstalledGhost,
+} from '../../shared/pluginIdentity.js';
 import { createLogger } from '../logger.js';
 import { ghostSecretSaved } from '../secrets/providerSecretStore';
 import {
@@ -18,6 +22,7 @@ import {
   CINDY_GITHUB_SECRET_KEY,
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter';
+import type { InstalledGhost } from '../../shared/ghost.js';
 
 let sharedDeps: GithubUserIssueSubmitterDeps | null = null;
 const log = createLogger('github-issue/github-user');
@@ -36,15 +41,62 @@ export function getSharedGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps
   return sharedDeps;
 }
 
+/** 一次解析出的目标实例；enabled / 凭证 / workdir / 派发全部由它派生。 */
+export interface CindyGithubInstance {
+  instanceKey: string;
+  enabled: boolean;
+}
+
+/**
+ * 锁定唯一的 cindy-github 实例并返回它的 instanceKey。
+ *
+ * 设置页按 installedGhostStoragePart(ghost) 作 storeId 写凭证、workdir 偏好也
+ * 存这个键；新版 root 命名空间安装得到 `_root__cindy-github`，旧版扁平安装是裸
+ * `cindy-github`。只认裸 ghostId 会让新安装的用户明明填了 PAT，确认卡仍只剩
+ * 官方 Bot(#9546)。
+ *
+ * 同名多实例时返回 null(fail-closed)：否则启用状态、凭证和调用目标可能拼自
+ * 不同实例，或把请求派给已被目录禁用的那个。纯函数，不读凭证库、不碰 Electron。
+ */
+export function resolveCindyGithubInstance(
+  ghosts: readonly InstalledGhost[],
+): CindyGithubInstance | null {
+  try {
+    // 按 ghostId 锁定唯一实例：同名多实例（root + 企业 / 新旧布局并存）
+    // 一律 fail-closed，避免四处判定各取一个实例拼出不一致的目标。
+    const resolved = resolveInstalledGhost(ghosts, CINDY_GITHUB_GHOST_ID);
+    if (resolved.status !== 'unique') return null;
+    return {
+      instanceKey: installedGhostStoragePart(resolved.ghost),
+      enabled: resolved.ghost.enabled,
+    };
+  } catch {
+    // 安装目录 / namespace 形态异常时无法可靠锁定实例，宁可隐藏可选身份。
+    return null;
+  }
+}
+
 export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
+  // 四处判定共用同一次实例解析；每个成员仍是惰性闭包，不缓存状态。
+  const instance = () => resolveCindyGithubInstance(getGhostManager().list());
   return {
-    isGithubGhostEnabled: () =>
-      getGhostManager()
-        .list()
-        .some((ghost) => ghost.manifest.id === CINDY_GITHUB_GHOST_ID && ghost.enabled),
-    isGithubCredentialSaved: () => ghostSecretSaved(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY),
-    isGithubGhostDisabledForWorkdir: (workdir) =>
-      isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir),
+    resolveInstanceId: () => instance()?.instanceKey ?? null,
+    isGithubGhostEnabled: () => instance()?.enabled === true,
+    isGithubCredentialSaved: () => {
+      const resolved = instance();
+      return resolved !== null && ghostSecretSaved(resolved.instanceKey, CINDY_GITHUB_SECRET_KEY);
+    },
+    isGithubGhostDisabledForWorkdir: (workdir) => {
+      const resolved = instance();
+      if (resolved === null) return false;
+      // 新版偏好写 instanceKey；旧版偏好可能仍存裸 ghostId，两者都认，
+      // 但都指向同一个已锁定的实例，不会拼到别的实例上。
+      return (
+        isGhostDisabledForWorkdir(resolved.instanceKey, workdir) ||
+        (resolved.instanceKey !== CINDY_GITHUB_GHOST_ID &&
+          isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir))
+      );
+    },
     callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
     logger: log,
   };

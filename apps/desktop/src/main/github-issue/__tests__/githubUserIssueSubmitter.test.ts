@@ -9,6 +9,7 @@ import {
 
 function makeDeps(over: Partial<GithubUserIssueSubmitterDeps> = {}): GithubUserIssueSubmitterDeps {
   return {
+    resolveInstanceId: () => 'cindy-github',
     isGithubGhostEnabled: () => true,
     isGithubCredentialSaved: () => true,
     isGithubGhostDisabledForWorkdir: () => false,
@@ -53,6 +54,22 @@ describe('resolveGithubIssueSubmissionChoices', () => {
       });
       expect(deps.callGhostTool).not.toHaveBeenCalled();
     }
+  });
+
+  it('实例无法锁定时不派发、只返回平台身份', async () => {
+    const deps = makeDeps({ resolveInstanceId: () => null });
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
+    expect(deps.callGhostTool).not.toHaveBeenCalled();
+  });
+
+  it('调用插件时使用 deps 锁定的 instanceId', async () => {
+    const deps = makeDeps({ resolveInstanceId: () => '_root__cindy-github' });
+    await resolveGithubIssueSubmissionChoices(deps);
+    expect(deps.callGhostTool).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: '_root__cindy-github',
+    }));
   });
 
   it('当前 workdir 禁用 cindy-github 时走平台身份且不调用插件', async () => {
