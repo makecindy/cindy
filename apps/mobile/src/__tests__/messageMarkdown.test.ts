@@ -2659,6 +2659,25 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / review 4625242633: a hidden root definition ends the prior list.
+  // Unit production entry; earlier boundary tests only checked resolved links.
+  it('ends list nesting when consuming root reference definitions', () => {
+    for (const definition of ['[s]: https://example.com/', ' [s]: https://example.com/\n  "title"']) {
+      const source = '- first\n' + definition + '\n  - second\n    - child';
+      const result = parseMobileMarkdownDocument(source, { srcLines: true });
+      expect(result.blocks.filter(block => block.type === 'list_item').map(block => block.depth ?? 0)).toEqual([0, 0, 1]);
+      expect(result.blocks[1].srcLine).toBe(source.split('\n').indexOf('  - second'));
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+    const nested = '- first\n\n  [s]: https://example.com/\n  - second';
+    expect(parseMobileMarkdownDocument(nested).blocks.filter(block => block.type === 'list_item').map(block => block.depth ?? 0)).toEqual([0, 1]);
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

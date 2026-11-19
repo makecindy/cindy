@@ -473,6 +473,9 @@ export function parseMobileMarkdownDocument(
     const line = lines[index];
     if (references.definitionLines.has(lineNumber(index))) {
       flushParagraph(index);
+      // Collected definitions are root blocks even though they emit no block.
+      // End the preceding list just as a visible root paragraph would.
+      listIndents.length = 0;
       continue;
     }
     if (code) {
