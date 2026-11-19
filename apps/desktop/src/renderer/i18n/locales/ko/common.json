@@ -3677,6 +3677,8 @@
           "edit": "편집",
           "editFailed": "URL, 프로토콜과 키를 확인하고 다시 시도하세요.",
           "editNote": "키를 비워 두면 읽은 인증 정보를 유지합니다. URL이나 프로토콜을 바꾸면 새 키가 필요합니다.",
+          "useSavedCredential": "저장된 인증 정보 사용",
+          "confirmDestination": "이 주소에서 저장된 Claude Code 인증 정보를 사용할까요?",
           "name": "표시 이름",
           "baseUrl": "기본 URL",
           "protocol": "API 프로토콜",

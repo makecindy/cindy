@@ -3677,6 +3677,8 @@
           "edit": "编辑",
           "editFailed": "请检查地址、协议和密钥后重试。",
           "editNote": "密钥留空会保留已读取的凭证。更改地址或协议后，需填写新密钥。",
+          "useSavedCredential": "使用已保存的凭证",
+          "confirmDestination": "要在此地址使用已保存的 Claude Code 凭证吗？",
           "name": "显示名称",
           "baseUrl": "基础 URL",
           "protocol": "接口协议",

@@ -3718,6 +3718,8 @@
           "edit": "Edit",
           "editFailed": "Check the URL, protocol and key, then retry.",
           "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "useSavedCredential": "Use saved credential",
+          "confirmDestination": "Use the saved Claude Code credential at this address?",
           "name": "Display name",
           "baseUrl": "Base URL",
           "protocol": "API protocol",

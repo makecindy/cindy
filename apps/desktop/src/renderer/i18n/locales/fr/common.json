@@ -3767,6 +3767,8 @@
           "edit": "Modifier",
           "editFailed": "Vérifiez l’URL, le protocole et la clé, puis réessayez.",
           "editNote": "Laissez la clé vide pour conserver les identifiants lus. Une nouvelle URL ou un nouveau protocole exige une nouvelle clé.",
+          "useSavedCredential": "Utiliser les identifiants enregistrés",
+          "confirmDestination": "Utiliser les identifiants Claude Code enregistrés à cette adresse ?",
           "name": "Nom affiché",
           "baseUrl": "URL de base",
           "protocol": "Protocole API",

@@ -3767,6 +3767,8 @@
           "edit": "Editar",
           "editFailed": "Revisa la URL, el protocolo y la clave, e inténtalo de nuevo.",
           "editNote": "Deja la clave vacía para conservar la credencial leída. Cambiar la URL o el protocolo requiere una clave nueva.",
+          "useSavedCredential": "Usar las credenciales guardadas",
+          "confirmDestination": "¿Usar las credenciales guardadas de Claude Code en esta dirección?",
           "name": "Nombre visible",
           "baseUrl": "URL base",
           "protocol": "Protocolo de API",
