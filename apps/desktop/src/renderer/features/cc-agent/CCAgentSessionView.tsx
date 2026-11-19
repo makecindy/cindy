@@ -56,6 +56,10 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
+import { findPluginEngine, usePluginEngines } from '@/hooks/usePluginEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
+import type { PluginEngineSessionPickerProps } from '@/components/new-chat/PluginEnginesSection';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import {
@@ -1830,12 +1834,15 @@ function CCAgentSessionContent({
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
     if (awaitingCreation) return;
+    // 插件引擎任务只认 Cindy 的桌面命令；其余 `/…` 原样交给引擎(与输入框的命令列表同源)。
+    const pluginEngineCommands = isPluginEngineKind(session?.agentKind);
     loadAllCommands(
       agentKind,
       wd,
       {
         contextReady: !!session,
-        skipAgentSkills: isRemoteSession,
+        skipAgentSkills: isRemoteSession || pluginEngineCommands,
+        ...(pluginEngineCommands ? { skipAgentCommands: true } : {}),
         sessionId: session?.id,
       },
       remoteDeviceId,
@@ -2237,14 +2244,24 @@ function CCAgentSessionContent({
   // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
+  // 插件引擎任务(agent_kind = 'acp',docs/plans/acp-plugin-bridge.md)：上面两个映射会回落成
+  // Claude Code，所以凡是按内置 Harness 取能力、做登录检查、改模型或压缩的地方都先看这一位。
+  // 引擎列表只有本机的(远程任务不会是插件引擎任务)。
+  const pluginEngineTask = isPluginEngineKind(session?.agentKind);
+  const pluginEngines = usePluginEngines(pluginEngineTask);
+  const pluginEngine = pluginEngineTask ? findPluginEngine(pluginEngines, session?.providerId) : null;
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
   // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
-  const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
+  // 插件引擎不支持手动压缩：不读内置能力，也就没有入口。
+  const { capabilities: realSessionCaps } = useAgentCapabilities(
+    pluginEngineTask ? null : realAgentKind,
+    remoteDeviceId,
+  );
   const compactChannel = useMemo(
-    () => resolveManualCompactChannel(realAgentKind, realSessionCaps),
-    [realAgentKind, realSessionCaps],
+    () => (pluginEngineTask ? null : resolveManualCompactChannel(realAgentKind, realSessionCaps)),
+    [pluginEngineTask, realAgentKind, realSessionCaps],
   );
   // 最新 channel 的可变镜像:useCallback 闭包在创建后固定捕获 compactChannel,确认框
   // await 期间同会话切换 agent(跨窗口/远程,sessionId 不变)会产生新 render 但旧 async
@@ -2498,7 +2515,11 @@ function CCAgentSessionContent({
     session?.providerId ?? null,
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
-  const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  // 插件引擎任务不读内置 Harness 的能力(没有 Fast、可写目录等)。
+  const { capabilities: sessionCaps } = useAgentCapabilities(
+    pluginEngineTask ? null : displayAgentKind,
+    remoteDeviceId,
+  );
   // callback 同时承载已有授权的展示/撤销，不能因远端没有安全 picker 就整块隐藏。
   // device-link 与 SSH 都只在实际执行端明确声明 setter 能力后开放；ChatInput 另行按
   // 文件系统来源关闭远端“新增”，因此这里开放的远端 callback 只会用于撤销。
@@ -3077,12 +3098,17 @@ function CCAgentSessionContent({
     const cached = allCommandsRef.current;
     if (cached.length > 0) return cached;
     const agentKind = dbToMakerAgentKind(session?.agentKind);
+    const pluginEngineCommands = isPluginEngineKind(session?.agentKind);
     try {
       // device-link 远程会话同源:传 remoteDeviceId,fallback 快照也从被控端读(见上方 cache effect 说明)。
       return await loadAllCommands(
         agentKind,
         session?.workingDir,
-        { skipAgentSkills: isRemoteSession, sessionId: session?.id },
+        {
+          skipAgentSkills: isRemoteSession || pluginEngineCommands,
+          ...(pluginEngineCommands ? { skipAgentCommands: true } : {}),
+          sessionId: session?.id,
+        },
         remoteDeviceId,
       );
     } catch {
@@ -3603,6 +3629,40 @@ function CCAgentSessionContent({
       refreshServerSession,
       t,
     ],
+  );
+
+  // 插件引擎任务换模型：只在该引擎自己的模型之间换，经既有 set-model 通道交给主进程(它直接转给
+  // 引擎并落库；来源不变，所以不传 providerId)。失败时选择器留在原地。
+  const handlePluginEngineModelSelect = useCallback(
+    async (modelId: string, effort?: string): Promise<boolean> => {
+      if (!sessionId) return false;
+      try {
+        // A level travels with the model like a built-in selection; plugin engines have no Fast.
+        await window.electronAPI.maker.setModel(
+          sessionId, modelId, undefined, undefined, effort ? { effort, fastMode: false } : undefined);
+        refreshServerSession();
+        return true;
+      } catch (err) {
+        log.warn('plugin engine set-model failed', err);
+        toast.error(t('newChat.pluginEngines.modelChangeFailed'));
+        return false;
+      }
+    },
+    [sessionId, refreshServerSession, t],
+  );
+  const pluginEngineSessionPicker = useMemo<PluginEngineSessionPickerProps | undefined>(
+    () =>
+      pluginEngineTask && session
+        ? {
+            providerId: session.providerId ?? '',
+            engine: pluginEngine,
+            engineName: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+            modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+            effort: session.effort,
+            onSelectModel: handlePluginEngineModelSelect,
+          }
+        : undefined,
+    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, t],
   );
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
@@ -4168,6 +4228,16 @@ function CCAgentSessionContent({
         });
         return true;
       }
+      // 插件引擎没有这条上下文查询通道；不拿 Claude Code 的 createOpts 去问。
+      if (isPluginEngineKind(session?.agentKind)) {
+        insertSystemCard('context', {
+          usage: null,
+          error: t('chat.systemCard.context.unsupportedAgent', {
+            agent: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+          }),
+        });
+        return true;
+      }
       const createOpts = session?.workingDir
         ? {
             agentKind: session.agentKind === 'pi' ? ('pi' as const) : ('claude-code' as const),
@@ -4206,7 +4276,7 @@ function CCAgentSessionContent({
         });
       return true;
     },
-    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData],
+    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData, pluginEngine?.name],
   );
 
   // 开始输入（打字、粘贴、开始语音输入）时提前启动 Agent，把冷启动藏进输入时间（本机与远程任务相同）。
@@ -4422,7 +4492,8 @@ function CCAgentSessionContent({
       const authCatalogDeviceId = deliveryMode !== 'steer' && agentSwitchIntent?.agentDeviceId !== undefined
         ? modelCatalogKey(agentSwitchIntent.agentDeviceId ?? undefined, controlledModelRoute.catalogHostDeviceId)
         : catalogDeviceId;
-      const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
+      // 插件引擎自带登录与模型(由引擎自己的配置管理)，不经内置 Harness 的登录检查。
+      const passesVendorAuthGate = async () => pluginEngineTask || (await vendorAuthGate.checkAndConfirm(authVendor, {
         ...(authCatalogDeviceId ? { deviceId: authCatalogDeviceId } : {}),
         // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
         // PR #744 review 第十七轮)。
@@ -5051,6 +5122,8 @@ function CCAgentSessionContent({
   useEffect(() => {
     if (readOnly) return;
     if (!sessionAgentKind || !sessionModel || !sessionId) return;
+    // 插件引擎任务的模型是引擎自己的取值，不在任何内置目录里：绝不按内置目录"纠正"成 Claude 默认模型。
+    if (isPluginEngineKind(sessionAgentKind)) return;
     // device-link 远程会话:vendor↔model 一致性由被控端权威保证。控制端不能替它"纠正"——
     // 远程模型可能只存在于被控端(本地目录查不到 → 误判跨 vendor),且本地 DB 没有该会话行,
     // sessionService.update 会写错 / refreshServerSession 对远程是 no-op。直接跳过(规则:host 为准)。
@@ -6472,7 +6545,9 @@ function CCAgentSessionContent({
                   ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
-                  runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
+                  // 插件引擎任务没有内置 Harness 身份：同样传 null，身份由 pluginEngineSession 给出。
+                  runtimeAgentKind={session && !pluginEngineTask ? dbToMakerAgentKind(session.agentKind) : null}
+                  {...(pluginEngineSessionPicker ? { pluginEngineSession: pluginEngineSessionPicker } : {})}
                   runtimeEffective={session?.runtimeEffective}
                   allowBaselineRecovery={session?.source === 'bot' && session.runtimeBaselineRecoveryPending === true}
                   baselineEffort={session?.runtimeBaseline?.effort ?? null}
@@ -6494,10 +6569,11 @@ function CCAgentSessionContent({
                   initialEffort={session?.effort}
                   initialPermissionMode={session?.permissionMode}
                   planModeEnabled={planModeEnabled}
-                  onPlanModeChange={setPlanMode}
+                  // 插件引擎没有计划模式与 Fast。
+                  onPlanModeChange={pluginEngineTask ? undefined : setPlanMode}
                   pluginSkillSetup={pluginSkillSetup}
                   fastMode={fastMode}
-                  onFastModeChange={setFastMode}
+                  onFastModeChange={pluginEngineTask ? undefined : setFastMode}
                   onWorkingDirChange={handleWorkingDirChange}
                   isStreaming={isStreaming}
                   isAgentBusy={isAgentBusy}
@@ -6536,14 +6612,15 @@ function CCAgentSessionContent({
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
-                  onExtraDirsChange={handleExtraDirsChange}
+                  // 插件引擎只拿到任务工作目录(docs/plans/acp-plugin-bridge.md)：不给附加目录入口。
+                  onExtraDirsChange={pluginEngineTask ? undefined : handleExtraDirsChange}
                   writableDirs={session?.writableDirs ?? []}
                   writableGrantScope={sessionId}
                   onWritableDirsChange={
-                    writableDirsChangeSupported ? handleWritableDirsChange : undefined
+                    writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirsChange : undefined
                   }
                   onWritableDirRemove={
-                    writableDirsChangeSupported ? handleWritableDirRemove : undefined
+                    writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirRemove : undefined
                   }
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
@@ -6558,8 +6635,9 @@ function CCAgentSessionContent({
                   // (worker 自己不能再开协同)。
                   // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
+                  // 插件引擎任务不支持协同(主进程同样拒绝)：不给入口。
                   collaboration={
-                    allowCollabToggle || (orcaMode && collabEnabled)
+                    !pluginEngineTask && (allowCollabToggle || (orcaMode && collabEnabled))
                       ? {
                           enabled: collabEnabled,
                           worker: collabWorker,
@@ -6717,18 +6795,21 @@ function CCAgentSessionContent({
                         />
                       </Tip>
                     )}
-                    <TodaySpendChip
-                      vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                      modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                      providerId={usageChipProviderId}
-                      sessionId={sessionId}
-                      sessionInitialMoney={session?.totalMoney ?? null}
-                      sessionInitialCostUsd={session?.totalCostUsd ?? null}
-                      sessionInitialTokens={session?.totalTokenUsage ?? null}
-                      remoteHostId={session?.remoteHostId ?? null}
-                      deviceLinkDeviceId={remoteDeviceId ?? null}
-                      usageAccount={usageAccount}
-                    />
+                    {/* 插件引擎用自己的账号与计费：Cindy 的额度 / 订阅用量对它不成立，不显示。 */}
+                    {!pluginEngineTask && (
+                      <TodaySpendChip
+                        vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                        modelId={agentSwitchIntent?.model ?? session?.model ?? null}
+                        providerId={usageChipProviderId}
+                        sessionId={sessionId}
+                        sessionInitialMoney={session?.totalMoney ?? null}
+                        sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                        sessionInitialTokens={session?.totalTokenUsage ?? null}
+                        remoteHostId={session?.remoteHostId ?? null}
+                        deviceLinkDeviceId={remoteDeviceId ?? null}
+                        usageAccount={usageAccount}
+                      />
+                    )}
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
@@ -6739,7 +6820,8 @@ function CCAgentSessionContent({
                       model={agentSwitchIntent?.model ?? session?.model ?? ''}
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
                       sdkContextWindow={agentStatus.contextWindow}
-                      verifiedContextWindow={resolveSessionContextWindow(
+                      // 插件引擎的上下文窗口只来自它上报的用量(sdkContextWindow)，不查内置目录。
+                      verifiedContextWindow={pluginEngineTask ? undefined : resolveSessionContextWindow(
                         { providers },
                         {
                           agentKind: normalizeDbAgentKind(displayAgentKind),

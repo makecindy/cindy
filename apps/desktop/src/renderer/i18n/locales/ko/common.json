@@ -8220,6 +8220,8 @@
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentModelPreferences": "모델 즐겨찾기 읽기 및 편집, 최근 사용한 모델 읽기",
         "agentModelPreferencesDetail": "이 컴퓨터의 모델 즐겨찾기와 최근 사용한 모델(추론 강도와 Fast 설정 포함)을 읽고, 즐겨찾기를 추가·변경·삭제할 수 있습니다. 변경 사항은 Cindy의 모델 선택기에도 표시됩니다. 플러그인에서 고른 모델은 최근 사용에 기록되지 않습니다. 다른 컴퓨터의 모델이나 공유받은 모델은 포함되지 않으며, 자격 증명도 제공되지 않습니다.",
+        "harnesses": "실행 엔진 제공: {{names}}",
+        "harnessesDetail": "작업에서 작업 디렉터리를 읽고 쓰고 명령을 실행하며, 기본 제공 Pi와 같은 범위의 Cindy 도구를 사용할 수 있습니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
         "agentErrandDetail": "생성된 작업은 Cindy 작업 목록에 표시되며 진행 상황을 확인하고 대화를 이어갈 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
@@ -14140,6 +14142,16 @@
             "label": "전체 접근",
             "description": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "매번 확인",
+            "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
+          },
+          "bypassPermissions": {
+            "label": "모두 허용",
+            "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."
+          }
         }
       }
     },
@@ -14601,6 +14613,16 @@
       "nowDefault": "기본값으로 설정됨",
       "switchToSteer": "기본값을 끼어들기로",
       "switchToQueue": "기본값을 대기열 추가로"
+    },
+    "pluginEngines": {
+      "group": "플러그인 엔진",
+      "genericName": "플러그인 엔진",
+      "defaultModel": "기본 모델",
+      "defaultModelHint": "엔진 자체의 기본 설정을 사용합니다",
+      "unavailable": "사용할 수 없음",
+      "engineMissing": "이 엔진을 제공하는 플러그인이 꺼져 있거나 제거되었습니다.",
+      "worktreeUnsupported": "플러그인 엔진은 아직 worktree에서 작업을 시작할 수 없습니다. worktree를 끈 뒤 보내세요",
+      "modelChangeFailed": "모델을 전환하지 못했습니다"
     }
   },
   "onboarding": {

@@ -16,6 +16,7 @@ import {
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
   type AgentKind,
+  type EngineKind,
   type MainOwnedSendContext,
   type SessionSendOptions,
   type Session,
@@ -263,7 +264,7 @@ export interface MakerSendTransactionSession {
   id: string;
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
   instanceId: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
@@ -307,13 +308,13 @@ export interface MakerSendTransactionDeps {
   /** Scheduler-only final route check, after asynchronous send preparation. */
   assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
   ensureRemoteReadyForSessionStart(params: {
-    session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
+    session?: { agentKind: EngineKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
   }): Promise<void>;
   checkWorkDirExists(
     sessionId: string,
     workingDir: string | undefined | null,
-    agentKind: AgentKind | undefined,
+    agentKind: EngineKind | undefined,
     remoteHostId?: string | null,
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
@@ -841,7 +842,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function isUsablePersistedWorkingDir(
     sessionId: string,
     workingDir: string,
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     remoteHostId: string | null | undefined,
   ): Promise<boolean> {
     const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;

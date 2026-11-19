@@ -5159,7 +5159,8 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex' | 'pi';
+        /** 'acp' = plugin engine task: main requires an `acp-plugin:` providerId and no remote fields. */
+        agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -5795,6 +5796,20 @@ interface ElectronAPI {
    */
   maker: {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
+    /**
+     * Plugin-provided task engines (docs/plans/acp-plugin-bridge.md). Local only: not
+     * tunnelled over device-link, so remote drafts and tasks never call it.
+     */
+    listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /**
+     * Asks engine plugins to republish their models, like the provider model refresh when the picker
+     * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
+     */
+    refreshPluginEngines?: () => Promise<void>;
+    /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
+    onPluginEnginesChanged: (
+      cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
+    ) => () => void;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
     /** Read-only: the V1 background tasks a teammate chat started (stored rows). */

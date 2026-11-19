@@ -880,6 +880,8 @@ const fanOutMakerInteractionRequest = createIpcFanOut('maker:interaction-request
 const fanOutMakerInteractionDismissed = createIpcFanOut('maker:interaction-dismissed');
 // Agent 鉴权 + today usage push (取代老 codex:auth:state-changed / codex-oauth / codex:usage:changed)
 const fanOutMakerAuthStateChanged = createIpcFanOut('maker:auth:state-changed');
+// Plugin-provided task engines (docs/plans/acp-plugin-bridge.md); local only.
+const fanOutPluginEnginesChanged = createIpcFanOut('maker:plugin-engines-changed');
 const fanOutMakerAuthLoginProgress = createIpcFanOut('maker:auth:login-progress');
 // 自定义供应商增删改广播 → 各 useProviders 实例 refetch（设置页列表 + 对话模型选择器 live 刷新）。
 const fanOutMakerProvidersChanged = createIpcFanOut('maker:provider:changed');
@@ -6767,6 +6769,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   maker: {
     listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi'>> =>
       ipcRenderer.invoke('maker:list-available-agents'),
+    listPluginEngines: (): Promise<import('../shared/pluginEngines.js').PluginEngineView[]> =>
+      ipcRenderer.invoke('maker:list-plugin-engines'),
+    /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
+    refreshPluginEngines: (): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines'),
+    onPluginEnginesChanged: fanOutPluginEnginesChanged,
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),

@@ -16,7 +16,7 @@
  * assigned once in register.ts, at the top level of registerMakerIpc before the set-model handler is
  * registered, and never reassigned (a guard test keeps that so), so a call sees the same values.
  */
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type AgentKind, type Maker, type Session, type SessionMeta } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { sessions } from '../localDb/schema.js';
 import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
@@ -185,6 +185,46 @@ export interface AgentDeviceRuntimeSelectionInput {
   supersededByOwnerBoundary(): boolean;
 }
 
+/** Whether a model selection targets a task running on a plugin engine (live or persisted). */
+function isPluginEngineSelectionTarget(
+  maker: Maker,
+  getSessionDbAgentKind: SessionRuntimeSelectionPorts['getSessionDbAgentKind'],
+  sessionId: string,
+): boolean {
+  const live = maker.getSession(sessionId);
+  return live ? live.agentKind === 'acp' : getSessionDbAgentKind(sessionId) === 'acp';
+}
+
+/**
+ * Model / reasoning selection for a plugin-engine task: the agent owns its model list
+ * (ACP config options), so there is no catalog route, provider, credential family or
+ * engine switch to settle. Applies to the live engine if running, then records the
+ * choice on the task row (it is re-applied when the engine next starts).
+ */
+async function applyPluginEngineModelSelection(
+  ports: Pick<SessionRuntimeSelectionPorts, 'maker' | 'persistSessionFields' | 'broadcastSessionRuntimeProjection'>,
+  sessionId: string,
+  model: string,
+  providerId: unknown,
+  selectionEffort: unknown,
+): Promise<{ deferred: boolean; superseded: boolean; effectiveModelId?: string }> {
+  if (providerId !== undefined && providerId !== null && (typeof providerId !== 'string' || !acpHarnessKeyFromProviderId(providerId))) {
+    throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+  }
+  const effort = isSupportedRuntimeEffort(selectionEffort) ? selectionEffort : undefined;
+  const live = ports.maker.getSession(sessionId);
+  if (live?.setModel) await live.setModel(model, effort ? { effort } : undefined);
+  await ports.persistSessionFields(sessionId, { model, ...(effort ? { effort } : {}) });
+  await ports.broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+  return { deferred: false, superseded: false, effectiveModelId: model };
+}
+
+/** Maker as seen after the plugin-engine branch of handleSetModel returned. */
+type BuiltinSessionsMaker = {
+  getSession(sessionId: string): (Session & { agentKind: AgentKind }) | undefined;
+  getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
+} & Maker;
+
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
     sessionId: unknown,
@@ -195,7 +235,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     internalOptions: InternalRuntimeSelectionOptions,
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
-      maker,
+      maker: makerPort,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -288,6 +328,16 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     ) {
       throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
     }
+    // Plugin engine tasks (docs/plans/acp-plugin-bridge.md) own their model list; handled apart.
+    if (isPluginEngineSelectionTarget(makerPort, getSessionDbAgentKind, sessionId)) {
+      return applyPluginEngineModelSelection(
+        { maker: makerPort, persistSessionFields, broadcastSessionRuntimeProjection },
+        sessionId, model, providerId, selectionEffort,
+      );
+    }
+    // From here on the task runs on a built-in engine (plugin-engine tasks returned above and
+    // cannot switch engines), so this handler sees built-in sessions only. Type-only view.
+    const maker = makerPort as BuiltinSessionsMaker;
     if (isDeviceLinkInvoke() && confirmedContextWindow !== undefined) {
       throwIpcError(
         'PRECONDITION_FAILED',

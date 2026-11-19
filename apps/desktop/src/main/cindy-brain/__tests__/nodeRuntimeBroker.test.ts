@@ -3105,3 +3105,146 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await stopping;
   });
 });
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：GhostNodeRuntimeBroker.spawnHarness 是否 fork、fork 的入口路径与参数、返回的
+ *   原样 stdio 进程，以及 stop / stopAndWait 在替换安装目录前收掉引擎进程。
+ * - Bug／规则依据：docs/plans/acp-plugin-bridge.md「引擎进程」；plugin-security-and-authoring.md §2/§3
+ *   （只执行清单声明的包内入口、守门现查）与 nodeRuntimeBroker 头注释的原位更新约束（Windows 文件锁）。
+ * - 现有覆盖缺口：childSpawn 用例只覆盖 worker 发起的子进程，引擎进程由主进程发起、不挂 worker。
+ * - 最小失败输入：receipt 未批准的引擎；入口越出安装目录；握手前停用；更新期间再次启动。
+ * - tier：unit（进程假体）。实测耗时：随本文件整体数秒。
+ */
+describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
+  class FakeHarnessProcess extends EventEmitter {
+    stdin = { destroyed: false, write: vi.fn((_chunk: string) => true) };
+    stdout = new PassThrough();
+    stderr = new PassThrough();
+    pid = 4321;
+    killed = false;
+    kill(signal?: NodeJS.Signals): boolean {
+      this.killed = true;
+      queueMicrotask(() => this.emit('exit', null, signal ?? 'SIGTERM'));
+      return true;
+    }
+  }
+
+  function harnessGhost(patch: (ghost: InstalledGhost) => void = () => {}): InstalledGhost {
+    const ghost = fakeGhost();
+    ghost.manifest.schemaVersion = 3;
+    ghost.manifest.node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio', entries: ['node/engine.cjs'] };
+    ghost.manifest.harnesses = [{ id: 'dsh', name: 'DSH', protocol: 'acp', entry: 'node/engine.cjs' }];
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.approvedHarnesses = ['dsh'];
+    patch(ghost);
+    return ghost;
+  }
+
+  function setupHarness(ghost: InstalledGhost, autoSpawn = true) {
+    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess }> = [];
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => { throw new Error('worker must not start'); },
+      spawnChildProcess: (entryPath, cwd, _ghostId, args) => {
+        const proc = new FakeHarnessProcess();
+        spawned.push({ entryPath, cwd, args, proc });
+        if (autoSpawn) queueMicrotask(() => proc.emit('spawn'));
+        return proc as unknown as NodeWorkerProcess;
+      },
+      log: { info: vi.fn(), warn },
+    });
+    return { broker, spawned, warn };
+  }
+
+  it('starts the declared entry in raw stdio mode without childSpawn and logs bounded stderr', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned, warn } = setupHarness(ghost);
+    try {
+      const proc = await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({
+        entryPath: path.resolve(ghost.dir, 'node', 'engine.cjs'), cwd: path.resolve(ghost.dir), args: [],
+      });
+      expect(proc).toBe(spawned[0].proc);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(1);
+      spawned[0].proc.stderr.write('x'.repeat(70 * 1024));
+      spawned[0].proc.stderr.write('more');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const logged = warn.mock.calls.filter(([message]) => message === 'ghost harness stderr');
+      expect(logged.length).toBeGreaterThan(0);
+      expect(logged.every(([, meta]) => String(meta?.text).length <= 4_096)).toBe(true);
+      expect(warn).toHaveBeenCalledWith('ghost harness stderr truncated', { ghostId: 'node-ghost', harnessId: 'dsh' });
+      spawned[0].proc.kill();
+      await vi.waitFor(() => expect(broker.harnessProcessCount('node-ghost')).toBe(0));
+    } finally { broker.destroyAll(); }
+  });
+
+  it.each([
+    ['disabled', (g: InstalledGhost) => { g.enabled = false; }],
+    ['not approved', (g: InstalledGhost) => { g.approval = { state: 'legacy-unapproved' }; }],
+    ['receipt without engine approval', (g: InstalledGhost) => { g.approvedHarnesses = undefined; }],
+    ['unknown protocol', (g: InstalledGhost) => { g.manifest.harnesses![0].protocol = 'acp/2'; }],
+    ['undeclared engine', (g: InstalledGhost) => { g.manifest.harnesses![0].id = 'other'; g.approvedHarnesses = ['other']; }],
+    ['entry outside node.entries', (g: InstalledGhost) => { g.manifest.harnesses![0].entry = 'node/worker.cjs'; }],
+    ['entry escaping the install dir', (g: InstalledGhost) => {
+      g.manifest.node!.entries = ['../escape.cjs']; g.manifest.harnesses![0].entry = '../escape.cjs';
+    }],
+    ['no node worker', (g: InstalledGhost) => { g.manifest.node = undefined; }],
+  ])('refuses to fork when %s', async (_label, patch) => {
+    const { broker, spawned } = setupHarness(harnessGhost(patch));
+    try {
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow();
+      expect(spawned).toHaveLength(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  it('refuses while the account boundary is switching', async () => {
+    const ghost = harnessGhost();
+    const spawnChildProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, spawnProcess: () => { throw new Error('unused'); }, spawnChildProcess,
+      ownerScope: { capture: () => 1, isCurrent: () => true, isStable: () => false },
+    });
+    try {
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('owner');
+      expect(spawnChildProcess).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
+  it('kills an engine that was disabled or updated before its startup handshake', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned } = setupHarness(ghost, false);
+    try {
+      const starting = broker.spawnHarness('node-ghost', 'dsh');
+      await vi.waitFor(() => expect(spawned).toHaveLength(1));
+      ghost.approval = { state: 'approved', revision: 'r2' };
+      spawned[0].proc.emit('spawn');
+      await expect(starting).rejects.toThrow('changed');
+      expect(spawned[0].proc.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
+  it('stopAndWait waits for running engines and blocks new ones until the plugin is resumed', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned } = setupHarness(ghost);
+    try {
+      await broker.spawnHarness('node-ghost', 'dsh');
+      const starting = broker.spawnHarness('node-ghost', 'dsh');
+      // A second engine is still in its startup window when the update begins.
+      let settled = false;
+      const stopping = broker.stopAndWait('node-ghost').then(() => { settled = true; });
+      expect(spawned.every(entry => entry.proc.killed)).toBe(true);
+      expect(settled).toBe(false);
+      await stopping;
+      await starting.catch(() => undefined);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(0);
+      // Before the directory is replaced nothing may start, even though the old install still looks enabled.
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
+      expect(spawned).toHaveLength(2);
+      broker.resumeHarnesses('node-ghost');
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+    } finally { broker.destroyAll(); }
+  });
+});

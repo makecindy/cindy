@@ -8335,6 +8335,8 @@
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentModelPreferences": "Ler e editar seus modelos favoritos e ler seus modelos usados recentemente",
         "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem compartilhados com você, e nenhuma credencial é compartilhada.",
+        "harnesses": "Fornece mecanismos de execução: {{names}}",
+        "harnessesDetail": "Nas suas tarefas, pode ler e gravar no diretório de trabalho, executar comandos e usar as mesmas ferramentas da Cindy que o Pi integrado.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
@@ -14309,6 +14311,16 @@
             "label": "Acesso total",
             "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar sempre",
+            "description": "Você confirma quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
+          },
+          "bypassPermissions": {
+            "label": "Permitir tudo",
+            "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
+          }
         }
       }
     },
@@ -14783,6 +14795,16 @@
       "nowDefault": "Agora é o padrão",
       "switchToSteer": "Orientar por padrão",
       "switchToQueue": "Colocar na fila por padrão"
+    },
+    "pluginEngines": {
+      "group": "Mecanismos de plugins",
+      "genericName": "Mecanismo de plugin",
+      "defaultModel": "Modelo padrão",
+      "defaultModelHint": "Usa o padrão do próprio mecanismo",
+      "unavailable": "Indisponível",
+      "engineMissing": "O plugin que fornece este mecanismo está desativado ou foi desinstalado.",
+      "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar.",
+      "modelChangeFailed": "Não foi possível trocar o modelo"
     }
   },
   "onboarding": {

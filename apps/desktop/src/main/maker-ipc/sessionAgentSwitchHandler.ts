@@ -587,6 +587,7 @@ export async function relocateForFreshStart(
   const row = await deps.getSessionRow(sessionId);
   if (!row || row.status === 'deleted') throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
   if (!row.model) throwIpcError('PRECONDITION_FAILED', `Session ${sessionId} has no model to relocate`);
+  if (row.agentKind === 'acp') throwIpcError('PRECONDITION_FAILED', 'tasks running on a plugin engine run on this computer only');
   const model = row.model;
   const dbKind = normalizeDbAgentKind(row.agentKind);
   const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
@@ -842,6 +843,10 @@ export async function performSessionAgentSwitch(
   if (row.remoteHostId) {
     // SSH can run all three Harnesses, but cannot hand off an existing task between them.
     throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'agent switch is not supported for remote sessions');
+  }
+  if (row.agentKind === 'acp') {
+    // Plugin engines keep their own history; a task cannot move to or from one (docs/plans/acp-plugin-bridge.md).
+    throwIpcError('PRECONDITION_FAILED', 'tasks running on a plugin engine cannot switch engines');
   }
   // Orca Lead / Worker tasks live on this computer, so moving their Agent works like
   // a normal task (2026-10-16). An execution-device Worker's task also lives on this

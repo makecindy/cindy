@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 
-import type { AgentKind } from './types/common.js';
+import type { AgentKind, EngineKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
 import {
   isTerminalAgentErrorEvent,
@@ -78,7 +78,7 @@ import type { MakerMemoryManager } from './memory/manager.js';
  * (零 Electron / 零 file system 概念)。
  */
 export interface SessionBeforeStartContext {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workingDir: string;
   remoteHostId?: string;
 }
@@ -151,7 +151,7 @@ export interface MakerDeps {
     close(): void;
   };
 
-  agents: Partial<Record<AgentKind, BaseAgent>>;
+  agents: Partial<Record<EngineKind, BaseAgent>>;
   /**
    * 可选：在同账号另一台电脑上启动 Agent(CreateSessionOptions.agentDeviceId)。返回的句柄由
    * host 实现(对方运行 Agent、本机执行文件与命令)。缺省时这类会话无法创建。
@@ -193,7 +193,7 @@ export interface CreateSessionOptions extends StartSessionOptions {
   preserveStartupStoppedError?: boolean;
   /** Host caller preferences before generated context; retained only by the live Session. */
   hostStartupPreferences?: SessionStartupPreferences;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   /** 可选：UI 显示用 */
   title?: string;
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
@@ -244,7 +244,7 @@ function codexThreadOwnerKey(opts: { remoteHostId?: string; agentDeviceId?: stri
 }
 
 function capabilitiesForSession(
-  agentKind: AgentKind,
+  agentKind: EngineKind,
   base: Capabilities,
   remoteHostId?: string | null,
   agentDeviceId?: string | null,
@@ -490,7 +490,7 @@ interface CodexThreadClaimLease {
  * children holding BYOM credentials the outgoing account cannot revoke.
  */
 export interface MakerShutdownReport {
-  sessionFailures: Array<{ sessionId: string; agentKind: AgentKind; error: unknown }>;
+  sessionFailures: Array<{ sessionId: string; agentKind: EngineKind; error: unknown }>;
 }
 
 interface FailedHandleCleanup {
@@ -531,7 +531,7 @@ function isUnfinishedRemoteTurnEvent(evt: AgentEvent): boolean {
 }
 
 export class Maker {
-  protected readonly agents: Partial<Record<AgentKind, BaseAgent>>;
+  protected readonly agents: Partial<Record<EngineKind, BaseAgent>>;
   protected readonly storage: SessionStorage;
   protected readonly logger: Logger;
   protected readonly lifecycleHooks: SessionLifecycleHooks;
@@ -907,7 +907,9 @@ export class Maker {
     const onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'] =
       startOpts[LOCAL_AGENT_CLIENT]
         ? async () => false
-        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+        // Plugin engines (acp): Cindy keeps the visible history, so an agent session that can no
+        // longer be resumed is replaced by a fresh one instead of blocking the task forever.
+        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi' || opts.agentKind === 'acp'
           ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
           : undefined;
     try {
@@ -925,6 +927,13 @@ export class Maker {
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
+        }
+        if (opts.agentKind === 'acp') {
+          throw new NotSupportedError('remoteSession', {
+            supported: false,
+            reason: 'not-implemented',
+            message: 'Plugin engines run on this computer only',
+          });
         }
         if (!this.startDeviceAgentSession) {
           throw new NotSupportedError('remoteSession', {
@@ -1249,7 +1258,7 @@ export class Maker {
       beforeTurn: this.lifecycleHooks.beforeTurn,
       capabilities: capabilitiesForSession(
         meta.agentKind,
-        agent?.capabilities ?? applicationHandleCapabilities(handle),
+        handle.negotiatedCapabilities ?? agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
         meta.agentDeviceId ?? startOpts.agentDeviceId,
         handle,
@@ -1717,13 +1726,15 @@ export class Maker {
   }
 
   /** 获取某 agent 的能力声明（用于 UI 在创建 session 前就能查能力） */
-  getCapabilities(agentKind: AgentKind) {
+  getCapabilities(agentKind: EngineKind) {
     return this.requireAgent(agentKind).capabilities;
   }
 
   /** 列出已注册的 agent kind */
   listAvailableAgents(): AgentKind[] {
-    return Object.keys(this.agents) as AgentKind[];
+    // Built-in engines only: this list crosses devices and feeds Agent tools.
+    // Plugin engines are listed through the host's local-only path.
+    return (Object.keys(this.agents) as EngineKind[]).filter((kind): kind is AgentKind => kind !== 'acp');
   }
 
   /**
@@ -1734,7 +1745,7 @@ export class Maker {
    * additive and idempotent so existing sessions and agent instances remain
    * untouched.
    */
-  registerAgent(kind: AgentKind, agent: BaseAgent): boolean {
+  registerAgent(kind: EngineKind, agent: BaseAgent): boolean {
     if (this.shutdownStarted) return false;
     if (this.agents[kind]) return false;
     this.agents[kind] = agent;
@@ -2059,7 +2070,7 @@ export class Maker {
     });
   }
 
-  protected requireAgent(kind: AgentKind): BaseAgent {
+  protected requireAgent(kind: EngineKind): BaseAgent {
     const agent = this.agents[kind];
     if (!agent) {
       throw new Error(`Agent '${kind}' is not registered (available: ${this.listAvailableAgents().join(', ')})`);

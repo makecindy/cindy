@@ -20,18 +20,27 @@ import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { RemoteSignalOverlay } from '@/components/icons/RemoteSourceMark';
+import { Puzzle } from 'lucide-react';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 
 export type VendorIconKind = 'cc' | 'codex' | 'pi';
+
+/**
+ * 任务身份图标的种类：内置三种 Harness，加上插件提供的执行引擎('acp',
+ * docs/plans/acp-plugin-bridge.md)。插件引擎只有一个通用图标，不冒充任何内置 Harness。
+ */
+export type EngineIconKind = VendorIconKind | 'acp';
 
 /**
  * 各 glyph 笔画右上角在自身方框里的位置(0–1，已留出与波纹点的间隙)。
  * 像素脸头部占 viewBox x 0–21 / y 5–20;花形放大 1.1 后右上沿在 (19.1, 4.9);
  * π 字形偏小且居中。
  */
-const REMOTE_SIGNAL_ANCHOR: Record<VendorIconKind, { x: number; y: number }> = {
+const REMOTE_SIGNAL_ANCHOR: Record<EngineIconKind, { x: number; y: number }> = {
   cc: { x: 0.95, y: 0.13 },
   codex: { x: 0.9, y: 0.1 },
   pi: { x: 0.83, y: 0.36 },
+  acp: { x: 0.9, y: 0.12 },
 };
 
 /**
@@ -43,8 +52,16 @@ export function agentKindToVendor(kind: string | null | undefined): VendorIconKi
   return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
 }
 
+/**
+ * 任务行(sessions.agent_kind)→ 身份图标。与 agentKindToVendor 只差插件引擎任务：它们画通用
+ * 插件引擎图标，而不是回落成 Claude 像素脸。会出现插件引擎任务的列表用这一个。
+ */
+export function engineIconKindOf(kind: string | null | undefined): EngineIconKind {
+  return isPluginEngineKind(kind) ? 'acp' : agentKindToVendor(kind);
+}
+
 interface VendorIconProps {
-  vendor: VendorIconKind;
+  vendor: EngineIconKind;
   size?: number;
   /** true → 切 Thinking Orange + 呼吸动画,复用 .session-status-breathing */
   running?: boolean;
@@ -56,6 +73,11 @@ interface VendorIconProps {
   remote?: boolean;
   /** 悬停说明(如 Agent 在哪台电脑上运行)。 */
   title?: string;
+  /**
+   * 仅 vendor = 'acp'：提供该引擎的插件自己的图标(清单 icon)。缺省画通用拼图。插件图标保留自身
+   * 配色；运行中仍随外层呼吸动画明暗变化。
+   */
+  iconDataUrl?: string;
 }
 
 export function VendorIcon({
@@ -66,6 +88,7 @@ export function VendorIcon({
   colorClassName,
   remote = false,
   title,
+  iconDataUrl,
 }: VendorIconProps) {
   const anchor = REMOTE_SIGNAL_ANCHOR[vendor];
   const wrapperClassName = cn(
@@ -80,7 +103,22 @@ export function VendorIcon({
 
   return (
     <span className={wrapperClassName} title={title}>
-      {vendor === 'codex' ? (
+      {vendor === 'acp' ? (
+        iconDataUrl ? (
+          <img
+            src={iconDataUrl}
+            alt=""
+            aria-hidden
+            draggable={false}
+            width={size}
+            height={size}
+            style={{ width: size, height: size }}
+            className="rounded-[3px] object-contain"
+          />
+        ) : (
+          <Puzzle size={size} aria-hidden strokeWidth={1.75} />
+        )
+      ) : vendor === 'codex' ? (
         <CodexMark size={size} />
       ) : vendor === 'pi' ? (
         <span

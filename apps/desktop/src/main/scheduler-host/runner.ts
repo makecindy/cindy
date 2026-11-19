@@ -59,6 +59,7 @@ import type {
   AgentEvent,
   AgentKind,
   Effort,
+  EngineKind,
   PermissionMode,
   Session,
 } from '@cindy/maker-core';
@@ -96,6 +97,8 @@ import {
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
+import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
+import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
@@ -186,6 +189,21 @@ export const QUEUED_DISPATCH_SUSPEND_GAP_MS = 30_000;
  */
 /** terminal error 后紧随的同轮 done 配对窗口；自动续跑的最短退避远大于它。 */
 const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
+
+/**
+ * Schedules do not run plugin-engine tasks in phase 1 (docs/plans/acp-plugin-bridge.md).
+ * A bound plugin-engine target is refused at fire entry; the narrowing below keeps every
+ * later engine-specific step refusing it too, never treating it as a built-in engine.
+ */
+const SCHEDULED_TASKS_FEATURE = 'Scheduled tasks';
+
+/** Refuses only the plugin engine; every other value is returned unchanged. */
+function scheduledBuiltinAgentKind(kind: EngineKind): AgentKind;
+function scheduledBuiltinAgentKind(kind: EngineKind | undefined): AgentKind | undefined;
+function scheduledBuiltinAgentKind(kind: EngineKind | undefined): AgentKind | undefined {
+  if (kind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+  return kind;
+}
 
 function hasScheduledModelOverride(schedule: Schedule): boolean {
   return !!(schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort ||
@@ -1036,6 +1054,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
       }
+      // A plugin-engine target is refused before hooks, restore or any engine switch.
+      if (target && isPluginEngineKind(target.agentKind)) {
+        const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+        await this.notifyFailureSilent(schedule, ctx, refusal.message);
+        throw refusal;
+      }
       if (target && target.status !== 'deleted') {
         await this.runtime.restoreScheduledTarget(schedule.targetSessionId, target, ctx.signal);
       }
@@ -1182,7 +1206,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (restorePending) return restorePending;
       if (!schedule.modelAgentKind && schedule.model?.trim()) {
         const currentAgentKind = (await this.deps.maker.getSessionMeta(sessionId).catch(() => null))?.agentKind;
-        const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, currentAgentKind);
+        // Never switch a plugin-engine task to the schedule's Harness: refuse it.
+        const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, scheduledBuiltinAgentKind(currentAgentKind));
         // Fire-local only: the saved schedule keeps its original shape.
         if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
       }
@@ -1270,6 +1295,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           throw new Error(errMsg);
         }
       } else {
+        // The fire-entry row check covers ordinary targets; this covers the rest
+        // (e.g. a Bot routine) before the task's engine feeds any routing below.
+        if (meta?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
         if (resolvedSelection) {
           schedule = {
             ...schedule,
@@ -1603,6 +1631,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let reusedLiveSession = this.deps.maker.isSessionAlive(sessionId);
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
+      if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
       const currentProviderId = getSessionProvider(sessionId) ?? heartbeatProviderId;
       // 隐式改道(reroutedProviderId)也是本次 fire 的落地来源:跨凭证家族的改道
       // (如停用 XD 默认 → 改道 Anthropic)若不进本判定,会复用旧凭证 spawn 的
@@ -2063,7 +2092,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         session.id,
         holder,
         {
-          agentKind: session.agentKind,
+          agentKind: scheduledBuiltinAgentKind(session.agentKind),
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
           fastMode,
@@ -2247,7 +2276,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             effectiveAgentKind !== 'pi' &&
             shouldCloseSessionForCredentialSwitch({
-              agentKind: session.agentKind,
+              agentKind: scheduledBuiltinAgentKind(session.agentKind),
               remoteHostId: session.remoteHostId,
               currentProviderId: dispatchProviderId,
               nextProviderId: verdict.providerId,
@@ -2811,7 +2840,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // explicit schedule axes and resolved-selection fences still win.
           const meta = await this.deps.maker.getSessionMeta(sessionId);
           routingBaseline = {
-            ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
+            ...routingBaseline, model: meta?.model, agentKind: scheduledBuiltinAgentKind(meta?.agentKind),
             effort: meta?.effort, fastMode: schedule.fastMode ?? meta?.fastMode,
             providerId: getSessionProvider(sessionId) ?? null,
           };
@@ -3358,6 +3387,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     },
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
+    // Runs inside onAccepted: only these route errors stop the vendor dispatch,
+    // so a plugin-engine task is refused through QueuedRouteDisabledError.
+    if (live.agentKind === 'acp') {
+      throw new QueuedRouteDisabledError(new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE).message);
+    }
     this.assertQueuedModelSelection(live, baseline.resolvedSelection);
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =

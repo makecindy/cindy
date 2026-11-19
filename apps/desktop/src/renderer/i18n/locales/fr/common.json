@@ -8335,6 +8335,8 @@
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentModelPreferences": "Lire et modifier vos modèles favoris, et lire vos modèles récemment utilisés",
         "agentModelPreferencesDetail": "Peut lire les modèles favoris et récemment utilisés sur cet ordinateur, y compris l’effort de raisonnement et Fast, et ajouter, modifier ou retirer des favoris. Les modifications apparaissent aussi dans le sélecteur de modèle de Cindy. Les modèles choisis dans le plugin ne sont pas ajoutés aux récents. Les modèles de vos autres ordinateurs ou partagés avec vous ne sont pas inclus, et aucun identifiant n’est transmis.",
+        "harnesses": "Fournit des moteurs d'exécution : {{names}}",
+        "harnessesDetail": "Dans vos tâches, peut lire et écrire dans le répertoire de travail, exécuter des commandes et utiliser les mêmes outils de Cindy que Pi intégré.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
@@ -14309,6 +14311,16 @@
             "label": "Accès complet",
             "description": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmer à chaque fois",
+            "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
+          },
+          "bypassPermissions": {
+            "label": "Tout autoriser",
+            "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
+          }
         }
       }
     },
@@ -14783,6 +14795,16 @@
       "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
       "switchToQueue": "File d'attente par défaut"
+    },
+    "pluginEngines": {
+      "group": "Moteurs de plugins",
+      "genericName": "Moteur de plugin",
+      "defaultModel": "Modèle par défaut",
+      "defaultModelHint": "Utilise le réglage par défaut du moteur",
+      "unavailable": "Indisponible",
+      "engineMissing": "Le plugin qui fournit ce moteur est désactivé ou désinstallé.",
+      "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer.",
+      "modelChangeFailed": "Impossible de changer de modèle"
     }
   },
   "onboarding": {

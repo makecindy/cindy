@@ -22,6 +22,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import type { Logger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
@@ -123,7 +124,7 @@ export function createRecoverRemoteRuntimeAxisPersistence(ports: {
     } catch (recoveryError) {
       if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
       const retainedSession = maker.getSession(sessionId);
-      if (retainedSession) {
+      if (retainedSession && hasBuiltinAgentKind(retainedSession)) {
         const retainedProfile: SessionRuntimeProfile = {
           ...previousProfile,
           agentKind: retainedSession.agentKind,

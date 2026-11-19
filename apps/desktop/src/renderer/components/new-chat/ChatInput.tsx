@@ -149,6 +149,8 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
+import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from './PluginEnginesSection';
+import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
   enqueueEffortChange,
@@ -949,6 +951,17 @@ interface ChatInputProps {
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
   /**
+   * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
+   * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
+   * 发送不按内置模型的来源检查拦截(由草稿层走引擎自己的创建路径)。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
+  /**
+   * 运行在插件引擎上的已建任务(sessions.agent_kind = 'acp')。传入时模型 pill 只列该引擎的模型，
+   * 不出现内置引擎切换、深度、Fast、计划模式；发送不做内置来源检查。
+   */
+  pluginEngineSession?: PluginEngineSessionPickerProps;
+  /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
    * 传入 = 这条 composer 的模型 pill 用统一面板,而且它是**草稿**:面板里的一行自带引擎
@@ -1430,8 +1443,20 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  pluginEngines,
+  pluginEngineSession,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
+  // 插件引擎(草稿里选中的，或任务本身运行在插件引擎上)：内置 Harness 的模型来源、深度、Fast、
+  // 计划模式与切换都不适用(docs/plans/acp-plugin-bridge.md)。下面只在这几处分支。
+  const pluginEngineActive = !!pluginEngineSession || (!sessionId && !!pluginEngines?.active);
+  const pluginEnginePermissionModes = useMemo(() => {
+    if (pluginEngineSession) return pluginEngineSession.engine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
+    const active = !sessionId ? pluginEngines?.active : null;
+    if (!active) return undefined;
+    return pluginEngines?.engines.find((engine) => engine.providerId === active.providerId)?.permissionModes
+      ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
+  }, [pluginEngineSession, pluginEngines, sessionId]);
   // Keep the existing draft/editor mounted during a companion call, but reuse
   // every disabled guard (typing, drop, button and hotkey sends) until it ends.
   const disabled = disabledProp || voiceConversationActive;
@@ -2151,8 +2176,10 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。伙伴保留这两个入口；任务设置锁定时一起禁用。
   const permissionCycleOptions = useMemo(
     () =>
-      settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? []),
-    [activeAgentCapabilities, settingsLocked, sharedGuest],
+      settingsLocked || sharedGuest
+        ? []
+        : (pluginEnginePermissionModes ?? activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, settingsLocked, sharedGuest, pluginEnginePermissionModes],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -2166,7 +2193,8 @@ export function ChatInput({
   );
 
   // 计划模式入口门控:agent capability(device-link 老被控端无此字段 → 隐藏)+ 父组件接线。
-  const planModeSupported = activeAgentCapabilities?.planMode?.supported === true;
+  // 插件引擎没有计划模式。
+  const planModeSupported = !pluginEngineActive && activeAgentCapabilities?.planMode?.supported === true;
   const planModeEntry =
     !sharedGuest && !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
@@ -2175,6 +2203,8 @@ export function ChatInput({
   // 「有没有已连接来源」。vendorKey 锁定时直接信任;否则按 capabilities 反推
   // (按 availableModels 归类,不靠 id 前缀猜)。
   const currentModelAgentKind: AgentKind | null = useMemo(() => {
+    // 插件引擎的模型不在任何内置目录里：没有内置 Harness，也就不做来源连接 / 断开判定。
+    if (pluginEngineActive) return null;
     if (runtimeEffective || composerSelection.pending) return composerSelection.display.agentKind;
     if (agentKind) return agentKind;
     if ((ccCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
@@ -2187,7 +2217,7 @@ export function ChatInput({
       return 'pi';
     }
     return null;
-  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [pluginEngineActive, activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   // SSH 项目:Codex 只走远端主机的原生连接,模型清单读远端;Claude Code / Pi 仍用本机目录。
@@ -2306,7 +2336,8 @@ export function ChatInput({
   const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
   // 新任务选了模型组或「让插件选」：这次用哪个模型、在哪台运行由发送时的选路决定，草稿底层模型的来源
   // 只在选路沿用它时才用得上(由发送回调在选路后检查)。输入框不按底层模型先挡下发送(model-groups.md §5)。
-  const sendRoutesOwnModel = !sessionId && (!!modelGroups?.active || !!pluginModels?.active);
+  // 插件引擎同理：它用自己的模型与登录，内置模型的来源检查不适用。
+  const sendRoutesOwnModel = (!sessionId && (!!modelGroups?.active || !!pluginModels?.active)) || pluginEngineActive;
   const remoteModelListBlocked = !sendRoutesOwnModel && (
     (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
     (!!sshCodexHostId && sshCodexProviders.status !== 'ready'));
@@ -4768,7 +4799,8 @@ export function ChatInput({
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
   const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
-  const slashContextReady = !sessionId || runtimeAgentKind != null;
+  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单只有桌面命令，随时可读。
+  const slashContextReady = !sessionId || runtimeAgentKind != null || !!pluginEngineSession;
   // Existing tasks use one authoritative snapshot. Mirrored composer state
   // catches up in an effect and otherwise scans the previous/global folder first.
   const slashWorkingDir = sessionId ? initialWorkingDir : workingDir;
@@ -4782,6 +4814,8 @@ export function ChatInput({
     isRemoteSession,
     sessionId ?? null,
     deviceLinkDeviceId ?? null,
+    // 插件引擎只列 Cindy 自己的桌面命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
+    ...(pluginEngineActive ? ['plugin-engine'] : []),
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
     contextKey: '',
@@ -4829,7 +4863,9 @@ export function ChatInput({
         {
           ...opts,
           contextReady: slashContextReady,
-          skipAgentSkills: isRemoteSession,
+          // 插件引擎自己解释 `/…`：不列内置 Harness 的命令与技能。
+          skipAgentSkills: isRemoteSession || pluginEngineActive,
+          ...(pluginEngineActive ? { skipAgentCommands: true } : {}),
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
           onPiRuntimeStatus: (status) => {
@@ -4863,6 +4899,7 @@ export function ChatInput({
       sessionId,
       deviceLinkDeviceId,
       slashCommandContextKey,
+      pluginEngineActive,
     ],
   );
   useEffect(() => {
@@ -10131,6 +10168,7 @@ export function ChatInput({
                     permissionMode={activePermissionMode}
                     onPermissionModeChange={handlePermissionModeChange}
                     vendorKey={vendorKey}
+                    {...(pluginEnginePermissionModes ? { pluginEngineModes: pluginEnginePermissionModes } : {})}
                     deviceId={deviceLinkDeviceId ?? undefined}
                     disabled={composerEditorLocked || settingsLocked || sharedGuest}
                     dense={effectiveDenseToolbar}
@@ -10312,6 +10350,8 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    {...(!sessionId && unifiedPanelActive && pluginEngines ? { pluginEngines } : {})}
+                    {...(pluginEngineSession ? { pluginEngineSession } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在

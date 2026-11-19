@@ -8206,6 +8206,8 @@
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentModelPreferences": "可讀改君之模型珍藏，並讀君近用之模型",
         "agentModelPreferencesDetail": "可讀此機之模型珍藏與近用之模型（含思之深淺與 Fast），並可增、改、去珍藏，所改亦見於 Cindy 之擇模。於法器中所擇之模型不記入近用。不含君他機之模型與人所分享者，亦不予憑證。",
+        "harnesses": "供執行引擎：{{names}}",
+        "harnessesDetail": "得於君之差事中讀寫工作目錄、行命令，並用與內建 Pi 同範之 Cindy 工具。",
         "agentErrand": "可立差事、行事並讀結果",
         "agentErrandDetail": "所立差事現於 Cindy 差事錄中，可觀其歷程並續言談。",
         "agentSchedule": "可請君新立自運",
@@ -14140,6 +14142,16 @@
             "label": "完全存取",
             "description": "常規操作徑許，可存取工作區外之卷，亦可聯網執行命令。"
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐項確認",
+            "description": "Agent 求權時由君裁可；Agent 未求確認之舉，Cindy 無從攔阻。"
+          },
+          "bypassPermissions": {
+            "label": "盡許",
+            "description": "Agent 所求之權，一概自許。"
+          }
         }
       }
     },
@@ -14601,6 +14613,16 @@
       "nowDefault": "已立為默",
       "switchToSteer": "默改插話",
       "switchToQueue": "默改排隊"
+    },
+    "pluginEngines": {
+      "group": "法器引擎",
+      "genericName": "法器引擎",
+      "defaultModel": "預設模型",
+      "defaultModelHint": "從引擎自身之預設",
+      "unavailable": "暫不可用",
+      "engineMissing": "供此引擎之法器已停用或卸除",
+      "worktreeUnsupported": "法器引擎尚不能於 worktree 中新建差事，請先取消勾選 worktree 再發",
+      "modelChangeFailed": "未能易模型"
     }
   },
   "onboarding": {

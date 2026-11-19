@@ -151,6 +151,15 @@ describe('Maker agent status', () => {
     expect(maker.registerAgent('pi', pi)).toBe(false);
     expect(maker.listAvailableAgents()).toEqual(['pi']);
   });
+
+  // The engine roster crosses devices and feeds Agent tools; a plugin engine must never appear in it
+  // (docs/plans/acp-plugin-bridge.md). Built-in kinds keep their exact listing.
+  it('keeps a registered plugin engine out of the built-in engine roster', () => {
+    const maker = new Maker({ agents: {}, storage: createStorage(), logger: createLogger() });
+    maker.registerAgent('pi', createAgent(async () => undefined, 'pi'));
+    expect(maker.registerAgent('acp', { ...createAgent(async () => undefined), kind: 'acp' } as BaseAgent)).toBe(true);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
 });
 
 function createAgent(
@@ -4586,6 +4595,40 @@ describe('Maker invalid-resume persistence bridge', () => {
       model: 'claude-opus-4-6',
       resumeSessionId: 'sdk-old',
     });
+    expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
+  });
+
+  // Plugin engines (acp): without the callback a task whose agent session can no longer be
+  // resumed failed on every start and could never run again (docs/plans/acp-plugin-bridge.md).
+  it('injects the same compare-and-clear callback for resumed plugin engine sessions', async () => {
+    const storage = createStorage();
+    await storage.create({
+      id: 'session-1',
+      agentKind: 'acp',
+      workDir: '/repo',
+      title: 'Resume me',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      sdkSessionId: 'sdk-old',
+    });
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
+      return createHandle({ id: '<pending>' });
+    });
+    const maker = new Maker({
+      agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
+      storage,
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: '/repo',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'sdk-old',
+    });
+    expect(startSession).toHaveBeenCalledOnce();
     expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
   });
 
