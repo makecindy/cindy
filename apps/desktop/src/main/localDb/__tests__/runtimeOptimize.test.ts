@@ -4,16 +4,16 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const fixture = vi.hoisted(() => ({ root: '' }));
+const fixture = vi.hoisted(() => ({ root: '', packaged: true }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
 vi.mock('../../userDataPath.js', () => ({ userDataPath: () => fixture.root }));
 vi.mock('../../host-client-mode.js', () => ({ isHostClientMode: () => false }));
 vi.mock('../../cindy-make/versionRuntimeIdentity.js', () => ({ isCindyPersonalRuntime: () => false }));
-vi.mock('../hostUi.js', () => ({ localDbHostUi: () => ({ isPackaged: () => true }) }));
+vi.mock('../hostUi.js', () => ({ localDbHostUi: () => ({ isPackaged: () => fixture.packaged, showMessageBoxSync: () => 1 }) }));
 vi.mock('../betterSqliteFactory', () => ({ createBetterSqliteDatabase: vi.fn((file: string) => new Database(file)) }));
 vi.mock('../registerCjkSeg', () => ({ ensureCjkFtsTempTriggersInstalled: () => undefined }));
 vi.mock('../migrate', () => ({ getDrizzleDir: () => fixture.root, prepareBackupDiskSpace: vi.fn(), pruneMigrationBackupsToBudget: vi.fn(), runMigrations: vi.fn() }));
-vi.mock('../backup', () => ({ tryRestoreWithFallback: vi.fn(), backupDb: vi.fn(), restrictLegacyBackupPermissions: vi.fn() }));
+vi.mock('../backup', () => ({ tryRestoreWithFallback: vi.fn(), backupDb: vi.fn(), restrictLegacyBackupPermissions: vi.fn(), estimateDbSizeBytes: () => 0, getFreeDiskBytes: () => null, isoBackupTotalBudgetBytes: () => 0, pruneIsoBackupsToBudget: () => [] }));
 vi.mock('../schemaDriftDetector', () => ({ detectSchemaDrift: vi.fn() }));
 vi.mock('../schemaDriftRepair', () => ({ repairSchemaDriftWithBackup: vi.fn() }));
 vi.mock('../schemaDriftCompatibility', () => ({ reconcileKnownEquivalentMigrationHashes: vi.fn() }));
@@ -23,7 +23,7 @@ vi.mock('../codexHistoryPromptInit', () => ({ initializeCodexHistoryPromptState:
 vi.mock('../dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () => [] }));
 vi.mock('../managedDialogueWorkspaceRepair', () => ({ repairManagedDialogueWorkspaceSessions: vi.fn() }));
 vi.mock('../sqliteVecLoader', () => ({ loadSqliteVec: () => ({ loaded: true }), resetSqliteVecState: vi.fn() }));
-vi.mock('../migrationRunner', () => ({ checkMigrationCompatibility: vi.fn(), prepareMigrationRuntimeManifest: vi.fn(), readSchemaVersion: vi.fn() }));
+vi.mock('../migrationRunner', async importOriginal => ({ ...await importOriginal<typeof import('../migrationRunner')>(), checkMigrationCompatibility: vi.fn(), prepareMigrationRuntimeManifest: vi.fn() }));
 vi.mock('../schemaMigrationLease', () => ({
   acquireSchemaStartupLease: vi.fn(async () => ({ acquired: true, kind: 'writer', lease: { release: vi.fn() } })),
   SchemaMigrationReaderLeaseLifecycle: class { release() {} closeConnection() {} },
@@ -32,6 +32,11 @@ vi.mock('../schemaStartupPolicy', () => ({ runSchemaStartupPolicy: vi.fn(async (
 vi.mock('../dbSlimmingWorkerClient', () => ({ deferReleaseUntilDbSlimmingWorkerTermination: () => false }));
 vi.mock('../modelDefaultsProfile', () => ({ ownerDatabasePath: (root: string, user: string) => path.join(root, `${user}.db`), prepareModelDefaultsProfile: vi.fn() }));
 vi.mock('../../devStartupStatus', () => ({ recordDesktopDevLocalDbStartupResult: vi.fn() }));
+import { backupDb } from '../backup';
+import { detectSchemaDrift } from '../schemaDriftDetector';
+import { reconcileKnownEquivalentMigrationHashes } from '../schemaDriftCompatibility';
+import { repairSchemaDriftWithBackup } from '../schemaDriftRepair';
+import { configureMigrationRuntime } from '../migrationRuntime';
 import * as runtime from '../index';
 import { createLifecycleDbClientManager } from '../client/lifecycleDbClient';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
@@ -48,6 +53,7 @@ import type { CreateDbClientOptions, DbClient } from '../client/DbClient';
 // state/mocks from the inproc factory regression. No migration/App claim.
 describe('main native connection quarantine', () => {
   beforeEach(() => {
+    fixture.packaged = true;
     fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-optimize-quarantine-'));
     vi.useFakeTimers();
   });
@@ -148,6 +154,61 @@ describe('main native connection quarantine', () => {
     expect(db.open).toBe(false);
     await expect(runtime.ensureReady(owner)).rejects.toBe(failure);
     runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: owner });
+  });
+
+  // Real schema helpers, not policy-port substitutes: an online backup yields
+  // while the live worker can report corruption. Only exclusively synthetic DBs.
+  it.each([false, true])('guards actual drift apply after backup (corrupt=%s)', async corrupt => {
+    fixture.packaged = false;
+    const owner = 'synthetic-owner';
+    const failure = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    const actual = await vi.importActual<typeof import('../schemaDriftRepair')>('../schemaDriftRepair');
+    vi.mocked(repairSchemaDriftWithBackup).mockImplementationOnce(actual.repairSchemaDriftWithBackup);
+    vi.mocked(detectSchemaDrift).mockReturnValue({ status: 'clean', entries: [] });
+    vi.mocked(reconcileKnownEquivalentMigrationHashes).mockImplementation((_db, report) => ({ report, reconciled: [], failures: [] }));
+    let finishBackup!: (value: string) => void;
+    let enteredBackup!: () => void;
+    const entered = new Promise<void>(resolve => { enteredBackup = resolve; });
+    vi.mocked(backupDb).mockImplementationOnce(() => { enteredBackup(); return new Promise(resolve => { finishBackup = resolve; }); });
+    vi.mocked(runSchemaStartupPolicy).mockImplementationOnce(async options => {
+      await options.handleSchemaDrift();
+      return { ready: true, compatibility: null };
+    });
+    const pending = runtime.ensureReady(owner);
+    await entered;
+    const db = runtime.getRawDb();
+    const exec = vi.spyOn(db, 'exec');
+    if (corrupt) runtime.markRuntimeDbCorrupt(owner, failure);
+    const result = corrupt ? expect(pending).rejects.toBe(failure) : expect(pending).resolves.toEqual({ ready: true });
+    finishBackup('synthetic-backup');
+    await result;
+    if (corrupt) expect(exec).not.toHaveBeenCalled();
+    if (!corrupt) expect(exec.mock.calls.length).toBeGreaterThan(0);
+    runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: owner });
+  });
+
+  it.each([false, true])('guards actual migration replay after backup (corrupt=%s)', async corrupt => {
+    const actual = await vi.importActual<typeof import('../migrate')>('../migrate');
+    const drizzleDir = path.join(fixture.root, 'drizzle');
+    fs.mkdirSync(drizzleDir);
+    // Synthetic migration input only; never modifies the repository chain.
+    fs.writeFileSync(path.join(drizzleDir, '0111_fixture.sql'), 'CREATE TABLE synthetic_guard(id INTEGER);');
+    configureMigrationRuntime({ drizzleDir, isPackaged: true });
+    const file = path.join(fixture.root, 'migration.db');
+    const db = new Database(file);
+    try {
+      db.exec("CREATE TABLE migration_meta(key TEXT PRIMARY KEY,value TEXT); INSERT INTO migration_meta VALUES('schema_version','110'); CREATE TABLE migration_history(seq INTEGER PRIMARY KEY,file_name TEXT,content_hash TEXT,applied_at INTEGER);");
+      let finishBackup!: (value: string) => void;
+      vi.mocked(backupDb).mockImplementationOnce(() => new Promise(resolve => { finishBackup = resolve; }));
+      let failure: Error | null = null;
+      const pending = actual.runMigrations(db, file, () => { if (failure) throw failure; });
+      if (corrupt) failure = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+      const result = corrupt ? expect(pending).rejects.toBe(failure) : expect(pending).resolves.toBeUndefined();
+      finishBackup('NO_DB_TO_BACKUP');
+      await result;
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='synthetic_guard'").get()).toEqual(corrupt ? undefined : { name: 'synthetic_guard' });
+      expect(db.open).toBe(true); // A quarantine rejection must not restore/replace files.
+    } finally { db.close(); }
   });
 
 });

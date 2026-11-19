@@ -382,7 +382,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
           );
         }
       },
-      runMigrations: () => whileAvailable(() => runMigrations(db, filePath)),
+      runMigrations: () => whileAvailable(() => runMigrations(db, filePath, () => assertRuntimeDbAvailable(filePath))),
       handleSchemaDrift: () => whileAvailable(() => handleSchemaDrift(filePath)),
       cleanupSchemaDdl: () => whileAvailable(() => cleanupStaleOrcaLeadIndex(db)),
     });
@@ -747,7 +747,7 @@ async function handleSchemaDrift(filePath: string): Promise<void> {
           return null;
         }
       },
-      isConnectionCurrent: () => _db === db,
+      isConnectionCurrent: () => _db === db && !runtimeCorruptFiles.has(filePath),
       afterApply: () => {
         pruneMigrationBackupsToBudget(filePath);
       },
