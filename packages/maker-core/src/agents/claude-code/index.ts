@@ -4973,8 +4973,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     >();
     // A Bash notification queues native follow-up even though Bash never owns a
-    // product-turn claim. Keep only its completion-to-start gap visible to idle
-    // recyclers; do not block send/steer or make Stop kill a running service.
+    // product-turn claim. Keep its follow-up visible to idle recyclers through
+    // native execution and delivery; do not block send/steer or make Stop kill a running service.
     // No polling, synthetic turn or replay: absent provider activity expires at
     // the existing native continuation grace budget, queried on the next gate.
     let pendingBashContinuationUntil = 0;
@@ -7317,7 +7317,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async requestGracefulStop(stopOpts) {
-        pendingBashContinuationUntil = 0;
         if (canceledBridgeQueries.has(q)) {
           throw new Error('Claude query is no longer active');
         }
@@ -7358,6 +7357,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           ) {
             throw new Error('Claude graceful stop could not confirm all background task stops');
           }
+          // Only confirmed control revokes Bash follow-up; a rejected or
+          // no-active Stop must leave its runtime protection intact.
+          clearPendingBashContinuations();
           const stoppedClaim = markWakeTasksStopped(fulfilledWakeIds, 'graceful_stop');
           const cancelledContinuation =
             stoppedClaim ?? cancelActiveContinuation('graceful_stop');
@@ -7372,7 +7374,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async abort() {
-        pendingBashContinuationUntil = 0;
+        const bashStopGeneration = turnState.generation;
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛
         // 'aborted by user' → eventQueue.end()), 后续 send 进黑洞 session 卡死。
@@ -7476,6 +7478,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
           const { fulfilledWakeIds } = await settleWakeStopRequests(stopRequests);
+          // ACK is the existing hard-Stop boundary even when the SDK never
+          // drains a result. Release active/queued retention as well as the
+          // startup gap, without clearing a newer user generation's state.
+          if (turnState.generation === bashStopGeneration) clearPendingBashContinuations();
           // interrupt ACK authorizes retiring only wake tasks whose stop RPC
           // also succeeded. Rejected stops remain tracked for provider events,
           // preserving their continuation contract instead of creating an
@@ -7640,8 +7646,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       countPendingWakeContinuations() {
-        // Pending native continuations: wake claims plus a bounded Bash
-        // completion-to-start gap. Bash does not acquire a product-turn claim.
+        // Pending native continuations: wake claims plus bounded Bash startup
+        // retention and its active/queued follow-up. Bash does not acquire a product-turn claim.
         // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
         // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
         // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),

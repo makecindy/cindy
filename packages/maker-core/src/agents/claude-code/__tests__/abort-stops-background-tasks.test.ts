@@ -3601,4 +3601,56 @@ describe('completed Bash runtime retention', () => {
       expect(handle.isTurnRunning?.()).toBe(false);
     } finally { vi.restoreAllMocks(); stream.end(); await handle.close(); await collected; }
   });
+
+  it('releases active Bash retention after a confirmed Stop even without a provider terminal', async () => {
+    const { handle, stream, events, collected } = await startSessionWithStream();
+    let now = 100;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      await handle.send({ type: 'user', content: 'background work' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some(e => e.type === 'done'), 'foreground done');
+      stream.emit(taskNotification('bash', 'completed'));
+      stream.emit(assistantText('native follow-up'));
+      await waitFor(() => handle.isTurnRunning?.() === true, 'native follow-up started');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      await handle.abort(); // SDK ACK; deliberately no result/done after it.
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      now += WAKE_CONTRACT_GRACE_MS + 1;
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      await handle.send({ type: 'user', content: 'new request after Stop' });
+      stream.emit(assistantText('new answer'));
+      stream.emit(turnResult('done'));
+      await waitFor(() => events.some(e => e.type === 'text' && JSON.stringify(e.data).includes('new answer')), 'next send delivered');
+    } finally { vi.restoreAllMocks(); stream.end(); await handle.close(); await collected; }
+  });
+
+  it.each(['no-active-turn', 'interrupt-rejected', 'hard-stop-rejected'] as const)('keeps unconfirmed Bash follow-up when Stop is %s', async (failure) => {
+    const { handle, stream, events, collected, fakeQuery } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'background work' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some(e => e.type === 'done'), 'foreground done');
+      stream.emit(taskNotification('bash', 'completed'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 0, 'Bash completed');
+      if (failure === 'interrupt-rejected') {
+        await handle.send({ type: 'user', content: 'ordinary next request' });
+        fakeQuery.interrupt.mockRejectedValueOnce(new Error('control rejected'));
+      }
+      if (failure === 'hard-stop-rejected') {
+        fakeQuery.interrupt.mockRejectedValueOnce(new Error('control rejected'));
+        await handle.abort(); // Hard Stop reports a rejected control via its existing log path.
+      } else {
+        await expect(handle.requestGracefulStop?.()).rejects.toThrow(failure === 'no-active-turn' ? 'No active Claude turn' : 'control rejected');
+      }
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      stream.emit(assistantText('native follow-up remains'));
+      stream.emit(turnResult('done'));
+      await waitFor(() => events.some(e => e.type === 'text' && JSON.stringify(e.data).includes('native follow-up remains')), 'follow-up delivered');
+    } finally { stream.end(); await handle.close(); await collected; }
+  });
+
 });
