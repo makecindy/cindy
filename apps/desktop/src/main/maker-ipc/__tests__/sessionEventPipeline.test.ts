@@ -1667,6 +1667,32 @@ describe('production Session event pipeline', () => {
     },
   );
 
+  it.each(['claude-code', 'pi'] as const)(
+    'does not seal a partial %s reply as successful when shutdown cancels its turn',
+    async (source) => {
+      const h = harness();
+      h.emit(event('text', { text: 'Working on the remaining changes' }, { source }));
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('partial-row');
+      h.emit(event('done', { status: 'cancelled' }, { source }));
+      expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'partial-row');
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'keeps a normal %s reply eligible for the successful assistant seal',
+    async (source) => {
+      const h = harness();
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-row');
+      h.emit(event('done', { status: 'completed' }, { source }));
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'completed-row', undefined);
+      expect(effects.fn('markAssistantTurnFailed')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
   it('passes the native fork anchor to the successful assistant seal after flushing tools', async () => {
     const h = harness();
     const nativeForkAnchor = {

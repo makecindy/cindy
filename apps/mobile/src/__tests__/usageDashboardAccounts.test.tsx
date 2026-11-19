@@ -13,9 +13,23 @@ vi.mock('@/widgets/usageWidgetSync', () => ({
   automaticUsageState: () => sync.state, readUsageWidgetStore: () => null, subscribeUsageWidgetStore: () => () => {},
 }));
 vi.mock('@/session/MobileProviderMark', () => ({ MobileProviderMark: () => null }));
+// Reduce Motion as the phone last reported it; null is "not known yet".
+const motion = vi.hoisted(() => ({ reduced: true as boolean | null }));
+vi.mock('@/hooks/useReduceMotion', () => ({ getCachedReduceMotionEnabled: () => motion.reduced }));
+// Worklets run inline: the first frame of an animated prop is what a static render shows.
+vi.mock('react-native-reanimated', () => ({
+  default: { createAnimatedComponent: (component: unknown) => component },
+  useSharedValue: (value: unknown) => ({ value }), useAnimatedProps: (props: () => unknown) => props(),
+  withTiming: (value: unknown) => value, cancelAnimation: () => {}, Easing: { linear: null },
+}));
 vi.mock('react-native-svg', () => ({
-  default: ({ opacity }: { opacity?: number }) => <i data-tube-opacity={opacity} />, Defs: () => null, ClipPath: () => null, Rect: () => null, Path: () => null,
-  LinearGradient: () => null, G: () => null, Stop: () => null,
+  default: ({ opacity, children }: { opacity?: number; children?: ReactNode }) => <i data-tube-opacity={opacity}>{children}</i>,
+  G: ({ children }: { children?: ReactNode }) => children,
+  // The well and the liquid are both Rects; the liquid is drawn last.
+  Rect: ({ fill, fillOpacity }: { fill?: string; fillOpacity?: number }) => <b data-liquid={fill} data-liquid-opacity={fillOpacity} />,
+  // The hatch of a reserve tube is a plain Path; only the opening liquid has animated props.
+  Path: ({ animatedProps }: { animatedProps?: { d: string } }) => animatedProps ? <u data-opening={animatedProps.d} /> : null,
+  Defs: () => null, ClipPath: () => null, LinearGradient: () => null, Stop: () => null,
 }));
 vi.mock('lucide-react-native', () => ({ ChevronRight: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
@@ -140,5 +154,59 @@ describe('model shares', () => {
     const { text, fills } = page(['A', 'B', 'C'], [50, 40, 30, 20]);
     expect(new Set(fills)).toEqual(new Set(['taskTagTeal', 'taskTagPink', 'taskTagPurple', 'taskTagGray']));
     expect(text).toContain('14% · 20');
+  });
+});
+
+// Rendered drawer card and details page (unit): which palette the tubes wear is decided by the
+// surface, so it is checked where each surface asks for it.
+describe('tube liquid by surface', () => {
+  function liquids(level: Source['level']) {
+    const snapshot = snapshotOf([{ ...subscription, level }]);
+    sync.state = { kind: 'snapshot', snapshot, deviceName: 'Studio' };
+    return [<DrawerUsage onOpen={() => {}} />, <UsageDashboard snapshot={snapshot} />].map(view => {
+      const rects = new DOMParser().parseFromString(renderToStaticMarkup(view), 'text/html').querySelectorAll('[data-liquid]');
+      const liquid = rects[rects.length - 1]!;
+      return [liquid.getAttribute('data-liquid'), liquid.getAttribute('data-liquid-opacity')];
+    });
+  }
+  it('keeps the drawer neutral like the menu bar panel and the details page teal like the widget', () => {
+    expect(liquids('normal')).toEqual([['textPrimary', '0.46'], ['quotaWidgetPlenty', '1']]);
+  });
+  it('shows a low level in the quota color on both', () => {
+    expect(liquids('warn')).toEqual([['quotaBarWarn', '1'], ['quotaBarWarn', '1']]);
+    expect(liquids('error')).toEqual([['quotaBarCrit', '1'], ['quotaBarCrit', '1']]);
+  });
+});
+
+// Rendered drawer card and details page (unit). The first frame is what matters here: an opening
+// starts from empty and zero, and anyone who has not turned Reduce Motion off must get the final
+// picture at once. The motion itself is covered in usageOpeningMotion.test.ts.
+describe('opening motion', () => {
+  function firstFrame(reduced: boolean | null) {
+    motion.reduced = reduced;
+    const snapshot = snapshotOf([subscription], { usage: { scope: 'local', days: ['2026-11-19'],
+      daily: [{ money: [0, 0, 0], paid: 0, tokens: [257_000, 0, 0] }] } });
+    sync.state = { kind: 'snapshot', snapshot, deviceName: 'Studio' };
+    const [drawer, details] = [<DrawerUsage onOpen={() => {}} />, <UsageDashboard snapshot={snapshot} />].map(view =>
+      new DOMParser().parseFromString(renderToStaticMarkup(view), 'text/html').body);
+    motion.reduced = true;
+    return { drawer: drawer!, details: details! };
+  }
+  it('starts the drawer card from an empty tube and zeroed numbers', () => {
+    const { drawer, details } = firstFrame(false);
+    expect(drawer.querySelector('[data-opening]')?.getAttribute('data-opening')).toBe('M0 0');
+    expect(drawer.textContent).toContain('\u20070%');
+    expect(drawer.textContent).toContain('\u2007\u20070K');
+    // The details page is not an opening: it shows its readings as they are.
+    expect(details.querySelector('[data-opening]')).toBeNull();
+    expect(details.textContent).toContain('68%');
+  });
+  it('shows the final picture, still, unless Reduce Motion is known to be off', () => {
+    for (const reduced of [true, null]) {
+      const { drawer } = firstFrame(reduced);
+      expect(drawer.querySelector('[data-opening]')).toBeNull();
+      expect(drawer.textContent).toContain('68%');
+      expect(drawer.textContent).toContain('257K');
+    }
   });
 });

@@ -8147,6 +8147,7 @@
         "cindyEmbedText": "可將文字送算為向量（用於語義檢索）",
         "cindyModelsDecisions": "可用決策模型（耗模型額度）",
         "cindyModelsRerank": "可用重排模型（耗模型額度）",
+        "cindyModelsMediaRequest": "可直用 Cindy AI 生圖、影片、語音合成及轉寫（耗模型額度）",
         "cindyEmbedTextDetail": "文字將送至系統之向量模型算為一串數字，每次至多 {{max}} 條，或生模型費用。所得向量僅交法器自存，不寫入君之資料庫。",
         "cindySearchWeb": "可用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢將存取公網，或耗 Cindy AI 限額。",
@@ -21604,14 +21605,14 @@
     },
     "taskInbox": {
       "title": "識收件匣",
-      "lead": "任務依其狀自分為待處理、進行中、待後處理、已處理。善用之道，在常清其匣：事畢者點「畢」，未及者待後處理。",
+      "lead": "數事並行，收件匣依其狀而分類。凡有新報或待君答者，皆列於待處理。",
       "pending": {
         "title": "待處理",
         "body": "任務事竣有果，或待君答，則現於此。"
       },
       "done": {
         "title": "畢",
-        "body": "事畢點「畢」，任務移入已處理；後有新進，自返其處。"
+        "body": "宜常清其匣，事畢即點「畢」。"
       },
       "snooze": {
         "title": "待後處理",
