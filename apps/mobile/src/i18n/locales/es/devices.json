@@ -453,9 +453,8 @@
         "invalidTime": "Elige una fecha y hora futuras dentro de un año."
       },
       "taskListMode": {
-        "heading": "Modo de tareas",
-        "tasks": "Lista de tareas",
-        "inbox": "Bandeja de entrada"
+        "enterInbox": "Bandeja de entrada",
+        "leaveInbox": "Lista de tareas"
       }
     },
     "search": {

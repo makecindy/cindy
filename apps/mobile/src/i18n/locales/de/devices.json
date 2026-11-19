@@ -449,9 +449,8 @@
         "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
       },
       "taskListMode": {
-        "heading": "Aufgabenmodus",
-        "tasks": "Aufgabenliste",
-        "inbox": "Posteingang"
+        "enterInbox": "Zum Posteingang",
+        "leaveInbox": "Zur Aufgabenliste"
       }
     },
     "search": {
