@@ -268,7 +268,8 @@ async function readUnmergedScopePath(dir: string): Promise<string | null> {
 }
 
 /** 拼进 system prompt 时两份索引各自的标题; 括号里是 memory 工具的 scope 取值。 */
-const USER_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — user (scope "user": applies in every project)`;
+/** 账号级索引的标题行; 快照以它开头才算账号级索引 (见 context.ts)。 */
+export const USER_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — user (scope "user": applies in every project)`;
 const PROJECT_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — project (scope "project": this repository or folder)`;
 /**
  * 账号级索引不写进提示词时放在它位置上的一句说明 (见 getPromptIndex 的 withholdUser)。
@@ -869,14 +870,19 @@ export class MakerMemoryManager {
    * 一次任务能读写哪几份记忆。工具层和提示词注入都从这里取, 不各自判断:
    *  - 普通项目任务: 账号级 + 项目两份;
    *  - 不属于任何项目的目录 (一次性对话): 只有账号级;
-   *  - 伙伴等独立作用域: 只有它自己那一份, 不读账号级 (伙伴记忆与 Cindy 记忆互不注入)。
+   *  - 伙伴的项目 (记忆放在项目文件夹里的独立作用域): 与普通项目一样是账号级 + 项目两份
+   *    (2026-11-19 裁决: 伙伴就是一个项目)。它自己那份跟伙伴自己的记忆开关, 账号级那份跟
+   *    Cindy 记忆总开关 —— 总开关关着时只剩它自己那一份;
+   *  - 旧式伙伴记忆 (`bot:` 键, 未升级为项目的伙伴): 只有它自己那一份, 不读账号级。
    */
   memoryScopesFor(scopeKey: string): { user: string | null; project: string | null } {
     if (isUserMemoryScopeKey(scopeKey)) return { user: USER_MEMORY_SCOPE_KEY, project: null };
-    // 伙伴的键按键形识别, 不只靠宿主注入的独立作用域判定: 没接这个端口的宿主里,
-    // 伙伴的 user 类记忆也绝不能落进账号级。
-    if (this.deps.isIndependentScope?.(scopeKey) === true || parseBotMemoryScopeKey(scopeKey) !== null) {
-      return { user: null, project: scopeKey };
+    // 旧式伙伴的键按键形识别, 不只靠宿主注入的独立作用域判定: 没接这个端口的宿主里,
+    // 它的 user 类记忆也绝不能落进账号级。
+    if (parseBotMemoryScopeKey(scopeKey) !== null) return { user: null, project: scopeKey };
+    if (this.deps.isIndependentScope?.(scopeKey) === true) {
+      this.syncOwnerScope();
+      return { user: this.enabled ? USER_MEMORY_SCOPE_KEY : null, project: scopeKey };
     }
     if (this.deps.isProjectlessScope?.(scopeKey) === true) {
       return { user: USER_MEMORY_SCOPE_KEY, project: null };
@@ -890,7 +896,10 @@ export class MakerMemoryManager {
    */
   async getPromptIndex(scopeKey: string, options: { withholdUser?: boolean } = {}): Promise<string> {
     const scopes = this.memoryScopesFor(scopeKey);
-    if (!scopes.user) return (await this.getStore(scopeKey)).getIndex();
+    // 项目记忆放在项目文件夹里的 (伙伴的项目): 那一份由模型按需用文件工具读, 索引不进提示词
+    // (cindy-bots-runtime.md「项目文件优先」); 提示词里只有账号级那一份。
+    const projectInFolder = scopes.project !== null && this.getProjectMemoryDirectory(scopes.project) !== undefined;
+    if (!scopes.user) return projectInFolder ? '' : (await this.getStore(scopeKey)).getIndex();
     // 两份索引分两次打开 store, 每次打开都只按「当时」的账号校验自己; 中间账号若切换,
     // 会拼出旧账号的账号级记忆加新账号的项目记忆。入口先绑定账号, 返回前复核。
     this.ensureOwnerScope();
@@ -903,7 +912,7 @@ export class MakerMemoryManager {
           MEMORY_INDEX_HEADING,
           USER_INDEX_HEADING,
         );
-    if (!scopes.project) {
+    if (!scopes.project || projectInFolder) {
       this.assertScopeUnchanged(scopeAtEntry);
       return user;
     }

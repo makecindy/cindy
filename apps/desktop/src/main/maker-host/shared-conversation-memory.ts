@@ -33,7 +33,8 @@ export async function withholdAccountMemoryIndexInSharedConversation(
     noteStart?(sessionId: string, includesAccountIndex: boolean): void;
   },
 ): Promise<void> {
-  // 已经给了快照的 (伙伴用自己的记忆) 不动; 伙伴的记忆不是账号级记忆。
+  // 已经给了快照的 (旧式伙伴用自己的记忆、只聊天的群专线) 不动; 那些快照里没有账号级记忆。
+  // 伙伴的项目不在此列: 它与普通项目一样带账号级索引, 走下面同一条路。
   if (
     opts.makerMemoryIndexSnapshot !== undefined
     || opts.makerMemoryScopeKey?.startsWith('bot:')

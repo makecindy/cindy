@@ -272,7 +272,7 @@ export function channelGuestForceConfirmMutatingToolCall(toolName: string, input
 
 /**
  * 访客轮次的策略加上「记忆调用要主人确认」。主人的轮次原样返回。
- * 只用于渠道自有任务: 伙伴任务用的是伙伴自己的记忆, 不经过这里。
+ * 渠道自有任务与伙伴任务同一条规则: 两者都读写得到主人账号级的记忆。
  */
 export function withGuestMemoryConfirmation(policy: TurnPermissionPolicy): TurnPermissionPolicy {
   if (!isGuestTurnAuthority(policy.autoReviewContext)) return policy;

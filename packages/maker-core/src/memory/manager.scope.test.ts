@@ -767,8 +767,8 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
  *
  * 入口是 agent 启动会话时调的 `getPromptIndex(scopeKey)` 与设置页的 `resetAll()`。
  * 保护的规则: 普通任务两份索引都注入且账号级在前; 一次性对话目录只用账号级, 不为它
- * 建项目记忆; 伙伴只读自己那份 (伙伴记忆与 Cindy 记忆互不注入);「清空全部」连账号级
- * 一起清; 伙伴记忆不设索引硬上限。
+ * 建项目记忆; 旧式伙伴记忆 (`bot:`) 只读自己那份; 伙伴的项目与普通项目一样带账号级那一份
+ * (§9);「清空全部」连账号级一起清; 伙伴记忆不设索引硬上限。
  */
 describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
   const BOT_SCOPE = buildBotMemoryScopeKey('bot-a');
@@ -836,7 +836,7 @@ describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
     expect(existsSync(path.join(rootA, 'maker-memory', memoryScopeDirName(DIALOGUE_DIR)))).toBe(false);
   });
 
-  it('伙伴: 只注入它自己那份索引, 读不到账号级记忆', async () => {
+  it('旧式伙伴记忆 (bot: 键): 只注入它自己那份索引, 读不到账号级记忆', async () => {
     await seedAllThree();
     const index = await manager.getPromptIndex(BOT_SCOPE);
 
@@ -864,6 +864,49 @@ describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
     // 伙伴只有自己那一份, 不受影响。
     await (await manager.getStore(BOT_SCOPE)).write(record('user', 'bot-habit'));
     expect(await manager.getPromptIndex(BOT_SCOPE, { withholdUser: true })).toContain('[user_bot-habit.md]');
+  });
+
+  // 伙伴的项目 (cindy-memory.md §9, 2026-11-19 裁决: 伙伴就是一个项目)。入口是三种引擎启动时共用的
+  // loadMemoryContext 与渠道用的 getPromptIndex。此前这类项目只有自己那一份, 提示词里没有账号级记忆。
+  // 最小失败输入: 记忆放在项目文件夹里的独立作用域。真 SQLite, unit。
+  it('伙伴的项目: 带账号级索引和读写说明, 不带项目索引; 别人也能说话时只留说明; 总开关关着时只剩自己那一份', async () => {
+    const project = path.join(rootA, 'teammate', 'workspace');
+    const directory = path.join(project, '.cindy', 'memory');
+    const teammate = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger, initialEnabled: true,
+      resolveStorageDir: (scope) => scope === project ? directory : null,
+      isIndependentScope: (scope) => scope === project,
+    });
+    try {
+      await (await teammate.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'tone'));
+      await (await teammate.getStore(project)).write(record('project', 'arch'));
+      expect(teammate.memoryScopesFor(project)).toEqual({ user: USER_MEMORY_SCOPE_KEY, project });
+
+      const context = await loadMemoryContext({ manager: teammate, scopeKey: project });
+      expect(headings(context.index)).toEqual([expect.stringContaining('scope "user"')]);
+      expect(context.index).toContain('[user_tone.md]');
+      expect(context.index).not.toContain('[project_arch.md]');
+      expect(context.rules).toContain(JSON.stringify(directory));
+      expect(context.rules).toContain('cindy_memory');
+
+      const shared = await teammate.getPromptIndex(project, { withholdUser: true });
+      expect(shared).toContain('memory_list');
+      expect(shared).not.toContain('[user_tone.md]');
+      expect(shared).not.toContain('[project_arch.md]');
+
+      // 在另一台电脑上运行: 只用随启动带来的账号级快照。
+      const hosted = await loadMemoryContext({
+        manager: teammate, scopeKey: '/remote', hosted: true, projectDirectory: directory, snapshot: context.index,
+      });
+      expect(hosted).toEqual(context);
+
+      await teammate.disable();
+      expect(teammate.memoryScopesFor(project)).toEqual({ user: null, project });
+      const off = await loadMemoryContext({ manager: teammate, scopeKey: project });
+      expect(off.index).toBe('');
+      expect(off.rules).toContain(JSON.stringify(directory));
+      expect(off.rules).not.toContain('cindy_memory');
+    } finally { teammate.dispose(); }
   });
 
   it('resetAll 连账号级记忆一起清空', async () => {
