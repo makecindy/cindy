@@ -1769,9 +1769,81 @@ describe('Chat Server result delivery and refresh', () => {
   });
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  // Unit / lifecycle regression: the real heartbeat must retire an accepted input
+  // whose terminal notification was lost, without publishing a later task's reply.
+  // Existing lease tests only covered server refusals, not locally orphaned runs.
+  it('retires an orphaned input once and ignores its late completion', async () => {
+    let live = true;
+    deps.isGroupInputLive = vi.fn(() => live);
+    await start();
+    live = false;
+    await vi.advanceTimersByTimeAsync(45_000);
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures()).toHaveLength(1);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failures()).toHaveLength(1);
+    expect(deliveries()).toHaveLength(0);
+  });
+
+  it('renews a live long task beyond the former wall-clock limit', async () => {
+    deps.isGroupInputLive = vi.fn(() => true);
+    await start();
+    vi.setSystemTime(Date.now() + 3 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    // A terminal without input attribution must not settle whichever run happens to be first.
+    expect(await service.settleLaneTurn(terminal)).toBe(false);
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it('resets the orphan grace when the original input becomes live again', async () => {
+    let live = true;
+    deps.isGroupInputLive = () => live;
+    await start();
+    live = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    live = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    live = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'fail')).toBe(false);
+    live = true;
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId });
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it('fences a late prior terminal when the same execution is explicitly retried', async () => {
+    deps.isGroupInputLive = () => true;
+    await start();
+    const oldInput = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput, outcome: 'error' });
+    let retried = false;
+    fixture.handle.mockImplementation(route => {
+      if (route === '/executions/claim') {
+        const next = retried ? null : { ...execution, epoch: execution.epoch + 2 };
+        retried = true;
+        return { body: { execution: next } };
+      }
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    const newInput = vi.mocked(deps.dispatch).mock.calls[1][0].clientId;
+    expect(newInput).not.toBe(oldInput);
+    expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput })).toBe(false);
+    expect(deliveries()).toHaveLength(0);
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: newInput, resultText: 'New reply' });
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2]).toMatchObject({ epoch: execution.epoch + 2, content: expect.arrayContaining([{ type: 'text', text: 'New reply' }]) });
+  });
   const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
     data: { groupId: roomId, executionId: execution.id, sessionId: 'lane', durationMs: expect.any(Number),
-      clientId: `bot-group:${roomId}:${execution.id}:local-bot` } };
+      clientId: `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot` } };
 
   // Unit: the historical locator must keep the executing host even if the
   // companion moves later; the production completion payload is the evidence.
@@ -3496,7 +3568,7 @@ describe('Chat Server result delivery and refresh', () => {
   // Ordinary group input, copied text and unrelated invitation greetings stay restorable.
   it('recognizes only the old host welcome envelope for queue recovery', () => {
     const text = 'You are participating as yourself in a Cindy group chat. The host has validated a server-issued event confirming that a real human joined this group.';
-    const item = { clientId: `bot-group:${roomId}:${execution.id}:local-bot`, persistedContent: `[UI_ACTION_TRIGGER]${text}` };
+    const item = { clientId: `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot`, persistedContent: `[UI_ACTION_TRIGGER]${text}` };
     expect(isRetiredGroupWelcomeInput(item)).toBe(true);
     expect(isRetiredGroupWelcomeInput({ ...item, clientId: 'user-message' })).toBe(false);
     expect(isRetiredGroupWelcomeInput({ ...item, persistedContent: text })).toBe(false);
@@ -3525,7 +3597,7 @@ describe('Chat Server result delivery and refresh', () => {
     const queued: AgentInputQueuedMessage = await build({ targetSessionId: 'lane', clientId: 'random-queue-id',
       message: text, persistedContent: text, meta: {}, toolsDisabled: true,
       files: [{ category: 'document', name: 'history.txt', path: '/isolated/history.txt' }] });
-    queued.retrySourceClientId = `bot-group:${roomId}:${execution.id}:local-bot`;
+    queued.retrySourceClientId = `bot-group:${roomId}:${execution.id}:${execution.epoch}:local-bot`;
     let snapshot: AgentInputQueuedMessage[] = [];
     const coordinator = new AgentInputCoordinator({
       sendToAgent: vi.fn(), steerToAgent: vi.fn(), abortSession: vi.fn(),

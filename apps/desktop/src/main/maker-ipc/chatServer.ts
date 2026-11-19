@@ -147,6 +147,8 @@ interface Running {
   /** A server replica refused `executor` (mid-rollout): this turn renews without it. */
   executorRefused?: boolean;
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
+  /** A short grace lets the already captured terminal drain its persistence queue. */
+  orphanedAt?: number;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
   laneLookup?: Promise<void>;
@@ -282,8 +284,8 @@ const displayText = (m: Message) => contentText(m, false);
 const attachmentName = (b: Message['content'][number]) => b.caption?.trim() || t('bots.groupChat.files.untitled');
 const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.type === 'media' ? [attachmentName(b)] : []).join(', ');
 /**
- * docs/product-rules/bot-group-chat.md §4.4 / §7.4: a reply or step may run tools for as long as
- * two hours; time waiting on the user is not counted. A hung lane is ended by its own idle watchdog.
+ * Setup/legacy-host budget only. Accepted inputs with authoritative liveness
+ * renew for as long as their Session owns them; its idle watchdog handles stalls.
  */
 const TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 /** How long the computers a request to the group's Cindy was not sent from leave it to the one it was. */
@@ -3004,7 +3006,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return;
     }
     if (running.has(execution.id)) return;
-    const run: Running = { execution, sessionId: '', clientId: BOT_GROUP_CLIENT_ID.memberTurn(execution.conversation_id, execution.id, bot.id), accepted: false, started: Date.now(), lane };
+    // A manual retry reuses the server execution ID but advances its epoch.
+    // Give it a distinct input receipt so a late prior terminal cannot settle it.
+    const run: Running = { execution, sessionId: '', clientId: BOT_GROUP_CLIENT_ID.memberTurn(execution.conversation_id, `${execution.id}:${execution.epoch}`, bot.id), accepted: false, started: Date.now(), lane };
     running.set(execution.id, run);
     // Until its conversation is known, this turn holds back the companion's other work.
     resolveLane(run);
@@ -3721,11 +3725,28 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (checking.has(run)) { recheck.add(run); return; }
     checking.add(run);
     try {
+      // A live Desktop is not evidence that this exact input is still executing.
+      // Do not renew an orphan forever after a lost terminal or a newer task turn.
+      // Reuse the existing heartbeat and terminal receipt; never abort the newer input.
+      const inputLive = run.accepted && run.sessionId && deps.isGroupInputLive
+        ? deps.isGroupInputLive(run.sessionId, run.clientId) : undefined;
+      if (inputLive === false) {
+        run.orphanedAt ??= Date.now();
+        if (Date.now() - run.orphanedAt >= 30_000) {
+          deps.log?.warn('Group execution lost its input owner', { executionId: run.execution.id,
+            epoch: run.execution.epoch, sessionId: run.sessionId });
+          await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
+            outcome: 'error', resultText: '', failureCode: 'RUNTIME_ERROR' });
+          return;
+        }
+      } else run.orphanedAt = undefined;
       // Ordinary group replies can wait for approval too, just like plan steps.
       const paused = !!deps.hasPendingInteraction?.(run.sessionId);
       if (paused) run.pauseStarted ??= Date.now();
       else if (run.pauseStarted !== undefined) { run.started += Date.now() - run.pauseStarted; run.pauseStarted = undefined; }
-      const timedOut = !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
+      // Confirmed active/queued/recovering inputs may run arbitrarily long. The
+      // Session watchdog owns a stalled provider; this cap only covers setup/legacy hosts.
+      const timedOut = inputLive === undefined && !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
       if (timedOut) {
         await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
           outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT' }, true);
@@ -4525,7 +4546,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     settleLaneTurn: async (terminal: BotGroupLaneTerminal) => {
       // A task card's task also runs its owner's own turns: only this turn's input ends it.
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
-        && (!r.inTask || r.clientId === terminal.activeInputClientId));
+        && (terminal.activeInputClientId ? r.clientId === terminal.activeInputClientId
+          : !deps.isGroupInputLive && !r.inTask));
       void taskCards.noteTurn(terminal, run?.inTask === true)
         .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
       if (!run) return local.settleLaneTurn(terminal);

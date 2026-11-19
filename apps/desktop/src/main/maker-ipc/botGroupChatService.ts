@@ -208,6 +208,8 @@ export interface BotGroupChatServiceDeps {
    * when the task is gone (bot-group-chat.md §10).
    */
   readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
+  /** Main-owned exact input liveness, including queue/steering and automatic recovery. No I/O. */
+  isGroupInputLive?: (sessionId: string, clientId: string) => boolean;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** Registered project folders on this computer that are checkouts of this repository (any remote). */
