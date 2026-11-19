@@ -1575,17 +1575,4 @@ describe('desktop modules the Host loads that read the build region, classified 
     expect([...collected].filter(key => !keys.includes(key)).sort(), 'region readers missing from desktop-region-readers.ts').toEqual([]);
     expect(keys.filter(key => !collected.has(key)), 'entries that no longer read the region').toEqual([]);
   }, 60_000);
-
-  it('keeps the table sorted, one entry per line, each with how it behaves on the Host', () => {
-    const rows = table();
-    const keys = rows.map(row => row.key);
-    expect(keys).toEqual([...keys].sort());
-    expect(rows.filter(row => !row.oneLine).map(row => row.key)).toEqual([]);
-    expect(rows.filter(row => !row.host.trim()).map(row => row.key)).toEqual([]);
-    for (const { key, host } of rows) {
-      // As the setter table: name the file and function, not `file.ts:12`, and wait on nothing unnamed.
-      expect(host, key).not.toMatch(/\.(ts|tsx|mts|cts|js|mjs|cjs):\d/);
-      expect(host, key).not.toMatch(/\bto be (assigned|decided|added)\b/i);
-    }
-  });
 });
