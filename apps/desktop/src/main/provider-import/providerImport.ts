@@ -1263,6 +1263,13 @@ export function editLocalProviderImport(
     const authHeaders = Object.entries(headers ?? {}).filter(([k]) =>
       /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(k),
     );
+    // The edit supplies the first destination for Claude's saved static authentication headers.
+    const completingClaudeHeaderAuth =
+      local.source === 'claude-code' &&
+      prior.baseUrl === '' &&
+      !oldKey &&
+      e.protocol === prior.protocol &&
+      authHeaders.some(([, value]) => !!value);
     const headerAuth =
       !oldKey &&
       e.protocol === prior.protocol &&
@@ -1286,6 +1293,9 @@ export function editLocalProviderImport(
       baseUrl,
       protocol: e.protocol as ProviderWireProtocol,
       ...(same ? { apiKey: oldKey, headers, modelsUrl, requestPath } : {}),
+      ...(completingClaudeHeaderAuth && replacement === undefined
+        ? { headers: Object.fromEntries(authHeaders) }
+        : {}),
       ...(replacement !== undefined
         ? {
             apiKey: headerAuth ? undefined : replacement || undefined,

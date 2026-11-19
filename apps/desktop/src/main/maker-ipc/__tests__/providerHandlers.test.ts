@@ -325,7 +325,7 @@ describe('provider file import IPC', () => {
 });
 
 describe('local API configuration import IPC', () => {
-  async function setup(source = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
+  async function setup(source: { env: Record<string, string> } = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
     mountDb();
     importDirectory = await mkdtemp(join(tmpdir(), 'cindy-local-provider-ipc-'));
     await mkdir(join(importDirectory, '.claude'));
@@ -362,6 +362,54 @@ describe('local API configuration import IPC', () => {
     expect(deps.broadcastChanged).toHaveBeenCalled();
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
     expect(await listCustomProviders()).toHaveLength(1);
+  });
+  it('imports saved Claude authentication headers after the user fills in the missing URL', async () => {
+    const { harness, deps } = await setup({
+      env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN' },
+    });
+    const item = (await scan(harness)).items[0];
+    expect(item).toMatchObject({
+      issue: 'needsInput',
+      endpoints: [{ baseUrl: '', hasCredential: true }],
+    });
+    const baseUrl = 'https://relay.test/prefix';
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+      name: item.name,
+      endpoints: [{ baseUrl, protocol: 'anthropic-messages' }],
+    });
+    expect(edited).toMatchObject({ endpoints: [{ baseUrl, hasCredential: true }] });
+    expect(edited).not.toHaveProperty('issue');
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
+      ok: true,
+      providerId: preview.providerId,
+    });
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'claude-code', {
+      Authorization: 'Bearer FAKE-STATIC-TOKEN',
+    });
+    expect((await getCustomProvider(preview.providerId))?.runtimes['claude-code']?.baseUrl).toBe(baseUrl);
+  });
+  it.each([
+    { sourceUrl: 'https://original.test', protocol: 'anthropic-messages' },
+    { sourceUrl: 'invalid-url', protocol: 'anthropic-messages' },
+    { sourceUrl: '', protocol: 'openai-chat' },
+  ])('does not carry saved headers to a changed destination or protocol ($sourceUrl, $protocol)', async ({ sourceUrl, protocol }) => {
+    const { harness, deps } = await setup({
+      env: {
+        ANTHROPIC_BASE_URL: sourceUrl,
+        ANTHROPIC_CUSTOM_HEADERS: 'x-api-key: FAKE-STATIC-KEY',
+      },
+    });
+    const item = (await scan(harness)).items[0];
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+      name: item.name,
+      endpoints: [{ baseUrl: 'https://relay.test/prefix', protocol }],
+    });
+    expect(edited).toMatchObject({ issue: 'needsInput', endpoints: [{ hasCredential: false }] });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
   });
   it('repeated scans/parallel confirmations do not create equivalent accounts twice', async () => {
     const { harness } = await setup();
