@@ -122,9 +122,13 @@ export async function probeSharedTask<T>(
   // Desktop's breaker probe serially restores the link, then invokes caps.
   // Default link budget: 1.5s ready + 30s first write + 30s response;
   // caps: 30s admission + 10s first write + 30s response (DeviceLinkClient).
-  // Cover one in-flight composite probe, cooldown, tick and another probe.
+  // An availability horizon is not a request deadline: a peer can recover while
+  // the breaker still holds a stale probe or cooldown. Reserve one final cycle
+  // to observe recovery at that horizon, without renewing either fixed bound.
   const compositeProbeMs = 1_500 + 30_000 + 30_000 + 30_000 + 10_000 + 30_000;
-  const windowMs = 2 * compositeProbeMs + BREAKER_PROBE_BACKOFF_MAX_MS + 5_000 + 25_000;
+  const observationGraceMs = 2 * compositeProbeMs + BREAKER_PROBE_BACKOFF_MAX_MS + 5_000 + 25_000;
+  const outageToleranceMs = observationGraceMs;
+  const windowMs = outageToleranceMs + observationGraceMs;
   const deadline = performance.now() + windowMs;
   const maxDelayMs = 20_000;
   const minJitter = 0.75;
