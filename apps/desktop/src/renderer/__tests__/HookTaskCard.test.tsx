@@ -46,12 +46,27 @@ afterEach(async () => {
 
 describe('HookTaskCard attached context', () => {
   it('projects only paragraph-wrapped Feishu/Lark text and keeps literal native input', () => {
-    const content = '<p>演示 &amp; &lt;p&gt;<br>第二行 <strong>正文</strong><script>隐藏内容</script></p>';
+    const content = '<p>演示 &amp; &lt;p&gt;<br>第二行 <strong>正文</strong></p>';
     expect(resolveUserDisplayText({ content })).toBe(content);
     expect(resolveUserDisplayText({ content, hookSource: { im: 'slack' } })).toBe(content);
     expect(resolveUserDisplayText({ content, hookSource: { im: 'lark' } })).toBe('演示 & <p>\n第二行 正文');
     const plain = '查看 <p> 的用途';
     expect(resolveUserDisplayText({ content: plain, hookSource: { im: 'feishu' } })).toBe(plain);
+  });
+
+  it.each([
+    '<p><input value="demo"></p>',
+    '<p>示例<input value="demo">后续</p>',
+    '<p>示例：`<strong>字面代码</strong>`</p>',
+    '<p><script>示例原文</script></p>',
+  ])('keeps literal Feishu HTML examples as inert text', (content) => {
+    const { container } = render(<HookTaskCard im="feishu"
+      userText={resolveUserDisplayText({ content, hookSource: { im: 'feishu' } })}
+      threadContext={[{ author: '演示成员', text: content }]} />);
+    expect(container.querySelector('[data-selection-quote-body]')?.textContent).toBe(content);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（1）' }));
+    expect(screen.getByRole('region').textContent).toContain(content);
+    expect(container.querySelector('script,input,strong')).toBeNull();
   });
 
   it('keeps the saved Feishu quote attribution, attachment note and count', () => {
@@ -94,6 +109,24 @@ describe('HookTaskCard attached context', () => {
     expect(group.textContent).toContain('[陈] 2025-11-19 09:13 (UTC+08:00) 下一条历史 [图片]');
     expect(group.textContent).toContain('[周] 11-19 09:14 一条很长的消息[…已截断]');
     expect(group.textContent).toContain('[示例] 11-19 10:00 <p>文件原文</p>');
+  });
+
+  it('normalizes Feishu forwarded group history and retains its outer boundary and attachments', () => {
+    const groupContext = [
+      '[林] 11-19 09:12 [合并转发消息]',
+      '[陈] <p>内层第一条<br>续行</p>',
+      '[周] <p>内层第二条</p> [图片] [文件: 样例.pdf]',
+      '[林] 11-19 09:13 下一条外层消息',
+      '[示例] <p>字面续行</p>',
+      '[历史消息 fixture，文件 example.html 的内容]',
+      '[周] 11-19 10:00 <p>文件原文</p>',
+    ].join('\n');
+    render(<HookTaskCard im="feishu" userText="演示请求" groupContext={groupContext} groupMessageCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（2）' }));
+    const group = screen.getByRole('region', { name: '群聊背景（2）' });
+    expect(group.textContent).toContain(groupContext
+      .replace('<p>内层第一条<br>续行</p>', '内层第一条\n续行')
+      .replace('<p>内层第二条</p>', '内层第二条'));
   });
 
   it('preserves literal HTML examples from another IM channel', () => {

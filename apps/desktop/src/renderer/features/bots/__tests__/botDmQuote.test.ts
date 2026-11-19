@@ -40,6 +40,14 @@ describe('IM companion reply quotes', () => {
     expect(message.content).toBe(content);
   });
 
+  it('keeps a literal Feishu code example in the quote snapshot and live preview', () => {
+    const content = '<p><input value="demo"></p>';
+    const message = { clientId: 'im-example', role: 'user' as const, content, hookSource: { im: 'feishu', userText: content } };
+    const quote = botReplyQuoteFor(message)!;
+    expect(quote.excerpt).toBe(content);
+    expect(botReplyQuoteDisplay(quote, message, names)).toMatchObject({ state: 'live', excerpt: content });
+  });
+
   it('preserves other channels and older snapshots whose source is unloaded', () => {
     const message = { clientId: 'im', role: 'user' as const, content, hookSource: { im: 'slack', userText: content } };
     const quote = botReplyQuoteFor(message)!;
