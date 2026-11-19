@@ -40,18 +40,11 @@ process.env.USERPROFILE = path.join(root, 'home');
 fs.mkdirSync(process.env.HOME, { recursive: true });
 // A fixture profile: the development guard against migrating the official shared profile is lifted to open it.
 delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
-after(() => {
-  for (const [key, value] of [['HOME', savedEnv.HOME], ['USERPROFILE', savedEnv.USERPROFILE], ['XDT_OFFICIAL_SHARED_PROFILE', savedEnv.shared]]) {
-    if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  }
-  fs.rmSync(root, { recursive: true, force: true });
-});
 
 // Outbound requests on the recording path fail the test (case 10).
 const realFetch = globalThis.fetch;
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error('no request on the usage recording path'); };
-after(() => { globalThis.fetch = realFetch; });
 
 configureAppDataDir(path.join(root, 'app-data'));
 configureHostOwner({ userDataDir: root, ownerId: 'usage-a' });
@@ -63,7 +56,6 @@ async function openOwner(ownerId) {
 }
 const ownerA = await openOwner('usage-a');
 const ownerB = await openOwner('usage-b');
-after(async () => { clearCurrentDbClient(); await ownerA.client.dispose(); await ownerB.client.dispose(); });
 const useOwner = owner => { clearCurrentDbClient(); setCurrentDbClient(owner.client, owner === ownerA ? 'usage-a' : 'usage-b'); };
 useOwner(ownerA);
 // The account's ledger currency, as a model catalog sync sets it (usage/modelPricingCore.ts).
@@ -79,7 +71,20 @@ const usage = createHostUsageRecording({
   codexProxyAuthInjection: () => 'env-key',
   isProfileHeld: () => profileHeld,
 });
-after(() => usage.close());
+after(async () => {
+  usage.close();
+  clearCurrentDbClient();
+  await ownerA.client.dispose();
+  await ownerB.client.dispose();
+  globalThis.fetch = realFetch;
+  for (const [key, value] of [['HOME', savedEnv.HOME], ['USERPROFILE', savedEnv.USERPROFILE], ['XDT_OFFICIAL_SHARED_PROFILE', savedEnv.shared]]) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  // Windows cannot unlink either database while its SQLite handle is open.
+  assert.equal(ownerA.sqlite.open, false);
+  assert.equal(ownerB.sqlite.open, false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 let taskSeq = 0;
 /** A task in both owner databases, a fake runtime for it and a Host turn executor wired as main.ts does. */
