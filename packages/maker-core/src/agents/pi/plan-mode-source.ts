@@ -83,8 +83,7 @@ export default function cindyPlanMode(pi) {
         if (eventName !== 'agent_end') return target.on(eventName, handler);
         return target.on(eventName, async (event, ctx) => {
           const assistant = [...event.messages].reverse().find(message => message.role === 'assistant');
-          const plan = Array.isArray(assistant?.content) ? assistant.content
-            .filter(block => block.type === 'text').map(block => block.text).join('\n') : '';
+          const plan = Array.isArray(assistant?.content) ? selectPlanText(assistant.content) : '';
           if (state?.enabled && !state.executing && ctx.hasUI && plan.trim()
             && assistant?.stopReason !== 'error' && assistant?.stopReason !== 'aborted'
             && Array.isArray(state.todos)) {

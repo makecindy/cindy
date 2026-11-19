@@ -8,8 +8,19 @@ import { buildPiPlanModeExtensionSource } from '../plan-mode-source.js';
 // cover parser boundaries and delegation without a real process or filesystem.
 type Todo = { step: number; text: string; completed: boolean };
 const extract = runInNewContext(PI_PLAN_TODOS_SOURCE + '; extractTodoItems') as (text: string) => Todo[];
+const selectPlan = runInNewContext(PI_PLAN_TODOS_SOURCE + '; selectPlanText') as
+  (content: Array<{ type: string; text?: string; thinking?: string }>) => string;
 
 describe('Pi plan title extraction', () => {
+  it('retains the native thinking plan but not its unrelated preamble, and prefers a visible plan', () => {
+    const thought = { type: 'thinking', thinking: 'Private reasoning.\n```\nPlan:\n1. Example\n```\nPlan:\n3. 验证\n7. 交付' };
+    expect(selectPlan([thought])).toBe('Plan:\n3. 验证\n7. 交付');
+    expect(selectPlan([thought, { type: 'text', text: 'Here is the plan.' }]))
+      .toBe('Plan:\n3. 验证\n7. 交付\nHere is the plan.');
+    expect(selectPlan([thought, { type: 'text', text: 'Details first.\nPlan:\n9. 发布' }]))
+      .toBe('Details first.\nPlan:\n9. 发布');
+  });
+
   it.each([
     ['Plan:\n1. **验证**\n2. **交付**', [1, 2], ['验证', '交付']],
     ['## **计划：**\n2）实现\n5) Verify\n9、`deploy`', [2, 5, 9], ['实现', 'Verify', 'deploy']],

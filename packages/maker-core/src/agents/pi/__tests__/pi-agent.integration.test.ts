@@ -2294,6 +2294,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       ['Read all project files carefully.', 'Verify the complete implementation.']],
     ['unnumbered', '先验证，再交付。', ['先验证，再交付。']],
     ['duplicate', 'Plan:\n1. 实现\n1. 验证', ['Plan:\n1. 实现\n1. 验证']],
+    ['thinking-only', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
+    ['thinking-visible', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;
@@ -2305,7 +2307,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Stay in plan mode' },
       }));
       handle.setInteractionResolver!(resolver as never);
-      scriptedResponses.push(anthropicStreamBody(plan as string));
+      let response = anthropicStreamBody(plan as string);
+      if (String(_name).startsWith('thinking')) {
+        response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
+          .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+        if (_name === 'thinking-visible') response = response.replace('event: message_delta', sse([
+          { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
+          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Here is the plan.' } } },
+          { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
+        ]) + 'event: message_delta');
+      }
+      scriptedResponses.push(response);
       const before = seenRequests.length;
       const events: AgentEvent[] = [];
       const done = (async () => {

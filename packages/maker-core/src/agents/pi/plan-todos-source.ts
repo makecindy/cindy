@@ -3,23 +3,44 @@
  * Adapted from zcinta0514's #8976 parser for #8933.
  */
 export const PI_PLAN_TODOS_SOURCE = String.raw`
-function extractTodoItems(plan) {
+function planLines(plan) {
   const visible = [];
   let fence;
-  for (const line of plan.split(/\r?\n/)) {
+  let offset = 0;
+  for (const line of plan.split('\n')) {
+    const start = offset;
+    offset += line.length + 1;
     const marker = line.match(/^\s*(\x60{3,}|~{3,})/);
     if (marker) {
       if (!fence) fence = marker[1];
       else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = undefined;
       continue;
     }
-    if (!fence) visible.push(line);
+    if (!fence) visible.push({ text: line, start });
   }
+  return visible;
+}
+function isPlanHeader(line) {
+  const title = line.trim().replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '');
+  return /^(?:(?:implementation|execution|action|work)\s+)?plan\s*[:：]?$/i.test(title)
+    || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title);
+}
+function selectPlanText(content) {
+  const visible = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
+  // A visible plan is authoritative. Native Pi also accepts plans in thinking
+  // blocks; preserve that ability without exposing unrelated reasoning before
+  // the last actual plan section or a fenced example.
+  if (planLines(visible).some(line => isPlanHeader(line.text)) || extractTodoItems(visible).length) return visible;
+  const native = content.map(block => block.type === 'text' ? block.text
+    : block.type === 'thinking' ? block.thinking ?? '' : '').join('\n');
+  const header = planLines(native).findLast(line => isPlanHeader(line.text));
+  return header ? native.slice(header.start) : visible;
+}
+function extractTodoItems(plan) {
+  const visible = planLines(plan).map(line => line.text);
   let header = -1;
   for (let i = 0; i < visible.length; i++) {
-    const title = visible[i].trim().replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '');
-    if (/^(?:(?:implementation|execution|action|work)\s+)?plan\s*[:：]?$/i.test(title)
-      || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title)) header = i;
+    if (isPlanHeader(visible[i])) header = i;
   }
   const candidates = [];
   for (const line of visible.slice(header + 1)) {
