@@ -11,6 +11,9 @@
  *   - idle (默认)   : Stone 灰 #737373 / dark #a3a3a3
  *   - running=true  : Thinking Orange(--warning-accent,全主题同值)+ session-breathing 呼吸;选中态同样橙(用户拍板 2026-07-20)
  *
+ * 插件引擎(2026-11-19 用户反馈:插件图标在侧栏一直是品牌色):插件图标按剪影用同一套状态色画
+ * (透明底的图标);不透明底的图标改为灰度图，不再显示插件的品牌色。见 pluginIconSilhouette。
+ *
  * Agent 在另一台电脑运行(remote):右上角加模型选择器同款的单波纹 + 点,波纹随图标
  * 取色与呼吸;glyph 大小与位置不变(2026-10-07 用户裁决，替代标题后的芯片图标)。
  *
@@ -21,6 +24,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { RemoteSignalOverlay } from '@/components/icons/RemoteSourceMark';
 import { Puzzle } from 'lucide-react';
+import { usePluginIconSilhouette } from '@/components/icons/pluginIconSilhouette';
 import { isPluginEngineKind } from '../../../shared/pluginEngines';
 
 export type VendorIconKind = 'cc' | 'codex' | 'pi';
@@ -80,6 +84,50 @@ interface VendorIconProps {
   iconDataUrl?: string;
 }
 
+/**
+ * A plugin engine's own icon drawn like the built-in marks: as a silhouette in the row's state
+ * colour when it has a transparent background, else in greyscale (also while not measured yet).
+ */
+function PluginIdentityMark({ iconDataUrl, size }: { iconDataUrl: string; size: number }) {
+  const silhouette = usePluginIconSilhouette(iconDataUrl);
+  if (silhouette) {
+    const mask = `url("${iconDataUrl}")`;
+    return (
+      <span
+        aria-hidden
+        data-plugin-icon="silhouette"
+        className="inline-block shrink-0"
+        style={{
+          width: size,
+          height: size,
+          backgroundColor: 'currentColor',
+          WebkitMaskImage: mask,
+          maskImage: mask,
+          WebkitMaskSize: 'contain',
+          maskSize: 'contain',
+          WebkitMaskRepeat: 'no-repeat',
+          maskRepeat: 'no-repeat',
+          WebkitMaskPosition: 'center',
+          maskPosition: 'center',
+        }}
+      />
+    );
+  }
+  return (
+    <img
+      src={iconDataUrl}
+      alt=""
+      aria-hidden
+      draggable={false}
+      width={size}
+      height={size}
+      data-plugin-icon="greyscale"
+      style={{ width: size, height: size }}
+      className="rounded-[3px] object-contain opacity-80 grayscale"
+    />
+  );
+}
+
 export function VendorIcon({
   vendor,
   size = 12,
@@ -105,16 +153,7 @@ export function VendorIcon({
     <span className={wrapperClassName} title={title}>
       {vendor === 'acp' ? (
         iconDataUrl ? (
-          <img
-            src={iconDataUrl}
-            alt=""
-            aria-hidden
-            draggable={false}
-            width={size}
-            height={size}
-            style={{ width: size, height: size }}
-            className="rounded-[3px] object-contain"
-          />
+          <PluginIdentityMark iconDataUrl={iconDataUrl} size={size} />
         ) : (
           <Puzzle size={size} aria-hidden strokeWidth={1.75} />
         )

@@ -4,6 +4,7 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { ModelSelector, ModelSelectorContent } from '../../../src/renderer/components/new-chat/ModelSelector';
 import type { PluginEngineView } from '../../../src/shared/pluginEngines';
 import type { PluginEngineSelection } from '../../../src/renderer/lib/pluginEngineSelection';
+import { VendorIcon } from '../../../src/renderer/components/sidebar/VendorIcon';
 
 const providers = [
   {
@@ -121,6 +122,32 @@ function TaskTrigger({ engineGone }: { engineGone: boolean }) {
   );
 }
 
+/** Sidebar task identity: the plugin icon next to a built-in mark, idle / selected / running. */
+function TaskIcons() {
+  const states = [
+    { label: 'Idle', props: {} },
+    { label: 'Selected', props: { colorClassName: 'text-[var(--sidebar-item-active-foreground)]' }, selected: true },
+    { label: 'Running', props: { running: true } },
+  ] as const;
+  return (
+    <main className="flex w-[260px] flex-col gap-1 p-3" data-task-icons>
+      {states.map((state) => (
+        <div
+          key={state.label}
+          className={
+            'flex items-center gap-2 rounded-lg px-3 py-2 text-14 '
+            + ('selected' in state ? 'bg-[var(--sidebar-item-active)] text-[var(--sidebar-item-active-foreground)]' : '')
+          }
+        >
+          <VendorIcon vendor="acp" size={14} iconDataUrl={DSH_ICON} {...state.props} />
+          <VendorIcon vendor="cc" size={14} {...state.props} />
+          <span>{state.label}</span>
+        </div>
+      ))}
+    </main>
+  );
+}
+
 void mountPage({
   host: {
     maker: {
@@ -135,7 +162,9 @@ void mountPage({
     },
   },
   render: (ctx) =>
-    ctx.case.startsWith('task')
+    ctx.case === 'task-icons'
+      ? <TaskIcons />
+      : ctx.case.startsWith('task')
       ? <TaskTrigger engineGone={ctx.case === 'task-engine-gone'} />
       : <DraftPicker selected={ctx.case === 'draft-selected' || ctx.case === 'effort-config'} />,
 });

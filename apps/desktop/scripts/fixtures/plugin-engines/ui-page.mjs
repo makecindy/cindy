@@ -9,10 +9,20 @@ export default {
     default: { about: 'New-task picker with three engines: available (no models yet), unknown (models known) and unavailable with an install hint' },
     'draft-selected': { about: 'An engine model is the draft choice: its row carries the selected fill, no built-in model row is selected' },
     'effort-config': { about: 'A plugin engine model with reasoning levels: level at the row end and its configuration flyout with the level slider' },
+    'task-icons': { about: 'Sidebar task identity: the plugin icon takes the row colour (idle grey, selected, running orange) next to a built-in mark', viewport: { width: 320, height: 200 } },
     task: { about: 'Task running on a plugin engine: trigger shows engine · model · level; the panel lists only that engine' },
     'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and a notice' },
   },
   async check(page, ui) {
+    if (ui.case === 'task-icons') {
+      // 2026-11-19:插件图标不再显示品牌色，透明底的图标按剪影用侧栏状态色。
+      await page.locator('[data-plugin-icon="silhouette"]').first().waitFor();
+      if ((await page.locator('[data-task-icons] img').count()) !== 0) {
+        throw new Error('plugin task icon is still drawn in its own colours');
+      }
+      await ui.capture('icons');
+      return;
+    }
     if (ui.case.startsWith('task')) {
       const trigger = page.locator('[data-plugin-engine-trigger]').locator('xpath=..');
       await trigger.waitFor();
