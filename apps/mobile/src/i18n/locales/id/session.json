@@ -77,6 +77,9 @@
     "back": "Kembali"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Putaran berikutnya tetap berjalan sesuai jadwal.",
+    "actionExpired": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Lihat hasil eksekusi terakhir otomatisasi.",
+    "actionRecovered": "Otorisasi untuk operasi ini telah kedaluwarsa. Otomatisasi yang sama kemudian berhasil dijalankan.",
     "text": "Sebelumnya ada eksekusi otomatis yang gagal.",
     "precheck": "Pemeriksaan otomatis sementara terhalang.",
     "rateLimited": "Pemeriksaan otomatis sementara terhalang: permintaan dibatasi.",

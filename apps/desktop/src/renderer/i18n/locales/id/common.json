@@ -142,6 +142,10 @@
     "message": "Cindy tidak bisa membaca lampiran ini. Pilih berkas aslinya untuk melanjutkan pengiriman pesan ini. Jika dibatalkan, draf tetap tersimpan.",
     "button": "Pakai Berkas Asli"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Pengiriman dibatalkan karena tugas atau jendela berubah.",
+    "invalid": "Pengiriman ini sudah tidak berlaku untuk tugas saat ini."
+  },
   "mailReader": {
     "showExternalImages": "Tampilkan gambar eksternal",
     "markReadFailed": "Status dibaca tidak dapat disinkronkan. Periksa izin kotak masuk lalu buka email ini lagi.",
@@ -428,7 +432,8 @@
       "loading": "Membaca akses model…",
       "loadFailed": "Akses model tidak bisa dimuat. Buka lagi pengaturan ini.",
       "saveFailed": "Akses model tidak bisa disimpan. Coba lagi.",
-      "needsUpdate": "Perbarui Cindy di komputer penyedia sebelum mengatur akses model."
+      "needsUpdate": "Perbarui Cindy di komputer penyedia sebelum mengatur akses model.",
+      "followsPool": "Koneksi ini telah digabungkan ke '{{pool}}'; model yang tersedia dari jarak jauh mengikuti '{{pool}}' — ubah di sana. Batasan model untuk setiap anggota di bawah tetap dapat diatur di sini."
     },
     "entry": {
       "label": "Jarak jauh & berbagi",
@@ -439,6 +444,8 @@
     },
     "manage": {
       "createLink": "Buat tautan berbagi",
+      "exportRoster": "Ekspor daftar",
+      "exportRosterFailed": "Gagal menyimpan daftar",
       "loading": "Memuat berbagi…",
       "notReady": "Berbagi belum tersedia sekarang. Pastikan sudah masuk dan jaringan normal; akan dicoba ulang otomatis.",
       "loadFailed": "Detail berbagi tidak bisa dimuat. Coba lagi sebentar lagi.",
@@ -1328,11 +1335,13 @@
         "body": "Sesi ini membuka {{device}} di komputer lain. Aktifkan Plugin “{{plugin}}” di komputer ini untuk melihat dan mengoperasikannya di sidebar kanan.",
         "action": "Aktifkan"
       },
-      "update": {
-        "title": "Plugin “{{plugin}}” perlu diperbarui",
-        "body": "Sesi ini membuka {{device}} di komputer lain. Perbarui Plugin “{{plugin}}” di komputer ini ke versi baru untuk melihat dan mengoperasikannya di sidebar kanan.",
-        "action": "Perbarui"
-      }
+      "unsupported": {
+        "title": "'{{plugin}}' belum mendukung tampilan jarak jauh",
+        "body": "Plugin terpasang tidak dapat menampilkan {{device}} di komputer lain. Periksa pembaruan kompatibilitas, atau gunakan perangkat di komputer tempat tugas berjalan.",
+        "action": "Periksa pembaruan kompatibilitas",
+        "unavailable": "Sumber Plugin ini belum memiliki pembaruan yang mendukung tampilan jarak jauh; gunakan perangkat di komputer tempat tugas berjalan"
+      },
+      "update": {}
     },
     "lockOnExitHintPrivacy": "Menutup layar setelah keluar dari desktop jarak jauh, jadi AI bisa tetap bekerja; begitu ada yang menyentuh komputer, layar terkunci.",
     "lockedEnablePrivacyHint": "Agar AI tetap bisa memakai komputer ini saat kamu pergi, aktifkan penutup layar di “Pengaturan → Umum → Saat kamu pergi” miliknya."
@@ -1866,7 +1875,6 @@
       "memory": "Memori",
       "subagentModels": "Subagent",
       "auxiliaryModels": "Model bantu",
-      "visionBridge": "Jembatan visi",
       "compaction": "Kompresi konteks",
       "terminalShell": "Shell terminal bawaan",
       "composer": "Input pesan",
@@ -4068,6 +4076,7 @@
         "refreshSpeechAdded": "Model diperbarui; ditambahkan 1 model suara rekomendasi",
         "refreshNoNew": "Daftar model sudah terbaru, tidak ada tambahan",
         "refreshFailed": "Gagal menyegarkan daftar model, coba lagi nanti",
+        "refreshReconnect": "Gagal memuat daftar model. Sambungkan ulang penyedia ini lalu coba lagi.",
         "refreshFetchDisabled": "Pengambilan katalog model jarak jauh tidak aktif, penyegaran dilewati",
         "disableModel": "Nonaktifkan model ini",
         "paymentRequired": "Berbayar",
@@ -4296,7 +4305,8 @@
           "description": "Jika aktif, komputer lain milikmu dan orang yang kamu beri akses bisa memakai model penyedia ini; Agent berjalan di komputer ini dengan login dan kuota komputer ini.",
           "descriptionGroup": "Jika aktif, komputer lain milikmu dan orang yang kamu beri akses bisa memakai model penyedia ini; grup penyedia memilih satu komputer untuk menjalankan Agent.",
           "ariaLabel": "Izinkan komputer lain milikmu dan orang yang kamu beri akses memakai penyedia ini",
-          "writeFailed": "Pengaturan pemakaian jarak jauh gagal disimpan, coba lagi"
+          "writeFailed": "Pengaturan pemakaian jarak jauh gagal disimpan, coba lagi",
+          "followsPool": "Koneksi ini telah digabungkan ke '{{pool}}' dan mengikuti 'Izinkan dipanggil jarak jauh' miliknya — ubah di '{{pool}}'."
         },
         "ownComputersCanUse": "Tersedia untuk komputer lainmu",
         "moreActionsAria": "Tindakan lainnya",
@@ -5353,7 +5363,18 @@
       "sendShortcut": {
         "label": "Gunakan {{shortcut}} untuk mengirim",
         "hint": "Ketika aktif, {{shortcut}} mengirim pesan; ketika nonaktif, Enter mengirim pesan dan Shift+Enter membuat baris baru.",
-        "ariaLabel": "Gunakan {{shortcut}} untuk mengirim pesan"
+        "ariaLabel": "Gunakan {{shortcut}} untuk mengirim pesan",
+        "hintModifierEnter": "Kirim dengan {{shortcut}}, Enter untuk baris baru."
+      },
+      "followUp": {
+        "label": "Metode kirim saat berjalan",
+        "hintQueue": "Saat tugas berjalan, tombol kirim dan {{send}} akan mengantre pesan.",
+        "hintSteer": "Saat tugas berjalan, tombol kirim dan {{send}} akan menyisipkan pesan ke tugas yang sedang berjalan.",
+        "ariaLabel": "Cara kirim saat tugas berjalan",
+        "options": {
+          "queue": "Antre",
+          "steer": "Sisipkan"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -5423,37 +5444,6 @@
     "compatMode": {
       "title": "Tips",
       "description": "Beberapa sakelar fitur; sebagian baru berlaku sesudah sesi baru dibuat (lihat penjelasan tiap item)."
-    },
-    "visionBridge": {
-      "title": "Jembatan visi",
-      "description": "Beri model teks-saja kemampuan membaca gambar: gambar diubah menjadi deskripsi teks oleh model multimodal terpisah, lalu diteruskan ke model teks-saja.",
-      "enableLabel": "Aktifkan Jembatan visi",
-      "enableHint": "Ketika nonaktif, semua model berperilaku persis seperti sebelumnya. Ketika aktif, model yang dicentang di bawah akan mengubah gambarnya menjadi deskripsi teks lewat backend visi; gambar yang dikirim ke model tersebut, serta teks di pesan yang sama yang dipakai sebagai petunjuk pengenalan, akan dikirim ke backend visi yang kamu pilih.",
-      "enableAria": "Alihkan Jembatan visi",
-      "toast": {
-        "saved": "Pengaturan Jembatan visi tersimpan",
-        "saveFailed": "Gagal menyimpan pengaturan Jembatan visi"
-      },
-      "capability": {
-        "vision": "Diketahui mendukung visi",
-        "noVision": "Diketahui hanya teks",
-        "unknown": "Kemampuan visi tidak diketahui"
-      },
-      "targetModels": {
-        "label": "Model yang lewat Jembatan visi",
-        "hint": "Model teks saja (misalnya DeepSeek) sudah dicentang secara bawaan. Model yang mendukung visi juga bisa dicentang — misalnya untuk sengaja memakai model deskripsi yang lebih murah demi menghemat token.",
-        "empty": "Tidak ada model yang tersedia.",
-        "toggleAria": "Alihkan Jembatan visi untuk {{model}}"
-      },
-      "backends": {
-        "label": "Model backend visi",
-        "hint": "Pilih maksimal dua model multimodal yang mengubah gambar menjadi teks. Model kedua (cadangan) opsional.",
-        "primary": "Backend utama",
-        "fallback": "Cadangan",
-        "unset": "Belum dipilih",
-        "noBackup": "Tanpa cadangan",
-        "hintSecondary": "Backend utama dipakai lebih dulu. Jika backend utama gagal dan cadangan dikonfigurasi, pemakaian beralih ke cadangan. Jika keduanya gagal, gambar tidak bisa dikenali dan diganti dengan keterangan teks."
-      }
     },
     "chatEmbedding": {
       "cell": {
@@ -6396,18 +6386,13 @@
         "allowInboundAria": "Alihkan apakah {{name}} boleh mengendalikan perangkat ini",
         "peerControlOff": "Perangkat itu belum mengaktifkan kontrol jarak jauh",
         "masterOffHint": "Nyalakan dulu sakelar utama di atas",
-        "controllingThisMac": "Sudah terhubung ke Cindy",
-        "useThisDeviceModels": "Pakai model perangkat ini",
-        "allowModelUseAria": "Izinkan {{name}} memakai model komputer ini"
+        "controllingThisMac": "Sudah terhubung ke Cindy"
       },
       "toast": {
         "revoked": "Akses perangkat itu sudah dicabut",
         "revokeFailed": "Gagal mencabut akses",
         "restored": "Akses perangkat itu sudah dipulihkan",
-        "restoreFailed": "Gagal memulihkan akses",
-        "modelUseRestored": "Komputer itu sudah bisa memakai model komputer ini lagi",
-        "modelUseRevoked": "Komputer itu tidak bisa lagi memakai model komputer ini",
-        "modelUseFailed": "“Pakai model perangkat ini” gagal disimpan. Coba lagi."
+        "restoreFailed": "Gagal memulihkan akses"
       },
       "sections": {
         "myDevices": "Perangkat milikku",
@@ -6773,6 +6758,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Hanya Agent-Net",
         "onlyEncryptedHint": "Setelah diaktifkan, perangkat lama dan pembagian yang masih memakai koneksi lama tidak akan bisa dipakai. Nonaktif secara bawaan.",
         "peerSwitch": {
@@ -6907,11 +6896,6 @@
       "description": "Perangkat yang masuk dengan akun Feishu yang sama bisa saling menemukan; setelah “Izinkan kontrol” diaktifkan, perangkatmu yang lain bisa mengendalikan {{appName}} di komputer ini dari jarak jauh.",
       "allowControl": "Izinkan perangkat dengan akun sama mengendalikan komputer ini",
       "allowControlHint": "Setelah diaktifkan, perangkat lain yang masuk dengan akun yang sama bisa mengendalikan komputer ini tanpa konfirmasi tiap kali; di komputer ini akan muncul indikator kontrol jarak jauh, dan kamu bisa memutusnya kapan saja.",
-      "ownModelAccess": {
-        "title": "Izinkan komputer lainmu memakai model di komputer ini",
-        "hint": "Saat aktif, komputer lainmu bisa memakai penyedia model di komputer ini. Agent berjalan di sini dengan status masuk dan kuota komputer ini. Tidak dibagikan ke orang lain.",
-        "writeFailed": "Pengaturan gagal disimpan. Coba lagi."
-      },
       "keepAwake": "Jaga komputer tetap bangun",
       "keepAwakeHint": "Saat aktif, komputer ini tidak masuk mode tidur, sehingga Agent dan tugas terjadwal di latar belakang tetap berjalan (layar tetap bisa dimatikan atau dikunci).",
       "linkStatus": {
@@ -6976,7 +6960,8 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Sudah termasuk dalam penutup layar: komputer tidak tidur."
+      "keepAwakeIncluded": "Sudah termasuk dalam penutup layar: komputer tidak tidur.",
+      "ownModelAccess": {}
     },
     "imBot": {
       "beta": "Beta",
@@ -7825,6 +7810,18 @@
         "overviewTab": "Ringkasan",
         "addPlugin": "Tambah Plugin",
         "addPluginAria": "Opsi tambah Plugin",
+        "githubInstall": {
+          "label": "Pasang dari GitHub Release…",
+          "title": "Pasang dari GitHub Release",
+          "description": "Tempel tautan repositori GitHub atau tautan Release versi tertentu. Repositori privat memerlukan login dengan akun GitHub yang memiliki akses.",
+          "url": "Alamat GitHub",
+          "submit": "Cari Plugin",
+          "loading": "Mencari dan mengunduh…",
+          "invalid": "Masukkan tautan repositori GitHub atau tag Release.",
+          "not-found": "Versi ini tidak ditemukan; periksa tautan dan izin repositori.",
+          "ambiguous": "Tautan ini berisi beberapa Plugin. Gunakan tautan Release yang hanya berisi satu Plugin, atau pasang langsung dari berkas.",
+          "installedAlready": "Plugin ini sudah terpasang. Anda dapat memperbaruinya di pengaturan Plugin tersebut."
+        },
         "installedSection": "Terpasang",
         "installedExpand": "Tampilkan semua {{count}} Plugin terpasang",
         "installedCollapse": "Sembunyikan Plugin terpasang lainnya",
@@ -8471,6 +8468,24 @@
         "openInSidebar": "Buka di sidebar",
         "panelPageHosted": "Dibuka dari halaman Plugin · tertutup saat meninggalkan halaman",
         "panelNone": "Plugin ini tidak punya panel",
+        "githubRelease": {
+          "title": "Pembaruan Plugin",
+          "installed": "Versi saat ini {{version}}",
+          "upstream": "Versi upstream {{version}}",
+          "prerelease": "Pra-rilis",
+          "check": "Periksa pembaruan",
+          "update": "Unduh & pasang",
+          "connect": "Masuk ke GitHub",
+          "checking": "Memeriksa pembaruan…",
+          "updating": "Mengunduh & memasang…",
+          "available": "Versi baru tersedia.",
+          "current": "Versi saat ini sudah yang terbaru.",
+          "updated": "Plugin telah diperbarui.",
+          "empty": "Belum ada versi yang dapat dipasang.",
+          "sign-in": "Masuk ke GitHub untuk memeriksa pembaruan.",
+          "forbidden": "Login GitHub saat ini tidak memiliki izin membaca repositori privat ini.",
+          "unavailable": "Tidak dapat memeriksa atau memasang pembaruan; coba lagi."
+        },
         "customSlotTitle": "Area pengaturan kustom Plugin",
         "dangerTitle": "Copot Plugin",
         "infoContents": "Berisi",
@@ -8700,6 +8715,10 @@
       "panelHost": {
         "close": "Tutup panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Menunggu konfirmasi…",
+        "installFailed": "Pemasangan gagal"
+      },
       "updateAll": {
         "title": "Perbarui semua · {{count}} Plugin",
         "collapseDiff": "Ciutkan",
@@ -8710,6 +8729,7 @@
         "statusDone": "Diperbarui",
         "statusSkipped": "Dilewati",
         "statusFailed": "Pembaruan gagal",
+        "progressCount": "Diperbarui {{done}} / {{total}}",
         "background": "Lanjutkan di latar belakang",
         "doneAction": "Selesai",
         "doneToast": "Pembaruan massal selesai: {{done}} diperbarui, {{rest}} belum selesai",
@@ -9247,6 +9267,12 @@
     },
     "navigation": {
       "unavailable": "Tidak dapat membuka pengaturan komputer tujuan. Pastikan komputer online dan mengizinkan kontrol jarak jauh; jika versinya lama, perbarui Cindy dulu."
+    },
+    "visionBridge": {
+      "toast": {},
+      "capability": {},
+      "targetModels": {},
+      "backends": {}
     }
   },
   "remoteDevice": {
@@ -9821,6 +9847,41 @@
       },
       "providerTooltip": "Memakai penyedia yang sedang dipilih untuk sesi ini; kosong jika tidak ditentukan.",
       "tokensTooltip": "Hanya menghitung token yang dipakai sesi ini dalam {{range}}."
+    },
+    "auxiliary": {
+      "title": "Pemakaian model bantu",
+      "label": "Permintaan bantu",
+      "purpose": "Tujuan",
+      "requests": "Permintaan tercatat",
+      "description": "Dihitung ke total Token. Hanya pemakaian yang dilaporkan upstream yang dicatat; permintaan tanpa laporan pemakaian dan kelalaian historis tidak diestimasi.",
+      "sources": {
+        "title": "Pembuatan judul",
+        "task-summary": "Ringkasan tugas",
+        "prompt-prediction": "Saran input",
+        "working-status": "Status kerja",
+        "help": "Tanya jawab bantuan",
+        "bot-creation": "Pembuatan buddy",
+        "bot-opening": "Pembuka buddy",
+        "group-planning": "Perencanaan dalam grup",
+        "ambient-reply": "Penilaian balasan",
+        "auto-review": "Tinjauan otomatis",
+        "tool-loop-review": "Verifikasi loop alat",
+        "memory-review": "Verifikasi memori",
+        "git-summary": "Ringkasan perubahan",
+        "hook-generation": "Skrip otomatisasi",
+        "automation-verification": "Validasi impor",
+        "plugin-text": "Permintaan teks Plugin",
+        "voice-dialogue": "Percakapan suara",
+        "voice-exit": "Penilaian keluar suara",
+        "voice-refinement": "Penyempurnaan suara",
+        "dictionary-learning": "Pembelajaran kamus",
+        "embedding-query": "Pencarian vektor",
+        "embedding-index": "Indeks vektor",
+        "web-search": "Pencarian web",
+        "provider-probe": "Uji koneksi",
+        "vision-bridge": "Jembatan visi",
+        "auxiliary": "Permintaan bantu lainnya"
+      }
     }
   },
   "usageDashboard": {
@@ -10762,6 +10823,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Tidak dapat membaca daftar buddy",
+    "rosterReload": "Baca ulang buddy",
     "avatarStatus": {
       "awaiting": "Menunggu konfirmasimu",
       "error": "Perlu perhatian",
@@ -10896,6 +10959,8 @@
     "autosave": {
       "saving": "Menyimpan…",
       "saved": "Tersimpan",
+      "unconfirmed": "Belum dikonfirmasi untuk disimpan",
+      "savedModel": "Tersimpan; berlaku pada putaran berikutnya",
       "retry": "Simpan lagi"
     },
     "retry": "Coba lagi",
@@ -13639,9 +13704,8 @@
     "sendButton": {
       "send": "Kirim pesan",
       "queue": "Antrekan pesan",
-      "queueTooltip": "Klik untuk mengantrekan; tekan {{shortcut}} untuk menyela tanpa menghentikan tugas",
-      "queueTooltipSendMode": "Klik untuk mengantrekan; tekan {{shortcut}} untuk mengirim pesan ini",
-      "stop": "Hentikan pembuatan"
+      "stop": "Hentikan pembuatan",
+      "steer": "Sisipkan ke tugas saat ini"
     },
     "pluginSetup": {
       "account": {
@@ -14003,12 +14067,8 @@
         "ultrafast": "Sangat cepat"
       },
       "discoveredCopy": {
-        "title": "Beralih ke {{provider}} di \"{{device}}\"?",
-        "description": "{{unavailable}}Setelah dikonfirmasi, {{provider}} akan dijalankan di \"{{device}}\"; kapan pun bisa diganti kembali dari sini.",
         "unavailableHere": "{{provider}} di komputer ini sedang tidak tersedia.",
-        "unavailableOn": "{{provider}} di \"{{device}}\" sedang tidak tersedia.",
-        "confirm": "Beralih",
-        "cancel": "Tetap seperti ini"
+        "unavailableOn": "{{provider}} di \"{{device}}\" sedang tidak tersedia."
       }
     },
     "permissionSelector": {
@@ -14274,34 +14334,17 @@
       "credentialSwitchApplied": "Pengalihan sumber model sudah berlaku.",
       "credentialSwitchFailed": "Pengalihan sumber model gagal. Pilih model lagi.",
       "modelSwitchContextGuard": {
-        "title": "Model ini tidak cukup untuk percakapan saat ini",
         "warnToast": "Percakapan ini sudah memakai {{used}}, sekitar {{pct}}% dari kapasitas model baru ({{total}})",
-        "overflowDescription": "Percakapan ini sudah memakai {{used}}, melebihi kapasitas model baru ({{total}}, sekitar {{pct}}%). Jika dialihkan, Cindy akan menyusun ringkasan singkat lalu melanjutkan; riwayat obrolan tetap ada, hanya tidak dikirim seluruhnya apa adanya ke model baru.",
-        "overflowDescriptionRemote": "Konteks tugas jarak jauh ini sudah memakai {{used}} / {{total}} (sekitar {{pct}}%), jadi tidak bisa dialihkan dengan aman ke model berjendela kecil ini. Pertahankan model saat ini, atau mulai tugas baru sebelum memilih model ini.",
-        "confirmSwitch": "Alihkan dan lanjutkan",
-        "cancelSwitch": "Pertahankan model ini"
+        "condensedToast": "Untuk menyesuaikan model baru, percakapan yang lebih lama akan dikompres; riwayat lengkap tetap dapat dilihat.",
+        "overflowDescriptionRemote": "Konteks tugas jarak jauh ini sudah memakai {{used}} / {{total}} (sekitar {{pct}}%), jadi tidak bisa dialihkan dengan aman ke model berjendela kecil ini. Pertahankan model saat ini, atau mulai tugas baru sebelum memilih model ini."
       },
       "agentSwitch": {
         "engineNotReady": "Engine sudah dialihkan, tetapi engine baru gagal dimulai; akan dicoba ulang saat kamu mengirim pesan",
         "failed": "Pengalihan engine gagal; tidak diterapkan",
         "deferred": "Pengalihan dijadwalkan: beralih ke {{agent}} · {{model}} saat pesan berikutnya dikirim",
-        "confirmation": {
-          "title": "Ganti Agent?",
-          "description": "Engine Agent baru melanjutkan lewat ringkasan serah terima, jadi isi penalaran dan sejenisnya tidak dijamin tersalin sempurna; saat beralih kembali, sesi engine asal tetap bisa dilanjutkan. Peralihan juga menghentikan cache prompt sekali dan bisa menambah pemakaian Token.",
-          "confirm": "Ganti Agent",
-          "cancel": "Pertahankan Agent saat ini",
-          "dontShowAgain": "Jangan ingatkan lagi"
-        }
+        "confirmation": {}
       },
-      "agentRelocation": {
-        "titleLocal": "Jalankan Agent di komputer ini lagi?",
-        "titleOther": "Jalankan Agent di “{{device}}”?",
-        "description": "Riwayat obrolan di komputer lama tidak bisa dibawa, jadi dilanjutkan lewat ringkasan serah terima. Isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
-        "descriptionNativeHistory": "Riwayat obrolan lengkap disalin dan dilanjutkan; jika tidak bisa dipulihkan, dilanjutkan lewat ringkasan serah terima, dan isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
-        "confirm": "Pindah komputer",
-        "cancel": "Tetap seperti sekarang",
-        "discoveredDescription": "{{reason}}{{description}}"
-      }
+      "agentRelocation": {}
     },
     "agentSelect": {
       "label": "Engine",
@@ -14532,6 +14575,13 @@
       "runningWithWorktree_one": "Tunggu sampai selesai sebelum memindah branch. Dengan worktree kamu bisa mulai sekarang di salinan terpisah tanpa saling memengaruhi.",
       "runningWithWorktree_other": "Tunggu sampai semuanya selesai sebelum memindah branch. Dengan worktree kamu bisa mulai sekarang di salinan terpisah tanpa saling memengaruhi.",
       "runningWithWorktree_many": "Tunggu sampai semuanya selesai sebelum memindah branch. Dengan worktree kamu bisa mulai sekarang di salinan terpisah tanpa saling memengaruhi."
+    },
+    "followUpHint": {
+      "queueDefault": "Pesan yang dikirim saat tugas berjalan secara default mengantre.",
+      "steerDefault": "Pesan yang dikirim saat tugas berjalan secara default menyisip ke tugas saat ini.",
+      "switchToSteer": "Ubah default ke sisip",
+      "switchToQueue": "Ubah default ke antre",
+      "dismiss": "Tutup tips"
     }
   },
   "onboarding": {
@@ -14804,11 +14854,6 @@
       "unavailable": "Gambar sementara tidak dapat ditampilkan",
       "loading": "Memuat gambar…"
     },
-    "visionBridge": {
-      "analyzing": "Menganalisis {{count}} gambar…",
-      "fallback": "Jembatan visi memakai backend visi cadangan (backend utama tidak tersedia), pengenalan gambar mungkin terpengaruh",
-      "unavailable": "Jembatan visi sedang tidak tersedia, gambar tidak bisa dikenali dan diganti dengan pemberitahuan teks"
-    },
     "newMessageIndicator": {
       "aria": "Kembali ke bawah, lihat {{count}} pesan baru",
       "label_one": "{{count}} pesan baru",
@@ -14907,6 +14952,7 @@
       "credentialSwitchBusy": "Tugas Codex lain masih berjalan, jadi penyedia yang dipilih untuk tugas ini belum bisa diterapkan (proses Codex bersama perlu dimulai ulang). Klik “Coba lagi” setelah tugas tersebut selesai.",
       "accountBoundaryPending": "Cindy sedang mengganti status akun, jadi tugas ini belum bisa dimulai. Tunggu sebentar lalu klik “Coba lagi”; jika terus terjadi, mulai ulang Cindy.",
       "codexThreadStale": "Mode autentikasi Codex berubah: tugas ini tidak bisa dilanjutkan. Buat tugas baru untuk menerapkannya.",
+      "codexSharedAuthLinkUnavailable": "Codex di komputer ini sudah login, tetapi tugas ini tidak dapat membaca login tersebut: tautan ke sana tidak bisa dibuat (di Windows biasanya karena izin biasa). Pastikan {{appName}} di komputer ini memiliki izin membuat tautan (di Windows bisa dijalankan sekali sebagai administrator atau aktifkan developer mode), lalu klik 'Coba lagi'. Anda juga bisa klik 'Login ulang ChatGPT' agar Cindy memakai login-nya sendiri untuk menjalankan tugas ini.",
       "codexResumeNotReady": "Codex belum bisa melanjutkan tugas ini sekarang. Coba lagi sebentar lagi",
       "claudeGatewayOpusPlanMismatch": "Permintaan Opus ini lewat XD Gateway, bukan langganan Claude.ai-mu. Rute gateway tersebut menolak model ini. Ganti ke langganan Claude.ai lalu coba lagi, atau pilih model lain.",
       "claudeSubscriptionOpusPlanMismatch": "Opus tidak tersedia di paket Claude Pro yang terhubung. Ganti ke model yang didukung paketmu. Jika baru saja upgrade, sambungkan ulang Anthropic di Pengaturan lalu coba lagi.",
@@ -15001,6 +15047,9 @@
       "continueFailed_other": "{{count}} tugas gagal dilanjutkan. Buka tugasnya untuk mencoba lagi."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Putaran berikutnya tetap berjalan sesuai jadwal.",
+      "actionExpired": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Lihat hasil eksekusi terakhir otomatisasi.",
+      "actionRecovered": "Otorisasi untuk operasi ini telah kedaluwarsa. Otomatisasi yang sama kemudian berhasil dijalankan.",
       "text": "Sebelumnya ada eksekusi otomatis yang gagal.",
       "precheck": "Pemeriksaan otomatis sementara terhalang.",
       "rateLimited": "Pemeriksaan otomatis sementara terhalang: permintaan dibatasi.",
@@ -15430,6 +15479,11 @@
         "relocatedTaskComputer": "Agent kini berjalan di komputer tempat tugas itu berada",
         "relocatedElsewhere": "Agent kini berjalan di komputer lain",
         "quotaRebalance": "Kuota akun ini sebaiknya dipakai lebih dulu"
+      },
+      "handoffCoverage": {
+        "complete": "Percakapan dilanjutkan secara lengkap",
+        "condensed": "Percakapan lama telah dikompres",
+        "details": "Konten serah terima untuk melanjutkan percakapan"
       },
       "contextRebuild": {
         "labelOverflow": "Konteks ditata ulang, lalu dilanjutkan",
@@ -15916,7 +15970,8 @@
       "signingIn": "Akun langganan yang dipakai tugas ini sedang masuk. Selesaikan proses masuknya lalu coba lagi.",
       "unavailable": "Akun langganan yang terikat pada tugas ini tidak bisa dipakai untuk permintaan ini. Periksa pengaturan akun di penyedia model pada komputer yang menjalankan tugas, atau pilih sumber model lain.",
       "legacy": "Akun langganan yang terikat pada tugas ini belum tersedia. Periksa status masuk dan penggunaan akun tersebut di komputer yang menjalankan tugas, atau pilih sumber model lain. Tugas ini tidak berganti akun otomatis."
-    }
+    },
+    "visionBridge": {}
   },
   "ccAgent": {
     "sessionEntry": {
@@ -16374,6 +16429,9 @@
         "title": "Arsipkan sesi",
         "description": "Arsipkan sesi ini? Setelah diarsipkan, sesi akan dihapus dari daftar.",
         "dirtyWorktreeWarning": "Worktree sesi ini punya perubahan yang belum di-commit; perubahan akan disimpan sebagai snapshot git sebelum diarsipkan, lalu bisa dipulihkan dari sesi ini.",
+        "discardChanges": "Buang perubahan yang belum di-commit",
+        "discardWarning": "Perubahan yang belum di-commit dan berkas baru tidak dapat dipulihkan.",
+        "discardAndArchive": "Buang & arsipkan",
         "scheduleWarning_one": "Otomasi tertaut {{names}} akan tetap berjalan dan memulihkan sesi ini.",
         "scheduleWarning_other": "Otomasi tertaut {{names}} akan tetap berjalan dan memulihkan sesi ini.",
         "scheduleWarningMany_one": "{{count}} sesi di antaranya punya otomasi tertaut yang akan memulihkannya saat berjalan.",
@@ -16409,6 +16467,7 @@
         "empty": "Otomasi ini tidak punya sesi yang bisa diarsipkan."
       },
       "archiveAll": {
+        "projectTitle": "Arsipkan semua tugas di bawah '{{name}}'?",
         "title": "Arsipkan semua sesi",
         "confirm": "Arsipkan semua",
         "cancel": "Batal",
@@ -16553,6 +16612,9 @@
         }
       },
       "projectAction": {
+        "menu": "Menu proyek '{{name}}'",
+        "previewFailed": "Tidak dapat membaca tugas proyek ini. Coba lagi.",
+        "remotePreviewFailed": "Tidak dapat membaca tugas proyek jarak jauh. Periksa koneksi dan pastikan Cindy di komputer jarak jauh sudah diperbarui.",
         "rename": "Ganti nama proyek",
         "pin": "Sematkan proyek",
         "unpin": "Batalkan sematan proyek",
@@ -16561,10 +16623,17 @@
         "removeFromSidebarConfirmDescription": "Ini menghapus proyek dari sidebar. Berkas di komputer tidak akan dihapus. Sesi yang ada akan pindah ke bagian “Obrolan” dan tetap bisa dipakai.",
         "removeFromSidebarConfirmAction": "Hapus proyek",
         "removeFromSidebarFailed": "Tidak bisa menghapus proyek dari sidebar. Coba lagi.",
+        "archiveOnRemove": "Arsipkan tugas sekaligus ({{count}})",
+        "keepSkippedOnRemove": "Tugas {{skip}} tetap di 'Percakapan'.",
+        "removedArchived": "{{count}} tugas akan dipindahkan ke 'Diarsipkan'.",
+        "removeAndArchive": "Hapus proyek & arsipkan tugas",
+        "removeKeepFiles": "Pin, nama kustom, dan ikon proyek akan dihapus. Berkas dan folder di komputer tetap ada.",
         "showFiles": "Tampilkan berkas",
         "archivedAll": "Arsipkan semua",
         "unarchiveAll": "Pulihkan semua",
+        "openInFinder": "Buka folder proyek di Finder",
         "openInExplorer": "Buka di pengelola berkas",
+        "openInFileManager": "Buka folder proyek di file manager",
         "newInDirectory": "Sesi baru di direktori ini",
         "copyDeepLink": "Salin tautan proyek",
         "search": "Cari sesi di proyek ini"
@@ -16769,6 +16838,7 @@
         "summaryAria": "Lihat ringkasan PR #{{number}}",
         "unresolvedLabel": "Komentar review yang belum selesai",
         "checks": "Pemeriksaan",
+        "following": "Ditindaklanjuti",
         "checksTotal": "Total {{count}}",
         "failed": "Gagal",
         "passed": "Lulus",
@@ -17036,6 +17106,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Notifikasi GitHub App belum terhubung; pemeriksaan tetap berjalan sesuai jadwal.",
+      "label": "PR",
+      "url": "Tautan PR",
+      "condition": "Kondisi pemicu",
+      "any": "Ada aktivitas baru di PR",
+      "merged": "PR telah digabungkan",
+      "review": "Ada aktivitas review baru",
+      "ci": "Perubahan status CI",
+      "timed": "Sekalian periksa terjadwal",
+      "invalid": "Masukkan tautan PR GitHub yang lengkap."
+    },
     "presentation": {
       "status": {
         "active": "Aktif",
@@ -19676,7 +19758,8 @@
           "expired": "Kedaluwarsa",
           "voided": "Dianulir"
         }
-      }
+      },
+      "viewUsage": "Lihat pemakaian"
     },
     "orders": {
       "title": "Riwayat pesanan",
@@ -21303,7 +21386,6 @@
       "sessionRuntimeFallback": "Fallback model tugas otomatis",
       "subagentModels": "Subagent",
       "auxiliaryModels": "Model bantu",
-      "visionBridge": "Jembatan visi",
       "modelVisibility": "Model yang ditampilkan dan disembunyikan",
       "providerOrder": "Urutan penyedia",
       "modelCatalogOverrides": "Penyesuaian parameter model",
@@ -21346,6 +21428,24 @@
   },
   "featureIntro": {
     "close": "Tutup",
+    "project": {
+      "title": "Mengenal proyek",
+      "lead": "Serahkan pekerjaan yang berkelanjutan ke sebuah proyek. Semua berkas disimpan dalam satu folder di komputermu, dan Cindy melanjutkan dari hasil sebelumnya setiap kali — tanpa perlu menjelaskan konteks ulang.",
+      "files": {
+        "title": "Hasilnya adalah berkas milikmu",
+        "body": "Cindy membaca dan menulis langsung di folder proyek. Hasil kerja tetap di komputermu, bisa dibuka dan dibawa kapan saja."
+      },
+      "context": {
+        "title": "Tanpa perlu menjelaskan ulang",
+        "body": "Saat membuat tugas baru dalam proyek, Cindy langsung melihat berkas-berkas ini dan mengikuti persyaratan yang tercatat di proyek."
+      },
+      "separate": {
+        "title": "Beberapa pekerjaan, masing-masing terpisah",
+        "body": "Tugas setiap proyek tersusun terpisah; pekerjaan berbeda tidak saling mengganggu, dan bisa dilanjutkan kapan pun kamu kembali."
+      },
+      "start": "Lanjut buat proyek",
+      "note": "Cukup beri nama untuk membuat; folder atau repositori kode yang sudah ada juga bisa langsung dipakai."
+    },
     "taskInbox": {
       "title": "Mengenal kotak masuk",
       "lead": "Tugas otomatis terbagi ke Menunggu, Berjalan, Ditunda, dan Diarsipkan sesuai statusnya. Kebiasaan terbaik: kosongkan kotak masuk sesering mungkin — selesai klik Selesai, yang tidak mendesak ditunda.",
@@ -21841,6 +21941,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Unduh repositori ini ke komputer?",
+    "credentialNotice": "Jika repositori privat, Cindy mungkin memakai akun yang sudah login di komputer ini.",
+    "saveTo": "Simpan ke komputer",
+    "confirmImport": "Konfirmasi impor",
+    "confirmSshTitle": "Izinkan proyek ini mengakses direktori SSH berikut?",
+    "sshHost": "Host SSH",
+    "readWriteAccess": "Baca-tulis",
+    "readAccess": "Hanya baca",
+    "confirmAccess": "Izinkan akses",
     "autoLoading": "Mendeteksi ikon proyek…",
     "autoNone": "Memakai ikon huruf dari nama proyek.",
     "autoSource": "Sumber",
@@ -21880,7 +21989,42 @@
     "discard": "Buang perubahan",
     "colors": {
       "default": "Default (ikut tema)"
-    }
+    },
+    "directories": "Direktori proyek",
+    "directoriesHint": "Berlaku untuk semua tugas proyek ini mulai putaran berikutnya. Direktori yang ditambahkan terpisah per tugas tetap dipertahankan.",
+    "removeDirectory": "Hapus direktori",
+    "directoryPath": "Jalur direktori lengkap",
+    "addDirectory": "Tambah direktori",
+    "browseDirectory": "Jelajahi direktori",
+    "mainDirectory": "Direktori utama",
+    "createTitle": "Proyek baru",
+    "createAction": "Buat proyek",
+    "repository": "Tautan repositori",
+    "repositoryHint": "Mendukung tautan HTTPS / SSH GitHub, GitLab, dan repositori Git lainnya.",
+    "autoDirectory": "Jika direktori tidak dipilih, dibuat di {{path}}; nama ganda diberi nomor otomatis.",
+    "cloning": "Meng-clone repositori…",
+    "invalidRepository": "Masukkan alamat repositori GitHub, GitLab, atau Git yang valid.",
+    "createFailed": "Gagal membuat. Periksa apakah direktori dapat ditulis, alamat repositori, dan izin Git komputer ini; direktori clone harus kosong.",
+    "createNamePlaceholder": "Nama proyek",
+    "createNameHint": "Beri nama, dan kamu bisa mulai.",
+    "createFromRepository": "Buat dari repositori kode",
+    "createBlank": "Ganti ke proyek kosong",
+    "source_blank": "Buat proyek kosong",
+    "source_existing": "Buka folder yang ada",
+    "source_repository": "Impor dari repositori kode",
+    "sourceHint_blank": "Isi nama; direktori proyek dibuat otomatis.",
+    "sourceHint_existing": "Pilih direktori proyek yang sudah ada di komputer ini.",
+    "sourceHint_repository": "Tempel tautan repositori untuk mengunduhnya ke komputer ini.",
+    "source": "Sumber proyek",
+    "sourceShort_blank": "Proyek kosong",
+    "sourceShort_existing": "Folder yang ada",
+    "sourceShort_repository": "Impor repositori",
+    "automaticMain": "Direktori utama · dibuat otomatis",
+    "source_local": "Folder lokal",
+    "sourceShort_local": "Folder lokal",
+    "sourceHint_local": "Isi nama untuk membuat otomatis, atau pilih folder yang sudah ada.",
+    "chooseExistingFolder": "Pilih folder yang ada",
+    "changeMainDirectory": "Ubah"
   },
   "taskManagement": {
     "scope": "Hanya berlaku untuk tugas akun ini di komputer ini.",

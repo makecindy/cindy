@@ -46,11 +46,12 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Model ini tidak bisa memuat percakapan saat ini",
+    "condensedToast": "Untuk menyesuaikan model baru, percakapan yang lebih lama akan dikompres; riwayat lengkap tetap dapat dilihat.",
     "remoteTitle": "Tugas jarak jauh ini tidak bisa berganti model dengan aman",
-    "description": "Percakapan ini sudah memakai {{used}}, melebihi kapasitas model baru ({{total}}, sekitar {{pct}}%). Kalau beralih, Cindy akan membuat ringkasan singkat lalu melanjutkan. Riwayat obrolan tetap tersimpan, hanya tidak lagi diteruskan kata per kata ke model baru.",
     "remoteDescription": "Konteks tugas jarak jauh ini sudah memakai {{used}} / {{total}} (sekitar {{pct}}%), jadi tidak bisa dialihkan dengan aman ke model berjendela kecil ini. Pertahankan model saat ini, atau mulai tugas baru sebelum memilih model ini.",
     "cancel": "Pertahankan model ini",
+    "title": "Model ini tidak bisa memuat percakapan saat ini",
+    "description": "Percakapan ini sudah memakai {{used}}, melebihi kapasitas model baru ({{total}}, sekitar {{pct}}%). Kalau beralih, Cindy akan membuat ringkasan singkat lalu melanjutkan. Riwayat obrolan tetap tersimpan, hanya tidak lagi diteruskan kata per kata ke model baru.",
     "confirm": "Alihkan dan lanjutkan"
   },
   "switchOutcome": {
@@ -64,16 +65,9 @@
     "cancel": "Batal",
     "confirm": "Lanjutkan"
   },
-  "agentRelocation": {
-    "titleOther": "Jalankan Agent di “{{device}}”?",
-    "titleHost": "Jalankan Agent di “{{host}}” lagi?",
-    "titleHostUnnamed": "Jalankan Agent di komputer sesi ini lagi?",
-    "message": "Riwayat obrolan di komputer lama tidak bisa dibawa, jadi dilanjutkan lewat ringkasan serah terima. Isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
-    "messageNativeHistory": "Riwayat obrolan lengkap disalin dan dilanjutkan; jika tidak bisa dipulihkan, dilanjutkan lewat ringkasan serah terima, dan isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
-    "confirm": "Pindah komputer",
-    "cancel": "Tetap seperti sekarang"
-  },
   "unified": {
+    "remoteCopyUnavailableOn": "{{provider}} di '{{device}}' sedang tidak tersedia.",
+    "remoteCopyUnavailableOnTaskComputer": "{{provider}} di komputer tempat tugas berada sedang tidak tersedia.",
     "accountCount_other": "{{count}} akun",
     "accountFallback": "Akun {{index}}",
     "favoriteConfiguration": "Favoritkan konfigurasi ini",
@@ -122,5 +116,14 @@
     "quotaResetIn": "Direset dalam {{duration}}",
     "quotaAverageHint": "Kuota mingguan · Bobot sama per akun",
     "quotaResetHint": "Dengan laju saat ini, kuota mungkin masih tersisa saat reset: kuning dalam 24 jam, merah dalam 6 jam."
+  },
+  "agentRelocation": {
+    "titleOther": "Jalankan Agent di “{{device}}”?",
+    "titleHost": "Jalankan Agent di “{{host}}” lagi?",
+    "titleHostUnnamed": "Jalankan Agent di komputer sesi ini lagi?",
+    "message": "Riwayat obrolan di komputer lama tidak bisa dibawa, jadi dilanjutkan lewat ringkasan serah terima. Isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
+    "messageNativeHistory": "Riwayat obrolan lengkap disalin dan dilanjutkan; jika tidak bisa dipulihkan, dilanjutkan lewat ringkasan serah terima, dan isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
+    "confirm": "Pindah komputer",
+    "cancel": "Tetap seperti sekarang"
   }
 }

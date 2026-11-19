@@ -36,7 +36,7 @@
   "terms": [
     {
       "id": "accessories",
-      "status": "proposed",
+      "status": "decided",
       "en": "Accessories",
       "translations": {
         "zh-CN": "配件",
@@ -45,7 +45,8 @@
         "ko": "액세서리",
         "id": "Aksesori"
       },
-      "note": "设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。"
+      "note": "设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。",
+      "checkCase": false
     },
     {
       "id": "active",
@@ -145,7 +146,7 @@
     },
     {
       "id": "additional-fees",
-      "status": "proposed",
+      "status": "decided",
       "en": "Additional fees",
       "translations": {
         "zh-CN": "附加费用",
@@ -154,7 +155,8 @@
         "ko": "추가 비용",
         "id": "Biaya tambahan"
       },
-      "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。"
+      "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。",
+      "checkCase": false
     },
     {
       "id": "agent",
@@ -212,7 +214,7 @@
     },
     {
       "id": "agent-net",
-      "status": "proposed",
+      "status": "decided",
       "en": "Agent-Net",
       "translations": {
         "zh-CN": "Agent-Net",
@@ -233,7 +235,7 @@
     },
     {
       "id": "agent-network",
-      "status": "proposed",
+      "status": "decided",
       "en": "Agent network",
       "translations": {
         "zh-CN": "Agent 网络",
@@ -247,7 +249,7 @@
     },
     {
       "id": "agent-notch",
-      "status": "proposed",
+      "status": "decided",
       "en": "Agent Notch",
       "translations": {
         "zh-CN": "任务胶囊",
@@ -372,19 +374,28 @@
     },
     {
       "id": "anthropic-messages",
-      "status": "proposed",
+      "status": "decided",
       "en": "Anthropic Messages",
       "translations": {
         "zh-CN": "Anthropic Messages",
         "ja": "Anthropic Messages",
         "ko": "Anthropic Messages",
-        "id": "Anthropic Messages"
+        "id": "Anthropic Messages",
+        "zh-TW": "Anthropic Messages",
+        "es": "Anthropic Messages",
+        "fr": "Anthropic Messages",
+        "de": "Anthropic Messages",
+        "pt-PT": "Anthropic Messages",
+        "pt-BR": "Anthropic Messages",
+        "zh-Hant-x-lzh": "Anthropic Messages",
+        "zh-Hans-x-lzh": "Anthropic Messages"
       },
-      "note": "Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。"
+      "note": "Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。",
+      "checkCase": false
     },
     {
       "id": "api-price-estimate",
-      "status": "proposed",
+      "status": "decided",
       "en": "API Price Estimate",
       "translations": {
         "zh-CN": "API 估价",
@@ -392,25 +403,33 @@
         "ko": "API 가격 추정치",
         "id": "Estimasi harga API"
       },
-      "note": "用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。"
+      "note": "用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。",
+      "checkCase": false
     },
     {
       "id": "archive-task",
-      "status": "proposed",
+      "status": "decided",
       "en": "Archive",
       "translations": {
         "zh-CN": "归档",
         "zh-TW": "歸檔",
         "ja": "アーカイブ",
         "ko": "보관",
-        "id": "Arsipkan"
+        "id": "Arsipkan",
+        "es": "Archivar",
+        "fr": "Archiver",
+        "de": "Archivieren",
+        "pt-PT": "Arquivar",
+        "pt-BR": "Arquivar",
+        "zh-Hant-x-lzh": "歸檔",
+        "zh-Hans-x-lzh": "归档"
       },
       "checkCase": false,
       "note": "任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。"
     },
     {
       "id": "auth-region-global",
-      "status": "proposed",
+      "status": "decided",
       "en": "Global region",
       "translations": {
         "zh-CN": "国际区",
@@ -418,11 +437,12 @@
         "ko": "글로벌 지역",
         "id": "Wilayah global"
       },
-      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。"
+      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。",
+      "checkCase": false
     },
     {
       "id": "auth-region-mainland-china",
-      "status": "proposed",
+      "status": "decided",
       "en": "Mainland China",
       "translations": {
         "zh-CN": "中国大陆区",
@@ -430,7 +450,8 @@
         "ko": "중국 본토 지역",
         "id": "Tiongkok Daratan"
       },
-      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。"
+      "note": "企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。",
+      "checkCase": false
     },
     {
       "id": "author",
@@ -502,8 +523,88 @@
       }
     },
     {
+      "id": "auto-added",
+      "status": "decided",
+      "en": "Auto-added",
+      "translations": {
+        "zh-CN": "自动添加",
+        "zh-TW": "自動新增",
+        "ja": "自動追加",
+        "ko": "자동 추가",
+        "es": "Añadido automáticamente",
+        "fr": "Ajouté automatiquement",
+        "de": "Automatisch hinzugefügt",
+        "pt-PT": "Adicionado automaticamente",
+        "pt-BR": "Adicionado automaticamente",
+        "id": "Ditambahkan otomatis",
+        "zh-Hant-x-lzh": "自動新增",
+        "zh-Hans-x-lzh": "自动添加"
+      },
+      "note": "Auto-* 家族；数据源 settings.voiceInput.refinement.dictionary.filters.automatic。"
+    },
+    {
+      "id": "auto-connect",
+      "status": "decided",
+      "en": "Auto-connect",
+      "translations": {
+        "zh-CN": "自动连接",
+        "zh-TW": "自動連線",
+        "ja": "自動接続",
+        "ko": "자동 연결",
+        "es": "Conexión automática",
+        "fr": "Connexion automatique",
+        "de": "Automatisch verbinden",
+        "pt-PT": "Ligação automática",
+        "pt-BR": "Conexão automática",
+        "id": "Sambungkan otomatis",
+        "zh-Hant-x-lzh": "自動連線",
+        "zh-Hans-x-lzh": "自动连接"
+      },
+      "note": "Auto-* 家族；数据源 settings.remote.button.autoConnect。"
+    },
+    {
+      "id": "auto-learning",
+      "status": "decided",
+      "en": "Auto-learning",
+      "translations": {
+        "zh-CN": "自动学习",
+        "zh-TW": "自動學習",
+        "ja": "自動学習",
+        "ko": "자동 학습",
+        "es": "Aprendizaje automático",
+        "fr": "Apprentissage automatique",
+        "de": "Automatisches Lernen",
+        "pt-PT": "Aprendizagem automática",
+        "pt-BR": "Aprendizado automático",
+        "id": "Pembelajaran otomatis",
+        "zh-Hant-x-lzh": "自動學習",
+        "zh-Hans-x-lzh": "自动学习"
+      },
+      "note": "Auto-* 家族；数据源 settings.voiceInput.refinement.dictionary.autoLearning.label。"
+    },
+    {
+      "id": "auto-review",
+      "status": "decided",
+      "en": "Auto-review",
+      "translations": {
+        "zh-CN": "自动审查",
+        "zh-TW": "自動審查",
+        "ja": "自動レビュー",
+        "ko": "자동 검토",
+        "es": "Revisión automática",
+        "fr": "Révision automatique",
+        "de": "Auto-Review",
+        "pt-PT": "Revisión automática",
+        "pt-BR": "Revisión automática",
+        "id": "Tinjauan otomatis",
+        "zh-Hant-x-lzh": "自動審查",
+        "zh-Hans-x-lzh": "自动审查"
+      },
+      "note": "Auto-* 前缀家族合并裁决（与 Auto-connect / Auto-added / Auto-learning 一并）：形态钉死「Auto- 大写 A + 连字符」。数据源 settings.auxiliaryModels。"
+    },
+    {
       "id": "auto-unlock-computer",
-      "status": "proposed",
+      "status": "decided",
       "en": "Automatically unlock computer",
       "translations": {
         "zh-CN": "自动解锁电脑",
@@ -581,7 +682,7 @@
     },
     {
       "id": "automation-trigger-mode",
-      "status": "proposed",
+      "status": "decided",
       "en": "Trigger mode",
       "translations": {
         "zh-CN": "触发方式",
@@ -590,7 +691,8 @@
         "ko": "트리거 방식",
         "id": "Cara pemicu"
       },
-      "note": "自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。"
+      "note": "自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。",
+      "checkCase": false
     },
     {
       "id": "balance",
@@ -637,7 +739,7 @@
     },
     {
       "id": "bot-glance",
-      "status": "proposed",
+      "status": "decided",
       "en": "At a glance",
       "translations": {
         "zh-CN": "近况",
@@ -672,7 +774,7 @@
     },
     {
       "id": "bot-reply-post",
-      "status": "proposed",
+      "status": "decided",
       "en": "reply (the bot's public post on X)",
       "translations": {
         "zh-CN": "回帖",
@@ -680,11 +782,12 @@
         "ko": "답장",
         "id": "Balasan publik"
       },
-      "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
+      "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。",
+      "checkCase": false
     },
     {
       "id": "captcha",
-      "status": "proposed",
+      "status": "decided",
       "en": "Security check",
       "translations": {
         "zh-CN": "安全验证",
@@ -693,7 +796,8 @@
         "ko": "보안 확인",
         "id": "Verifikasi keamanan"
       },
-      "note": "登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。"
+      "note": "登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。",
+      "checkCase": false
     },
     {
       "id": "chat",
@@ -762,7 +866,7 @@
     },
     {
       "id": "chat-workspace",
-      "status": "proposed",
+      "status": "decided",
       "en": "Chat workspace",
       "translations": {
         "zh-CN": "对话工作区",
@@ -776,20 +880,27 @@
     },
     {
       "id": "china-model-group",
-      "status": "proposed",
+      "status": "decided",
       "en": "China",
       "translations": {
         "zh-CN": "中国",
         "zh-TW": "中國",
         "ja": "中国",
         "ko": "중국",
-        "id": "Tiongkok"
+        "id": "Tiongkok",
+        "es": "China",
+        "de": "China",
+        "pt-PT": "China",
+        "pt-BR": "China",
+        "zh-Hant-x-lzh": "中國",
+        "zh-Hans-x-lzh": "中国"
       },
-      "note": "模型目录中由服务端显式 group:\"china\" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。"
+      "note": "模型目录中由服务端显式 group:\"china\" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。",
+      "checkCase": false
     },
     {
       "id": "cindy-ai-free-tier",
-      "status": "proposed",
+      "status": "decided",
       "en": "Free tier",
       "translations": {
         "zh-CN": "免费版",
@@ -798,7 +909,8 @@
         "ko": "무료 버전",
         "id": "Paket gratis"
       },
-      "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。"
+      "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。",
+      "checkCase": false
     },
     {
       "id": "cindy-ai-personal",
@@ -828,19 +940,28 @@
     },
     {
       "id": "cindy-codex-home",
-      "status": "proposed",
+      "status": "decided",
       "en": "Cindy Codex home",
       "translations": {
         "zh-CN": "Cindy Codex home",
         "ja": "Cindy Codex home",
         "ko": "Cindy Codex home",
-        "id": "Cindy Codex home"
+        "id": "Cindy Codex home",
+        "zh-TW": "Cindy Codex home",
+        "es": "Cindy Codex home",
+        "fr": "Cindy Codex home",
+        "de": "Cindy Codex home",
+        "pt-PT": "Cindy Codex home",
+        "pt-BR": "Cindy Codex home",
+        "zh-Hant-x-lzh": "Cindy Codex home",
+        "zh-Hans-x-lzh": "Cindy Codex home"
       },
-      "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
+      "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。",
+      "checkCase": false
     },
     {
       "id": "cindy-friend",
-      "status": "proposed",
+      "status": "decided",
       "en": "Cindy Friend",
       "translations": {
         "zh-CN": "Cindy Friend",
@@ -856,24 +977,33 @@
         "zh-Hans-x-lzh": "Cindy Friend",
         "id": "Cindy Friend"
       },
-      "note": "Agent-Net App name supplied by the product request; preserve the brand in every locale."
+      "note": "Agent-Net App name supplied by the product request; preserve the brand in every locale.",
+      "checkCase": false
     },
     {
       "id": "cindy-make",
-      "status": "proposed",
+      "status": "decided",
       "en": "Cindy Make",
       "translations": {
         "zh-CN": "Cindy Make",
         "zh-TW": "Cindy Make",
         "ja": "Cindy Make",
         "ko": "Cindy Make",
-        "id": "Cindy Make"
+        "id": "Cindy Make",
+        "es": "Cindy Make",
+        "fr": "Cindy Make",
+        "de": "Cindy Make",
+        "pt-PT": "Cindy Make",
+        "pt-BR": "Cindy Make",
+        "zh-Hant-x-lzh": "Cindy Make",
+        "zh-Hans-x-lzh": "Cindy Make"
       },
-      "note": "用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。"
+      "note": "用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-contribution",
-      "status": "proposed",
+      "status": "decided",
       "en": "Submit to Cindy",
       "translations": {
         "zh-CN": "提交给官方",
@@ -882,11 +1012,12 @@
         "ko": "공식에 제출",
         "id": "Kirim ke Cindy"
       },
-      "note": "把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。"
+      "note": "把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-history",
-      "status": "proposed",
+      "status": "decided",
       "en": "Make history",
       "translations": {
         "zh-CN": "制作历史",
@@ -895,11 +1026,12 @@
         "ko": "제작 기록",
         "id": "Riwayat pembuatan"
       },
-      "note": "Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。"
+      "note": "Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-reapply-integration",
-      "status": "proposed",
+      "status": "decided",
       "en": "Add back to personal version",
       "translations": {
         "zh-CN": "重新加入个人版",
@@ -908,11 +1040,12 @@
         "ko": "개인 버전에 다시 추가",
         "id": "Tambahkan lagi ke versi pribadi"
       },
-      "note": "重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。"
+      "note": "重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-storage-location",
-      "status": "proposed",
+      "status": "decided",
       "en": "Saved in",
       "translations": {
         "zh-CN": "保存位置",
@@ -921,11 +1054,12 @@
         "ko": "저장 위치",
         "id": "Disimpan di"
       },
-      "note": "Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。"
+      "note": "Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-undo-integration",
-      "status": "proposed",
+      "status": "decided",
       "en": "Remove from personal version",
       "translations": {
         "zh-CN": "从个人版移除",
@@ -934,11 +1068,12 @@
         "ko": "개인 버전에서 제거",
         "id": "Hapus dari versi pribadi"
       },
-      "note": "从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。"
+      "note": "从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。",
+      "checkCase": false
     },
     {
       "id": "cindy-make-version-control",
-      "status": "proposed",
+      "status": "decided",
       "en": "Version Control",
       "translations": {
         "zh-CN": "版本控制",
@@ -947,11 +1082,12 @@
         "ko": "버전 관리",
         "id": "Kontrol versi"
       },
-      "note": "Cindy Make 设置中用户指定的页签名称，汇总我的版本与制作历史，并提供本地合入、撤销和生成入口。"
+      "note": "Cindy Make 设置中用户指定的页签名称，汇总我的版本与制作历史，并提供本地合入、撤销和生成入口。",
+      "checkCase": false
     },
     {
       "id": "cindy-original-version",
-      "status": "proposed",
+      "status": "decided",
       "en": "Original Version",
       "translations": {
         "zh-CN": "原版",
@@ -960,11 +1096,12 @@
         "ko": "기본 버전",
         "id": "Versi asli"
       },
-      "note": "Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。"
+      "note": "Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。",
+      "checkCase": false
     },
     {
       "id": "cindy-personal-version",
-      "status": "proposed",
+      "status": "decided",
       "en": "Personal Version",
       "translations": {
         "zh-CN": "个人版",
@@ -973,7 +1110,8 @@
         "ko": "개인 버전",
         "id": "Versi pribadi"
       },
-      "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
+      "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。",
+      "checkCase": false
     },
     {
       "id": "collaboration",
@@ -1084,7 +1222,7 @@
     },
     {
       "id": "companion-main-computer",
-      "status": "proposed",
+      "status": "decided",
       "en": "Main computer",
       "translations": {
         "zh-CN": "主力电脑",
@@ -1098,7 +1236,7 @@
     },
     {
       "id": "connection-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Connection code",
       "translations": {
         "zh-CN": "连接码",
@@ -1112,7 +1250,7 @@
     },
     {
       "id": "connection-latency",
-      "status": "proposed",
+      "status": "decided",
       "en": "Latency",
       "translations": {
         "zh-CN": "延迟",
@@ -1121,37 +1259,42 @@
         "ko": "지연",
         "id": "Latensi"
       },
-      "note": "远程连接拓扑与浮层里的往返时间（ms）。"
+      "note": "远程连接拓扑与浮层里的往返时间（ms）。",
+      "checkCase": false
     },
     {
       "id": "connection-path-direct",
-      "status": "proposed",
+      "status": "decided",
       "en": "Direct",
       "translations": {
         "zh-CN": "直连",
         "zh-TW": "直連",
         "ja": "直接",
         "ko": "직접",
-        "id": "Langsung"
+        "id": "Langsung",
+        "fr": "Direct"
       },
-      "note": "远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。"
+      "note": "远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。",
+      "checkCase": false
     },
     {
       "id": "connection-path-via-relay",
-      "status": "proposed",
+      "status": "decided",
       "en": "Via relay",
       "translations": {
         "zh-CN": "经中转",
         "zh-TW": "經中轉",
         "ja": "中継経由",
         "ko": "중계 경유",
-        "id": "Lewat relay"
+        "id": "Lewat relay",
+        "pt-PT": "Através do relay"
       },
-      "note": "远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。"
+      "note": "远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。",
+      "checkCase": false
     },
     {
       "id": "content-update",
-      "status": "proposed",
+      "status": "decided",
       "en": "Content Update",
       "translations": {
         "zh-CN": "内容更新",
@@ -1159,11 +1302,12 @@
         "ko": "콘텐츠 업데이트",
         "id": "Pembaruan konten"
       },
-      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。"
+      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。",
+      "checkCase": false
     },
     {
       "id": "context-window",
-      "status": "proposed",
+      "status": "decided",
       "en": "Context window",
       "translations": {
         "zh-CN": "上下文窗口",
@@ -1171,11 +1315,12 @@
         "ko": "컨텍스트 윈도우",
         "id": "Jendela konteks"
       },
-      "note": "模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。"
+      "note": "模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。",
+      "checkCase": false
     },
     {
       "id": "crash",
-      "status": "proposed",
+      "status": "decided",
       "en": "Crash",
       "translations": {
         "zh-CN": "崩溃",
@@ -1183,7 +1328,8 @@
         "ko": "크래시",
         "id": "Crash"
       },
-      "note": "应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。"
+      "note": "应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。",
+      "checkCase": false
     },
     {
       "id": "credits",
@@ -1284,7 +1430,7 @@
     },
     {
       "id": "custom-mcp",
-      "status": "proposed",
+      "status": "decided",
       "en": "Custom MCP",
       "translations": {
         "zh-CN": "自定义 MCP",
@@ -1304,7 +1450,7 @@
     },
     {
       "id": "database-cleanup",
-      "status": "proposed",
+      "status": "decided",
       "en": "Database cleanup",
       "translations": {
         "zh-CN": "数据库清理",
@@ -1313,45 +1459,61 @@
         "ko": "데이터베이스 정리",
         "id": "Pembersihan basis data"
       },
-      "note": "设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。"
+      "note": "设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。",
+      "checkCase": false
     },
     {
       "id": "detached-head",
-      "status": "proposed",
+      "status": "decided",
       "en": "Detached HEAD",
       "translations": {
         "zh-CN": "分离 HEAD",
         "zh-TW": "分離 HEAD",
         "ja": "Detached HEAD",
         "ko": "Detached HEAD",
-        "id": "Detached HEAD"
+        "id": "Detached HEAD",
+        "de": "Detached HEAD",
+        "zh-Hant-x-lzh": "分離 HEAD",
+        "zh-Hans-x-lzh": "分离 HEAD"
       },
       "checkCase": false,
       "note": "沿用会话顶栏分支徽标现有译法"
     },
     {
       "id": "dev-server-environment-release",
-      "status": "proposed",
+      "status": "decided",
       "en": "Release",
       "translations": {
         "zh-CN": "Release",
         "zh-TW": "Release",
         "ja": "Release",
         "ko": "Release",
-        "id": "Release"
+        "id": "Release",
+        "fr": "Release",
+        "de": "Release",
+        "zh-Hant-x-lzh": "Release",
+        "zh-Hans-x-lzh": "Release"
       },
       "checkCase": false,
       "note": "CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。"
     },
     {
       "id": "device",
-      "status": "proposed",
+      "status": "decided",
       "en": "Device",
       "translations": {
         "zh-CN": "设备",
         "ja": "デバイス",
         "ko": "기기",
-        "id": "Perangkat"
+        "id": "Perangkat",
+        "zh-TW": "裝置",
+        "es": "Dispositivo",
+        "fr": "Appareil",
+        "de": "Gerät",
+        "pt-PT": "Dispositivo",
+        "pt-BR": "Dispositivo",
+        "zh-Hant-x-lzh": "裝置",
+        "zh-Hans-x-lzh": "设备"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -1379,7 +1541,7 @@
     },
     {
       "id": "device-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Device Code",
       "translations": {
         "zh-CN": "设备码",
@@ -1387,11 +1549,12 @@
         "ko": "기기 코드",
         "id": "Kode perangkat"
       },
-      "note": "OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。"
+      "note": "OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。",
+      "checkCase": false
     },
     {
       "id": "device-link",
-      "status": "proposed",
+      "status": "decided",
       "en": "Device Link",
       "translations": {
         "zh-CN": "Device Link",
@@ -1412,28 +1575,40 @@
     },
     {
       "id": "device-simulator",
-      "status": "proposed",
+      "status": "decided",
       "en": "Device Simulator",
       "translations": {
         "zh-CN": "设备模拟器",
         "zh-TW": "裝置模擬器",
         "ja": "デバイスシミュレータ",
         "ko": "기기 시뮬레이터",
-        "id": "Simulator perangkat"
+        "id": "Simulator perangkat",
+        "es": "Simulador de dispositivos",
+        "de": "Gerätesimulator",
+        "pt-PT": "Simulador de dispositivo",
+        "pt-BR": "Simulador de dispositivos"
       },
-      "note": "官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。"
+      "note": "官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。",
+      "checkCase": false
     },
     {
       "id": "dingtalk",
-      "status": "proposed",
+      "status": "decided",
       "en": "DingTalk",
       "translations": {
         "zh-CN": "钉钉",
         "ja": "DingTalk",
         "ko": "DingTalk",
-        "id": "DingTalk"
+        "id": "DingTalk",
+        "es": "DingTalk",
+        "fr": "DingTalk",
+        "de": "DingTalk",
+        "pt-PT": "DingTalk",
+        "pt-BR": "DingTalk",
+        "zh-Hant-x-lzh": "DingTalk"
       },
-      "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "directory",
@@ -1528,7 +1703,7 @@
     },
     {
       "id": "dissolve-group",
-      "status": "proposed",
+      "status": "decided",
       "en": "Dissolve group",
       "translations": {
         "zh-CN": "解散群聊",
@@ -1542,16 +1717,22 @@
     },
     {
       "id": "doubao-model-brand",
-      "status": "proposed",
+      "status": "decided",
       "en": "Doubao",
       "translations": {
         "zh-CN": "豆包",
         "zh-TW": "豆包",
         "ja": "Doubao",
         "ko": "Doubao",
-        "id": "Doubao"
+        "id": "Doubao",
+        "es": "Doubao",
+        "fr": "Doubao",
+        "de": "Doubao",
+        "pt-PT": "Doubao",
+        "pt-BR": "Doubao"
       },
-      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。",
+      "checkCase": false
     },
     {
       "id": "effort",
@@ -1621,19 +1802,22 @@
     },
     {
       "id": "embedding",
-      "status": "proposed",
+      "status": "decided",
       "en": "embedding",
       "translations": {
         "zh-CN": "向量",
         "ja": "ベクトル",
         "ko": "벡터",
-        "id": "Embedding"
+        "id": "Embedding",
+        "fr": "Vecteur",
+        "de": "Vektor"
       },
-      "note": "文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。"
+      "note": "文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。",
+      "checkCase": false
     },
     {
       "id": "end-to-end-encryption",
-      "status": "proposed",
+      "status": "decided",
       "en": "End-to-end encryption",
       "translations": {
         "zh-CN": "端到端加密",
@@ -1641,25 +1825,27 @@
         "ko": "종단 간 암호화",
         "id": "Enkripsi ujung ke ujung"
       },
-      "note": "设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。"
+      "note": "设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。",
+      "checkCase": false
     },
     {
       "id": "engine",
-      "status": "proposed",
+      "status": "decided",
       "en": "Engine",
       "translations": {
         "zh-CN": "引擎",
         "zh-TW": "引擎",
         "ja": "エンジン",
         "ko": "엔진",
-        "id": "（待定）"
+        "id": "Engine",
+        "de": "Engine"
       },
       "checkCase": false,
       "note": "伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。"
     },
     {
       "id": "face-id-verification",
-      "status": "proposed",
+      "status": "decided",
       "en": "Face ID verification",
       "translations": {
         "zh-CN": "Face ID 验证",
@@ -1673,7 +1859,7 @@
     },
     {
       "id": "feishu-link-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Link code",
       "translations": {
         "zh-CN": "关联码",
@@ -1687,7 +1873,7 @@
     },
     {
       "id": "feishu-organization-app",
-      "status": "proposed",
+      "status": "decided",
       "en": "Organization app",
       "translations": {
         "ja": "組織のカスタムアプリ",
@@ -1708,7 +1894,7 @@
     },
     {
       "id": "feishu-store-app",
-      "status": "proposed",
+      "status": "decided",
       "en": "Store app",
       "translations": {
         "ja": "ストアアプリ",
@@ -1743,7 +1929,7 @@
     },
     {
       "id": "gitlab-merge-request",
-      "status": "proposed",
+      "status": "decided",
       "en": "MR",
       "translations": {
         "zh-CN": "MR",
@@ -1759,11 +1945,12 @@
         "zh-Hant-x-lzh": "MR",
         "id": "MR"
       },
-      "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。"
+      "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。",
+      "checkCase": false
     },
     {
       "id": "group-admin",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group Admin",
       "translations": {
         "zh-CN": "群管理员",
@@ -1777,7 +1964,7 @@
     },
     {
       "id": "group-chat",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group chat",
       "translations": {
         "zh-CN": "群聊",
@@ -1791,7 +1978,7 @@
     },
     {
       "id": "group-cindy",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group Cindy",
       "translations": {
         "zh-CN": "群里的 Cindy",
@@ -1805,7 +1992,7 @@
     },
     {
       "id": "group-main-chat",
-      "status": "proposed",
+      "status": "decided",
       "en": "Main Chat",
       "translations": {
         "zh-CN": "群聊",
@@ -1819,7 +2006,7 @@
     },
     {
       "id": "group-nickname",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group Nickname",
       "translations": {
         "zh-CN": "群昵称",
@@ -1833,7 +2020,7 @@
     },
     {
       "id": "group-owner",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group Owner",
       "translations": {
         "zh-CN": "群主",
@@ -1847,7 +2034,7 @@
     },
     {
       "id": "group-personal-mask",
-      "status": "proposed",
+      "status": "decided",
       "en": "AI reply mode",
       "translations": {
         "zh-CN": "AI 代答模式",
@@ -1861,7 +2048,7 @@
     },
     {
       "id": "group-strategy",
-      "status": "proposed",
+      "status": "decided",
       "en": "Group Strategy",
       "translations": {
         "zh-CN": "组策略",
@@ -1875,7 +2062,7 @@
     },
     {
       "id": "group-thread",
-      "status": "proposed",
+      "status": "decided",
       "en": "Thread (in a group chat)",
       "translations": {
         "zh-CN": "话题",
@@ -1896,26 +2083,40 @@
         "zh-TW": "Harness",
         "ja": "Harness",
         "ko": "Harness",
-        "id": "Harness"
+        "id": "Harness",
+        "es": "Harness",
+        "fr": "Harness",
+        "de": "Harness",
+        "pt-PT": "Harness",
+        "pt-BR": "Harness",
+        "zh-Hant-x-lzh": "Harness",
+        "zh-Hans-x-lzh": "Harness"
       },
-      "note": "用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+      "note": "用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。",
+      "checkCase": false
     },
     {
       "id": "hunyuan-model-brand",
-      "status": "proposed",
+      "status": "decided",
       "en": "Hunyuan",
       "translations": {
         "zh-CN": "混元",
         "zh-TW": "混元",
         "ja": "Hunyuan",
         "ko": "Hunyuan",
-        "id": "Hunyuan"
+        "id": "Hunyuan",
+        "es": "Hunyuan",
+        "fr": "Hunyuan",
+        "de": "Hunyuan",
+        "pt-PT": "Hunyuan",
+        "pt-BR": "Hunyuan"
       },
-      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。",
+      "checkCase": false
     },
     {
       "id": "input-handoff",
-      "status": "proposed",
+      "status": "decided",
       "en": "Input Handoff",
       "translations": {
         "zh-CN": "代输入",
@@ -1929,7 +2130,7 @@
     },
     {
       "id": "invitation-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Invitation Code",
       "translations": {
         "zh-CN": "邀请码",
@@ -1938,7 +2139,8 @@
         "ko": "초대 코드",
         "id": "Kode undangan"
       },
-      "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
+      "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。",
+      "checkCase": false
     },
     {
       "id": "ios-simulator",
@@ -1954,7 +2156,7 @@
     },
     {
       "id": "island-subtle-reminders",
-      "status": "proposed",
+      "status": "decided",
       "en": "Subtle reminders",
       "translations": {
         "zh-CN": "轻提醒",
@@ -2055,15 +2257,24 @@
     },
     {
       "id": "lark",
-      "status": "proposed",
+      "status": "decided",
       "en": "Lark",
       "translations": {
         "zh-CN": "Lark",
         "ja": "Lark",
         "ko": "Lark",
-        "id": "Lark"
+        "id": "Lark",
+        "zh-TW": "Lark",
+        "es": "Lark",
+        "fr": "Lark",
+        "de": "Lark",
+        "pt-PT": "Lark",
+        "pt-BR": "Lark",
+        "zh-Hant-x-lzh": "Lark",
+        "zh-Hans-x-lzh": "Lark"
       },
-      "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "lead",
@@ -2074,14 +2285,22 @@
         "zh-TW": "Lead",
         "ja": "Lead",
         "ko": "Lead",
-        "id": "Lead"
+        "id": "Lead",
+        "es": "Lead",
+        "fr": "Lead",
+        "de": "Lead",
+        "pt-PT": "Lead",
+        "pt-BR": "Lead",
+        "zh-Hant-x-lzh": "Lead",
+        "zh-Hans-x-lzh": "Lead"
       },
       "forbidden": {},
-      "note": "Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。"
+      "note": "Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。",
+      "checkCase": false
     },
     {
       "id": "left-navigation",
-      "status": "proposed",
+      "status": "decided",
       "en": "Left navigation",
       "translations": {
         "zh-CN": "左侧导航",
@@ -2095,7 +2314,7 @@
     },
     {
       "id": "local-model",
-      "status": "proposed",
+      "status": "decided",
       "en": "Local model",
       "translations": {
         "zh-CN": "本机模型",
@@ -2104,18 +2323,26 @@
         "ko": "로컬 모델",
         "id": "Model lokal"
       },
-      "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
+      "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。",
+      "checkCase": false
     },
     {
       "id": "local-session-scope",
-      "status": "proposed",
+      "status": "decided",
       "en": "Local",
       "translations": {
         "zh-CN": "本机任务",
         "zh-TW": "本機任務",
         "ja": "このデバイスのセッション",
         "ko": "이 기기의 세션",
-        "id": "Lokal"
+        "id": "Lokal",
+        "es": "Local",
+        "fr": "Local",
+        "de": "Lokal",
+        "pt-PT": "Local",
+        "pt-BR": "Local",
+        "zh-Hant-x-lzh": "本機任務",
+        "zh-Hans-x-lzh": "本机任务"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -2148,7 +2375,7 @@
     },
     {
       "id": "mac-login-password",
-      "status": "proposed",
+      "status": "decided",
       "en": "Mac Login Password",
       "translations": {
         "zh-CN": "Mac 登录密码",
@@ -2162,21 +2389,26 @@
     },
     {
       "id": "macos-dynamic-island",
-      "status": "proposed",
+      "status": "decided",
       "en": "Dynamic Island",
       "translations": {
         "zh-CN": "灵动岛",
         "zh-TW": "動態島",
         "ja": "Dynamic Island",
         "ko": "Dynamic Island",
-        "id": "Dynamic Island"
+        "id": "Dynamic Island",
+        "es": "Dynamic Island",
+        "fr": "Dynamic Island",
+        "de": "Dynamic Island",
+        "pt-PT": "Dynamic Island",
+        "pt-BR": "Dynamic Island"
       },
       "checkCase": false,
       "note": "Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。"
     },
     {
       "id": "macos-live-activities",
-      "status": "proposed",
+      "status": "decided",
       "en": "Live Activities",
       "translations": {
         "zh-CN": "实时活动",
@@ -2190,44 +2422,62 @@
     },
     {
       "id": "mascot-black-cat",
-      "status": "proposed",
+      "status": "decided",
       "en": "Black Cat",
       "translations": {
         "zh-CN": "黑猫",
         "ja": "黒猫",
         "ko": "검은 고양이",
-        "id": "Kucing Hitam"
+        "id": "Kucing Hitam",
+        "de": "Schwarze Katze",
+        "pt-PT": "Gato Preto",
+        "pt-BR": "Gato Preto"
       },
-      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。"
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。",
+      "checkCase": false
     },
     {
       "id": "mascot-erika",
-      "status": "proposed",
+      "status": "decided",
       "en": "Erika",
       "translations": {
         "zh-CN": "Erika",
         "ja": "Erika",
         "ko": "Erika",
-        "id": "Erika"
+        "id": "Erika",
+        "zh-TW": "Erika",
+        "es": "Erika",
+        "fr": "Erika",
+        "de": "Erika",
+        "pt-PT": "Erika",
+        "pt-BR": "Erika",
+        "zh-Hant-x-lzh": "Erika",
+        "zh-Hans-x-lzh": "Erika"
       },
-      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。"
+      "note": "灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。",
+      "checkCase": false
     },
     {
       "id": "mcp-app",
-      "status": "proposed",
+      "status": "decided",
       "en": "MCP App",
       "translations": {
         "zh-CN": "MCP App",
         "zh-TW": "MCP App",
         "ja": "MCP App",
         "ko": "MCP App",
-        "id": "MCP App"
+        "id": "MCP App",
+        "fr": "MCP App",
+        "de": "MCP App",
+        "zh-Hant-x-lzh": "MCP App",
+        "zh-Hans-x-lzh": "MCP App"
       },
-      "note": "标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。"
+      "note": "标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。",
+      "checkCase": false
     },
     {
       "id": "merge-conflict",
-      "status": "proposed",
+      "status": "decided",
       "en": "Merge conflict",
       "translations": {
         "zh-CN": "合并冲突",
@@ -2302,20 +2552,28 @@
     },
     {
       "id": "message-read",
-      "status": "proposed",
+      "status": "decided",
       "en": "Read",
       "translations": {
         "zh-CN": "已读",
         "zh-TW": "已讀",
         "ja": "既読",
         "ko": "읽음",
-        "id": "Dibaca"
+        "id": "Dibaca",
+        "es": "Leído",
+        "fr": "Lu",
+        "de": "Gelesen",
+        "pt-PT": "Lido",
+        "pt-BR": "Lido",
+        "zh-Hant-x-lzh": "已讀",
+        "zh-Hans-x-lzh": "已读"
       },
-      "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
+      "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。",
+      "checkCase": false
     },
     {
       "id": "migration-assistant",
-      "status": "proposed",
+      "status": "decided",
       "en": "Migration Assistant",
       "translations": {
         "zh-CN": "迁移助理",
@@ -2324,11 +2582,12 @@
         "ko": "마이그레이션 지원",
         "id": "Asisten migrasi"
       },
-      "note": "新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。"
+      "note": "新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。",
+      "checkCase": false
     },
     {
       "id": "mivo-library",
-      "status": "proposed",
+      "status": "decided",
       "en": "Mivo Library",
       "translations": {
         "zh-CN": "Mivo 作品库",
@@ -2337,11 +2596,12 @@
         "ko": "Mivo 라이브러리",
         "id": "Mivo Library"
       },
-      "note": "#5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。"
+      "note": "#5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。",
+      "checkCase": false
     },
     {
       "id": "model-category-audio",
-      "status": "proposed",
+      "status": "decided",
       "en": "Audio Generation",
       "translations": {
         "zh-CN": "音频生成",
@@ -2350,23 +2610,26 @@
         "ko": "오디오 생성",
         "id": "Pembuatan audio"
       },
-      "note": "V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。"
+      "note": "V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。",
+      "checkCase": false
     },
     {
       "id": "model-category-compression",
-      "status": "proposed",
+      "status": "decided",
       "en": "Compression",
       "translations": {
         "zh-CN": "压缩",
         "ja": "圧縮",
         "ko": "압축",
-        "id": "Kompresi"
+        "id": "Kompresi",
+        "fr": "Compression"
       },
-      "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。",
+      "checkCase": false
     },
     {
       "id": "model-category-decision",
-      "status": "proposed",
+      "status": "decided",
       "en": "Decision",
       "translations": {
         "zh-CN": "决策",
@@ -2375,11 +2638,12 @@
         "ko": "의사결정",
         "id": "Keputusan"
       },
-      "note": "模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。"
+      "note": "模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。",
+      "checkCase": false
     },
     {
       "id": "model-category-realtime",
-      "status": "proposed",
+      "status": "decided",
       "en": "Realtime Audio",
       "translations": {
         "zh-CN": "实时语音",
@@ -2387,11 +2651,12 @@
         "ko": "실시간 음성",
         "id": "Audio real-time"
       },
-      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。",
+      "checkCase": false
     },
     {
       "id": "model-category-rerank",
-      "status": "proposed",
+      "status": "decided",
       "en": "Rerank",
       "translations": {
         "zh-CN": "重排",
@@ -2407,11 +2672,12 @@
         "zh-Hant-x-lzh": "重排",
         "id": "Rerank"
       },
-      "note": "模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。"
+      "note": "模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。",
+      "checkCase": false
     },
     {
       "id": "model-category-stt",
-      "status": "proposed",
+      "status": "decided",
       "en": "Speech to Text",
       "translations": {
         "zh-CN": "语音转写",
@@ -2419,11 +2685,12 @@
         "ko": "음성 인식",
         "id": "Ucapan ke teks"
       },
-      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。"
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。",
+      "checkCase": false
     },
     {
       "id": "model-category-tts",
-      "status": "proposed",
+      "status": "decided",
       "en": "Text to Speech",
       "translations": {
         "zh-CN": "语音合成",
@@ -2431,11 +2698,12 @@
         "ko": "음성 합성",
         "id": "Teks ke ucapan"
       },
-      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。"
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。",
+      "checkCase": false
     },
     {
       "id": "model-group",
-      "status": "proposed",
+      "status": "decided",
       "en": "Model Group",
       "translations": {
         "zh-CN": "模型组",
@@ -2456,26 +2724,31 @@
         "zh-TW": "Model ID",
         "ja": "Model ID",
         "ko": "Model ID",
-        "id": "Model ID"
+        "id": "Model ID",
+        "zh-Hant-x-lzh": "Model ID",
+        "zh-Hans-x-lzh": "Model ID"
       },
-      "note": "用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。"
+      "note": "用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。",
+      "checkCase": false
     },
     {
       "id": "model-native-api",
-      "status": "proposed",
+      "status": "decided",
       "en": "Native API",
       "translations": {
         "zh-CN": "原生协议",
         "zh-TW": "原生協定",
         "ja": "ネイティブAPI",
         "ko": "기본 API",
-        "id": "API native"
+        "id": "API native",
+        "de": "Native API"
       },
-      "note": "模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。"
+      "note": "模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。",
+      "checkCase": false
     },
     {
       "id": "model-upstream-apis",
-      "status": "proposed",
+      "status": "decided",
       "en": "Upstream APIs",
       "translations": {
         "zh-CN": "上游接口",
@@ -2484,11 +2757,12 @@
         "ko": "업스트림 API",
         "id": "API hulu"
       },
-      "note": "模型设置「引擎支持」顶部只读列出当前来源为该模型提供的全部接口（Messages / Responses / Chat Completions / Google Gemini），替代旧的单值「原生协议」。上游提供的接口按原生使用，只有 Cindy 本地转换才标兼容模式（2026-10-30）。"
+      "note": "模型设置「引擎支持」顶部只读列出当前来源为该模型提供的全部接口（Messages / Responses / Chat Completions / Google Gemini），替代旧的单值「原生协议」。上游提供的接口按原生使用，只有 Cindy 本地转换才标兼容模式（2026-10-30）。",
+      "checkCase": false
     },
     {
       "id": "my-plugins",
-      "status": "proposed",
+      "status": "decided",
       "en": "Publish Plugin",
       "translations": {
         "zh-CN": "发布插件",
@@ -2497,7 +2771,8 @@
         "ko": "플러그인 게시",
         "id": "Terbitkan Plugin"
       },
-      "note": "当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。"
+      "note": "当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。",
+      "checkCase": false
     },
     {
       "id": "new-connection-view",
@@ -2514,7 +2789,7 @@
     },
     {
       "id": "new-project-location",
-      "status": "proposed",
+      "status": "decided",
       "en": "New project location",
       "translations": {
         "zh-CN": "新项目存放位置",
@@ -2528,7 +2803,7 @@
     },
     {
       "id": "nightly-learning",
-      "status": "proposed",
+      "status": "decided",
       "en": "Nightly learning",
       "translations": {
         "zh-CN": "夜间学习",
@@ -2542,7 +2817,7 @@
     },
     {
       "id": "not-signed-in",
-      "status": "proposed",
+      "status": "decided",
       "en": "Not signed in",
       "translations": {
         "zh-CN": "未登录",
@@ -2550,11 +2825,12 @@
         "ko": "로그인하지 않음",
         "id": "Belum masuk"
       },
-      "note": "跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。"
+      "note": "跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。",
+      "checkCase": false
     },
     {
       "id": "official-feishu-working-computer",
-      "status": "proposed",
+      "status": "decided",
       "en": "Working computer",
       "translations": {
         "zh-CN": "工作电脑",
@@ -2575,45 +2851,70 @@
     },
     {
       "id": "openai-chat-completions-api",
-      "status": "proposed",
+      "status": "decided",
       "en": "Chat Completions",
       "translations": {
         "zh-CN": "Chat Completions",
         "zh-TW": "Chat Completions",
         "ja": "Chat Completions",
         "ko": "Chat Completions",
-        "id": "Chat Completions"
+        "id": "Chat Completions",
+        "es": "Chat Completions",
+        "fr": "Chat Completions",
+        "de": "Chat Completions",
+        "pt-PT": "Chat Completions",
+        "pt-BR": "Chat Completions",
+        "zh-Hant-x-lzh": "Chat Completions",
+        "zh-Hans-x-lzh": "Chat Completions"
       },
-      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。",
+      "checkCase": false
     },
     {
       "id": "openai-responses-api",
-      "status": "proposed",
+      "status": "decided",
       "en": "Responses",
       "translations": {
         "zh-CN": "Responses",
         "zh-TW": "Responses",
         "ja": "Responses",
         "ko": "Responses",
-        "id": "Responses"
+        "id": "Responses",
+        "es": "Responses",
+        "fr": "Responses",
+        "de": "Responses",
+        "pt-PT": "Responses",
+        "pt-BR": "Responses",
+        "zh-Hant-x-lzh": "Responses",
+        "zh-Hans-x-lzh": "Responses"
       },
-      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。"
+      "note": "模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。",
+      "checkCase": false
     },
     {
       "id": "openclaw",
-      "status": "proposed",
+      "status": "decided",
       "en": "OpenClaw",
       "translations": {
         "zh-CN": "OpenClaw",
         "ja": "OpenClaw",
         "ko": "OpenClaw",
-        "id": "OpenClaw"
+        "id": "OpenClaw",
+        "zh-TW": "OpenClaw",
+        "es": "OpenClaw",
+        "fr": "OpenClaw",
+        "de": "OpenClaw",
+        "pt-PT": "OpenClaw",
+        "pt-BR": "OpenClaw",
+        "zh-Hant-x-lzh": "OpenClaw",
+        "zh-Hans-x-lzh": "OpenClaw"
       },
-      "note": "腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "organizer",
-      "status": "proposed",
+      "status": "decided",
       "en": "Organizer",
       "translations": {
         "zh-CN": "负责人",
@@ -2627,7 +2928,7 @@
     },
     {
       "id": "overview",
-      "status": "proposed",
+      "status": "decided",
       "en": "Overview",
       "translations": {
         "zh-CN": "概览",
@@ -2636,11 +2937,12 @@
         "ko": "개요",
         "id": "Ringkasan"
       },
-      "note": "插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。"
+      "note": "插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。",
+      "checkCase": false
     },
     {
       "id": "pairing-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Pairing Code",
       "translations": {
         "zh-CN": "配对码",
@@ -2666,7 +2968,7 @@
     },
     {
       "id": "performance-trace",
-      "status": "proposed",
+      "status": "decided",
       "en": "Performance Trace",
       "translations": {
         "zh-CN": "性能跟踪",
@@ -2675,31 +2977,42 @@
         "ko": "성능 기록",
         "id": "Jejak performa"
       },
-      "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。"
+      "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。",
+      "checkCase": false
     },
     {
       "id": "personal-wechat",
-      "status": "proposed",
+      "status": "decided",
       "en": "Personal WeChat",
       "translations": {
         "zh-CN": "个人微信",
         "ja": "個人 WeChat",
         "ko": "개인 WeChat",
-        "id": "WeChat Pribadi"
+        "id": "WeChat Pribadi",
+        "es": "WeChat personal"
       },
-      "note": "个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "pin",
-      "status": "proposed",
+      "status": "decided",
       "en": "Pin",
       "translations": {
         "zh-CN": "钉住",
         "ja": "ピン留め",
         "ko": "고정",
-        "id": "Sematkan"
+        "id": "Sematkan",
+        "zh-TW": "釘選",
+        "es": "Fijar",
+        "fr": "Épingler",
+        "de": "Anpinnen",
+        "pt-PT": "Fixar",
+        "pt-BR": "Fixar",
+        "zh-Hant-x-lzh": "釘選"
       },
-      "note": "右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。"
+      "note": "右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。",
+      "checkCase": false
     },
     {
       "id": "plugin",
@@ -2748,11 +3061,12 @@
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
         ]
-      }
+      },
+      "checkCase": false
     },
     {
       "id": "plugin-anonymous-publishing",
-      "status": "proposed",
+      "status": "decided",
       "en": "Publish anonymously",
       "translations": {
         "zh-CN": "匿名发布",
@@ -2761,11 +3075,12 @@
         "ko": "익명으로 게시",
         "id": "Terbitkan secara anonim"
       },
-      "note": "个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。"
+      "note": "个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。",
+      "checkCase": false
     },
     {
       "id": "plugin-community",
-      "status": "proposed",
+      "status": "decided",
       "en": "Community",
       "translations": {
         "zh-CN": "社区",
@@ -2781,11 +3096,12 @@
         "zh-Hant-x-lzh": "社群",
         "id": "Komunitas"
       },
-      "note": "插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。"
+      "note": "插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。",
+      "checkCase": false
     },
     {
       "id": "plugin-main-view",
-      "status": "proposed",
+      "status": "decided",
       "en": "Main view",
       "translations": {
         "zh-CN": "主视图",
@@ -2794,23 +3110,28 @@
         "ko": "메인 보기",
         "id": "Tampilan utama"
       },
-      "note": "Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。"
+      "note": "Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。",
+      "checkCase": false
     },
     {
       "id": "plugin-manual",
-      "status": "proposed",
+      "status": "decided",
       "en": "Manual",
       "translations": {
         "zh-CN": "手册",
         "ja": "マニュアル",
         "ko": "매뉴얼",
-        "id": "Panduan"
+        "id": "Panduan",
+        "es": "Manual",
+        "pt-PT": "Manual",
+        "pt-BR": "Manual"
       },
-      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。",
+      "checkCase": false
     },
     {
       "id": "plugin-source-local",
-      "status": "proposed",
+      "status": "decided",
       "en": "Locally installed",
       "translations": {
         "zh-CN": "本地安装",
@@ -2830,7 +3151,7 @@
     },
     {
       "id": "plugin-source-third-party",
-      "status": "proposed",
+      "status": "decided",
       "en": "Third-party source",
       "translations": {
         "zh-CN": "第三方来源",
@@ -2850,7 +3171,7 @@
     },
     {
       "id": "plugin-source-unknown",
-      "status": "proposed",
+      "status": "decided",
       "en": "Unknown source",
       "translations": {
         "zh-CN": "来源未知",
@@ -2870,68 +3191,90 @@
     },
     {
       "id": "pricing-component-audio",
-      "status": "proposed",
+      "status": "decided",
       "en": "Audio",
       "translations": {
         "zh-CN": "音频",
         "zh-TW": "音訊",
         "ja": "音声",
         "ko": "오디오",
-        "id": "Audio"
+        "id": "Audio",
+        "es": "Audio",
+        "fr": "Audio",
+        "de": "Audio"
       },
-      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"
+      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。",
+      "checkCase": false
     },
     {
       "id": "pricing-component-image",
-      "status": "proposed",
+      "status": "decided",
       "en": "Image",
       "translations": {
         "zh-CN": "图片",
         "zh-TW": "圖片",
         "ja": "画像",
         "ko": "이미지",
-        "id": "Gambar"
+        "id": "Gambar",
+        "fr": "Image",
+        "de": "Bild",
+        "zh-Hant-x-lzh": "圖片",
+        "zh-Hans-x-lzh": "图片"
       },
-      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"
+      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。",
+      "checkCase": false
     },
     {
       "id": "pricing-component-text",
-      "status": "proposed",
+      "status": "decided",
       "en": "Text",
       "translations": {
         "zh-CN": "文字",
         "zh-TW": "文字",
         "ja": "テキスト",
         "ko": "텍스트",
-        "id": "Teks"
+        "id": "Teks",
+        "de": "Text"
       },
-      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"
+      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。",
+      "checkCase": false
     },
     {
       "id": "pricing-component-video",
-      "status": "proposed",
+      "status": "decided",
       "en": "Video",
       "translations": {
         "zh-CN": "视频",
         "zh-TW": "影片",
         "ja": "動画",
         "ko": "동영상",
-        "id": "Video"
+        "id": "Video",
+        "es": "Vídeo",
+        "de": "Video"
       },
-      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"
+      "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。",
+      "checkCase": false
     },
     {
       "id": "pricing-duration",
-      "status": "proposed",
+      "status": "decided",
       "en": "Duration",
       "translations": {
         "zh-CN": "时长",
         "zh-TW": "時長",
         "ja": "時間",
         "ko": "길이",
-        "id": "Durasi"
+        "id": "Durasi",
+        "es": "Duración",
+        "fr": "Durée",
+        "de": "Dauer",
+        "pt-PT": "Duração",
+        "pt-BR": "Duração",
+        "zh-Hant-x-lzh": "時長",
+        "zh-Hans-x-lzh": "时长"
       },
-      "note": "模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。"
+      "note": "模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。",
+      "checkCase": false
     },
     {
       "id": "privacy-policy",
@@ -2964,7 +3307,7 @@
     },
     {
       "id": "privacy-screen",
-      "status": "proposed",
+      "status": "decided",
       "en": "Privacy screen",
       "translations": {
         "zh-CN": "隐私屏",
@@ -2973,19 +3316,23 @@
         "ko": "프라이버시 화면",
         "id": "Layar privasi"
       },
-      "note": "Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。"
+      "note": "Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。",
+      "checkCase": false
     },
     {
       "id": "process",
-      "status": "proposed",
+      "status": "decided",
       "en": "Process",
       "translations": {
         "zh-CN": "进程",
         "ja": "プロセス",
         "ko": "프로세스",
-        "id": "Proses"
+        "id": "Proses",
+        "pt-PT": "Processo",
+        "pt-BR": "Processo"
       },
-      "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
+      "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。",
+      "checkCase": false
     },
     {
       "id": "project",
@@ -3130,7 +3477,7 @@
     },
     {
       "id": "provider-group",
-      "status": "proposed",
+      "status": "decided",
       "en": "Provider Group",
       "translations": {
         "zh-CN": "供应商组",
@@ -3144,7 +3491,7 @@
     },
     {
       "id": "provider-sharing",
-      "status": "proposed",
+      "status": "decided",
       "en": "Provider Sharing",
       "translations": {
         "zh-CN": "供应商分享",
@@ -3158,7 +3505,7 @@
     },
     {
       "id": "provider-transaction-id",
-      "status": "proposed",
+      "status": "decided",
       "en": "Provider transaction ID",
       "translations": {
         "zh-CN": "渠道交易号",
@@ -3174,7 +3521,8 @@
         "zh-Hans-x-lzh": "渠道交易号",
         "id": "ID transaksi penyedia"
       },
-      "note": "支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。"
+      "note": "支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。",
+      "checkCase": false
     },
     {
       "id": "proxy",
@@ -3292,7 +3640,7 @@
     },
     {
       "id": "quote-reply",
-      "status": "proposed",
+      "status": "decided",
       "en": "Quote reply",
       "translations": {
         "zh-CN": "引用回复",
@@ -3306,20 +3654,28 @@
     },
     {
       "id": "qwen-model-brand",
-      "status": "proposed",
+      "status": "decided",
       "en": "Qwen",
       "translations": {
         "zh-CN": "千问",
         "zh-TW": "千問",
         "ja": "Qwen",
         "ko": "Qwen",
-        "id": "Qwen"
+        "id": "Qwen",
+        "es": "Qwen",
+        "fr": "Qwen",
+        "de": "Qwen",
+        "pt-PT": "Qwen",
+        "pt-BR": "Qwen",
+        "zh-Hant-x-lzh": "千問",
+        "zh-Hans-x-lzh": "千问"
       },
-      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。"
+      "note": "模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。",
+      "checkCase": false
     },
     {
       "id": "read-by-sentence",
-      "status": "proposed",
+      "status": "decided",
       "en": "Read by sentence",
       "translations": {
         "zh-CN": "按句朗读",
@@ -3345,13 +3701,21 @@
     },
     {
       "id": "region-code-cn",
-      "status": "proposed",
+      "status": "decided",
       "en": "CN",
       "translations": {
         "zh-CN": "CN",
         "ja": "CN",
         "ko": "CN",
-        "id": "CN"
+        "id": "CN",
+        "zh-TW": "CN",
+        "es": "CN",
+        "fr": "CN",
+        "de": "CN",
+        "pt-PT": "CN",
+        "pt-BR": "CN",
+        "zh-Hant-x-lzh": "CN",
+        "zh-Hans-x-lzh": "CN"
       },
       "forbidden": {
         "zh-CN": [
@@ -3377,18 +3741,26 @@
           }
         ]
       },
-      "note": "中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。"
+      "note": "中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。",
+      "checkCase": false
     },
     {
       "id": "region-code-dev",
-      "status": "proposed",
+      "status": "decided",
       "en": "Dev",
       "translations": {
         "zh-CN": "Dev",
         "zh-TW": "Dev",
         "ja": "Dev",
         "ko": "Dev",
-        "id": "Dev"
+        "id": "Dev",
+        "es": "Dev",
+        "fr": "Dev",
+        "de": "Dev",
+        "pt-PT": "Dev",
+        "pt-BR": "Dev",
+        "zh-Hant-x-lzh": "Dev",
+        "zh-Hans-x-lzh": "Dev"
       },
       "forbidden": {
         "zh-CN": [
@@ -3414,11 +3786,12 @@
         "desktop:settings.about.debugLogDescription",
         "desktop:settings.voiceInput.permissions.inputMonitoring.tooltip"
       ],
-      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。2026-08-26 起 CindyDev 内部的业务服务器环境切换也沿用 Dev 标签；这里只表示所连接的服务环境，不能据此改变安装包区域或身份。"
+      "note": "dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。2026-08-26 起 CindyDev 内部的业务服务器环境切换也沿用 Dev 标签；这里只表示所连接的服务环境，不能据此改变安装包区域或身份。",
+      "checkCase": false
     },
     {
       "id": "remote-computer",
-      "status": "proposed",
+      "status": "decided",
       "en": "Remote computer",
       "translations": {
         "zh-CN": "远程电脑",
@@ -3427,11 +3800,12 @@
         "ko": "원격 컴퓨터",
         "id": "Komputer jarak jauh"
       },
-      "note": "用户可见文案用具体对象说明连接与操作，避免被控端、被控电脑等实现术语；指当前电脑时用这台电脑，指保存密码的位置时用此设备。"
+      "note": "用户可见文案用具体对象说明连接与操作，避免被控端、被控电脑等实现术语；指当前电脑时用这台电脑，指保存密码的位置时用此设备。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop",
-      "status": "proposed",
+      "status": "decided",
       "en": "Remote desktop",
       "translations": {
         "zh-CN": "远程桌面",
@@ -3440,11 +3814,12 @@
         "ko": "원격 데스크톱",
         "id": "Desktop jarak jauh"
       },
-      "note": "同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。"
+      "note": "同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-background-running",
-      "status": "proposed",
+      "status": "decided",
       "en": "Run in background",
       "translations": {
         "zh-CN": "后台运行",
@@ -3453,11 +3828,12 @@
         "ko": "백그라운드 실행",
         "id": "Jalankan di latar belakang"
       },
-      "note": "远程桌面的持续开关，用户已确认中文名。离开页面或切到后台时以小窗继续显示，回到全屏后仍保持开启；不是任意后台任务或强制退出后继续运行的承诺。其他语言译名登记为 proposed。"
+      "note": "远程桌面的持续开关，用户已确认中文名。离开页面或切到后台时以小窗继续显示，回到全屏后仍保持开启；不是任意后台任务或强制退出后继续运行的承诺。其他语言译名登记为 proposed。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-direct",
-      "status": "proposed",
+      "status": "decided",
       "en": "Direct to computer",
       "translations": {
         "zh-CN": "电脑直连",
@@ -3466,11 +3842,12 @@
         "ko": "컴퓨터에 직접 연결",
         "id": "Langsung ke komputer"
       },
-      "note": "远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。"
+      "note": "远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-display-sound",
-      "status": "proposed",
+      "status": "decided",
       "en": "Display & Sound",
       "translations": {
         "zh-CN": "影音",
@@ -3484,7 +3861,7 @@
     },
     {
       "id": "remote-desktop-lock-screen-control",
-      "status": "proposed",
+      "status": "decided",
       "en": "Lock screen control",
       "translations": {
         "zh-CN": "锁屏控制",
@@ -3493,11 +3870,12 @@
         "ko": "잠금 화면 제어",
         "id": "Kontrol layar kunci"
       },
-      "note": "Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。"
+      "note": "Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-native-resolution",
-      "status": "proposed",
+      "status": "decided",
       "en": "Native resolution",
       "translations": {
         "zh-CN": "原生分辨率",
@@ -3506,11 +3884,12 @@
         "ko": "기본 해상도",
         "id": "Resolusi asli"
       },
-      "note": "Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生."
+      "note": "Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生.",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-pip",
-      "status": "proposed",
+      "status": "decided",
       "en": "Picture in picture",
       "translations": {
         "zh-CN": "小窗模式",
@@ -3519,11 +3898,12 @@
         "ko": "화면 속 화면",
         "id": "Gambar dalam gambar"
       },
-      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-resolution",
-      "status": "proposed",
+      "status": "decided",
       "en": "Computer resolution",
       "translations": {
         "zh-CN": "电脑分辨率",
@@ -3532,11 +3912,12 @@
         "ko": "컴퓨터 해상도",
         "id": "Resolusi komputer"
       },
-      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture."
+      "note": "Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-screenshot-relay",
-      "status": "proposed",
+      "status": "decided",
       "en": "Server screenshot relay",
       "translations": {
         "zh-CN": "服务器截图中转",
@@ -3545,11 +3926,12 @@
         "ko": "서버 스크린샷 중계",
         "id": "Relay tangkapan layar server"
       },
-      "note": "远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。"
+      "note": "远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-takeover",
-      "status": "proposed",
+      "status": "decided",
       "en": "Take over connection",
       "translations": {
         "zh-CN": "接管连接",
@@ -3558,11 +3940,12 @@
         "ko": "연결 넘겨받기",
         "id": "Ambil alih koneksi"
       },
-      "note": "Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery."
+      "note": "Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.",
+      "checkCase": false
     },
     {
       "id": "remote-desktop-video-relay",
-      "status": "proposed",
+      "status": "decided",
       "en": "Server video relay",
       "translations": {
         "zh-CN": "服务器视频中转",
@@ -3571,11 +3954,12 @@
         "ko": "서버 영상 중계",
         "id": "Relay video server"
       },
-      "note": "远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。"
+      "note": "远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。",
+      "checkCase": false
     },
     {
       "id": "remote-device",
-      "status": "proposed",
+      "status": "decided",
       "en": "Remote device",
       "translations": {
         "zh-CN": "远程设备",
@@ -3584,11 +3968,12 @@
         "ko": "원격 기기",
         "id": "Perangkat jarak jauh"
       },
-      "note": "远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。"
+      "note": "远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。",
+      "checkCase": false
     },
     {
       "id": "request-refund",
-      "status": "proposed",
+      "status": "decided",
       "en": "Request Refund",
       "translations": {
         "zh-CN": "申请退款",
@@ -3604,11 +3989,12 @@
         "zh-Hans-x-lzh": "请退款",
         "id": "Ajukan pengembalian dana"
       },
-      "note": "订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。"
+      "note": "订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。",
+      "checkCase": false
     },
     {
       "id": "resource-usage",
-      "status": "proposed",
+      "status": "decided",
       "en": "Activity Monitor",
       "translations": {
         "zh-CN": "资源监视器",
@@ -3616,11 +4002,12 @@
         "ko": "활성 상태 보기",
         "id": "Monitor Aktivitas"
       },
-      "note": "独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。"
+      "note": "独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。",
+      "checkCase": false
     },
     {
       "id": "role-name",
-      "status": "proposed",
+      "status": "decided",
       "en": "Role name",
       "translations": {
         "zh-CN": "角色名",
@@ -3634,33 +4021,44 @@
     },
     {
       "id": "routine",
-      "status": "proposed",
+      "status": "decided",
       "en": "Routine",
       "translations": {
         "zh-CN": "例行任务",
         "zh-TW": "例行任務",
         "ja": "ルーティン",
         "ko": "루틴",
-        "id": "Rutinitas"
+        "id": "Rutinitas",
+        "fr": "Routine",
+        "de": "Routine"
       },
-      "note": "伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。"
+      "note": "伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。",
+      "checkCase": false
     },
     {
       "id": "routine-trigger",
-      "status": "proposed",
+      "status": "decided",
       "en": "Trigger",
       "translations": {
         "zh-CN": "触发器",
         "zh-TW": "觸發器",
         "ja": "トリガー",
         "ko": "트리거",
-        "id": "Pemicu"
+        "id": "Pemicu",
+        "es": "Activador",
+        "fr": "Déclencheur",
+        "de": "Trigger",
+        "pt-PT": "Acionador",
+        "pt-BR": "Acionador",
+        "zh-Hant-x-lzh": "觸發器",
+        "zh-Hans-x-lzh": "触发器"
       },
-      "note": "例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。"
+      "note": "例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。",
+      "checkCase": false
     },
     {
       "id": "run-records",
-      "status": "proposed",
+      "status": "decided",
       "en": "Run records",
       "translations": {
         "zh-CN": "运行记录",
@@ -3668,7 +4066,8 @@
         "ko": "실행 기록",
         "id": "Catatan operasi"
       },
-      "note": "日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。"
+      "note": "日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。",
+      "checkCase": false
     },
     {
       "id": "running",
@@ -3780,7 +4179,7 @@
     },
     {
       "id": "scrolling-screenshot",
-      "status": "proposed",
+      "status": "decided",
       "en": "Scrolling Screenshot",
       "translations": {
         "zh-CN": "滚动截图",
@@ -3794,7 +4193,7 @@
     },
     {
       "id": "self-hosted-relay-service",
-      "status": "proposed",
+      "status": "decided",
       "en": "Relay service",
       "translations": {
         "zh-CN": "中转服务",
@@ -3803,7 +4202,8 @@
         "ko": "중계 서비스",
         "id": "Layanan relay"
       },
-      "note": "远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。"
+      "note": "远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。",
+      "checkCase": false
     },
     {
       "id": "session",
@@ -3928,7 +4328,7 @@
     },
     {
       "id": "session-notification-mute",
-      "status": "proposed",
+      "status": "decided",
       "en": "Mute notifications",
       "translations": {
         "zh-CN": "消息免打扰",
@@ -3942,7 +4342,7 @@
     },
     {
       "id": "share-link",
-      "status": "proposed",
+      "status": "decided",
       "en": "Share Link",
       "translations": {
         "zh-CN": "分享链接",
@@ -3956,7 +4356,7 @@
     },
     {
       "id": "share-request",
-      "status": "proposed",
+      "status": "decided",
       "en": "Share Request",
       "translations": {
         "zh-CN": "分享申请",
@@ -3970,7 +4370,7 @@
     },
     {
       "id": "shared-session",
-      "status": "proposed",
+      "status": "decided",
       "en": "Shared Session",
       "translations": {
         "zh-CN": "共享任务",
@@ -3979,11 +4379,12 @@
         "ko": "공유 세션",
         "id": "Sesi bersama"
       },
-      "note": "远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。"
+      "note": "远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。",
+      "checkCase": false
     },
     {
       "id": "shortcut-listener-permission",
-      "status": "proposed",
+      "status": "decided",
       "en": "shortcut listener permission",
       "translations": {
         "zh-CN": "监听权限",
@@ -4016,7 +4417,7 @@
     },
     {
       "id": "side-chat",
-      "status": "proposed",
+      "status": "decided",
       "en": "Side chat",
       "translations": {
         "zh-CN": "侧边追问",
@@ -4027,6 +4428,27 @@
       },
       "checkCase": false,
       "note": "在右侧独立提问，继承主任务已完成的上下文；追问不自动写回主任务。"
+    },
+    {
+      "id": "sign-in",
+      "status": "decided",
+      "en": "Sign-in",
+      "translations": {
+        "zh-CN": "登录",
+        "zh-TW": "登入",
+        "en": "Sign-in",
+        "ja": "サインイン",
+        "ko": "로그인",
+        "es": "Inicio de sesión",
+        "fr": "Connexion",
+        "de": "Anmeldung",
+        "pt-PT": "Início de sessão",
+        "pt-BR": "Login",
+        "id": "Masuk",
+        "zh-Hant-x-lzh": "登入",
+        "zh-Hans-x-lzh": "登录"
+      },
+      "note": "家族合并条目：涵盖 sign-in（名词形）/ signed-in（状态形）/ Sign-ins（复数形）。一致性核对：en 语料 142 键，非英语种均已自然翻译。id 用 Masuk / 已登录。"
     },
     {
       "id": "skill",
@@ -4111,7 +4533,7 @@
     },
     {
       "id": "skip-sign-in",
-      "status": "proposed",
+      "status": "decided",
       "en": "Skip Sign-In",
       "translations": {
         "zh-CN": "跳过登录",
@@ -4119,11 +4541,12 @@
         "ko": "로그인 건너뛰기",
         "id": "Lewati masuk"
       },
-      "note": "登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。"
+      "note": "登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。",
+      "checkCase": false
     },
     {
       "id": "smart-subagent-routing",
-      "status": "proposed",
+      "status": "decided",
       "en": "Smart routing",
       "translations": {
         "zh-CN": "智能调配",
@@ -4132,11 +4555,12 @@
         "ko": "스마트 라우팅",
         "id": "Perutean pintar"
       },
-      "note": "Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。"
+      "note": "Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。",
+      "checkCase": false
     },
     {
       "id": "speech-speed",
-      "status": "proposed",
+      "status": "decided",
       "en": "Speech speed",
       "translations": {
         "zh-CN": "语速",
@@ -4243,7 +4667,7 @@
     },
     {
       "id": "task-header",
-      "status": "proposed",
+      "status": "decided",
       "en": "Header",
       "translations": {
         "zh-CN": "顶栏",
@@ -4256,13 +4680,15 @@
         "es": "encabezado",
         "fr": "en-tête",
         "pt-BR": "cabeçalho",
-        "pt-PT": "cabeçalho"
+        "pt-PT": "cabeçalho",
+        "id": "Bilah atas"
       },
-      "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。"
+      "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。",
+      "checkCase": false
     },
     {
       "id": "task-inbox",
-      "status": "proposed",
+      "status": "decided",
       "en": "Inbox",
       "translations": {
         "zh-CN": "收件箱",
@@ -4277,11 +4703,12 @@
         "zh-Hant-x-lzh": "收件匣",
         "zh-Hans-x-lzh": "收件箱"
       },
-      "note": "按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。"
+      "note": "按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。",
+      "checkCase": false
     },
     {
       "id": "task-pending",
-      "status": "proposed",
+      "status": "decided",
       "en": "Pending",
       "translations": {
         "zh-CN": "待处理",
@@ -4294,13 +4721,15 @@
         "pt-PT": "Pendentes",
         "pt-BR": "Pendentes",
         "zh-Hant-x-lzh": "待處理",
-        "zh-Hans-x-lzh": "待处理"
+        "zh-Hans-x-lzh": "待处理",
+        "id": "Menunggu"
       },
-      "note": "收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。"
+      "note": "收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。",
+      "checkCase": false
     },
     {
       "id": "task-processed",
-      "status": "proposed",
+      "status": "decided",
       "en": "Processed",
       "translations": {
         "zh-CN": "已处理",
@@ -4315,11 +4744,12 @@
         "zh-Hant-x-lzh": "已處理",
         "zh-Hans-x-lzh": "已处理"
       },
-      "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
+      "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。",
+      "checkCase": false
     },
     {
       "id": "task-snoozed",
-      "status": "proposed",
+      "status": "decided",
       "en": "Snoozed",
       "translations": {
         "zh-CN": "稍后处理",
@@ -4334,18 +4764,25 @@
         "zh-Hant-x-lzh": "待後處理",
         "zh-Hans-x-lzh": "待后处理"
       },
-      "note": "任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。"
+      "note": "任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。",
+      "checkCase": false
     },
     {
       "id": "task-tag",
-      "status": "proposed",
+      "status": "decided",
       "en": "Tag",
       "translations": {
         "zh-CN": "标签",
         "zh-TW": "標籤",
         "ja": "タグ",
         "ko": "태그",
-        "id": "Label"
+        "id": "Label",
+        "fr": "Étiquette",
+        "de": "Tag",
+        "pt-PT": "Etiqueta",
+        "pt-BR": "Etiqueta",
+        "zh-Hant-x-lzh": "標籤",
+        "zh-Hans-x-lzh": "标签"
       },
       "checkCase": false,
       "note": "任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。"
@@ -4415,7 +4852,7 @@
     },
     {
       "id": "teammate-core-skill",
-      "status": "proposed",
+      "status": "decided",
       "en": "Core skill",
       "translations": {
         "zh-CN": "核心技能",
@@ -4443,21 +4880,24 @@
     },
     {
       "id": "teammate-todo",
-      "status": "proposed",
+      "status": "decided",
       "en": "Todo",
       "translations": {
         "zh-CN": "待办",
         "zh-TW": "待辦",
         "ja": "Todo",
         "ko": "할 일",
-        "id": "To-do"
+        "id": "To-do",
+        "es": "Pendiente",
+        "pt-PT": "A hacer",
+        "pt-BR": "A hacer"
       },
       "checkCase": false,
       "note": "（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。"
     },
     {
       "id": "terms-of-service",
-      "status": "proposed",
+      "status": "decided",
       "en": "Terms of Service",
       "translations": {
         "zh-CN": "服务条款",
@@ -4555,15 +4995,24 @@
     },
     {
       "id": "token-plan",
-      "status": "proposed",
+      "status": "decided",
       "en": "Token Plan",
       "translations": {
         "zh-CN": "Token Plan",
         "ja": "Token Plan",
         "ko": "Token Plan",
-        "id": "Token Plan"
+        "id": "Token Plan",
+        "zh-TW": "Token Plan",
+        "es": "Token Plan",
+        "fr": "Token Plan",
+        "de": "Token Plan",
+        "pt-PT": "Token Plan",
+        "pt-BR": "Token Plan",
+        "zh-Hant-x-lzh": "Token Plan",
+        "zh-Hans-x-lzh": "Token Plan"
       },
-      "note": "阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。"
+      "note": "阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。",
+      "checkCase": false
     },
     {
       "id": "turn",
@@ -4626,21 +5075,28 @@
     },
     {
       "id": "ultrafast",
-      "status": "proposed",
+      "status": "decided",
       "en": "Ultrafast",
       "translations": {
         "zh-CN": "超快",
         "zh-TW": "超快",
         "ja": "超高速",
         "ko": "초고속",
-        "id": "Sangat cepat"
+        "id": "Sangat cepat",
+        "es": "Ultra rápido",
+        "fr": "Ultra-rapide",
+        "de": "Ultraschnell",
+        "pt-PT": "Ultra rápido",
+        "pt-BR": "Ultra rápido",
+        "zh-Hant-x-lzh": "超快",
+        "zh-Hans-x-lzh": "超快"
       },
       "checkCase": false,
       "note": "Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。"
     },
     {
       "id": "ungrouped",
-      "status": "proposed",
+      "status": "decided",
       "en": "Ungrouped",
       "translations": {
         "zh-CN": "未分组",
@@ -4649,11 +5105,12 @@
         "ko": "미분류",
         "id": "Tanpa grup"
       },
-      "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。"
+      "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。",
+      "checkCase": false
     },
     {
       "id": "upload-code",
-      "status": "proposed",
+      "status": "decided",
       "en": "Upload code",
       "translations": {
         "zh-CN": "上传编号",
@@ -4661,7 +5118,8 @@
         "ko": "업로드 번호",
         "id": "Kode unggahan"
       },
-      "note": "客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。"
+      "note": "客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。",
+      "checkCase": false
     },
     {
       "id": "usage",
@@ -4746,7 +5204,7 @@
     },
     {
       "id": "use-my-browser-logins",
-      "status": "proposed",
+      "status": "decided",
       "en": "Use my browser logins",
       "translations": {
         "zh-CN": "使用我的浏览器登录态",
@@ -4755,11 +5213,12 @@
         "ko": "내 브라우저 로그인 사용",
         "id": "Gunakan login browser saya"
       },
-      "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。"
+      "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。",
+      "checkCase": false
     },
     {
       "id": "voice-dictionary",
-      "status": "proposed",
+      "status": "decided",
       "en": "Voice dictionary",
       "translations": {
         "zh-CN": "语音词典",
@@ -4767,11 +5226,12 @@
         "ko": "음성 사전",
         "id": "Kamus suara"
       },
-      "note": "语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。"
+      "note": "语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。",
+      "checkCase": false
     },
     {
       "id": "voice-mode",
-      "status": "proposed",
+      "status": "decided",
       "en": "Voice Mode",
       "translations": {
         "zh-CN": "语音模式",
@@ -4785,7 +5245,7 @@
     },
     {
       "id": "voiceprint",
-      "status": "proposed",
+      "status": "decided",
       "en": "Voiceprint",
       "translations": {
         "zh-CN": "声纹",
@@ -4799,7 +5259,7 @@
     },
     {
       "id": "wallpaper",
-      "status": "proposed",
+      "status": "decided",
       "en": "Wallpaper",
       "translations": {
         "zh-CN": "壁纸",
@@ -4808,11 +5268,12 @@
         "ko": "배경화면",
         "id": "Wallpaper"
       },
-      "note": "Desktop appearance setting for an in-app visual background layer."
+      "note": "Desktop appearance setting for an in-app visual background layer.",
+      "checkCase": false
     },
     {
       "id": "wallpaper-blur",
-      "status": "proposed",
+      "status": "decided",
       "en": "Wallpaper Blur",
       "translations": {
         "zh-CN": "壁纸模糊",
@@ -4821,11 +5282,12 @@
         "ko": "배경화면 흐림",
         "id": "Buram wallpaper"
       },
-      "note": "仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。"
+      "note": "仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。",
+      "checkCase": false
     },
     {
       "id": "wallpaper-visibility",
-      "status": "proposed",
+      "status": "decided",
       "en": "Wallpaper Visibility",
       "translations": {
         "zh-CN": "壁纸可见度",
@@ -4834,35 +5296,49 @@
         "ko": "배경화면 표시 강도",
         "id": "Visibilitas wallpaper"
       },
-      "note": "壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。"
+      "note": "壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。",
+      "checkCase": false
     },
     {
       "id": "wechat",
-      "status": "proposed",
+      "status": "decided",
       "en": "WeChat",
       "translations": {
         "zh-CN": "微信",
         "ja": "WeChat",
         "ko": "WeChat",
-        "id": "WeChat"
+        "id": "WeChat",
+        "es": "WeChat",
+        "fr": "WeChat",
+        "de": "WeChat",
+        "pt-PT": "WeChat",
+        "pt-BR": "WeChat"
       },
-      "note": "个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "wecom",
-      "status": "proposed",
+      "status": "decided",
       "en": "WeCom",
       "translations": {
         "zh-CN": "企业微信",
         "ja": "WeCom",
         "ko": "WeCom",
-        "id": "WeCom"
+        "id": "WeCom",
+        "es": "WeCom",
+        "fr": "WeCom",
+        "de": "WeCom",
+        "pt-PT": "WeCom",
+        "pt-BR": "WeCom",
+        "zh-Hant-x-lzh": "WeCom"
       },
-      "note": "企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。"
+      "note": "企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。",
+      "checkCase": false
     },
     {
       "id": "wecom-group-bot",
-      "status": "proposed",
+      "status": "decided",
       "en": "WeCom group bot",
       "translations": {
         "zh-CN": "企微群机器人",
@@ -4870,11 +5346,12 @@
         "ko": "WeCom 그룹 봇",
         "id": "Bot grup WeCom"
       },
-      "note": "企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。"
+      "note": "企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。",
+      "checkCase": false
     },
     {
       "id": "wecom-intelligent-bot",
-      "status": "proposed",
+      "status": "decided",
       "en": "WeCom Intelligent Bot",
       "translations": {
         "zh-CN": "企业微信智能机器人",
@@ -4882,11 +5359,12 @@
         "ko": "WeCom 지능형 봇",
         "id": "Bot Cerdas WeCom"
       },
-      "note": "企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。"
+      "note": "企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。",
+      "checkCase": false
     },
     {
       "id": "withdraw-reply",
-      "status": "proposed",
+      "status": "decided",
       "en": "withdraw (a reply)",
       "translations": {
         "zh-CN": "撤回",
@@ -4894,11 +5372,12 @@
         "ko": "철회",
         "id": "Tarik kembali"
       },
-      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。"
+      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。",
+      "checkCase": false
     },
     {
       "id": "work-split",
-      "status": "proposed",
+      "status": "decided",
       "en": "Work split",
       "translations": {
         "zh-CN": "分工",

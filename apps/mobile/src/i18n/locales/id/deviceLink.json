@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} tidak bisa dipakai karena belum masuk di komputer. Masuk lewat {{appName}} pada komputer di Pengaturan → Penyedia model, lalu coba lagi.",
     "noEncryption": "{{agent}} tidak bisa dipakai karena penyimpanan aman sistem di komputer tidak tersedia. Periksa Keychain (macOS) atau enkripsi akun (Windows), lalu mulai ulang {{appName}} di komputer.",
     "proxyNotReady": "{{agent}} belum siap di komputer. Coba lagi sebentar; jika terus terjadi, mulai ulang {{appName}} di komputer.",
+    "sharedLinkUnavailable": "{{agent}} sementara tidak tersedia: Codex di komputer sudah login, tetapi {{appName}} tidak dapat membaca login tersebut (tautan ke sana tidak bisa dibuat; di Windows biasanya karena izin biasa). Pastikan {{appName}} di komputer memiliki izin membuat tautan (di Windows bisa dijalankan sekali sebagai administrator atau aktifkan developer mode), lalu coba lagi.",
     "default": "{{agent}} tidak bisa dipakai karena kredensial login komputer tidak tersedia. Masuk lagi lewat {{appName}} pada komputer di Pengaturan → Penyedia model. ({{reason}})"
   },
   "remoteError": {
