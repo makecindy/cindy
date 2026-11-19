@@ -39,11 +39,28 @@ export function useDialogueGroupOrder(enabled: boolean) {
   const owner = getDataOwnerGeneration().dataOwnerId;
   const [revision, setRevision] = useState(0);
   const positions = useMemo(() => enabled ? readPositions(owner) : new Map<string, Position>(), [enabled, owner, revision]);
-  function remember(scope: string, ids: string[]) {
-    const index = ids.indexOf(DIALOGUE_SORT_ID);
+  function remember(scope: string, before: readonly string[], after: readonly string[], comparisonKey: (key: string) => string) {
+    const index = after.indexOf(DIALOGUE_SORT_ID);
     if (index < 0 || getDataOwnerGeneration().dataOwnerId !== owner) return;
     const next = new Map(readPositions(owner));
-    next.set(scope, { previous: ids[index - 1] ?? null, next: ids[index + 1] ?? null });
+    const saved = next.get(scope);
+    let position: Position;
+    if (index === before.indexOf(DIALOGUE_SORT_ID)) {
+      if (!saved) return;
+      // Only projects traded slots. Remap visible anchors in place; a filtered
+      // neighbour (or a true list boundary) still occupies its original slot.
+      const atSlot = (anchor: string | null) => {
+        if (anchor === null) return null;
+        const identity = comparisonKey(anchor);
+        const slot = before.findIndex(id => id !== DIALOGUE_SORT_ID && comparisonKey(id) === identity);
+        return slot < 0 ? anchor : after[slot];
+      };
+      position = { previous: atSlot(saved.previous), next: atSlot(saved.next) };
+    } else {
+      position = { previous: after[index - 1] ?? null, next: after[index + 1] ?? null };
+    }
+    if (position.previous === saved?.previous && position.next === saved?.next) return;
+    next.set(scope, position);
     if (writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
       setRevision(value => value + 1);
     }

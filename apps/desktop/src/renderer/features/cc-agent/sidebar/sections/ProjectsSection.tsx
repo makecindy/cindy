@@ -1160,16 +1160,7 @@ export function ProjectsSection({
         if (ordered.every((id, i) => id === sortableIds[i])) return;
         const projectIds = ordered.filter(id => id !== DIALOGUE_SORT_ID);
         const priorProjectIds = sortableIds.filter(id => id !== DIALOGUE_SORT_ID);
-        const index = ordered.indexOf(DIALOGUE_SORT_ID);
-        const scope = orderScope(groupKey);
-        if (index >= 0) {
-          const moved = index !== sortableIds.indexOf(DIALOGUE_SORT_ID);
-          const neighborsChanged = ordered[index - 1] !== sortableIds[index - 1] ||
-            ordered[index + 1] !== sortableIds[index + 1];
-          if (moved || (dialogueOrder.positions.has(scope) && neighborsChanged)) {
-            dialogueOrder.remember(scope, ordered);
-          }
-        }
+        dialogueOrder.remember(orderScope(groupKey), sortableIds, ordered, projectComparisonKey);
         if (projectIds.some((id, i) => id !== priorProjectIds[i])) handleReorder(projectIds);
       }}
       disabled={!projectDragEnabled || overflow}

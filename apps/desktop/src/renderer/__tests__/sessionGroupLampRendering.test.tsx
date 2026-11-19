@@ -431,6 +431,51 @@ describe('Manual project sorting', () => {
     }
   });
 
+  it.each([
+    { hidden: 'A', dialogueIndex: 1, expected: ['A', 'dialogue-group', 'C', 'B'] },
+    { hidden: 'C', dialogueIndex: 2, expected: ['B', 'A', 'dialogue-group', 'C'] },
+  ])('keeps the hidden $hidden beside the dialogue group after sorting filtered projects', ({ hidden, dialogueIndex, expected }) => {
+    setDataOwnerGeneration('filtered-project-sort');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    try {
+      const p = groupProps(false);
+      const projects = ['A', 'B', 'C'].map(name => ({
+        projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name, scope: 'local' as const,
+        sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+        remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+      }));
+      p.projects = projects;
+      p.allProjectKeysForOrder = projects.map(project => project.projectKey);
+      p.filter.manualProjectOrder = [...p.allProjectKeysForOrder];
+      p.filter.projectOrder = 'custom';
+      const view = render(<ProjectsSection {...p} />);
+      function dropBefore(id: string, before: string) {
+        const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
+        const row = list.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
+        const oldIndex = Array.from(list.children).indexOf(row);
+        list.insertBefore(row, list.querySelector(`[data-sortable-id="${before}"]`));
+        const sortable = Sortable.get(list)!;
+        act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+          item: row, from: list, oldIndex, newIndex: Array.from(list.children).indexOf(row),
+        }) as SortableEvent));
+      }
+      dropBefore('dialogue-group', p.allProjectKeysForOrder[dialogueIndex]);
+      const visible = p.allProjectKeysForOrder.filter(key => key !== 'local:/' + hidden);
+      view.rerender(<ProjectsSection {...p} projects={projects.filter(project => visible.includes(project.projectKey))} />);
+      dropBefore(visible[1], visible[0]);
+      const saved = vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0];
+      view.unmount();
+      render(<ProjectsSection {...p} filter={{ ...p.filter, manualProjectOrder: [...saved] }} />);
+      const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
+      expect(Array.from(list.children, row => row.getAttribute('data-sortable-id')?.replace('local:/', ''))).toEqual(expected);
+    } finally {
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
   it('leaves the real project header draggable and persists a completed reorder', () => {
     const p = groupProps(false);
     const writePreference = vi.spyOn(sidebarOwnerStorage, 'writeSidebarOwnerStorage');
