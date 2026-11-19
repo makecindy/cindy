@@ -29,6 +29,16 @@ export default {
       await panel.getByTestId('trace-pick').waitFor();
       assert.match(await page.getByTestId('trace-readout').innerText(), /\d/);
       await ui.capture('picked-moment');
+      // Regression #11543: at both ends the portal readout must stay inside the viewport.
+      for (const ratio of [0.01, 0.99]) {
+        await page.mouse.move(box.x + box.width * ratio, box.y + box.height * 0.5);
+        await page.waitForFunction(() => {
+          const readout = document.querySelector('[data-testid="trace-readout"]');
+          if (!readout) return false;
+          const rect = readout.getBoundingClientRect();
+          return rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+        });
+      }
       await page.mouse.move(2, 2);
       await page.getByTestId('trace-readout').waitFor({ state: 'detached' });
       assert.match(await share.locator('xpath=following-sibling::*[1]').innerText(), /^(<1|\d+)%$/);

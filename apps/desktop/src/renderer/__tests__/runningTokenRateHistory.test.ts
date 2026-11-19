@@ -537,3 +537,22 @@ describe('finished requests on the speed chart', () => {
     expect(thinkingStrokeLength(500, 20_000, 20, 1.5)).toBeGreaterThan(3);
   });
 });
+
+
+// Production recordTokenSpeed, regression #11543: a view opening after several requests
+// must recover the host's whole-turn share and marks. Existing cases observe every request.
+// Minimal input is one snapshot with index 3 and three completed requests. Tier: unit.
+it('restores missed requests and the whole-turn reasoning share from a host trace', () => {
+  const trace = { durationMs: 3000, requests: 3, speed: [],
+    marks: [[1000, 10, 1], [2000, 20, 1], [3000, 0, 1]] as Array<[number, number, number]>,
+    reportedOutputTokens: 100 };
+  const speed = { rate: 30, average: 30, tokens: 100, elapsedMs: 3000, streaming: false,
+    request: { index: 3, atMs: 3000, thinkingTokens: 0, outputTokens: 30 }, trace };
+  const restored = recordTokenSpeed(emptyRateHistory(1), { startedAt: 1, speed });
+  expect(restored.turnThinkingTokens).toBe(30);
+  expect(restored.turnThinkingOutputTokens).toBe(100);
+  expect(restored.marks).toHaveLength(3);
+  const repeated = recordTokenSpeed(restored, { startedAt: 1, speed });
+  expect(repeated.marks).toEqual(restored.marks);
+  expect(readTokenSpeedSnapshot(speed)?.trace).toEqual(trace);
+});

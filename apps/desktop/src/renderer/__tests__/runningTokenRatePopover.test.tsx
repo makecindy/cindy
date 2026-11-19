@@ -502,6 +502,14 @@ it('says what is at the picked moment, and mentions reasoning only where there w
     expect(lines()).toHaveLength(1);
     fireEvent.pointerMove(chart, { clientX: 72, clientY: 120 });
     expect(lines()).toHaveLength(1);
+    // Regression #11543: portal coordinates cannot survive scrolling, resizing or window blur.
+    for (const event of ['scroll', 'resize', 'blur']) {
+      fireEvent.pointerMove(chart, { clientX: 72, clientY: 120 });
+      expect(readout()).not.toBeNull();
+      fireEvent(window, new Event(event));
+      expect(readout()).toBeNull();
+    }
+    fireEvent.pointerMove(chart, { clientX: 72, clientY: 120 });
     fireEvent.pointerLeave(chart);
     expect(readout()).toBeNull();
     expect(screen.queryByTestId('trace-pick')).toBeNull();

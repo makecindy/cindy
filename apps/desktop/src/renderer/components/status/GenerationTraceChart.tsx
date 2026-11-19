@@ -1,4 +1,5 @@
-import { useState, type PointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
+import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -86,7 +87,23 @@ export function GenerationTraceChart({
   const { t } = useTranslation();
   // The picked slice, and where its readout goes on screen. The live chart redraws
   // under a resting pointer, so what is shown is read from the data on every render.
-  const [pick, setPick] = useState<{ column: number; left: number; top: number } | null>(null);
+  const [pick, setPick] = useState<{ column: number } | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pick) return;
+    const clear = () => setPick(null);
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') clear(); };
+    window.addEventListener('scroll', clear, true);
+    window.addEventListener('resize', clear);
+    window.addEventListener('blur', clear);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('scroll', clear, true);
+      window.removeEventListener('resize', clear);
+      window.removeEventListener('blur', clear);
+      window.removeEventListener('keydown', escape);
+    };
+  }, [pick]);
   const plotWidth = width - PAD_LEFT - PAD_RIGHT;
   const span = toMs - fromMs;
   const columns = binThinkingMarks(marks, fromMs, toMs, THINKING_COLUMNS);
@@ -123,17 +140,38 @@ export function GenerationTraceChart({
     if (box.width <= 0) return;
     const x = ((event.clientX - box.left) / box.width) * width;
     const column = Math.min(THINKING_COLUMNS - 1, Math.max(0, Math.floor(((x - PAD_LEFT) / plotWidth) * THINKING_COLUMNS)));
-    if (pick?.column === column && pick.top === box.top) return;
-    setPick({ column, left: box.left + (columnX(column) / width) * box.width, top: box.top });
+    if (pick?.column === column) return;
+    setPick({ column });
   };
+
+  const anchor = useMemo(() => ({
+    getBoundingClientRect: () => {
+      const rect = chartRef.current?.getBoundingClientRect();
+      if (!rect || !pick) return new DOMRect();
+      return new DOMRect(rect.left + ((PAD_LEFT + (pick.column + 0.5) *
+        (width - PAD_LEFT - PAD_RIGHT) / THINKING_COLUMNS) / width) * rect.width, rect.top, 0, rect.height);
+    },
+    contextElement: chartRef.current ?? undefined,
+  }), [pick, width]);
+  const { refs, floatingStyles } = useFloating({
+    open: picked !== null,
+    strategy: 'fixed',
+    placement: 'top',
+    elements: { reference: anchor },
+    middleware: [offset(6), flip({ padding: 8 }), shift({ padding: 8, crossAxis: true })],
+    whileElementsMounted: autoUpdate,
+  });
 
   return (
     <div
+      ref={chartRef}
       className={cn('relative', pickable && 'cursor-crosshair touch-none', className)}
       // Down as well as move: on a touch screen a press picks the moment.
       onPointerMove={pickable ? onPick : undefined}
       onPointerDown={pickable ? onPick : undefined}
       onPointerLeave={pickable ? () => setPick(null) : undefined}
+      onPointerCancel={() => setPick(null)}
+      onPointerUp={(event) => { if (event.pointerType === 'touch') setPick(null); }}
     >
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -195,10 +233,11 @@ export function GenerationTraceChart({
         // A portal with fixed position: the usage details scroll and would clip it. Above the
         // chart, so it covers neither the strokes nor the figures under them.
         <div
+          ref={refs.setFloating}
           aria-hidden="true"
           data-testid="trace-readout"
-          className="pointer-events-none fixed left-0 top-0 z-[10011] w-max select-none rounded-xl bg-[var(--tooltip-bg)] px-2.5 py-1.5 text-12 leading-normal tabular-nums text-[var(--tooltip-text)] shadow-[shadow:var(--shadow-menu)]"
-          style={{ transform: `translate3d(${pick.left}px, ${pick.top - 6}px, 0) translate(-50%, -100%)` }}
+          className="pointer-events-none fixed left-0 top-0 z-[10011] w-max max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-2.5 py-1.5 text-12 leading-normal tabular-nums text-[var(--tooltip-text)] shadow-[shadow:var(--shadow-menu)]"
+          style={floatingStyles}
         >
           <div className="flex justify-between gap-3">
             <span>{t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate) })}</span>

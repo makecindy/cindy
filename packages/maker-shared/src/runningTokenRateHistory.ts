@@ -1,3 +1,5 @@
+import { normalizeGenerationTrace, type GenerationTrace } from './generationTrace.js';
+
 interface RateCounters {
   durationMs: number;
   outputTokens: number;
@@ -211,6 +213,8 @@ export interface TokenSpeedSnapshot {
   totalOutputTokens?: number;
   /** The newest finished request of this turn; old hosts omit it. */
   request?: TokenSpeedRequestMark;
+  /** Bounded host-owned turn history, restores requests missed while this view was absent. */
+  trace?: GenerationTrace;
 }
 
 /** One finished model request, placed on the same axis as `elapsedMs`. */
@@ -241,7 +245,9 @@ export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | und
   const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
   if (!finite(speed.rate) || !finite(speed.average) || !finite(speed.tokens) ||
     !finite(speed.elapsedMs) || typeof speed.streaming !== 'boolean') return undefined;
+  const trace = normalizeGenerationTrace(speed.trace);
   return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
+    ...(trace ? { trace } : {}),
     elapsedMs: speed.elapsedMs, streaming: speed.streaming,
     ...(finite(speed.totalOutputTokens) && speed.totalOutputTokens >= speed.tokens
       ? { totalOutputTokens: speed.totalOutputTokens } : {}),
@@ -297,6 +303,19 @@ export function recordTokenSpeed(
       turnThinkingOutputTokens: shareTokens
         ? (sameMarkTurn ? history.turnThinkingOutputTokens ?? 0 : 0) + shareTokens.output
         : sameMarkTurn ? history.turnThinkingOutputTokens : undefined,
+    } : {}),
+    ...(speed.trace ? {
+      marks: [
+        ...(sameMarkTurn ? previousMarks.filter((mark) => mark.durationMs <= baseOffset) : previousMarks),
+        ...speed.trace.marks.map(([atMs, thinking, requests]) => ({
+          durationMs: offset + atMs, thinkingTokens: thinking < 0 ? null : thinking, requests,
+        })),
+      ].slice(-MAX_RATE_MARKS),
+      markStartedAt: startedAt,
+      markIndex: speed.trace.requests,
+      turnThinkingTokens: speed.trace.reportedOutputTokens > 0
+        ? speed.trace.marks.reduce((sum, mark) => sum + Math.max(0, mark[1]), 0) : undefined,
+      turnThinkingOutputTokens: speed.trace.reportedOutputTokens || undefined,
     } : {}),
     startedAt,
     baseline: null,

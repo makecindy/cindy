@@ -236,6 +236,9 @@ export class CalibratedTokenSpeedMeter {
   private traceSpeed: GenerationTrace['speed'] = [];
   private traceSampleMs = TRACE_SAMPLE_MS;
   private traceMarks: GenerationTrace['marks'] = [];
+  /** Earliest request in each mark's covered time range. */
+  private traceMarkStarts: number[] = [];
+  private traceMarkEnds: number[] = [];
   /** Output of the requests that reported a reasoning split: what the turn's reasoning is a share of. */
   private reportedOutputTokens = 0;
 
@@ -281,6 +284,8 @@ export class CalibratedTokenSpeedMeter {
     this.traceSpeed = [];
     this.traceSampleMs = TRACE_SAMPLE_MS;
     this.traceMarks = [];
+    this.traceMarkStarts = [];
+    this.traceMarkEnds = [];
     this.reportedOutputTokens = 0;
     this.clearLive();
   }
@@ -522,7 +527,7 @@ export class CalibratedTokenSpeedMeter {
       elapsedMs,
       streaming,
       ...(this.peak > 0 ? { peak: this.peak } : {}),
-      ...(this.lastRequest ? { request: this.lastRequest } : {}),
+      ...(this.lastRequest ? { request: this.lastRequest, trace: this.trace() } : {}),
     };
   }
 
@@ -554,15 +559,28 @@ export class CalibratedTokenSpeedMeter {
     };
     if (thinkingTokens !== undefined) this.reportedOutputTokens += outputTokens;
     this.traceMarks.push([atMs, thinkingTokens ?? -1, 1]);
+    this.traceMarkStarts.push(atMs);
+    this.traceMarkEnds.push(atMs);
     if (this.traceMarks.length <= TRACE_MAX_POINTS) return;
-    const merged: GenerationTrace['marks'] = [];
-    for (let i = 0; i < this.traceMarks.length; i += 2) {
-      const a = this.traceMarks[i];
-      const b = this.traceMarks[i + 1];
-      if (!b) merged.push(a);
-      else merged.push([b[0], a[1] < 0 && b[1] < 0 ? -1 : Math.max(0, a[1]) + Math.max(0, b[1]), a[2] + b[2]]);
+    // Merge the smallest covered time range, preserving a request-weighted position.
+    // Repeatedly halving neighbours moved large early groups to their right edge.
+    let closest = 0;
+    let smallestSpan = Infinity;
+    for (let i = 0; i < this.traceMarks.length - 1; i += 1) {
+      const end = this.traceMarkEnds[i + 1];
+      const span = end - this.traceMarkStarts[i];
+      if (span < smallestSpan) { smallestSpan = span; closest = i; }
     }
-    this.traceMarks = merged;
+    const a = this.traceMarks[closest];
+    const b = this.traceMarks[closest + 1];
+    const requests = a[2] + b[2];
+    this.traceMarks.splice(closest, 2, [
+      (a[0] * a[2] + b[0] * b[2]) / requests,
+      a[1] < 0 && b[1] < 0 ? -1 : Math.max(0, a[1]) + Math.max(0, b[1]),
+      requests,
+    ]);
+    this.traceMarkStarts.splice(closest + 1, 1);
+    this.traceMarkEnds.splice(closest, 1);
   }
 
   /** Keep a speed reading for the trace, at most one per `traceSampleMs` of generation time. */

@@ -2978,6 +2978,11 @@ it('marks each finished request with its reasoning tokens and keeps a bounded tu
     expect(trace.marks.reduce((sum, mark) => sum + mark[2], 0)).toBe(140);
     expect(trace.marks.reduce((sum, mark) => sum + Math.max(0, mark[1]), 0)).toBe(516 + 137 * 10);
     expect(trace.reportedOutputTokens).toBe(139 * 1_000);
+    // Regression #11543: an absent view must recover the entire turn, and compacting
+    // a long trace must leave marks near its beginning instead of shifting them right.
+    expect(rt.tokenSpeed.snapshot()?.trace).toEqual(trace);
+    expect(trace.marks[0][0]).toBeLessThan(trace.durationMs / 28);
+
     expect(trace.marks.map((mark) => mark[0])).toEqual([...trace.marks.map((mark) => mark[0])].sort((a, b) => a - b));
   } finally {
     vi.useRealTimers();
