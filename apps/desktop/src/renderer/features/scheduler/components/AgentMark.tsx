@@ -13,7 +13,7 @@ import { CodexMark } from '@/components/icons/CodexMark';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { PiMark } from '@/components/icons/PiMark';
 import type { ScheduleAgentKind } from '@cindy/maker-scheduler';
-import { PluginEngineIcon } from '@/components/new-chat/PluginEnginesSection';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 
 interface Props {
   /** 'acp' = 插件引擎：显示通用的引擎标志(颜色跟父级，与其他 mark 一致)。 */

@@ -434,7 +434,7 @@ export function loadPluginEngines(deviceId: string, reader: PluginEngineReader):
 
 /** Lists with plugin tasks share one initial catalogue read per device. */
 export function prefetchPluginEngineIcons(deviceId: string, reader: PluginEngineReader): Promise<void> {
-  return cache.has(deviceId) ? Promise.resolve() : loadPluginEngines(deviceId, reader);
+  return getCachedPluginEngines(deviceId).length ? Promise.resolve() : loadPluginEngines(deviceId, reader);
 }
 
 /** 插件重新上报模型需要一点时间：请求后只再读一次，不轮询。 */

@@ -22,7 +22,8 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
-import { PluginEngineIcon, type PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
 import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {

@@ -16,11 +16,12 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
-import { Puzzle, SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 
@@ -76,42 +77,6 @@ export interface PluginEnginePendingSelection {
   engineName: string;
   modelId: string;
   effort?: string | null;
-}
-
-/**
- * The engine's mark: the providing plugin's own icon (manifest `icon`) when it has one, else the
- * generic puzzle. `className` colours the puzzle only; a plugin icon keeps its own colours.
- */
-export function PluginEngineIcon({
-  size,
-  className,
-  iconDataUrl,
-}: {
-  size: number;
-  className?: string;
-  iconDataUrl?: string | null;
-}) {
-  if (iconDataUrl) {
-    return (
-      <img
-        src={iconDataUrl}
-        alt=""
-        aria-hidden
-        draggable={false}
-        width={size}
-        height={size}
-        style={{ width: size, height: size }}
-        className="shrink-0 object-contain"
-      />
-    );
-  }
-  return (
-    <Puzzle
-      size={size}
-      aria-hidden
-      className={cn('shrink-0', className ?? 'text-[var(--text-secondary)]')}
-    />
-  );
 }
 
 /** Localized name of a reasoning level, the same strings the built-in rows use. */

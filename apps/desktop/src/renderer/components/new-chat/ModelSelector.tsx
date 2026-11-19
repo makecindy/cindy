@@ -81,9 +81,9 @@ import {
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
   matchPluginEngineRows,
-  PluginEngineIcon,
   PluginEngineSessionPanel,
   PluginEnginesSection,
   type PluginEnginePendingSelection,

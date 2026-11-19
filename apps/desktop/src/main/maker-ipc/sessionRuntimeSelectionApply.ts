@@ -22,6 +22,7 @@ import { sessions } from '../localDb/schema.js';
 import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
 import { normalizeSessionProviderId, getSessionProvider, hasSessionProvider, setSessionProvider, hydrateSessionProvider, clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
@@ -389,22 +390,33 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         if (internalOptions.source !== 'user' || (live && live.agentKind !== 'acp')) {
           return { deferred: false, superseded: true };
         }
-        if (!acpHarnessKeyFromProviderId(runtimeStatus.providerId)
+        if (!runtimeStatus.providerId || !acpHarnessKeyFromProviderId(runtimeStatus.providerId)
           || (providerId != null && providerId !== runtimeStatus.providerId)) {
           throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+        }
+        if (!agentSwitchDeps.admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        if (atomicSelection && atomicSelection.fastMode !== false) {
+          throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
         }
         // Keep the same owner, write authorization and send lock across the ACP round trip.
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
-        const effort = atomicSelection?.effort;
+        const target = agentSwitchDeps.admitPluginEngineTarget({
+          providerId: runtimeStatus.providerId,
+          model,
+          effort: atomicSelection?.effort,
+        });
+        const effort = isPluginEngineEffort(target.effort) ? target.effort : undefined;
         if (live && runtimeStatus.status === 'active') {
-          await live.setModel(model, effort ? { effort } : undefined);
+          await live.setModel(target.model, effort ? { effort } : undefined);
           assertRuntimeOwnerCurrent();
           assertSharedTaskCurrent.admit();
         }
-        await persistSessionFields(sessionId, { model, ...(effort ? { effort } : {}) });
+        await persistSessionFields(sessionId, { model: target.model, ...(effort ? { effort } : {}) });
         assertRuntimeOwnerCurrent();
-        const response = { deferred: false, superseded: false, effectiveModelId: model };
+        const response = { deferred: false, superseded: false, effectiveModelId: target.model };
         if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
         return response;
       }

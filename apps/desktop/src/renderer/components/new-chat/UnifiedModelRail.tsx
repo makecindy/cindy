@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
-import { PluginEngineIcon } from './PluginEnginesSection';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
