@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Error del servidor ascendente (5xx). Vuelve a intentarlo más tarde",
     "UPSTREAM_UNREACHABLE": "No se puede conectar con el punto final. Comprueba tu red y la URL base",
     "TIMEOUT": "Se agotó el tiempo de conexión. Comprueba tu red y la URL base",
+    "CERT_ERROR": "No se pudo verificar el certificado. Comprueba que el nombre de host de la URL base coincida con el certificado, así como la cadena de certificados y la configuración de confianza de la CA de tu organización.",
     "UNKNOWN": "Error desconocido. Consulta los registros para obtener más detalles.",
     "upstreamToast": "Error en la solicitud del proveedor \"{{provider}}\": {{message}}"
   },

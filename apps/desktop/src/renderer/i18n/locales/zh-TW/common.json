@@ -1412,6 +1412,7 @@
     "UPSTREAM_ERROR": "上游服務錯誤（5xx），請稍後重試",
     "UPSTREAM_UNREACHABLE": "無法連線到端點，請檢查網路與基礎 URL",
     "TIMEOUT": "連線逾時，請檢查網路與基礎 URL",
+    "CERT_ERROR": "憑證驗證失敗，請檢查基礎 URL 的主機名稱是否與憑證相符，以及憑證鏈和企業 CA 信任設定",
     "UNKNOWN": "未知錯誤，請檢視日誌瞭解詳情",
     "upstreamToast": "供應商「{{provider}}」請求失敗：{{message}}"
   },

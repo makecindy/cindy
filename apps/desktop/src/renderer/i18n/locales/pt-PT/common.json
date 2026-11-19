@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Erro do servidor a montante (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não é possível contactar o endpoint. Verifique a rede e o URL base",
     "TIMEOUT": "O tempo de ligação esgotou-se. Verifique a rede e o URL base",
+    "CERT_ERROR": "A verificação do certificado falhou. Verifica se o nome do anfitrião do URL base corresponde ao certificado, bem como a cadeia de certificados e a configuração de confiança da CA da tua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os registos para obter detalhes",
     "upstreamToast": "O pedido ao fornecedor \"{{provider}}\" falhou: {{message}}"
   },
