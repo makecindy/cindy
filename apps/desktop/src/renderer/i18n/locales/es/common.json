@@ -19665,6 +19665,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Este turno ha fallado.",
+    "blockedReasonUnknown": "No se ha indicado un motivo concreto del bloqueo.",
+    "blockedNextStep": "Puedes añadir información en esta tarea. Tras resolver la causa, haz clic en «{{action}}» para continuar.",
     "status": {
       "active": "Avanzando hacia el objetivo",
       "paused": "En pausa",

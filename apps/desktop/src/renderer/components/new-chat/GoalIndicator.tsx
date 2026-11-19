@@ -1,6 +1,8 @@
 import type { TFunction } from 'i18next';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 /**
  * GoalIndicator —— 会话内 /goal 进行中的状态 chip(composer 上方)。
  *
@@ -19,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useGoalStatus } from '@/hooks/useGoalStatus';
 import { goalApiFor } from '@/lib/makerTransport';
-import { isGoalCapacityBackoff } from '@/utils/overloadError';
+import { GOAL_OVERLOAD_LAST_REASON, isGoalCapacityBackoff } from '@/utils/overloadError';
 import { GoalAdvancedLimits, type GoalLimitValues } from './GoalAdvancedLimits';
 import { ListComposerTextarea } from './ListComposerTextarea';
 
@@ -48,7 +50,12 @@ function formatResetTime(resetAtMs: number | null): string {
   const sameDay = new Date().toDateString() === d.toDateString();
   return sameDay
     ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    : d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
 }
 
 function GoalEditor({
@@ -132,7 +139,10 @@ function GoalEditor({
             textareaRef.current?.focus();
           }}
         >
-          <AlertDialog.Title className="text-15 font-medium" style={{ color: 'var(--text-primary)' }}>
+          <AlertDialog.Title
+            className="text-15 font-medium"
+            style={{ color: 'var(--text-primary)' }}
+          >
             {t('goal.editGoal.title')}
           </AlertDialog.Title>
           <div className="flex flex-col gap-1.5">
@@ -222,102 +232,140 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
   // 多余, 跨午夜那一刻两次结果还可能不一致(copilot 低置信提示; 双取是既有写法)。
   const resetTimeText = formatResetTime(goal.usageResetAt);
   const elapsedMs = active ? Math.max(0, nowMs - goal.startedAt) : 0;
+  const reason = goal.lastReason?.trim();
+  const unknownReason =
+    !reason ||
+    reason === 'agent reported blocked' ||
+    reason === 'turn failed: unknown error' ||
+    reason === 'unknown error';
+  const failedTurn =
+    reason?.startsWith('turn failed:') || reason?.startsWith('turn dispatch failed:');
+  const blockedMessage = unknownReason
+    ? t('goal.blockedReasonUnknown')
+    : reason === 'tool_use_loop_detected'
+      ? t('logic.errors.toolUseLoopDetected')
+      : reason === GOAL_OVERLOAD_LAST_REASON
+        ? t('goal.status.capacityLimited')
+        : failedTurn
+          ? t('goal.blockedTurnFailed')
+          : redactSensitiveText(reason);
 
   return (
-    <div
-      className="mx-auto mb-1.5 flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-12"
-      style={{
-        backgroundColor: 'var(--surface-chip)',
-        border: `1px solid ${attention ? 'var(--error-border)' : 'var(--border-default)'}`,
-      }}
-    >
-      {/* 目标 icon(替代状态点):标识这是目标模式;attention 态用 error 色。 */}
-      <Target
-        size={13}
-        strokeWidth={2}
-        aria-hidden
-        className="shrink-0"
-        style={{ color: attention ? 'var(--error-fg)' : 'var(--text-secondary)' }}
-      />
-      {/* 状态标签 */}
-      <span
-        className="shrink-0 font-medium"
-        style={{ color: attention ? 'var(--error-fg)' : 'var(--text-secondary)' }}
+    <div className="mx-auto mb-1.5 max-w-full min-w-0">
+      <div
+        className="flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-12"
+        style={{
+          backgroundColor: 'var(--surface-chip)',
+          border: `1px solid ${attention ? 'var(--error-border)' : 'var(--border-default)'}`,
+        }}
       >
-        {statusLabel}
-      </span>
-      {/* usageLimited:显示恢复 / 重试时刻(知道才显示)。过载那条是重试时刻, 不是额度重置。 */}
-      {goal.status === 'usageLimited' && resetTimeText && (
-        <span className="shrink-0" style={{ color: 'var(--error-fg)' }}>
-          {t(isCapacityBackoff ? 'goal.capacityRetryAt' : 'goal.usageLimitedUntil', {
-            time: resetTimeText,
-          })}
-        </span>
-      )}
-      {/* 目标文本(截断) */}
-      <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--text-primary)' }} title={goal.objective}>
-        {goal.objective}
-      </span>
-      {/* 续跑轮数。设了 maxTurns 时直接显示 used/max,让默认上限可见。 */}
-      <span className="shrink-0 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-        {goal.maxTurns == null
-          ? t('goal.turns', { used: goal.turnsUsed })
-          : t('goal.turnsWithMax', { used: goal.turnsUsed, max: goal.maxTurns })}
-      </span>
-      {/* 实时运行时长(仅 active 时每秒刷新) */}
-      {active && (
+        {/* 目标 icon(替代状态点):标识这是目标模式;attention 态用 error 色。 */}
+        <Target
+          size={13}
+          strokeWidth={2}
+          aria-hidden
+          className="shrink-0"
+          style={{ color: attention ? 'var(--error-fg)' : 'var(--text-secondary)' }}
+        />
+        {/* 状态标签 */}
         <span
-          className="shrink-0 tabular-nums"
-          style={{ color: 'var(--text-tertiary)' }}
-          title={t('goal.elapsedTooltip')}
+          className="shrink-0 font-medium"
+          style={{ color: attention ? 'var(--error-fg)' : 'var(--text-secondary)' }}
         >
-          {formatElapsed(elapsedMs, t)}
+          {statusLabel}
         </span>
-      )}
-      <GoalEditor sessionId={sessionId} goal={goal} />
-      {/* 暂停(仅 active):保留计数停续跑,可 resume */}
-      {goal.status === 'active' && (
+        {/* usageLimited:显示恢复 / 重试时刻(知道才显示)。过载那条是重试时刻, 不是额度重置。 */}
+        {goal.status === 'usageLimited' && resetTimeText && (
+          <span className="shrink-0" style={{ color: 'var(--error-fg)' }}>
+            {t(isCapacityBackoff ? 'goal.capacityRetryAt' : 'goal.usageLimitedUntil', {
+              time: resetTimeText,
+            })}
+          </span>
+        )}
+        {/* 目标文本(截断) */}
+        <span
+          className="min-w-0 flex-1 truncate"
+          style={{ color: 'var(--text-primary)' }}
+          title={goal.objective}
+        >
+          {goal.objective}
+        </span>
+        {/* 续跑轮数。设了 maxTurns 时直接显示 used/max,让默认上限可见。 */}
+        <span className="shrink-0 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+          {goal.maxTurns == null
+            ? t('goal.turns', { used: goal.turnsUsed })
+            : t('goal.turnsWithMax', { used: goal.turnsUsed, max: goal.maxTurns })}
+        </span>
+        {/* 实时运行时长(仅 active 时每秒刷新) */}
+        {active && (
+          <span
+            className="shrink-0 tabular-nums"
+            style={{ color: 'var(--text-tertiary)' }}
+            title={t('goal.elapsedTooltip')}
+          >
+            {formatElapsed(elapsedMs, t)}
+          </span>
+        )}
+        <GoalEditor sessionId={sessionId} goal={goal} />
+        {/* 暂停(仅 active):保留计数停续跑,可 resume */}
+        {goal.status === 'active' && (
+          <button
+            type="button"
+            aria-label={t('goal.pause')}
+            title={t('goal.pause')}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+            style={{ color: 'var(--text-tertiary)' }}
+            onClick={() => {
+              void goalApiFor(sessionId).pauseGoal(sessionId);
+            }}
+          >
+            <Pause size={12} strokeWidth={2} />
+          </button>
+        )}
+        {/* 恢复(paused / blocked / usageLimited):保留计数继续推进 */}
+        {(goal.status === 'paused' ||
+          goal.status === 'blocked' ||
+          goal.status === 'usageLimited') && (
+          <button
+            type="button"
+            aria-label={t('goal.resume')}
+            title={t('goal.resume')}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:opacity-80"
+            style={{ color: 'var(--accent-cta-bg)' }}
+            onClick={() => {
+              void goalApiFor(sessionId).resumeGoal(sessionId);
+            }}
+          >
+            <Play size={12} strokeWidth={2.5} />
+          </button>
+        )}
+        {/* 清除 */}
         <button
           type="button"
-          aria-label={t('goal.pause')}
-          title={t('goal.pause')}
+          aria-label={t('goal.clear')}
+          title={t('goal.clear')}
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: 'var(--text-tertiary)' }}
           onClick={() => {
-            void goalApiFor(sessionId).pauseGoal(sessionId);
+            void goalApiFor(sessionId).clearGoal(sessionId);
           }}
         >
-          <Pause size={12} strokeWidth={2} />
+          <Trash2 size={12} strokeWidth={2} />
         </button>
+      </div>
+      {goal.status === 'blocked' && (
+        <ErrorNotice
+          key={sessionId}
+          className="mt-1.5"
+          message={
+            <div className="max-h-32 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {blockedMessage}
+            </div>
+          }
+          description={t('goal.blockedNextStep', { action: t('goal.resume') })}
+          details={!unknownReason && failedTurn ? reason : undefined}
+        />
       )}
-      {/* 恢复(paused / blocked / usageLimited):保留计数继续推进 */}
-      {(goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited') && (
-        <button
-          type="button"
-          aria-label={t('goal.resume')}
-          title={t('goal.resume')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:opacity-80"
-          style={{ color: 'var(--accent-cta-bg)' }}
-          onClick={() => {
-            void goalApiFor(sessionId).resumeGoal(sessionId);
-          }}
-        >
-          <Play size={12} strokeWidth={2.5} />
-        </button>
-      )}
-      {/* 清除 */}
-      <button
-        type="button"
-        aria-label={t('goal.clear')}
-        title={t('goal.clear')}
-        className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
-        style={{ color: 'var(--text-tertiary)' }}
-        onClick={() => {
-          void goalApiFor(sessionId).clearGoal(sessionId);
-        }}
-      >
-        <Trash2 size={12} strokeWidth={2} />
-      </button>
     </div>
   );
 }

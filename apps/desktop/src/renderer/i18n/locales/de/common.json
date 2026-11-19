@@ -19481,6 +19481,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Diese Runde ist fehlgeschlagen.",
+    "blockedReasonUnknown": "Es wurde kein konkreter Grund für die Blockierung angegeben.",
+    "blockedNextStep": "Du kannst in dieser Aufgabe Informationen ergänzen. Sobald die Ursache behoben ist, klicke auf „{{action}}“, um fortzufahren.",
     "status": {
       "active": "Ziel wird weiterverfolgt",
       "paused": "Pausiert",
