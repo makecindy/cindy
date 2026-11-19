@@ -45,7 +45,17 @@
     for identifier in provider.registeredTypeIdentifiers {
       guard let type = UTType(identifier), type.conforms(to: .plainText),
             let data = await loadShareData(provider, identifier: identifier) else { continue }
-      let encoding: String.Encoding = type == .utf16PlainText || type == .utf16ExternalPlainText ? .utf16 : .utf8
+      let encoding: String.Encoding
+      switch type {
+      case .utf16PlainText:
+        // Without a BOM, this representation uses the native iOS byte order.
+        let hasBOM = data.starts(with: [0xff, 0xfe]) || data.starts(with: [0xfe, 0xff])
+        encoding = hasBOM ? .utf16 : .utf16LittleEndian
+      case .utf16ExternalPlainText:
+        encoding = .utf16
+      default:
+        encoding = .utf8
+      }
       if let text = String(data: data, encoding: encoding), !text.isEmpty {
         return SharePayload(type: .text, value: text, mimeType: "text/plain", metadata: nil)
       }
@@ -134,7 +144,8 @@
       }
     }
     if let payload { return payload }
-    guard let kind, kind != .video, kind != .audio, let type = UTType(identifier),
+    // The generic file pass can see media too. Keep these exports file-backed.
+    guard let kind, let type = UTType(identifier), !type.conforms(to: .audiovisualContent),
           !type.conforms(to: .directory), !type.conforms(to: .url),
           let data = await loadShareData(provider, identifier: identifier) else { return nil }
     return receive(data as NSData)

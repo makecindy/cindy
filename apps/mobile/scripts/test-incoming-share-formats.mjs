@@ -86,6 +86,29 @@ final class Adapter {
       }
     }
     print("PASS: text, photos and documents available only as data representations")
+    // Byte-only providers bypass loadItem. Native UTF-16 accepts a BOM, while
+    // the external representation defaults to big-endian without one.
+    for (type, bytes) in [(UTType.utf16PlainText, Data([0x41, 0, 0x42, 0])),
+                         (.utf16PlainText, Data([0xff, 0xfe, 0x41, 0, 0x42, 0])),
+                         (.utf16ExternalPlainText, Data([0, 0x41, 0, 0x42]))] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { done in
+        done(bytes, nil); return nil
+      }
+      guard let payload = await adapter.parse(provider), payload.type == .text, payload.value == "AB" else {
+        fatalError("Incorrect byte order or BOM handling for " + type.identifier)
+      }
+    }
+    // The generic file pass also sees audio and movie types. It must not ask
+    // for their bytes after the file representation fails.
+    for type in [UTType.mpeg4Movie, .mp3] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { _ in
+        fatalError("Requested in-memory media bytes for " + type.identifier)
+      }
+      let payload = await adapter.parse(provider)
+      precondition(payload == nil, "Missing file should leave the media share unhandled")
+    }
     if selected != "raw-image" {
       let url = root.appendingPathComponent("data encoded document.pdf")
       let bytes = Data("original file URL document".utf8)
