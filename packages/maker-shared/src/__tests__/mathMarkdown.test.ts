@@ -101,6 +101,18 @@ describe('normalizeMathDelimiters — link destination 保护', () => {
     expect(normalizeMathDelimiters(src)).toBe('[r]: ./run\\(1\\).md\n正文 $a$ 公式');
   });
 
+  // #9440 / review 4625603886: next-line reference destinations are URL
+  // syntax too; preserve them while ordinary following math still converts.
+  it('protects next-line reference destinations and keeps surrounding math', () => {
+    for (const target of ['docs/a\\(1\\).md', 'docs/a\\[1\\].md']) {
+      const source = '[f]:\n ' + target + '\n\n\\(x\\)';
+      for (const preserveLineCount of [false, true]) {
+        expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe('[f]:\n ' + target + '\n\n$x$');
+      }
+    }
+    expect(normalizeMathDelimiters('[f]:\n\n\\(x\\)')).toBe('[f]:\n\n$x$');
+  });
+
   it('reference 定义在文末无换行同样保护', () => {
     const src = '公式 \\(x\\)\n[img]: ./a\\[1\\].png';
     expect(normalizeMathDelimiters(src)).toBe('公式 $x$\n[img]: ./a\\[1\\].png');

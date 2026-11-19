@@ -90,7 +90,13 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
     i = Math.max(open + 2, j);
   }
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
-    const lineEnd = text.indexOf('\n', match.index);
+    let lineEnd = text.indexOf('\n', match.index);
+    // An empty definition header can put its destination on the next line.
+    // Protect that physical line as URL syntax, but never cross a blank line.
+    if (lineEnd !== -1 && !text.slice(match.index + match[0].length, lineEnd).trim()) {
+      const nextEnd = text.indexOf('\n', lineEnd + 1);
+      if (text.slice(lineEnd + 1, nextEnd === -1 ? text.length : nextEnd).trim()) lineEnd = nextEnd;
+    }
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
   }
   return ranges.sort((a, b) => a[0] - b[0]);

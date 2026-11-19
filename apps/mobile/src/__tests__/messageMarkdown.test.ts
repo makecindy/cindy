@@ -2678,6 +2678,45 @@ describe('reference definition boundaries', () => {
     expect(parseMobileMarkdownDocument(nested).blocks.filter(block => block.type === 'list_item').map(block => block.depth ?? 0)).toEqual([0, 1]);
   });
 
+  // #9440 / reviews 4625603886/3895/3901: validate actual reference targets
+  // and HTML exclusion boundaries, not just whether a token was recognized.
+  it('preserves escaped continuation destinations before math normalization', () => {
+    for (const path of ['docs/a\\(1\\).md', 'docs/a\\[1\\].md']) {
+      const source = '[file][f]\n\n[f]:\n ' + path + '\n\n\\(x\\)';
+      for (const srcLines of [false, true]) {
+        const result = parseMobileMarkdownDocument(source, { srcLines });
+        expect(result.blocks[0]).toMatchObject({ inlines: [{ type: 'link', text: 'file', url: path.replace(/\\/g, '') }] });
+      }
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
+  it('excludes reference definitions inside the complete block HTML tag set', () => {
+    for (const tag of ['iframe', 'base', 'basefont', 'col', 'frame', 'frameset', 'menuitem', 'noframes', 'optgroup', 'option', 'param', 'search']) {
+      const source = '[site][s]\n\n<' + tag + '>\n# hidden\n[s]: https://wrong.example/\n</' + tag + '>';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+  });
+
+  it('ends generic HTML declarations at the first closing angle', () => {
+    for (const declaration of ['<!ELEMENT note>', '<!ATTLIST note\n id ID #REQUIRED>']) {
+      const source = '[site][s]\n\n' + declaration + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

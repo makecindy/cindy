@@ -216,7 +216,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       continue;
     }
     if (!line.trim()) { html = false; paragraph = false; continue; }
-    const rawDeclaration = /^ {0,3}(?:<!DOCTYPE\b|<\?(?=[\s\S])|<!\[CDATA\[)/i.test(line);
+    const rawDeclaration = /^ {0,3}(?:<![A-Z]|<\?|<!\[CDATA\[)/.test(line);
     if (rawDeclaration) {
       const end = line.trimStart().startsWith('<?')
         ? /\?>/
@@ -234,7 +234,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
-    if (/^ {0,3}<(?:\/?(?:address|article|aside|blockquote|body|caption|center|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|legend|li|link|main|menu|nav|ol|p|pre|script|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])|!)/i.test(line)) html = true;
+    if (/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])/i.test(line)) html = true;
     if (html) continue;
     const definition = !paragraph && listContentIndents.length === 0
       ? readMarkdownReferenceDefinition(lines, index) : null;
