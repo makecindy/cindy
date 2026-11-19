@@ -125,10 +125,11 @@
       }
       let isRenderedImage = value is UIImage
       var type = isRenderedImage ? UTType.png : UTType(identifier)
-      if !isRenderedImage, identifier == UTType.image.identifier,
-         let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-         let identifier = CGImageSourceGetType(source),
-         let imageType = UTType(identifier as String), imageType.conforms(to: .image) {
+      if !isRenderedImage, identifier == UTType.image.identifier {
+        // UIKit can vend a keyed archive for public.image. Only save actual image bytes.
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let identifier = CGImageSourceGetType(source),
+              let imageType = UTType(identifier as String), imageType.conforms(to: .image) else { return nil }
         type = imageType
       }
       let ext = type?.preferredFilenameExtension ?? "bin"

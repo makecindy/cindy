@@ -132,8 +132,7 @@ final class Adapter {
     }
     if selected != "data-file-url" {
       let gif = Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")!
-      for (bytes, type) in [(png, UTType.png), (gif, UTType.gif)] {
-        let provider = NSItemProvider()
+      for (bytes, type, provider) in [(png, UTType.png, NSItemProvider()), (gif, UTType.gif, BytesProvider())] {
         provider.registerDataRepresentation(forTypeIdentifier: UTType.image.identifier, visibility: .all) { done in
           done(bytes, nil); return nil
         }
@@ -145,6 +144,15 @@ final class Adapter {
         precondition(try! Data(contentsOf: result) == bytes)
       }
       print("PASS: unnamed abstract image bytes preserve concrete extensions and MIME")
+      // An abstract image provider can return an object archive when asked for
+      // bytes. A keyed archive must not be delivered as an image attachment.
+      let archive = try! NSKeyedArchiver.archivedData(withRootObject: png as NSData, requiringSecureCoding: true)
+      let archiveProvider = BytesProvider()
+      archiveProvider.registerDataRepresentation(forTypeIdentifier: UTType.image.identifier, visibility: .all) { done in
+        done(archive, nil); return nil
+      }
+      let payload = await adapter.parse(archiveProvider)
+      precondition(payload == nil, "Object archive was accepted as an image")
     }
     for (name, bytes, kind) in [("extensionless-document", Data("original document bytes".utf8), ShareType.file),
                                 ("extensionless-image", png, ShareType.image)] {
