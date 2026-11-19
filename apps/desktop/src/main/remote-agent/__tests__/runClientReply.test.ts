@@ -138,6 +138,7 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
             if (request.op === 'upload' && phase === 'upload') {
               uploading();
               await held;
+              throw Object.assign(new Error('queue full'), { code: 'BACKPRESSURE' });
             }
             if (request.op === 'call') client.onData(Buffer.from(`${JSON.stringify({
               t: 'result', callId: request.callId, ok: true, value: null,

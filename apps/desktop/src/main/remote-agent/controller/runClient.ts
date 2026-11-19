@@ -223,7 +223,8 @@ export class RemoteAgentRunClient implements PolledRun {
           if (attempt >= UPLOAD_CHUNK_RETRIES || failure || this.closed || !isRetryableLinkError(error)) throw error;
           window = 1;
           await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
-          if (failure || this.closed) throw error;
+          if (failure) throw error;
+          requireOpen();
         }
       }
     };
