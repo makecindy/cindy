@@ -17,12 +17,14 @@
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import test, { mock } from 'node:test';
+import { promisify } from 'node:util';
 import ts from 'typescript';
 import { createHostServer } from './server.mjs';
 
@@ -78,7 +80,7 @@ function standIn(behaviour = {}) {
       },
     });
     child.kill = (signal) => { child.signals.push(signal); return true; };
-    child.exit = () => { if (!child.exited) { child.exited = true; child.emit('exit', null, null); } };
+    child.exit = (code = null) => { if (!child.exited) { child.exited = true; child.emit('exit', code, null); } };
     spawned.push(child);
     behaviour.onSpawn?.(child);
     return child;
@@ -88,7 +90,22 @@ function standIn(behaviour = {}) {
 
 const ready = child => child.send({ ready: true, pid: child.pid });
 const answer = result => (child, message) => { if (message.method === 'resolve') child.send({ id: message.id, result }); };
-const helperFor = (spawnImpl) => createChromiumProxyHelper({ profileDir, spawnImpl, assets: () => ({ binary: 'electron', script: 'worker.cjs' }) });
+const helperFor = (spawnImpl) => createChromiumProxyHelper({ profileDir, spawnImpl, platform: 'darwin',
+  assets: () => ({ binary: 'electron', script: 'worker.cjs' }) });
+
+const ipcWorker = path.join(profileDir, 'ipc-worker.cjs');
+fs.writeFileSync(ipcWorker, `
+  const send = value => process.send(JSON.stringify(value));
+  let first;
+  process.on('disconnect', () => process.exit());
+  process.on('message', line => {
+    const request = JSON.parse(line);
+    if (!first) { first = request; return; }
+    send({ id: request.id, result: request.url });
+    send({ id: first.id, result: first.url });
+  });
+  send({ ready: true, pid: process.pid });
+`);
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)); };
 
 /** Starts a resolution and reports whether it settled, and how, without awaiting it. */
@@ -134,6 +151,105 @@ test('the proxy helper client ignores unrelated stdout before ready and a reply'
     assert.equal(await helper.resolveProxy('https://api.example.test/'), 'PROXY 127.0.0.1:9');
   } finally {
     await helper.close();
+  }
+});
+
+// Entry: the production helper and Host resolver. Rule: an early exit releases readiness and uses
+// the Windows fallback without starting another worker during backoff. Gap: the current crash test
+// exits after ready. Minimal input: one code-zero exit before ready, then requests bracketing retry.
+// Tier: unit with the child and clock injected.
+test('a clean exit before ready falls back immediately and retries only after backoff', async () => {
+  const { spawned, spawnImpl } = standIn();
+  const helper = helperFor(spawnImpl);
+  try {
+    const warmup = track(startHostSystemProxySettings({ platform: 'win32', makeHelper: () => helper }));
+    const upstream = 'https://exit-before-ready.example.test/';
+    const first = track(resolveHostOutboundProxy(upstream));
+    spawned[0].exit(0);
+    await settle();
+    assert.equal(warmup.settled, true);
+    assert.ifError(warmup.error);
+    assert.equal(first.settled, true);
+    assert.ifError(first.error);
+    assert.equal(first.value, null);
+    assert.equal(getHostOutboundPathSnapshotFor([upstream]).kind, 'unknown');
+    assert.equal(helper.state(), 'backoff');
+
+    mock.timers.tick(FIRST_BACKOFF_MS - 1);
+    await assert.rejects(helper.resolveProxy(upstream), /restarting/);
+    assert.equal(spawned.length, 1);
+    mock.timers.tick(1);
+    const retry = track(helper.resolveProxy(upstream));
+    assert.equal(spawned.length, 2);
+    spawned[1].exit(0);
+    await settle();
+    assert.match(retry.error?.message ?? '', /helper exited/);
+    mock.timers.tick(FIRST_BACKOFF_MS);
+    await assert.rejects(helper.resolveProxy(upstream), /restarting/);
+    assert.equal(spawned.length, 2, 'a second early exit doubles the backoff');
+  } finally {
+    await helper.close();
+  }
+});
+
+// Entry: createChromiumProxyHelper with a real Node subprocess in place of Electron.
+// Rule: Windows IPC carries unchanged JSON and pairs replies by id. Gap: stream-only stand-ins
+// miss IPC wiring. Minimal input: two concurrent requests, replied to in reverse. Tier: unit with
+// a local IPC fixture, exercising the parent transport without system proxy settings.
+test('the Windows transport pairs out-of-order replies over Node IPC', { timeout: 5000 }, async t => {
+  let child;
+  const helper = createChromiumProxyHelper({ profileDir, platform: 'win32',
+    spawnImpl: (binary, args, options) => { child = spawn(binary, args, { ...options, signal: AbortSignal.timeout(3500) }); return child; },
+    assets: () => ({ binary: process.execPath, script: ipcWorker }) });
+  t.after(() => helper.close());
+  const first = 'https://ipc-first.example.test/path';
+  const second = 'https://ipc-second.example.test/other';
+  const replies = Promise.all([helper.resolveProxy(first), helper.resolveProxy(second)]);
+  // The helper's deadlines use the mock clock, so keep the real fixture referenced until it exits.
+  child.ref();
+  assert.deepEqual(await replies, [first, second]);
+});
+
+// Entry: a short-lived Node Host calls the real helper's warmUp and optional close. Rule: an idle
+// Windows IPC channel must not keep login alive. Gap: mocks cannot detect a referenced OS handle.
+// Minimal input: a ready IPC worker, with and without explicit close. Tier: unit with a subprocess
+// fixture and real IPC, isolated from Electron and system settings.
+test('the Windows IPC channel allows a short Host to exit after warmup or close', { timeout: 32_000 }, async () => {
+  const source = `
+    import { createChromiumProxyHelper } from ${JSON.stringify(new URL('./chromium-proxy.ts', import.meta.url).href)};
+    const [script, profileDir, action] = process.argv.slice(1);
+    const helper = createChromiumProxyHelper({ profileDir, platform: 'win32',
+      assets: () => ({ binary: process.execPath, script }) });
+    await helper.warmUp();
+    if (helper.state() !== 'ready') throw new Error('fixture did not become ready');
+    if (action === 'close') await helper.close();
+    console.log(helper.state());
+  `;
+  const run = promisify(execFile);
+  for (const [action, expected] of [['warmup', 'ready'], ['close', 'stopped']]) {
+    const exit = new AbortController();
+    const result = run(process.execPath, ['--import', 'tsx',
+      '--import', new URL('./loaders/register-raw.mjs', import.meta.url).href,
+      '--input-type=module', '-e', source, ipcWorker, profileDir, action],
+    { signal: AbortSignal.any([AbortSignal.timeout(15_000), exit.signal]) });
+
+    // Start the liveness check when the short Host reports its final state. Loading its
+    // TypeScript dependencies under the parallel Host suite has a separate deadline.
+    let exitDeadline;
+    const abort = () => exit.abort(new Error(`${action}: the short Host reported its final state but did not exit`));
+    result.child.stdout.once('data', () => {
+      exitDeadline = AbortSignal.timeout(3500);
+      exitDeadline.addEventListener('abort', abort, { once: true });
+    });
+    try {
+      const { stdout } = await result;
+      assert.equal(stdout.trim(), expected);
+    } catch (error) {
+      if (exit.signal.aborted) throw exit.signal.reason;
+      throw error;
+    } finally {
+      exitDeadline?.removeEventListener('abort', abort);
+    }
   }
 });
 

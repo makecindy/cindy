@@ -4,8 +4,9 @@
  * Host follows the same rules as the desktop's session.resolveProxy. The Host starts it on demand and owns its
  * lifetime (chromium-proxy.ts).
  *
- * Boundary: stdin and stdout only, one JSON object per line; no window, page, port or socket of its own. Its
- * userData is its own directory under the Host data directory; it takes no single-instance lock and opens no
+ * Boundary: parent-child IPC on Windows and stdin/stdout elsewhere, one JSON text per message; no window,
+ * page, port or socket of its own. Its userData is its own directory under the Host data directory;
+ * it takes no single-instance lock and opens no
  * desktop profile. It asks an in-memory session (no `persist:` partition: nothing on disk, no cookies), never
  * calls safeStorage and receives no credentials, tokens or request bodies: only URLs, answered with Chromium's
  * PAC result string. Chromium itself fetches PAC files and tries auto-discovery, as for the desktop.
@@ -34,12 +35,27 @@ app.setName('Cindy Proxy');
 app.dock?.hide();
 app.disableHardwareAcceleration();
 
-const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const transport = process.platform === 'win32' ? {
+  write(line) {
+    if (process.connected) process.send(line, (error) => { if (error) app.quit(); });
+  },
+  listen(onLine) {
+    process.on('disconnect', () => app.quit());
+    if (!process.connected) { app.quit(); return; }
+    process.on('message', line => { if (typeof line === 'string') onLine(line); });
+  },
+} : {
+  write: (line) => process.stdout.write(`${line}\n`),
+  listen(onLine) {
+    const lines = createInterface({ input: process.stdin });
+    lines.on('close', () => app.quit());
+    lines.on('line', onLine);
+  },
+};
+const send = (value) => transport.write(JSON.stringify(value));
 let ses = null;
 
-const lines = createInterface({ input: process.stdin });
-lines.on('close', () => app.quit());
-lines.on('line', (line) => {
+transport.listen((line) => {
   if (line.length > MAX_LINE) return;
   let request;
   try { request = JSON.parse(line); } catch { return; }

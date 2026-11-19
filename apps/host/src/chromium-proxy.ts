@@ -15,11 +15,11 @@
  * MAX_BACKOFF_MS and resets once it is ready.
  *
  * The helper is told only the URL, without user info, query or fragment, and answers only a PAC result string.
- * The helper process, its stdio and its start timer are unreferenced, so an idle helper never keeps a short Host
- * command alive; a resolution in progress keeps it alive through its own bounded timer. When the Host exits, the
- * helper's stdin closes and it quits.
+ * The helper process, its transport and its start timer are unreferenced, so an idle helper never keeps a short Host
+ * command alive; a resolution in progress keeps it alive through its own bounded timer. When the Host exits,
+ * the transport closes and the helper quits.
  */
-import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
+import { spawn as nodeSpawn, type ChildProcess, type StdioOptions } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -56,7 +56,7 @@ export interface ChromiumProxyHelper {
   /** Chromium's PAC result string for the URL; rejects with ChromiumProxyUnavailableError when it has none in time. */
   resolveProxy(url: string): Promise<string>;
   state(): ChromiumProxyHelperState;
-  /** Stops the helper by its handle (stdin closed, then SIGTERM, then SIGKILL); nothing starts afterwards. */
+  /** Stops the helper by its handle (transport closed, then SIGTERM, then SIGKILL); nothing starts afterwards. */
   close(): Promise<void>;
 }
 
@@ -67,6 +67,7 @@ export interface ChromiumProxyHelperOptions {
   assets?: () => { binary: string; script: string } | null;
   spawnImpl?: typeof nodeSpawn;
   now?: () => number;
+  platform?: NodeJS.Platform;
 }
 
 /** Only scheme, host, port and path go to the helper: never user info, a query or a fragment. */
@@ -103,10 +104,51 @@ function defaultAssets(): { binary: string; script: string } | null {
   return binary ? { binary, script: fileURLToPath(new URL('./chromium-proxy-worker.cjs', import.meta.url)) } : null;
 }
 
+export function chromiumProxyWorkerStdio(platform: NodeJS.Platform, stderr: 'ignore' | 'pipe' = 'ignore'): StdioOptions {
+  // Electron's Windows main process exposes an already-ended stdin even when fd 0 is a pipe.
+  return platform === 'win32' ? ['ignore', 'ignore', stderr, 'ipc'] : ['pipe', 'pipe', stderr];
+}
+
+type WriteResult = (error: Error | null | undefined) => void;
+type ReadLine = (line: string) => void;
+type StreamError = (error: Error) => void;
+
+/** Both transports carry the same JSON text, with a newline only as stream framing. */
+export function createChromiumProxyWorkerTransport(child: ChildProcess, platform: NodeJS.Platform) {
+  if (platform === 'win32') {
+    return {
+      canWrite: () => child.connected,
+      write: (line: string, done: WriteResult) => { child.send(line, done); },
+      listen(onLine: ReadLine, _onStreamError?: StreamError, onDisconnect?: () => void) {
+        child.on('message', (line) => { if (typeof line === 'string') onLine(line); });
+        if (onDisconnect) child.once('disconnect', onDisconnect);
+      },
+      unref: () => child.channel?.unref(),
+      close: () => { if (child.connected) child.disconnect(); },
+    };
+  }
+  return {
+    canWrite: () => Boolean(child.stdin?.writable && !child.stdin.destroyed),
+    write: (line: string, done: WriteResult) => { child.stdin?.write(`${line}\n`, done); },
+    listen(onLine: ReadLine, onStreamError?: StreamError) {
+      child.stdin?.on('error', onStreamError ?? (() => {}));
+      const lines = createInterface({ input: child.stdout! });
+      lines.on('line', onLine);
+      if (onStreamError) lines.on('error', onStreamError);
+    },
+    unref() {
+      (child.stdin as unknown as { unref?: () => void } | null)?.unref?.();
+      (child.stdout as unknown as { unref?: () => void } | null)?.unref?.();
+    },
+    close: () => { child.stdin?.end(); },
+  };
+}
+
 interface Pending { resolve: (value: string) => void; reject: (error: Error) => void }
 
 interface Worker {
   child: ChildProcess;
+  transport: ReturnType<typeof createChromiumProxyWorkerTransport>;
   ready: Promise<void>;
   isReady: () => boolean;
   request: (message: Record<string, unknown>, timeoutMs: number) => Promise<string>;
@@ -117,6 +159,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
   const spawnImpl = options.spawnImpl ?? nodeSpawn;
   const now = options.now ?? Date.now;
   const assets = options.assets ?? defaultAssets;
+  const platform = options.platform ?? process.platform;
   let worker: Worker | null = null;
   let state: ChromiumProxyHelperState = 'not-started';
   let retryAt = 0;
@@ -132,7 +175,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
 
   function stopWorker(target: Worker): Promise<void> {
     if (worker === target) worker = null;
-    target.child.stdin?.end();
+    target.transport.close();
     const terminate = setTimeout(() => target.child.kill('SIGTERM'), 500);
     const kill = setTimeout(() => target.child.kill('SIGKILL'), 1500);
     terminate.unref?.();
@@ -165,15 +208,15 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     try {
       mkdirSync(profile, { recursive: true, mode: 0o700 });
       child = spawnImpl(found.binary, [found.script], {
-        env: helperEnv(profile), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
+        env: helperEnv(profile), stdio: chromiumProxyWorkerStdio(platform), windowsHide: true,
       });
     } catch {
       deferRestart('start failed');
       return null;
     }
     child.unref?.();
-    (child.stdin as unknown as { unref?: () => void } | null)?.unref?.();
-    (child.stdout as unknown as { unref?: () => void } | null)?.unref?.();
+    const transport = createChromiumProxyWorkerTransport(child, platform);
+    transport.unref();
     let ready = false;
     let sequence = 0;
     const pending = new Map<number, Pending>();
@@ -184,6 +227,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     const exited = new Promise<void>(resolve => { child.once('exit', () => resolve()); child.once('error', () => resolve()); });
     const self: Worker = {
       child,
+      transport,
       ready: readyPromise,
       isReady: () => ready,
       exited,
@@ -196,7 +240,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
             resolve: (value) => { clearTimeout(timer); resolve(value); },
             reject: (error) => { clearTimeout(timer); reject(error); },
           });
-          child.stdin?.write(`${JSON.stringify({ id, ...message })}\n`, (error) => {
+          transport.write(JSON.stringify({ id, ...message }), (error) => {
             if (error) {
               pending.get(id)?.reject(new ChromiumProxyUnavailableError('write failed'));
               pending.delete(id);
@@ -214,9 +258,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     };
     child.once('exit', gone);
     child.once('error', gone);
-    child.stdin?.on('error', () => {});
-    const lines = createInterface({ input: child.stdout! });
-    lines.on('line', (line) => {
+    transport.listen((line) => {
       if (line.length > MAX_LINE) return;
       let value: { ready?: unknown; pid?: unknown; id?: unknown; result?: unknown; error?: unknown };
       try { value = JSON.parse(line); } catch { return; }
@@ -234,7 +276,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
       pending.delete(value.id as number);
       if (typeof value.result === 'string') entry.resolve(value.result);
       else entry.reject(new ChromiumProxyUnavailableError(typeof value.error === 'string' ? value.error : 'no result'));
-    });
+    }, undefined, gone);
     const startTimer = setTimeout(() => { if (!ready) fail(self, 'not ready in time'); }, START_TIMEOUT_MS);
     startTimer.unref?.();
     void readyPromise.then(() => clearTimeout(startTimer), () => clearTimeout(startTimer));
@@ -296,7 +338,10 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     async close() {
       closed = true;
       state = 'stopped';
-      if (worker) await stopWorker(worker);
+      if (worker) {
+        worker.child.ref?.();
+        await stopWorker(worker);
+      }
     },
   };
 }
