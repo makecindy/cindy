@@ -21,7 +21,7 @@ const catalogs = new Map([
   ['mini', { providers: [provider('openai', 'account-b'), provider('xai')], loading: false, error: null }],
 ]);
 // Hiding is a picker-only choice: Settings keeps the row, the picker folds it under 已隐藏.
-if (ctx.case === 'hidden-provider') {
+if (ctx.case.startsWith('hidden-provider')) {
   local[1] = { ...anthropic(), hidden: true };
   // A disabled provider too, so Settings shows both folded groups side by side.
   local.push(provider('anthropic', 'account-d', { id: 'anthropic-work', name: 'Anthropic · Work', models: fable, suspended: true } as Partial<ProviderView>));

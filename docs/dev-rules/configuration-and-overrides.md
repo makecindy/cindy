@@ -135,7 +135,7 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 `UnifiedModelList.tsx`、`OwnRemoteProviders.tsx`。回归见 `disableOverrides.test.ts`、
 `model-disable-store.test.ts`、`providerHandlers.test.ts`、`modelManagementActions.test.tsx`、
 `unifiedModelPanelRendering.test.tsx`，界面核对用 `pnpm ui:check --page model-categories --case two-axes`
-与 `--page provider-listing-consistency --case hidden-provider`。
+与 `--page provider-listing-consistency --case hidden-provider,hidden-provider-settings`。
 
 已知范围：「已隐藏」展开区目前只在 Desktop 的统一选择器里有。Mobile 选择器、IM `/model` 卡片与旧版
 分段列表按同一规则收起隐藏的供应商，但还没有展开入口；其他电脑上被隐藏的供应商在选择器里只通过
