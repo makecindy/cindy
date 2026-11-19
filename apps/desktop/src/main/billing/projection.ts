@@ -116,6 +116,16 @@ function decimal(value: unknown): string | null {
   return typeof value === 'string' && DECIMAL_PATTERN.test(value) ? value : null;
 }
 
+/**
+ * 两个 decimal() 金额是否相等：去掉小数末尾的 0 再比（如 20 与 20.000000000）。
+ * DECIMAL_PATTERN 不允许整数部分前导 0，所以只需处理小数部分。
+ */
+function sameDecimal(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value;
+  return normalize(left) === normalize(right);
+}
+
 function ledgerDecimal(value: unknown): { source: string; scaled: bigint } | null {
   if (typeof value !== 'string' || !LEDGER_DECIMAL_PATTERN.test(value)) return null;
   const negative = value.startsWith('-');
@@ -489,7 +499,8 @@ function projectOffer(
     productKind === 'GIFT_CARD' &&
     interval === null &&
     amount !== null &&
-    creditAmount === amount &&
+    creditAmount !== null &&
+    sameDecimal(creditAmount, amount) &&
     minAmount === null &&
     maxAmount === null &&
     rolloverCap === null;
@@ -829,8 +840,9 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
   );
   const minFaceValue = optional(value.minFaceValue, decimal);
   const maxFaceValue = optional(value.maxFaceValue, decimal);
+  // 0 是合法的「不冷却」；null 或缺省才表示服务端不支持发到邮箱。
   const emailCooldownSeconds = optional(value.emailCooldownSeconds, (input) =>
-    boundedCount(input, 24 * 3_600) || null,
+    boundedCount(input, 24 * 3_600),
   );
   if (
     !policyCurrency ||
