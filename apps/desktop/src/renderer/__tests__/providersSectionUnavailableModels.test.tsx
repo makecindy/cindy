@@ -808,33 +808,54 @@ describe('ProvidersSection — 双栏管理', () => {
   });
   // Renderer unit: a saved binding must expose the original image preferences under
   // the new connection, even when no legacy API key has ever been configured.
-  it.each([false, true])('manages bound Gemini images with legacy key present: %s', async legacyConnected => {
-    providerSnapshotState.customOverride = {
-      id: 'new-google', name: 'Google Gemini API', source: 'user', connected: true,
-      auth: { method: 'apiKey' }, agents: ['codex'], routing: {}, models: { codex: [] },
-    };
-    providerSnapshotState.legacyGemini = {
-      id: 'gemini', name: 'My old Gemini', source: 'builtin', connected: legacyConnected,
-      auth: { method: 'apiKey' }, agents: [], routing: {}, models: {},
-      imageModels: [{ id: 'gemini-image-test', name: 'Gemini image test' }],
-      availableMediaModelIds: ['gemini-image-test'],
-      geminiImageSettingsConnectionId: 'new-google',
-    };
-    providerSnapshotState.order = ['new-google', 'gemini', 'xd'];
-    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+  it.each(['first setup', 'old key retained', 'old row removed while suspended'])(
+    'manages bound Gemini images after %s', async state => {
+      const legacyConnected = state === 'old key retained';
+      const legacySuspended = state === 'old row removed while suspended';
+      providerSnapshotState.customOverride = {
+        id: 'new-google', name: 'Google Gemini API', source: 'user', connected: true,
+        auth: { method: 'apiKey' }, agents: ['codex'], routing: {}, models: { codex: [] },
+      };
+      providerSnapshotState.legacyGemini = {
+        id: 'gemini', name: 'My old Gemini', source: 'builtin', connected: legacyConnected,
+        auth: { method: 'apiKey' }, agents: [], routing: {}, models: {},
+        imageModels: [{ id: 'gemini-image-test', name: 'Gemini image test' }],
+        availableMediaModelIds: legacySuspended ? [] : ['gemini-image-test'],
+        suspended: legacySuspended,
+        removed: legacySuspended || undefined,
+        geminiImageSettingsConnectionId: 'new-google',
+      };
+      providerSnapshotState.order = ['new-google', 'gemini', 'xd'];
+      const setModelDisable = vi.fn<typeof window.electronAPI.maker.setModelDisable>().mockResolvedValue({ ok: true });
+      window.electronAPI.maker.setModelDisable = setModelDisable;
+      const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
 
-    const imageSwitch = await screen.findByRole('switch', { name: 'Gemini image test' });
-    fireEvent.click(imageSwitch);
-    expect(setModelVisibilities).toHaveBeenCalledWith(
-      'gemini', [expect.objectContaining({ modelId: 'gemini-image-test' })], expect.any(Boolean),
-    );
-    if (legacyConnected) {
-      fireEvent.click(screen.getByRole('button', { name: /My old Gemini/ }));
-      expect(screen.queryByText('Gemini image test')).toBeNull();
-    } else {
-      expect(screen.queryByRole('button', { name: /My old Gemini/ })).toBeNull();
-    }
-  });
+      if (legacySuspended) {
+        fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.enableProvider' }));
+        expect(setModelDisable).toHaveBeenCalledWith({ kind: 'provider', providerId: 'gemini', disabled: false });
+        providerSnapshotState.legacyGemini = {
+          ...providerSnapshotState.legacyGemini,
+          suspended: false,
+          availableMediaModelIds: ['gemini-image-test'],
+        };
+        view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      }
+
+      const imageSwitch = await screen.findByRole('switch', { name: 'Gemini image test' });
+      fireEvent.click(imageSwitch);
+      expect(setModelVisibilities).toHaveBeenCalledWith(
+        'gemini', [expect.objectContaining({ modelId: 'gemini-image-test' })], expect.any(Boolean),
+      );
+      if (legacyConnected) {
+        fireEvent.click(screen.getByRole('button', { name: /^My old Gemini/ }));
+        expect(screen.queryByText('Gemini image test')).toBeNull();
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+        expect(await screen.findByRole('menuitem', { name: 'settings.providers.builtinApiKey.replaceKey' })).toBeTruthy();
+        expect(screen.queryByRole('menuitem', { name: 'settings.providers.menu.disableProvider' })).toBeNull();
+      } else {
+        expect(screen.queryByRole('button', { name: /My old Gemini/ })).toBeNull();
+      }
+    });
 
   it('dims GPT Image 2 without a ready image channel, independently of chat connection', async () => {
     providerSnapshotState.order = ['custom', 'xd'];

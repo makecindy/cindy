@@ -929,7 +929,7 @@ function DetailHeader({
                     </DropdownMenuItem>
                   )}
                   {menuItems}
-                  <DropdownMenuItem
+                  {provider.geminiImageSettingsConnectionId === undefined && <DropdownMenuItem
                     onClick={() =>
                       writeProviderDisabled(
                         provider.id,
@@ -943,7 +943,7 @@ function DetailHeader({
                         ? 'settings.providers.menu.enableProvider'
                         : 'settings.providers.menu.disableProvider',
                     )}
-                  </DropdownMenuItem>
+                  </DropdownMenuItem>}
                   {menuFooter}
                   {resolvedDelete && (
                     <>
@@ -3662,7 +3662,7 @@ export function ProvidersSection() {
                   {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
                     模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
                     盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
-                  {effectiveSelected.suspended && (
+                  {effectiveSelected.suspended && effectiveSelected.geminiImageSettingsConnectionId === undefined && (
                     <div
                       className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
                       style={{ borderColor: 'var(--settings-theme-card-border)' }}
@@ -3807,19 +3807,35 @@ export function ProvidersSection() {
                   {!effectiveSelected.suspended &&
                     !selectedBorrowedModels &&
                     managesGeminiImages && geminiImages && (
-                      <UnifiedModelList
-                        key={effectiveSelected.id + ':gemini-images'}
-                        provider={{
-                          ...geminiImages,
-                          // Visibility and disable preferences belong to the existing image route.
-                          connected: effectiveSelected.connected,
-                          availableMediaModelIds: effectiveSelected.connected ? geminiImages.availableMediaModelIds : [],
-                          models: {},
-                          videoModels: undefined,
-                          audioModels: undefined,
-                          embeddingModels: undefined,
-                        }}
-                      />
+                      <>
+                        {geminiImages.suspended && (
+                          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                            style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+                            <span style={{ color: 'var(--text-tertiary)' }}>
+                              {t('newChat.modelSelector.category.image')} · {t('settings.providers.pill.suspended')}
+                            </span>
+                            <PillButton
+                              label={t('settings.providers.button.enableProvider')}
+                              onClick={() => writeProviderDisabled(
+                                geminiImages.id, false, t('settings.providers.models.accessWriteFailed'),
+                              )}
+                            />
+                          </div>
+                        )}
+                        <UnifiedModelList
+                          key={effectiveSelected.id + ':gemini-images'}
+                          provider={{
+                            ...geminiImages,
+                            // Visibility and disable preferences belong to the existing image route.
+                            connected: effectiveSelected.connected,
+                            availableMediaModelIds: effectiveSelected.connected ? geminiImages.availableMediaModelIds : [],
+                            models: {},
+                            videoModels: undefined,
+                            audioModels: undefined,
+                            embeddingModels: undefined,
+                          }}
+                        />
+                      </>
                     )}
                   {!effectiveSelected.suspended &&
                     !selectedBorrowedModels &&
