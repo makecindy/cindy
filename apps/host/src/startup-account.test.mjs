@@ -655,6 +655,14 @@ function isolatedServeEnv(root, bin, set) {
   return env;
 }
 
+// Allow cold source-mode startup the same 90 seconds as the lifecycle acceptance.
+const SOURCE_SERVE_ENDPOINT_TIMEOUT_MS = 90_000;
+
+function serveTimeoutMessage(what, stderr) {
+  const stderrTail = stderr.slice(-8192).trimEnd() || '(empty)';
+  return `timed out waiting for ${what}\ncindy-host stderr tail:\n${stderrTail}`;
+}
+
 // Integration: unlike tests with injected binaries, run the default source
 // workers against the installed JS package with no dist executable.
 test('source proxy and power workers report unavailable without an Electron binary', async t => {
@@ -707,6 +715,7 @@ test('source serve keeps health responsive and refreshes an empty native profile
     cp.spawnSync = cp.execSync = cp.execFileSync = unexpected;
     syncBuiltinESMExports();
   `);
+  const serveStarted = performance.now();
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs',
     '--import', './monitor.mjs', 'src/main.ts', 'serve'], { cwd: host, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = once(child, 'exit');
@@ -717,13 +726,17 @@ test('source serve keeps health responsive and refreshes an empty native profile
     await exited;
   });
   const lines = createInterface({ input: child.stdout });
+  let endpointTimer;
   const baseUrl = await new Promise((resolve, reject) => {
+    endpointTimer = setTimeout(() => reject(new Error(serveTimeoutMessage('the endpoint', stderr))),
+      SOURCE_SERVE_ENDPOINT_TIMEOUT_MS - (performance.now() - serveStarted));
     lines.on('line', line => {
       const match = /^cindy-host listening on (http:\/\/127\.0\.0\.1:\d+)$/.exec(line);
       if (match) resolve(match[1]);
     });
     exited.then(() => reject(new Error('serve exited before listening: ' + stderr)), reject);
-  });
+  }).finally(() => clearTimeout(endpointTimer));
+  t.diagnostic(`Source serve spawn to endpoint: ${Math.ceil(performance.now() - serveStarted)} ms`);
   const headers = { authorization: 'Bearer ' + readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim() };
   const start = performance.now();
   const deadline = AbortSignal.timeout(1000);
@@ -812,6 +825,7 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
   const lease = acquireHostRuntimeLease(profile, 'owner-locked');
   assert.equal(lease.held, true);
   const hostDir = fileURLToPath(new URL('..', import.meta.url));
+  const serveStarted = performance.now();
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
     cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
     env: isolatedServeEnv(root, bin, { CINDY_HOST_DATA_DIR: profile, CINDY_HOST_APP_DATA_DIR: path.join(root, 'app-data'),
@@ -826,17 +840,18 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
     lease.release();
     rmSync(root, { recursive: true, force: true });
   });
-  const until = async (read, what) => {
-    for (let i = 0; i < 600; i++) {
+  const until = async (read, what, deadline = null) => {
+    for (let i = 0; deadline === null ? i < 600 : performance.now() < deadline; i++) {
       if (child.exitCode !== null) assert.fail(`cindy-host exited (${child.exitCode}) while waiting for ${what}: ${stderr}`);
       const value = await read().catch(() => null);
       if (value) return value;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    const stderrTail = stderr.slice(-8192).trimEnd() || '(empty)';
-    assert.fail(`timed out waiting for ${what}\ncindy-host stderr tail:\n${stderrTail}`);
+    assert.fail(serveTimeoutMessage(what, stderr));
   };
-  const { baseUrl } = await until(async () => JSON.parse(readFileSync(path.join(profile, 'host-endpoint.json'), 'utf8')), 'the endpoint');
+  const { baseUrl } = await until(async () => JSON.parse(readFileSync(path.join(profile, 'host-endpoint.json'), 'utf8')),
+    'the endpoint', serveStarted + SOURCE_SERVE_ENDPOINT_TIMEOUT_MS);
+  t.diagnostic(`Source serve spawn to endpoint: ${Math.ceil(performance.now() - serveStarted)} ms`);
   const token = readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim();
   const call = async (method, pathname) => {
     const response = await fetch(`${baseUrl}${pathname}`, { method, headers: { authorization: `Bearer ${token}`,
