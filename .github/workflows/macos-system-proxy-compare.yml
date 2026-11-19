@@ -113,3 +113,10 @@ jobs:
           name: windows-system-proxy-compare
           path: ${{ runner.temp }}/system-proxy-compare
           if-no-files-found: warn
+      - name: Upload Chromium proxy helper diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-chromium-proxy-helper-diagnostics
+          path: ${{ runner.temp }}/cindy-proxy-helper-logs-*/
+          if-no-files-found: warn

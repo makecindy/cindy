@@ -29,8 +29,12 @@ const hostDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const electron = createRequire(path.join(hostDir, '../desktop/package.json'))('electron');
 const script = path.join(hostDir, 'src/chromium-proxy-worker.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-helper-e2e-'));
+const diagnostics = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'cindy-proxy-helper-logs-'));
+console.log(`Chromium proxy helper diagnostics: ${diagnostics}`);
 const TEST_ARGS = ['--use-mock-keychain', '--no-proxy-server'];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const STDERR_MODE = 'pipe';
+const TAIL_LINES = 50;
 
 // The PAC file arrives after 400 ms, so a helper that answered before loading it would answer DIRECT.
 const PAC = 'function FindProxyForURL(url, host) { if (dnsDomainIs(host, ".intranet.test")) return "DIRECT"; return "PROXY 127.0.0.1:9"; }';
@@ -63,6 +67,99 @@ async function gone(pid, ms) {
   return !isAlive(pid);
 }
 
+async function waitForRound(condition, timeoutMs) {
+  const until = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < until) await delay(20);
+  return condition();
+}
+
+async function checkStartupRound(run) {
+  const profile = path.join(root, `race-${run}`);
+  fs.mkdirSync(profile);
+  const env = { ...process.env, CINDY_PROXY_WORKER_PROFILE: profile, CINDY_PROXY_WORKER_TEST_CONFIG: testConfig };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const name = `round-${String(run).padStart(2, '0')}`;
+  const logFile = path.join(diagnostics, `${name}.chromium.log`);
+  const started = performance.now();
+  const child = spawn(electron, [script, ...TEST_ARGS, '--enable-logging=file', `--log-file=${logFile}`],
+    { stdio: ['pipe', 'pipe', STDERR_MODE], env });
+  let exit = null;
+  let closed = false;
+  let streamError = null;
+  let forcedStop = false;
+  const stderr = [];
+  const running = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  child.once('exit', (code, signal) => { exit = { code, signal, elapsedMs: Math.round(performance.now() - started) }; });
+  child.once('close', () => { closed = true; });
+  const onError = error => { streamError ??= error; };
+  child.on('error', onError);
+  child.stdin.on('error', onError);
+  const errors = createInterface({ input: child.stderr });
+  errors.on('error', onError);
+  errors.on('line', line => {
+    stderr.push(line.slice(-4096));
+    if (stderr.length > TAIL_LINES) stderr.shift();
+  });
+
+  const answers = [];
+  let readyAt = null;
+  let id = 0;
+  const replies = createInterface({ input: child.stdout });
+  replies.on('error', onError);
+  replies.on('line', (line) => {
+    // Electron's stdout can also contain lines outside the worker protocol.
+    let value;
+    try { value = JSON.parse(line); } catch { return; }
+    if (!value || typeof value !== 'object') return;
+    if (value.ready === true && value.pid === child.pid) readyAt = answers.length;
+    else if (Number.isSafeInteger(value.id) && value.id > 0 && value.id <= id) answers.push(value);
+  });
+  const ask = setInterval(() => {
+    if (!running() || streamError || !child.stdin.writable || child.stdin.destroyed) return;
+    child.stdin.write(`${JSON.stringify({ id: ++id, method: 'resolve', url: 'https://api.example.test/v1' })}\n`);
+  }, 20);
+  try {
+    await waitForRound(() => exit || closed || streamError ||
+      (readyAt !== null && answers.slice(readyAt).some(a => a.result)), 15_000);
+  } finally {
+    clearInterval(ask);
+    if (child.stdin.writable && !child.stdin.destroyed) child.stdin.end();
+    if (!await waitForRound(() => closed, 1500)) {
+      forcedStop = true;
+      if (running()) child.kill('SIGKILL');
+      if (!await waitForRound(() => closed, 1500)) {
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+      }
+    }
+  }
+
+  const summary = { run, pid: child.pid ?? null, stderrMode: STDERR_MODE,
+    exitCode: exit?.code ?? null, signal: exit?.signal ?? null, elapsedMs: exit?.elapsedMs ?? null,
+    stdioClosed: closed, forcedStop, streamError: streamError?.code ?? streamError?.message ?? null };
+  console.log(`Chromium proxy helper ${JSON.stringify(summary)}`);
+  fs.appendFileSync(path.join(diagnostics, 'rounds.jsonl'), `${JSON.stringify(summary)}\n`);
+  fs.writeFileSync(path.join(diagnostics, `${name}.stderr.log`), stderr.join('\n'));
+
+  try {
+    assert.notEqual(readyAt, null, `run ${run}: ready`);
+    const before = answers.slice(0, readyAt);
+    assert.ok(before.length > 0, `run ${run}: received at least one answer before ready`);
+    assert.ok(before.every(a => a.error === 'not_ready'), `run ${run}: before ready only not_ready (${JSON.stringify(before.slice(0, 3))})`);
+    assert.ok(!answers.some(a => typeof a.result === 'string' && /DIRECT/.test(a.result)), `run ${run}: never DIRECT`);
+    assert.ok(answers.some(a => a.result === 'PROXY 127.0.0.1:9'), `run ${run}: the PAC result`);
+    if (streamError) throw streamError;
+    if (forcedStop) throw new Error('helper did not close after stdin ended');
+  } catch (error) {
+    const logTail = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trimEnd().split(/\r?\n/).slice(-TAIL_LINES).join('\n') : '';
+    console.error(`Chromium proxy helper run ${run} failed (stderr=${STDERR_MODE}): ${error.message}\n` +
+      `stderr tail:\n${stderr.join('\n') || '(empty)'}\nChromium log tail:\n${logTail || '(empty or missing)'}`);
+    throw error;
+  }
+}
+
 try {
   // The Electron the Host release copies (scripts/build.mjs) is this one: cookie encryption must be off, so that the
   // helper's Chromium never sets up Safe Storage (a keychain item on macOS).
@@ -75,36 +172,12 @@ try {
   // The helper's own promise, asked over its line protocol from the moment it starts: before it is ready every
   // answer is not_ready, never DIRECT, and once ready it answers what the PAC script says.
   await check('20 starts: no answer before ready, never DIRECT, then the PAC result', async () => {
-    for (let run = 0; run < 20; run++) {
-      const profile = path.join(root, `race-${run}`);
-      fs.mkdirSync(profile);
-      const env = { ...process.env, CINDY_PROXY_WORKER_PROFILE: profile, CINDY_PROXY_WORKER_TEST_CONFIG: testConfig };
-      delete env.ELECTRON_RUN_AS_NODE;
-      const child = spawn(electron, [script, ...TEST_ARGS], { stdio: ['pipe', 'pipe', 'ignore'], env });
-      const answers = [];
-      let readyAt = null;
-      let id = 0;
-      createInterface({ input: child.stdout }).on('line', (line) => {
-        // Electron's stdout can also contain lines outside the worker protocol.
-        let value;
-        try { value = JSON.parse(line); } catch { return; }
-        if (!value || typeof value !== 'object') return;
-        if (value.ready === true && value.pid === child.pid) readyAt = answers.length;
-        else if (Number.isSafeInteger(value.id) && value.id > 0 && value.id <= id) answers.push(value);
-      });
-      const ask = setInterval(() => child.stdin.write(`${JSON.stringify({ id: ++id, method: 'resolve', url: 'https://api.example.test/v1' })}\n`), 20);
-      const until = Date.now() + 15_000;
-      while (Date.now() < until && !(readyAt !== null && answers.slice(readyAt).some(a => a.result))) await delay(20);
-      clearInterval(ask);
-      child.stdin.end();
-      await new Promise(resolve => child.once('exit', resolve));
-      assert.notEqual(readyAt, null, `run ${run}: ready`);
-      const before = answers.slice(0, readyAt);
-      assert.ok(before.length > 0, `run ${run}: received at least one answer before ready`);
-      assert.ok(before.every(a => a.error === 'not_ready'), `run ${run}: before ready only not_ready (${JSON.stringify(before.slice(0, 3))})`);
-      assert.ok(!answers.some(a => typeof a.result === 'string' && /DIRECT/.test(a.result)), `run ${run}: never DIRECT`);
-      assert.ok(answers.some(a => a.result === 'PROXY 127.0.0.1:9'), `run ${run}: the PAC result`);
+    const failed = [];
+    for (let run = 1; run <= 20; run++) {
+      try { await checkStartupRound(run); }
+      catch (error) { failed.push(`run ${run}: ${error.message}`); }
     }
+    if (failed.length) throw new Error(failed.join('; '));
   });
 
   await check('the Host side answers through Chromium and the PAC script, per host', async () => {
