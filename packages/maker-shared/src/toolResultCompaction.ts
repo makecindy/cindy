@@ -52,6 +52,7 @@ export function sanitizeToolResultDiagnostics(value: unknown): ToolResultDiagnos
       'screenshot_context_missing', 'capture_expired', 'typed_output_mismatch',
       'background_unavailable', 'browser_consent_required',
       'element_outside_target_window', 'type_text_incomplete', 'select_menu_would_raise_window',
+      'minimized_or_hidden_window', 'target_focus_unconfirmed', 'off_space_or_ax_unresolved', 'tool_invocation_failed',
       'ACT_INVALID_REQUEST', 'BROWSER_UNAVAILABLE', 'BROWSER_NOT_CONNECTED',
       'BROWSER_RUNTIME_ACTION_FAILED', 'BROWSER_RUNTIME_INVALID_REQUEST', 'TIMEOUT',
     ],
