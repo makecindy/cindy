@@ -19346,6 +19346,7 @@
       "permissionLabel": "權柄模式",
       "noAvailableModels": "無可用之 {{agent}} 模型，請於規制中察供方之相通與憑證。",
       "savedModelUnavailable": "前選模型或其來源今不可用。",
+      "pluginEngineNoWorktree": "法器引擎之 Worker 不可用 worktree，去其勾選而後建之。",
       "reselectModel": "重選模型",
       "effortLabel": "思之深淺",
       "initialTaskLabel": "首件差事",

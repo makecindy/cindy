@@ -154,6 +154,7 @@ export type {
   ControlErrResult,
   ControlResult,
   ControlWorkerAgent,
+  ControlWorkerEngine,
 } from './types.js';
 
 // ── Entry-tool descriptions ─────────────────────────────────────────────────

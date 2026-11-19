@@ -19421,6 +19421,7 @@
       "permissionLabel": "Berechtigungsmodus",
       "noAvailableModels": "Kein {{agent}}-Modell verfügbar. Prüfe die Anbieterverbindung und die Zugangsdaten in den Einstellungen.",
       "savedModelUnavailable": "Das gespeicherte Modell oder seine Quelle ist nicht verfügbar.",
+      "pluginEngineNoWorktree": "Worker mit Plugin-Engine können keinen Worktree verwenden. Deaktiviere die Worktree-Option, um diesen Worker zu erstellen.",
       "reselectModel": "Modell auswählen",
       "effortLabel": "Denkintensität",
       "initialTaskLabel": "Erste Aufgabe",

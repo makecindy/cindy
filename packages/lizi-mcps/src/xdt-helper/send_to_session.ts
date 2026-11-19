@@ -6,6 +6,7 @@ import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
+  ControlWorkerEngine,
   LiziMcpSessionContext,
 } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
@@ -48,7 +49,8 @@ export type SendToSessionCallback = (params: {
       targetDeviceId?: string;
       responsibilityRecorded?: false;
       targetSessionId: string;
-      agentKind: ControlWorkerAgent;
+      /** 'acp' only for collaboration-internal deliveries to a plugin-engine Worker. */
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;

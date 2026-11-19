@@ -19421,6 +19421,7 @@
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "savedModelUnavailable": "The saved model or its source is unavailable.",
+      "pluginEngineNoWorktree": "Plugin engine Workers can't use a worktree. Turn off the worktree option to create this Worker.",
       "reselectModel": "Choose a model",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",

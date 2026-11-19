@@ -1182,6 +1182,7 @@ import {
 } from './orcaMcpHydrationCache.js';
 import {
   applyOrcaInstructions,
+  renderOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
 } from './orcaSessionStartOptions.js';
 import {
@@ -2639,7 +2640,8 @@ type SendToSessionInternalResult =
       ok: true;
       /** 目标 session 的 business id。create 分支回传新建 id;jump 分支回显入参 id。 */
       targetSessionId: string;
-      agentKind: AgentKind;
+      /** 'acp' 只出现在协同内部的派发(插件引擎 Worker)；普通 send_to_session 仍拒绝插件引擎目标。 */
+      agentKind: EngineKind;
       /** created = 本次新建并投递;resumed = 既有 session 被唤醒;already-active = 已在线直送;queued = 目标繁忙时进入输入队列。 */
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
@@ -2873,7 +2875,8 @@ interface OrcaCollabService {
     useCreationPrefs?: boolean;
     leadSessionId: string;
     role: string;
-    agent?: AgentKind;
+    /** 'acp' = 本机插件引擎 Worker(配 providerId)。 */
+    agent?: EngineKind;
     model?: string;
     providerId?: string;
     effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -2927,7 +2930,7 @@ interface OrcaCollabService {
           workerId: string;
           sessionId: string;
           role: string;
-          agent: AgentKind;
+          agent: EngineKind;
           model: string;
           effort: string | null;
           label: string | null;
@@ -2957,7 +2960,7 @@ interface OrcaCollabService {
           queue_paused: boolean;
           label: string | null;
           role: string;
-          agent_kind: AgentKind;
+          agent_kind: EngineKind;
           model: string;
           effort: string | null;
           focused: boolean;
@@ -3143,7 +3146,7 @@ interface OrcaCollabService {
 }
 
 interface EnableOrcaOptions {
-  workerAgent: AgentKind;
+  workerAgent: EngineKind;
   delegateTask?: string;
   role?: string;
   label?: string;
@@ -8880,6 +8883,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applyPersistedReviewMode(o);
     assertAccess?.();
     const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
+    // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). A collaboration
+    // Worker cannot work without its role instructions, so they travel ahead of its first message,
+    // and the engine is trusted as a whole to report to its Lead (user decision 2026-11-19).
+    if (o.agentKind === 'acp' && o.reviewMode !== true && o.vendorOptions?.orcaRole === 'worker') {
+      const briefing = renderOrcaRoleInstructions(o);
+      if (briefing) {
+        o.pluginEngineBriefing = briefing;
+        o.pluginEngineTrustedCaller = true;
+      }
+    }
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
 
@@ -9593,7 +9606,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const writableDirs = await readSessionWritableDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({
       id: row.id,
-      agentKind: dbToMakerAgentKind(row.agentKind),
+      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)按自己的引擎唤醒，并带上引擎标识；内置引擎不变。
+      agentKind: dbToMakerEngineKind(row.agentKind),
+      ...(isPluginEngineKind(row.agentKind) ? { providerId: row.providerId } : {}),
       workingDir: row.workingDir ?? '',
       model: row.model,
       effort: row.effort as CreateOpts['effort'],
@@ -11734,6 +11749,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (leadRow?.orcaRole === 'worker' || leadRow?.orcaRemoteLead) {
       throwIpcError('PRECONDITION_FAILED', '[WORKER_CANNOT_NEST] a worker task cannot start collaboration');
     }
+    // A plugin engine can be a Worker but not yet a Lead (docs/plans/acp-plugin-bridge.md): it has
+    // no live role switch and receives no Lead instructions. Refuse every Lead entry here.
+    if (lead?.agentKind === 'acp' || leadRow?.agentKind === 'acp') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', '[PLUGIN_ENGINE_CANNOT_LEAD] a plugin engine task cannot start collaboration yet; switch the task to a built-in engine first');
+    }
     const rawWorkingDir =
       typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;
     const normalizedWorkingDir =
@@ -12391,16 +12411,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      if (meta.agentKind === 'acp') {
-        // Agent-to-agent messages into plugin-engine tasks are not supported in phase 1
-        // (docs/plans/acp-plugin-bridge.md); the target keeps working for its owner.
+      if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca') {
+        // Agent-to-agent messages into plugin-engine tasks are not supported yet, except within a
+        // collaboration team (Lead ↔ plugin-engine Worker, phase 2 of docs/plans/acp-plugin-bridge.md).
         return {
           ok: false as const,
           errorCode: 'UNSUPPORTED_CAPABILITY' as const,
           message: `session ${targetSessionId} runs on a plugin engine; sending messages to it is not supported yet`,
         };
       }
-      const targetAgentKind: AgentKind = meta.agentKind;
+      const targetAgentKind: EngineKind = meta.agentKind;
       if (dbRow.status === 'archived') {
         return {
           ok: false as const,
@@ -15134,7 +15154,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     }
     return {
-      agentKind: requireBuiltinAgentKind(createOpts.agentKind, 'Queued agent messages'),
+      // 插件引擎任务(docs/plans/acp-plugin-bridge.md，例如插件引擎 Worker)的排队项与渲染端一样记成通用 reducer
+      // 的 'claude-code'：排队快照只认内置引擎，真正启动时 sessionOptionsReconciler 按任务行恢复成插件引擎及其来源。
+      agentKind: builtinAgentKindOrNull(createOpts.agentKind) ?? 'claude-code',
       workingDir: createOpts.workingDir,
       model: createOpts.model,
       effort: createOpts.effort,
@@ -15482,8 +15504,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         projectPath?: unknown;
         agentDeviceId?: unknown;
       };
-      const workerAgent: AgentKind =
-        body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
+      // 'acp' = the first Worker runs on a plugin engine (docs/plans/acp-plugin-bridge.md).
+      const workerAgent: EngineKind =
+        body.workerAgent === 'codex' ? 'codex'
+          : body.workerAgent === 'pi' ? 'pi'
+            : body.workerAgent === 'acp' ? 'acp' : 'claude-code';
       const delegateTask = typeof body.delegateTask === 'string' ? body.delegateTask : undefined;
       if (
         body.workerPermissionMode !== undefined &&
@@ -15763,12 +15788,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof b.label !== 'string') throwIpcError('INVALID_PARAMS', 'label required');
     const label = normalizeOrcaWorkerLabel(b.label);
     if (!label.ok) throwIpcError('INVALID_PARAMS', label.message);
+    // 'acp' = a plugin engine Worker (docs/plans/acp-plugin-bridge.md); providerId names the engine.
     const agent =
       b.agent === 'codex'
         ? ('codex' as const)
         : b.agent === 'pi'
           ? ('pi' as const)
-          : ('claude-code' as const);
+          : b.agent === 'acp'
+            ? ('acp' as const)
+            : ('claude-code' as const);
     const model = typeof b.model === 'string' && b.model.length > 0 ? b.model : undefined;
     if (
       b.workerPermissionMode !== undefined &&
@@ -16378,12 +16406,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    // Orca workers run on built-in engines only.
-    bootstrapSession: async (...args: Parameters<typeof bootstrapSession>) => {
-      const result = await bootstrapSession(...args);
-      if (!hasBuiltinAgentKind(result.session)) throw new PluginEngineUnsupportedError('Orca workers');
-      return { ...result, session: result.session };
-    },
+    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机、不用 worktree)。
+    bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
+    admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -17599,6 +17624,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (await orcaRemoteWorkersForHost?.isRemoteWorker(found.sessionId)) {
           return { ok: false, errorCode: 'REMOTE_WORKER_NOT_SUPPORTED',
             message: 'This Worker runs on another computer; change its model on that computer.' };
+        }
+        // Plugin engines have no catalog runtime profile (docs/plans/acp-plugin-bridge.md); the user
+        // changes a plugin-engine Worker's model in that Worker's own task.
+        if ((await getSessionRowSnapshot(found.sessionId))?.agentKind === 'acp') {
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+            message: 'This Worker runs on a plugin engine; its model can only be changed in its own task window.' };
         }
         await assertCurrent();
         // Without a generation the request still fails if the runtime changes during the call.
