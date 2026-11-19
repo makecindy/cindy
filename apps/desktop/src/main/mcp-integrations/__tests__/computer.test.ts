@@ -4899,6 +4899,34 @@ describe('computer driver update check', () => {
     });
   });
 
+  it('clears a cached offer once the same release no longer has a downloadable asset', async () => {
+    // 复审 P2:先发现 0.7.0 可装并缓存入口,下一次检查读到同一个 0.7.0、但它的包已经 404
+    // (上游撤包)。这跟网络失败不同:刷新刚刚证伪了缓存里的目标,入口必须撤掉,
+    // 否则用户点下去只会在点击前预检里再失败一次。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const offered = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: true, status: 200, headers: { get: (n: string) => (n === 'content-length' ? '1024' : null) } });
+    await expect(checkComputerDriverUpdate(offered as unknown as typeof fetch)).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+    });
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const withdrawn = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: false, status: 404 });
+    await expect(
+      checkComputerDriverUpdate(withdrawn as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      currentVersion: '0.5.8',
+      latestVersion: null,
+      updateAvailable: false,
+    });
+  });
+
   it('keeps installable releases when the proxy strips the length header', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const fetchImpl = vi

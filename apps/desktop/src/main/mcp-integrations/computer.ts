@@ -3206,13 +3206,24 @@ async function fetchDriverUpdateCheck(
 }
 
 /**
- * 网络失败(latestVersion 拿不到)时不覆盖已有的"发现新版"缓存,避免一次
+ * 网络失败(latestVersion 拿不到、带 checkError)时不覆盖已有的"发现新版"缓存,避免一次
  * 离线刷新把更新入口抹掉;本地 driver 都读不到版本(currentVersion null,
  * 例如被卸载)时则如实覆盖。
+ *
+ * 没有 checkError 的 latestVersion=null 是另一种事:上游清单读到了,但这个版本明确没有
+ * 可下载包(404/204/空包),或者点击前的预检刚证伪它。缓存里正在兜售的入口已经被证伪,
+ * 再留着只会让用户点下去在预检里再失败一次,所以这里如实覆盖并清掉可安装包。
  */
 function commitDriverUpdateCheck(
   result: Omit<ComputerDriverUpdateCheck, 'updating'>,
 ): void {
+  const disprovedTarget =
+    result.currentVersion !== null && result.latestVersion === null && !result.checkError;
+  if (disprovedTarget) {
+    cachedDriverReleaseAssets = [];
+    cachedDriverUpdateCheck = result;
+    return;
+  }
   if (result.latestVersion !== null || result.currentVersion === null || !cachedDriverUpdateCheck) {
     cachedDriverUpdateCheck = result;
   } else {
