@@ -32,6 +32,12 @@ export const REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS = 1024 * 1024;
 export const REMOTE_AGENT_READ_MAX_BYTES = 512 * 1024;
 /** 一次 poll 所有任务合计最多返回的字节(base64 后仍远低于单条逻辑消息 4MB)。 */
 export const REMOTE_AGENT_POLL_MAX_BYTES = 1536 * 1024;
+/**
+ * poll 可选 `maxBytes`（2026-11-19）：控制端按实测的回程速度要求这次最多回多少，被控端在
+ * [REMOTE_AGENT_POLL_MIN_BYTES, REMOTE_AGENT_POLL_MAX_BYTES] 里取。慢线路上一次回 1.5MB 在请求时限内传不完，
+ * 超时后按同一游标重拉同样大小，会一直卡住。旧被控端忽略这个字段，照旧按上限回。
+ */
+export const REMOTE_AGENT_POLL_MIN_BYTES = 64 * 1024;
 /** 没有新数据时被控端最多挂起 poll 的时长；远低于通道超时，留出回程余量。 */
 export const REMOTE_AGENT_READ_WAIT_MS = 10_000;
 /** 一次 poll 最多带的任务数。 */
@@ -190,7 +196,7 @@ export type RemoteAgentRequest =
    * hold：控制端这边还有这个任务的工作在进行、被控端看不到(如 Codex 经执行环境在控制端起的后台进程)，
    * 被控端按有活动处理，不按闲置收回。旧被控端忽略。
    */
-  | { op: 'poll'; runs: Array<{ runId: string; cursor: number; hold?: true }>; waitMs?: number }
+  | { op: 'poll'; runs: Array<{ runId: string; cursor: number; hold?: true }>; waitMs?: number; maxBytes?: number }
   | { op: 'reply'; runId: string; requestId: string; payload: RemoteAgentPayload }
   /** hold: local work has started; protect it with the startup reply before the next poll batch. */
   | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[]; hold?: true }
@@ -692,6 +698,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         op: 'poll',
         runs,
         ...(v.waitMs !== undefined ? { waitMs: count(v.waitMs, REMOTE_AGENT_READ_WAIT_MS) } : {}),
+        // 超出范围的按范围取，不拒绝整个 poll：拒绝会让任务拉不到事件。
+        ...(v.maxBytes !== undefined ? {
+          maxBytes: Math.min(REMOTE_AGENT_POLL_MAX_BYTES, Math.max(REMOTE_AGENT_POLL_MIN_BYTES, count(v.maxBytes, Number.MAX_SAFE_INTEGER))),
+        } : {}),
       };
     }
     case 'reply':
