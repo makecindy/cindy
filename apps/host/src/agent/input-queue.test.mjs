@@ -5000,6 +5000,42 @@ test('idle release: watchers scan once started and stop when the owner runtime i
   assert.equal(scans, 0, 'a disposed runtime scans no more');
 });
 
+// Rule: ordinary Claude tasks use the desktop's idle deadline after the Host resumes accepting input.
+// Gap: lifting a hold disposed the original watchers but never started their replacements.
+// Minimal input: hold and release, then let one ordinary live task reach the idle limit.
+// Tier: unit through the Host queue and actual idle watcher, with a fixture DB and clock.
+test('idle release: a task still releases on schedule after a desktop hold', async t => {
+  t = lifoCleanup(t);
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const db = await recoveryDatabase(t);
+  const id = 'idle-after-hold';
+  const sdkId = 'idle-native-session';
+  await db.createTask(id);
+  db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(sdkId, id);
+
+  let now = 0;
+  const h = createHarness({ readClaudeIdleMinutes: () => 1, idleReleaseClock: { monotonic: () => now, wall: () => now } });
+  t.after(() => h.queue.dispose());
+  h.queue.startIdleRelease();
+  h.queue.holdForDesktop('Desktop is using the profile');
+  assert.equal(await h.queue.releaseDesktopHold(), true);
+  assert.equal(await h.queue.releaseDesktopHold(), true, 'a duplicate release has nothing to rebuild');
+
+  const session = await h.maker.createSession({ id, agentKind: 'claude-code' });
+  Object.assign(session, {
+    sdkSessionId: sdkId, getStatus: () => 'active', listBackgroundTasks: () => [],
+    countPendingWakeContinuations: () => 0, manageAsyncUserQuestions: () => ({ questions: [] }),
+  });
+  t.mock.timers.tick(60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.maker.getSession(id), session, 'the first scan starts the task’s idle clock');
+
+  now = 60_000;
+  t.mock.timers.tick(60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.maker.getSession(id), null, 'the next scan releases the idle task');
+});
+
 // Claude's background-activity detection (claude-session-background-activity.ts) needs the logical
 // turn's start and end; the Host feeds them from its event stream at the desktop's points, so model
 // calls the proxy records after the turn ended mark the task busy (idle release keeps it).

@@ -761,6 +761,7 @@ export function createInputQueue(deps) {
       if (ownerStopping) runtime.beginStop();
     }
     if (profileHold === null) {
+      runtime.startIdleRelease();
       for (const id of deps.deferredTurnSettlements?.() ?? []) {
         try { await runtime.settleAndWake(id); }
         catch (error) { settlementLog.warn('task settlement failed after profile release', { id, error: errorText(error) }); }
