@@ -67,6 +67,7 @@ function Body({ dark, onTheme }: { dark: boolean; onTheme: () => void }) {
         }}>
           <MarkdownBody text={text} layout={layout} richStateKey="fixed-table-body"
             androidTableSelection={!native} selectable={!streaming} streaming={streaming} codeCopyEnabled
+            tableFallbackBackground={whitespace ? colors.surfaceElevated : colors.surface}
             onTableMeasured={height => { measurements.current.document = height; }} />
         </View>
       </ScrollView>

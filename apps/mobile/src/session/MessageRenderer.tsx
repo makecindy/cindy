@@ -4027,6 +4027,11 @@ function MessageBubble({
   );
   const bubbleShown = item.message.role !== 'error'
     && (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));
+  const ownBubbleColors = isUser && !item.message.systemCardType && userBubbleColors
+    && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
+    ? userBubbleColors : undefined;
+  const tableFallbackBackground = ownBubbleColors?.background
+    ?? (isUser || hookSource ? colors.surfaceElevated : colors.surface);
   // 气泡是纯 View,不承接任何手势:文本选择走正文原生 Text selectable(长按文字就地选择复制),
   // 气泡上不能挂 Pressable——它会参与触摸协商,干扰正文里表格/代码块横向 ScrollView 的拖动。
   const bubble = (
@@ -4039,9 +4044,7 @@ function MessageBubble({
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
         actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
-        isUser && !item.message.systemCardType && userBubbleColors
-          && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
-          && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
+        ownBubbleColors && { backgroundColor: ownBubbleColors.background, borderColor: ownBubbleColors.border },
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
@@ -4123,6 +4126,7 @@ function MessageBubble({
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
                   androidTableSelection={actions.companion !== true && !shareSelectionActive}
+                  tableFallbackBackground={tableFallbackBackground}
                   richStateKey={`${item.message.source.clientId ?? item.message.key}:text:${index}`}
                   codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
@@ -4141,6 +4145,7 @@ function MessageBubble({
         ) : (
           <MarkdownBody
             androidTableSelection={actions.companion !== true && !shareSelectionActive}
+            tableFallbackBackground={tableFallbackBackground}
             codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
@@ -6177,6 +6182,7 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
 // across paragraphs/cells; iOS and companion bodies retain native selection.
 function MarkdownBodyBase({
   androidTableSelection = false,
+  tableFallbackBackground,
   richStateKey,
   allowIosUITextView = true,
   codeCopyEnabled = true,
@@ -6194,6 +6200,7 @@ function MarkdownBodyBase({
 }: {
   /** Explicit ordinary-task opt-in; group/companion/iOS carriers are unchanged. */
   androidTableSelection?: boolean;
+  tableFallbackBackground?: ViewStyle['backgroundColor'];
   /** Local fixture measurement only; no document/host capability. */
   onTableMeasured?: (height: number) => void;
   renderRichAnswers?: boolean;
@@ -6286,9 +6293,10 @@ function MarkdownBodyBase({
   const tableFailed = tableFailedRevision === documentRevision;
   const mountTableDocument = tableCandidate && !tableFailed && nativeBodySize.width > 0 && nativeBodySize.height > 0;
   const showTableDocument = mountTableDocument && tableReadyRevision === documentRevision;
-  // The WebView measures its container but has no intrinsic width for a hug bubble.
+  // Let Android draw the WebView behind the readable native body: alpha zero can
+  // leave an undrawn WebView when it takes over. Reserve the hug bubble's width.
   const tableDocumentStyle: ViewStyle | undefined = !showTableDocument
-    ? { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0 }
+    ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, overflow: 'hidden' }
     : pinContentWidth ? undefined : { width: nativeBodySize.width, maxWidth: '100%' };
   // The native bootstrap remains readable until the document is ready, with
   // no selectable duplicate that could lose handles during this one promotion.
@@ -6714,7 +6722,10 @@ function MarkdownBodyBase({
       {!showTableDocument ? (
       <View
         collapsable={false}
-        style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
+        style={[
+          pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null,
+          mountTableDocument ? { zIndex: 1, backgroundColor: tableFallbackBackground ?? colors.surface } : null,
+        ]}
       >
       {groups.flatMap((group, groupIndex) => {
         const renderedGroup = group.type === 'text_run'
