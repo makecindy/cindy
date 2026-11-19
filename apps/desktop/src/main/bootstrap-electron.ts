@@ -978,7 +978,7 @@ import {
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
 } from './maker-host/claude-native-cli.desktop.js';
-import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { closeCliProxyBridge } from './maker-host/cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
@@ -6085,7 +6085,7 @@ const registerIpcHandlers = () => {
   // 退出时结束进行中的登录子进程(CLI 的本机回调监听没有超时),并关闭 CLI 的代理桥。
   app.once('will-quit', () => {
     cancelClaudeCliLogin();
-    void closeClaudeCliProxyBridge();
+    void closeCliProxyBridge();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
     // 没有使用许可时结论恒为 false,不必拉起 CLI(状态栏等常驻读取对所有用户都会调用)。
