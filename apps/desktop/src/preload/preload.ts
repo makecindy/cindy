@@ -7062,6 +7062,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      /** true only when every catalog page was read; absent = unknown. */
+      complete?: boolean;
+      /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
+      listingReceipt?: string;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
