@@ -5243,17 +5243,25 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   return loginFlowState;
 }
 
-async function discoverOrganizationRealm(org: string, expectedLoginFlowEpoch = loginFlowEpoch) {
+async function discoverOrganizationRealm(
+  org: string,
+  expectedLoginFlowEpoch = loginFlowEpoch,
+  options: { allowPartialSuccess?: boolean } = {},
+) {
   // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后才重新冻结。
   pendingAuthRealm = null;
-  const discovery = await lookupOrganizationRealm(org, expectedLoginFlowEpoch);
+  const discovery = await lookupOrganizationRealm(org, expectedLoginFlowEpoch, options);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   pendingAuthRealm = discovery.region;
   return discovery;
 }
 
 /** Read-only realm lookup also serves optional hints after successful personal authentication. */
-async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: number) {
+async function lookupOrganizationRealm(
+  org: string,
+  expectedLoginFlowEpoch: number,
+  options: { allowPartialSuccess?: boolean } = {},
+) {
   const realmConfig = getClientEndpointRealmConfig();
   if (!realmConfig.crossRealmOrgLoginEnabled || !realmConfig.realmManifestBaseUrls) {
     const discovery = await createAuthClient(AUTH_REGION).discoverSsoOrg(org);
@@ -5261,9 +5269,9 @@ async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: numb
     return discovery;
   }
 
-  // 先并行加载/校验两区清单，再并行做 home-realm discovery。任一清单或请求
-  // 不可用都 fail closed，不凭另一侧成功结果猜区域；只有发现结果跨出安装包
-  // 区域时，后续状态机才要求用户确认。
+  // 先并行加载/校验两区清单，再并行发现企业区域；清单不可用仍阻断。
+  // 只有显式企业标识入口允许单侧发现成功，邮箱发现与登录后提示保持严格策略。
+  // 发现结果跨出安装包区域时，后续状态机仍要求用户确认。
   try {
     await Promise.all([loadClientEndpointsForRealm('cn'), loadClientEndpointsForRealm('global')]);
     assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -5277,7 +5285,7 @@ async function lookupOrganizationRealm(org: string, expectedLoginFlowEpoch: numb
   const selected = await discoverSsoOrgRealm(org, {
     cn: createAuthClient('cn'),
     global: createAuthClient('global'),
-  });
+  }, options);
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   return selected.discovery;
 }
@@ -5704,6 +5712,7 @@ async function runLoginAction(
       const discovery = await discoverOrganizationRealm(
         action.org.trim().toLowerCase(),
         actionLoginFlowEpoch,
+        { allowPartialSuccess: true },
       );
       const methods = ssoOrgDiscoveryToMethods(discovery);
       if (discovery.region !== AUTH_REGION) {
