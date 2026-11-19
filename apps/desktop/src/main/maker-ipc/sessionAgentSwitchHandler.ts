@@ -898,9 +898,16 @@ export async function performSessionAgentSwitch(
   // 但插件引擎只在本机运行，协同、IM、伙伴、定时、共享等任务暂不支持换到或换出插件引擎。
   let pluginTarget: ReturnType<NonNullable<MakerSessionAgentSwitchHandlerDeps['admitPluginEngineTarget']>> | null = null;
   if (!builtinTarget || sourceIsPluginEngine) {
-    if (requestedAgentDeviceId || row.agentDeviceId) {
-      throwIpcError('PRECONDITION_FAILED', 'plugin engines run on this computer only');
+    if (!builtinTarget) {
+      // 插件引擎只在任务所在的这台电脑运行：不能点名另一台电脑；Agent 原本在另一台电脑(例如供应商组
+      // 按额度挪过去)或分享上时，切到插件引擎就是把 Agent 换回这台，与内置引擎之间换电脑同一套交接
+      // (2026-11-19 用户反馈：Agent 被挪走后列表里选不到插件引擎)。
+      if (requestedAgentDeviceId) {
+        throwIpcError('PRECONDITION_FAILED', 'plugin engines run on this computer only');
+      }
+      if (row.agentDeviceId) requestedAgentDeviceId = null;
     }
+    // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
     if ((row.source && row.source !== 'desktop') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
       || getDeviceLinkInvokeContext()?.sharedTask) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
@@ -1000,7 +1007,8 @@ export async function performSessionAgentSwitch(
   // 落到另一台电脑的完整切换(换引擎或换电脑)：登记与落地前都按那台的目录裁决。同引擎同位置
   // 的模型选择走 selectSameAgentModel，在 SET_MODEL 链路里裁决。
   let remoteHandoffWindow: number | null | void = undefined;
-  // 插件引擎参与的切换前面已要求两端都在本机，到这里 targetAgentDeviceId 必为 null。
+  // 切到插件引擎时目标位置已定为本机(targetAgentDeviceId 为 null)；从插件引擎换到另一台电脑上的
+  // 内置引擎按那台的目录裁决。
   if (builtinTarget && targetAgentDeviceId && (rebuildingRoute || orcaGroupReturnRebuild || fromDbKind !== toDbKind)) {
     remoteHandoffWindow = await deps.assertAgentDeviceRouteUsable?.(
       targetAgentDeviceId,
@@ -1382,6 +1390,8 @@ export async function performSessionAgentSwitch(
             ...(pluginTarget.effort ? { effort: pluginTarget.effort } : {}),
             fastMode: false,
             permissionMode: pluginTarget.permissionMode,
+            // Agent 原本在另一台电脑时随插件引擎回到这台(targetAgentDeviceId 为 null)。
+            ...(agentDeviceChanges ? { agentDeviceId: targetAgentDeviceId } : {}),
           }
         : {
             agentKind: toDbKind,

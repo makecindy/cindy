@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, writeFile, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, onTestFinished, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, DiscoveredModel, ModelRegistry, ProviderPreset, ProviderView } from '@cindy/model-providers';
 import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, storedCustomProviderId } from '@cindy/model-providers';
@@ -325,7 +325,7 @@ describe('provider file import IPC', () => {
 });
 
 describe('local API configuration import IPC', () => {
-  async function setup(source = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
+  async function setup(source: { env: Record<string, string> } = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
     mountDb();
     importDirectory = await mkdtemp(join(tmpdir(), 'cindy-local-provider-ipc-'));
     await mkdir(join(importDirectory, '.claude'));
@@ -362,6 +362,94 @@ describe('local API configuration import IPC', () => {
     expect(deps.broadcastChanged).toHaveBeenCalled();
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
     expect(await listCustomProviders()).toHaveLength(1);
+  });
+  it.each([undefined, 'FAKE-REPLACEMENT'])('imports saved Claude headers after destination consent (replacement: %s)', async (replacement) => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    onTestFinished(() => { now.mockRestore(); });
+    const { harness, deps } = await setup({
+      env: {
+        ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN\nX-Tenant: FAKE-TENANT',
+      },
+    });
+    const approveDestination = vi.fn(async () => false);
+    deps.confirmLocalProviderDestination = approveDestination;
+    const item = (await scan(harness)).items[0];
+    expect(item).toMatchObject({
+      issue: 'needsInput',
+      endpoints: [{ baseUrl: '', hasCredential: true }],
+    });
+    const baseUrl = 'https://relay.test/prefix';
+    const edit = {
+      name: item.name,
+      endpoints: [{ baseUrl, protocol: 'anthropic-messages' }],
+    };
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, edit);
+    expect(edited).toMatchObject({ endpoints: [{ baseUrl, hasCredential: true }] });
+    expect(edited).not.toHaveProperty('issue');
+    let preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-TENANT');
+    const opened = Promise.withResolvers<void>();
+    const decision = Promise.withResolvers<boolean>();
+    approveDestination.mockImplementationOnce(() => {
+      opened.resolve();
+      return decision.promise;
+    });
+    const first = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    await opened.promise;
+    const overlapping = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    decision.resolve(false);
+    await Promise.all([first, overlapping]);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    expect(approveDestination).toHaveBeenCalledTimes(1);
+    expect(approveDestination).toHaveBeenCalledWith(expect.anything(), baseUrl);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+    now.mockReturnValue(15_000);
+    if (replacement) {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+        ...edit,
+        endpoints: [{ ...edit.endpoints[0], apiKey: replacement }],
+      });
+      preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+      expect(deps.fetchModels).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+      now.mockReturnValue(20_000);
+    }
+    approveDestination.mockResolvedValueOnce(true);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
+      ok: true,
+      providerId: preview.providerId,
+    });
+    const headers = {
+      Authorization: `Bearer ${replacement ?? 'FAKE-STATIC-TOKEN'}`,
+      'X-Tenant': 'FAKE-TENANT',
+    };
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl, headers }));
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'claude-code', headers);
+    expect((await getCustomProvider(preview.providerId))?.runtimes['claude-code']?.baseUrl).toBe(baseUrl);
+  });
+  it.each([
+    { sourceUrl: 'https://original.test', protocol: 'anthropic-messages' },
+    { sourceUrl: 'invalid-url', protocol: 'anthropic-messages' },
+    { sourceUrl: '', protocol: 'openai-chat' },
+  ])('does not carry saved headers to a changed destination or protocol ($sourceUrl, $protocol)', async ({ sourceUrl, protocol }) => {
+    const { harness, deps } = await setup({
+      env: {
+        ANTHROPIC_BASE_URL: sourceUrl,
+        ANTHROPIC_CUSTOM_HEADERS: 'x-api-key: FAKE-STATIC-KEY',
+      },
+    });
+    const item = (await scan(harness)).items[0];
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+      name: item.name,
+      endpoints: [{ baseUrl: 'https://relay.test/prefix', protocol }],
+    });
+    expect(edited).toMatchObject({ issue: 'needsInput', endpoints: [{ hasCredential: false }] });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
   });
   it('repeated scans/parallel confirmations do not create equivalent accounts twice', async () => {
     const { harness } = await setup();
@@ -577,6 +665,34 @@ describe('provider:list IPC handler', () => {
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
     expect(result.providers[0].routing.pi?.headerOverrideState).toBe('configured');
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
+  });
+
+  // IPC unit: the settings page can locate the active image connection without
+  // changing the legacy key status or disclosing the binding to remote readers.
+  it('projects the Gemini image binding only to local settings', async () => {
+    const binding = await import('../../maker-host/gemini-image-connection.js');
+    const readBinding = vi.spyOn(binding, 'geminiImageConnectionId').mockReturnValue(null);
+    let trusted = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [fakeView('gemini', false), fakeView('new-google', true)],
+      isTrustedSender: () => trusted,
+    }));
+    try {
+      const list = async () => (await harness.invoke(MAKER_INVOKE.PROVIDER_LIST) as {
+        providers: ProviderView[];
+      }).providers;
+      expect((await list())[0].geminiImageSettingsConnectionId).toBeUndefined();
+      readBinding.mockReturnValue('new-google');
+      expect(await list()).toMatchObject([
+        { id: 'gemini', connected: false, geminiImageSettingsConnectionId: 'new-google' },
+        { id: 'new-google', connected: true },
+      ]);
+      trusted = false;
+      expect((await list())[0].geminiImageSettingsConnectionId).toBeUndefined();
+    } finally {
+      readBinding.mockRestore();
+    }
   });
 
   it('strips runtime header credentials even for the trusted local settings editor', async () => {
@@ -1671,6 +1787,48 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toHaveLength(1);
     expect(deps.refreshCatalog).toHaveBeenCalledOnce();
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('preserves legacy Gemini keys until an explicit save, then rotates and disconnects only the selected connection', async () => {
+    mountDb();
+    const binding = await import('../../maker-host/gemini-image-connection.js');
+    let selected: string | null = null;
+    const readBinding = vi.spyOn(binding, 'geminiImageConnectionId').mockImplementation(() => selected);
+    const bind = vi.spyOn(binding, 'bindGeminiImageConnection').mockImplementation(async id => { selected = id; });
+    const keys = new Map<string, string>();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: (id, agent) => keys.get(id + agent) ?? null,
+      storeCustomProviderKey: (id, agent, key) => { keys.set(id + agent, key); return true; },
+      removeCustomProviderKey: (id, agent) => { keys.delete(id + agent); return { success: true }; },
+    });
+    registerProviderHandlers(harness, deps);
+    const rt = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' as const, models: [] };
+    const old = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: { codex: rt, pi: rt } };
+    const fresh = { ...old, id: 'new-google' };
+    const imageKey = () => binding.resolveGeminiImageKey(selected,
+      id => buildUserProvider(id === old.id ? old : fresh),
+      (id, agent) => keys.get(id + agent) ?? null, () => 'fake-legacy-image');
+    try {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, old, { codex: 'fake-legacy-chat' });
+      expect(imageKey()).toBe('fake-legacy-image');
+      const both = { codex: 'fake-new-key', pi: 'fake-new-key' };
+      bind.mockRejectedValueOnce(new Error('disk unavailable'));
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true })).rejects.toThrow();
+      expect(await getCustomProvider(fresh.id)).toBeNull();
+      expect(keys.get(fresh.id + 'pi')).toBeUndefined();
+      expect(imageKey()).toBe('fake-legacy-image');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true });
+      expect(imageKey()).toBe('fake-new-key');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, fresh, { pi: 'fake-rotated' });
+      expect(imageKey()).toBe('fake-rotated');
+      expect(keys.get(old.id + 'codex')).toBe('fake-legacy-chat');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, fresh.id);
+      expect(imageKey()).toBeNull();
+    } finally {
+      readBinding.mockRestore();
+      bind.mockRestore();
+    }
   });
 
   it('requires confirmation before a busy manual create and persists nothing when cancelled', async () => {

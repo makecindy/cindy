@@ -1229,6 +1229,13 @@ export interface AgentDeps {
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
+   * Probe the selected BYOM endpoint from the SSH execution host, without credentials.
+   * Success permits direct use of the configured URL; it does not authorize a host forward.
+   * Hosts without this capability keep loopback BYOM fail-closed.
+   */
+  probeRemotePiProviderEndpoint?: (remoteHostId: string, baseUrl: string) => Promise<boolean>;
+
+  /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
    *
    * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
@@ -2077,6 +2084,18 @@ export interface StartSessionOptions {
    * 用户改 prompt 后，下一次新 session 立即生效，老 session 维持启动时快照。
    */
   userPrompt?: string;
+  /**
+   * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
+   * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
+   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   */
+  pluginEngineBriefing?: string;
+  /**
+   * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
+   * true = the host trusts the engine as a whole, so its tool calls count as the task's own
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   */
+  pluginEngineTrustedCaller?: boolean;
   /**
    * Bot Profile runtime context, resolved by the main/DB authority at session
    * start. It is a startup system-prompt segment, not a per-turn user prefix.

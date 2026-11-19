@@ -1232,6 +1232,8 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
+  restoreDisplayLanguage?: (legacy: import('../shared/locale').LocalePreference | null) => Promise<import('../shared/locale').LocalePreference | null>;
+  saveDisplayLanguage?: (preference: import('../shared/locale').LocalePreference, onlyIfUnset?: boolean) => Promise<boolean>;
   onLocaleChanged?: (
     cb: (locale: import('../shared/locale').SupportedLocale) => void,
   ) => () => void;
@@ -5802,6 +5804,8 @@ interface ElectronAPI {
      * tunnelled over device-link, so remote drafts and tasks never call it.
      */
     listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /** Read the private account snapshot of one approved plugin engine. */
+    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
     /**
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
@@ -6506,7 +6510,8 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
-        workerAgent: 'claude-code' | 'codex' | 'pi';
+        /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
+        workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;
         role?: string;
         label?: string;

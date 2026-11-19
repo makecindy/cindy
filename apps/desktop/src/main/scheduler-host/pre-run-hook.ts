@@ -22,6 +22,8 @@
 import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
+import { readPrCheckDiagnosis } from '@cindy/maker-shared/schedule-model';
+import { deviceName } from '../device-link/deviceName.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -108,6 +110,18 @@ export function buildSkipResultText(hook: PreRunHookResult): string {
   const head = `pre-run hook exit ${hook.exitCode ?? '?'} — ${hook.durationMs}ms`;
   const out = hook.stdout.trim();
   return out ? `${head} — ${firstLine(out)}` : head;
+}
+
+function parsePrCheckOutput(stdout: string) {
+  const prefix = 'CINDY_PR_CHECK_DIAGNOSIS ';
+  const marker = stdout.split(/\r?\n/).find(line => line.startsWith(prefix));
+  if (!marker) return;
+  try {
+    const device = process.versions.electron ? deviceName() : process.env.CINDY_HOST_DEVICE_NAME?.trim() || deviceName();
+    return readPrCheckDiagnosis({ ...JSON.parse(marker.slice(prefix.length)), device });
+  } catch {
+    return undefined;
+  }
 }
 
 function firstLine(text: string): string {
@@ -266,8 +280,10 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
               : exitCode === 2
                 ? 'skipped'
                 : 'failed';
+      const diagnosis = status === 'failed' && !stdoutTruncated ? parsePrCheckOutput(stdout) : undefined;
       resolve({
         status,
+        ...(diagnosis && { prCheckDiagnosis: diagnosis }),
         ...((status === 'passed' || status === 'skipped') && !stdoutTruncated
           && stdout.split(/\r?\n/).includes('CINDY_PRECHECK_OK') ? { checkSucceeded: true as const } : {}),
         decision: status === 'passed' ? 'run' : status === 'skipped' ? 'skip' : 'block',

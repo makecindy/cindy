@@ -22,7 +22,7 @@ export interface RendererApplyApi {
   setBuiltinTool(id: string, enabled: boolean): Promise<unknown>;
   setRemoteControl(enabled: boolean): Promise<unknown>;
   setKeepAwake(enabled: boolean): Promise<unknown>;
-  applyPrefs(values: Record<string, string>): number;
+  applyPrefs(values: Record<string, string>): number | Promise<number>;
 }
 
 export function rendererApplyCount(plan: SetupMigrationPlan, keys: ReadonlySet<string>): number {
@@ -105,7 +105,7 @@ export async function applyRendererItems(
   if (plan.rendererPrefs?.state === 'ready') {
     const values = plan.rendererPrefs.values;
     await run(plan.rendererPrefs.key, async () => {
-      const changed = api.applyPrefs(values);
+      const changed = await api.applyPrefs(values);
       prefsChanged = changed > 0;
       return changed > 0 ? 'done' : 'skipped';
     });
