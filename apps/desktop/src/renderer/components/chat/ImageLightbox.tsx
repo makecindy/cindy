@@ -317,7 +317,20 @@ function isDirectCacheable(src: string): boolean {
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
 export function ImageLightbox(props: ImageLightboxProps) {
-  const items = useOpeningCollection(props.annotationFallbackSrc ?? props.src);
+  const source = props.annotationFallbackSrc ?? props.src;
+  const collectionItems = useOpeningCollection(source);
+  const sessionImages = useContext(ImageGalleryContext);
+  // 图片优先走任务内画廊：同一条消息里的附件集合可能只包含其中一张，
+  // 逐条发送的图片更是各成一组；两者都会把翻页限制在局部。
+  const preferSessionGallery =
+    props.enableGallery === true &&
+    (sessionImages?.length ?? 0) > 1 &&
+    (sessionImages?.some(
+      (image) =>
+        image.src === source ||
+        (props.galleryId !== undefined && image.galleryId === props.galleryId),
+    ) ?? false);
+  const items = preferSessionGallery ? null : collectionItems;
   return items ? (
     <AttachmentCollectionPreview
       items={items}
