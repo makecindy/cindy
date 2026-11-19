@@ -698,6 +698,50 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
     }
   });
 
+  // #9221 review: accepted same-turn input supersedes a prior handoff even
+  // without beginNewTurn. Observe real adapter done, including a late receipt
+  // and a cancelled-steer control; no live SDK, Worker or network. Unit tier.
+  it.each(['before-steer', 'after-steer', 'cancelled'] as const)('keeps recovery after a same-turn steer (%s dispatch receipt)', async (receiptTiming) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'dispatch-before-steer', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      if (receiptTiming !== 'after-steer') {
+        session.stream.emit(userToolResult('dispatch-before-steer', '{"ok":true,"wake_kind":"resumed"}'));
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      } else {
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'dispatch tool use processed');
+      }
+      const steer = { type: 'user' as const, content: 'answer this new question first' };
+      if (receiptTiming === 'cancelled') {
+        const controller = new AbortController();
+        controller.abort();
+        await expect(session.handle.steer!(steer, { signal: controller.signal })).rejects.toThrow('cancelled before acceptance');
+      } else {
+        await session.handle.steer!(steer);
+      }
+      if (receiptTiming === 'after-steer') {
+        session.stream.emit(userToolResult('dispatch-before-steer', '{"ok":true,"wake_kind":"resumed"}'));
+      }
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'steered-work' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'steered turn ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(receiptTiming === 'cancelled' ? undefined : true);
+    } finally {
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
+    }
+  });
+
   it('a remote approval callback throwing releases its idle pause', async () => {
     const session = await startPendingRemoteApproval();
     try {

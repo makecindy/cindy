@@ -1713,7 +1713,10 @@ function handleAssistant(
   if (!parentToolUseId && content.some((block) => block.type === 'tool_use')) {
     // A later tool batch means the Lead continued working after delegation;
     // only a new confirmed dispatch may exempt that batch's empty ending.
+    // Report obligations also belong to that batch: an earlier ordinary tool
+    // error may already have been corrected before a successful handoff.
     ctx.turn.completedWorkerDispatch = false;
+    ctx.turn.workerDispatchNeedsReport = false;
   }
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。

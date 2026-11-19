@@ -101,14 +101,15 @@ function pushEmptyThinkingMessage(queue: ReturnType<typeof createAsyncQueue<Agen
 function pushWorkerToolResult(
   queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
   ctx: ReturnType<typeof createCtx>,
-  options: { name?: string; payload?: Record<string, unknown>; isError?: boolean } = {},
+  options: { id?: string; name?: string; payload?: Record<string, unknown>; isError?: boolean } = {},
 ): void {
+  const id = options.id ?? 'worker-1';
   const name = options.name ?? 'mcp__cindy_orca__create_worker';
   const payload = options.payload ?? { ok: true, worker_id: 'w-1', dispatched: true, queued_message_id: 'm-1' };
   translateSdkMessage(
     {
       type: 'assistant',
-      message: { content: [{ type: 'tool_use', id: 'worker-1', name, input: { label: 'worker' } }] },
+      message: { content: [{ type: 'tool_use', id, name, input: { label: 'worker' } }] },
     },
     queue,
     ctx,
@@ -119,7 +120,7 @@ function pushWorkerToolResult(
       message: {
         content: [{
           type: 'tool_result',
-          tool_use_id: 'worker-1',
+          tool_use_id: id,
           content: JSON.stringify(payload),
           ...(options.isError ? { is_error: true } : {}),
         }],
@@ -455,6 +456,27 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     const events = await drain(queue);
     expect(silentStopWarned(ctx)).toBe(true);
     expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  // #9221 review: old coverage only mixed errors into the dispatch batch.
+  // A corrected ordinary error in an earlier batch must not cause a hidden
+  // Continue after a later confirmed handoff. Real translator/done, unit tier.
+  it('does not carry a repaired Read error into a later successful dispatch', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushWorkerToolResult(queue, ctx, {
+      id: 'read-missing', name: 'Read', payload: { error: 'ENOENT' }, isError: true,
+    });
+    pushWorkerToolResult(queue, ctx, {
+      id: 'read-corrected', name: 'Read', payload: { content: 'file body' },
+    });
+    pushWorkerToolResult(queue, ctx, {
+      id: 'handoff', name: 'mcp__cindy_orca__send_to_worker',
+      payload: { ok: true, wake_kind: 'resumed' },
+    });
+    finishWithEmptyThinking(queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue))).toBeUndefined();
+    expect(silentStopWarned(ctx)).toBe(false);
   });
 
   it('keeps the zero-body exemption when a non-dispatch tool in the batch succeeded', async () => {

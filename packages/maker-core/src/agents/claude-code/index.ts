@@ -7274,6 +7274,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
+        // Accepted input adds work after the handoff. Keep usage/generation in
+        // this turn, but neither its old dispatch nor a late receipt may exempt
+        // the steered response from silent-stop recovery. Rejected steers above
+        // leave the existing handoff untouched.
+        turnState.completedWorkerDispatch = false;
+        turnState.workerDispatchNeedsReport = false;
+        turnState.workerDispatchTurnToolUseIds?.clear();
         const awaitingClaim = activeContinuationClaim();
         if (awaitingClaim?.state === 'awaiting') {
           // This input belongs to the already claimed next segment, not another
