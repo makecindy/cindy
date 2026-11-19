@@ -108,6 +108,16 @@ function plainListParagraphMarker(text: string): PlainListParagraphMarker | null
   return null;
 }
 
+function followingHardBreakOffset(paragraph: PMNode, from: number): number | undefined {
+  if (from >= paragraph.content.size) return undefined;
+  let offset: number | undefined;
+  paragraph.nodesBetween(from, paragraph.content.size, (node, pos) => {
+    if (offset === undefined && node.type.name === 'hardBreak') offset = pos;
+    return false;
+  });
+  return offset;
+}
+
 function hardBreakListInputRule(
   find: RegExp,
   type: NodeType,
@@ -139,23 +149,29 @@ function hardBreakListInputRule(
       if (documentFenceStateBefore(state.doc, $markerStart.before(1))) return null;
 
       const before = paragraph.content.cut(0, markerOffset - hardBreak.nodeSize);
-      const after = paragraph.content.cut(range.to - paragraphStart);
+      const markerEnd = range.to - paragraphStart;
+      const followingBreak = followingHardBreakOffset(paragraph, markerEnd);
+      const itemContent = paragraph.content.cut(markerEnd, followingBreak);
       const paragraphType = state.schema.nodes.paragraph;
       const itemType = state.schema.nodes.listItem;
       if (!paragraphType || !itemType) return null;
 
       const leadingParagraph = paragraph.type.create(paragraph.attrs, before, paragraph.marks);
-      const listParagraph = paragraph.type.create(paragraph.attrs, after, paragraph.marks);
+      const listParagraph = paragraph.type.create(paragraph.attrs, itemContent, paragraph.marks);
       const list = type.create(
         (match.data?.attributes as Record<string, unknown> | undefined) ?? {},
         itemType.create(null, listParagraph),
       );
       const paragraphPosition = $markerStart.before(1);
-      const replacement = Fragment.fromArray([leadingParagraph, list]);
+      const blocks = [leadingParagraph, list];
+      if (followingBreak !== undefined) {
+        const rest = paragraph.content.cut(followingBreak + 1);
+        blocks.push(paragraph.copy(rest));
+      }
       const tr = state.tr.replaceWith(
         paragraphPosition,
         paragraphPosition + paragraph.nodeSize,
-        replacement,
+        Fragment.fromArray(blocks),
       );
       const listPosition = paragraphPosition + leadingParagraph.nodeSize;
       tr.setSelection(TextSelection.create(tr.doc, listPosition + 3));
@@ -176,6 +192,21 @@ function fenceAwareWrappingInputRule(
         documentFenceStateBefore(props.state.doc, $markerStart.before(1))
       ) {
         return null;
+      }
+      if ($markerStart.parent.type.name === 'paragraph') {
+        const paragraphStart = $markerStart.start();
+        const followingBreak = followingHardBreakOffset(
+          $markerStart.parent,
+          props.range.to - paragraphStart,
+        );
+        // Wrap only the row containing the marker, even on the paragraph's first row.
+        if (followingBreak !== undefined) {
+          const position = paragraphStart + followingBreak;
+          const tr = props.state.tr.delete(position, position + 1).split(position);
+          if (position === props.range.to) {
+            tr.setSelection(TextSelection.create(tr.doc, position));
+          }
+        }
       }
       return rule.handler(props);
     },
