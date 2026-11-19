@@ -121,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   getPrimaryDisplay: vi.fn(),
   getDisplayMatching: vi.fn(),
   getAllDisplays: vi.fn(),
+  onDisplayEvent: vi.fn<(event: string, listener: () => void) => void>(),
   getPreferredSystemLanguages: vi.fn(),
   getLocale: vi.fn(),
   ipcHandle: vi.fn(),
@@ -170,6 +171,7 @@ vi.mock('electron', () => {
     ipcMain: { handle: mocks.ipcHandle },
     shell: { openExternal: mocks.openExternal },
     screen: {
+      on: mocks.onDisplayEvent,
       getPrimaryDisplay: mocks.getPrimaryDisplay,
       getDisplayMatching: mocks.getDisplayMatching,
       getAllDisplays: mocks.getAllDisplays,
@@ -251,6 +253,7 @@ beforeEach(async () => {
   mocks.getPrimaryDisplay.mockReset();
   mocks.getDisplayMatching.mockReset();
   mocks.getAllDisplays.mockReset();
+  mocks.onDisplayEvent.mockClear();
   mocks.getPreferredSystemLanguages.mockReset();
   mocks.getLocale.mockReset();
   mocks.ipcHandle.mockReset();
@@ -5554,7 +5557,7 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
-  it('falls back to the best current display when the selected display is disconnected', async () => {
+  it('hides the island while its selected display is disconnected and restores it on reconnect', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
@@ -5565,7 +5568,6 @@ describe('AgentIslandService native publishing', () => {
       getMainWindow: () => null,
       nativeHost: { failed: false, publish },
     });
-    syncEnabledForTest(service, publish);
     service.registerIpc();
 
     await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
@@ -5576,9 +5578,12 @@ describe('AgentIslandService native publishing', () => {
       displayInternal: false,
       displayBounds: { x: 1728, y: 0, width: 1512, height: 982 },
     });
+    service.setEnabled(true);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
+
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
-    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([1]);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
 
     const options = await registeredIpcHandler(AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL)(null);
     expect(options).toMatchObject({
@@ -5588,6 +5593,18 @@ describe('AgentIslandService native publishing', () => {
         displayName: 'Disconnected Display',
       },
     });
+
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    mocks.displays.push({
+      id: 7, label: 'Disconnected Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+    });
+    displayEvents.get('display-added')!();
+    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([7]);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
   });
 
   it('remaps by persisted identity before trusting a reused display id', async () => {

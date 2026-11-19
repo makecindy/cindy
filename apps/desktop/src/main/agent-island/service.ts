@@ -667,6 +667,13 @@ export class AgentIslandService {
   }
 
   registerIpc(): void {
+    // The native helper has no panel observing screen changes while the target is absent.
+    const refreshDisplays = () => {
+      if (this.isEnabled()) this.publish();
+    };
+    screen.on('display-added', refreshDisplays);
+    screen.on('display-removed', refreshDisplays);
+
     ipcMain.handle(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, (event, sessionId: unknown) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
       if (!sourceWindow || sourceWindow.isDestroyed()) {
@@ -2704,9 +2711,7 @@ export class AgentIslandService {
     if (this.displayTarget.mode === 'display') {
       const selectedDisplay = this.resolveSelectedDisplay(displays);
       if (!selectedDisplay) {
-        // A temporary disconnect uses the current fallback for rendering only;
-        // keep the saved identity so reconnecting restores the user's choice.
-        return [this.getTargetDisplay(displays)];
+        return [];
       }
       const resolvedTarget = this.displayTargetForDisplay(displays, selectedDisplay);
       if (!sameAgentIslandDisplayTarget(this.displayTarget, resolvedTarget)) {
