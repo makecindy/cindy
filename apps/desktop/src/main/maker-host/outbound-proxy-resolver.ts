@@ -11,6 +11,7 @@ import { app, session } from 'electron';
 import { isLoopbackHostname, type OutboundProxyResolver } from '@cindy/anthropic-compat-proxy';
 
 import { createOutboundProxyResolver } from './outboundProxyResolverCore.js';
+import type { OutboundPathSnapshot } from './outboundProxyResolverCore.js';
 // 传输层(真实 socket)自己的解析口径:诊断探针必须用同一把尺子,否则判出来的路径
 // 与真实请求不是同一条(协议归一 + path + 明文 ws 的代理限制)。
 // 用函数而非静态 import:outbound-fetch 在模块求值期就要 resolveDesktopOutboundProxy,
