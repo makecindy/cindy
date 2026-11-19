@@ -29,6 +29,8 @@ export default {
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
     'visibility-wallpaper-commit': { about: 'Wallpaper visibility has the same preview/commit behavior', data: { tab: 'appearance', previewBackground: 'cindy-window', visibility: 0.4 } },
     'chat-layout': { about: 'Find the chat layout, choose Wide, preview and keep a custom width', data: { tab: 'appearance', chatLayout: true } },
+    'chat-layout-narrow': { about: 'Compact chat layout controls stay usable below Wallpaper in a narrow Settings window',
+      viewport: { width: 800, height: 820 }, data: { tab: 'appearance', chatLayout: true } },
     ...Object.fromEntries(['none', 'cindy-window'].flatMap(background => [0.5, 1].map(visibility => [
       `glass-${background}-${visibility * 100}`, { about: 'Background sources share readable translucent cards', data: { tab: 'appearance', glassBackground: background, visibility } },
     ]))),
@@ -55,12 +57,19 @@ export default {
       const wide = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true });
       const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
       const savedWidth = () => page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent'));
+      // Feedback #12: place both compact controls with the layout settings below Wallpaper.
+      assert.ok(await row.evaluate(el => {
+        const wallpaper = document.getElementById('settings-search-target-appearance-wallpaper');
+        return el.closest('#settings-search-target-appearance-sidebar') &&
+          (wallpaper.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }));
       await row.scrollIntoViewIfNeeded();
       assert.equal(await standard.getAttribute('aria-checked'), 'true');
       assert.equal(await slider.count(), 0);
       await ui.capture('standard');
       await standard.press('ArrowRight');
       await slider.waitFor();
+      await slider.scrollIntoViewIfNeeded();
       assert.equal(await wide.getAttribute('aria-checked'), 'true');
       assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
       assert.equal(await savedWidth(), null);
@@ -69,6 +78,12 @@ export default {
 
       const track = await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').boundingBox();
       const thumb = await slider.boundingBox();
+      const widthRow = await panel.locator('#settings-chat-width').boundingBox();
+      assert.ok(track.width >= 100 && track.height >= 36 && track.x + track.width <= widthRow.x + widthRow.width,
+        'Slider keeps its hit area inside the settings row');
+      if (ui.viewport.width >= 1200) assert.ok(widthRow.height <= 90, 'Width controls share a single compact row');
+      console.log('APPEARANCE_CHAT_LAYOUT', JSON.stringify({ viewport: ui.viewport.width, locale: ui.locale,
+        rowHeight: widthRow.height, trackWidth: track.width }));
       await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
       await page.mouse.down();
       await page.mouse.move(track.x + track.width * 0.8, track.y + track.height / 2, { steps: 8 });

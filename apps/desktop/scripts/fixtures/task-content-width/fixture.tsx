@@ -4,6 +4,7 @@ import { MessageStream } from '../../../src/renderer/components/chat/MessageStre
 import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { ChatLayoutSettings } from '../../../src/renderer/components/settings/ChatLayoutSettings';
+import { SettingsCard } from '../../../src/renderer/components/ui/settings-rows';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { useProportionalWidth } from '../../../src/renderer/hooks/useProportionalWidth';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
@@ -77,7 +78,7 @@ function Fixture() {
     </div>
     {ctx.data.interactive && (
       <div data-ui-page-control className="fixed bottom-32 left-4 z-50 w-64">
-        <ChatLayoutSettings />
+        <SettingsCard><ChatLayoutSettings /></SettingsCard>
       </div>
     )}
     <AppFrame sidebar={sidebar ? <div className="p-5 text-14">Cindy<br /><br />宽屏工作区</div> : undefined}>
