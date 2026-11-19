@@ -25,7 +25,9 @@ vi.mock('expo-router', () => ({
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
-vi.mock('react-native-svg', () => ({ default: 'svg', G: 'g', Rect: 'rect', Path: 'path', Text: 'text' }));
+vi.mock('react-native-svg', () => ({
+  default: 'svg', Circle: 'circle', Defs: 'defs', LinearGradient: 'linearGradient', Rect: 'rect', Stop: 'stop', Text: 'text',
+}));
 vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowActionButton: ({ action }: { action: { onPress(): void; label: string } }) =>
     <button onClick={action.onPress}>{action.label}</button>,
@@ -77,6 +79,11 @@ it.each([
     expect(guide.textContent).toContain(text);
   }
   expect(guide.querySelector('[role=img]')?.getAttribute('aria-label')).toBe(zh.widgetGuideExample);
+  // Only iOS offers these widgets on the Lock Screen.
+  for (const text of [zh.widgetGuideLock, zh.widgetGuideLockIOS]) {
+    expect(guide.textContent?.includes(text)).toBe(OS === 'ios');
+  }
+  expect(guide.querySelectorAll('svg')).toHaveLength(OS === 'ios' ? 2 : 1);
   act(() => guide.querySelector('button')!.click());
   expect(host.querySelector('section')).toBeNull();
 });

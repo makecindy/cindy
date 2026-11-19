@@ -43,7 +43,8 @@ export default function UsageScreen() {
           ? <UsageDashboard snapshot={state.snapshot} name={state.deviceName} />
           : <ErrorNotice message={t('session.menu.usage.quotaUnavailable')} />}
       </ScrollView>
-      {canShowWidgetGuide && <UsageWidgetGuide visible={guideVisible} instructions={instructions} onClose={() => setGuideVisible(false)} />}
+      {canShowWidgetGuide && <UsageWidgetGuide visible={guideVisible} instructions={instructions}
+        lockScreenHint={Platform.OS === 'ios' ? t('devices.widgetGuideLockIOS') : undefined} onClose={() => setGuideVisible(false)} />}
     </SafeAreaView>
   );
 }
