@@ -257,6 +257,7 @@ export async function generatePromptPrediction(
   const modelsSnapshot = JSON.stringify(readAuxiliaryModelSettings().models);
 
   const requestOptions: UtilityTextRequestOptions = {
+    source: 'prompt-prediction', sessionId: params.sessionId,
     maxTokens: 96,
     timeoutMs: 12_000,
     disableReasoning: true,

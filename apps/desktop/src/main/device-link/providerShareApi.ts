@@ -45,6 +45,7 @@ const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
   PROVIDER_SHARE_CROSS_REGION_DISABLED: 'PROVIDER_SHARE_CROSS_REGION_DISABLED',
 };
 const ALLOWED_REDACTED_CODES = Object.keys(ACTIONABLE_CODES);
+const PRIVATE_IDENTITY_CARD = 'private-device';
 
 function captureScope() {
   const key = activeOwnerScopeKey();
@@ -114,18 +115,26 @@ const listingApi = createProviderShareApi({ captureScope, request: async (path, 
     allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES });
   return await listAgentNetProviderShares(received, legacy) ?? legacy();
 } });
-export const providerShareApi: ProviderShareApi = {
+type CreateLink = ProviderShareApi['createLink'];
+type CreateLinkInput = Omit<Parameters<CreateLink>[0], 'identityCard'> & { identityCard?: string };
+export const providerShareApi: Omit<ProviderShareApi, 'createLink'> & {
+  createLink(input: CreateLinkInput, assertCurrent?: () => void): ReturnType<CreateLink>;
+} = {
   ...legacyProviderShareApi,
   listOwned: () => listingApi.listOwned(),
   listReceived: () => listingApi.listReceived(),
-  async createLink(input) {
+  async createLink(input, assertCurrent) {
+    const scope = captureScope();
     const route = selectedAgentNetSharingRoute('provider-share');
-    if (!route) {
-      if (isAgentNetActive()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Agent-Net is not ready');
-      return legacyProviderShareApi.createLink(input);
-    }
+    if (!route && isAgentNetActive()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Agent-Net is not ready');
+    const identityCard = route?.v === 3 ? PRIVATE_IDENTITY_CARD
+      : input.identityCard ?? await fetchIdentityCard('share-link', sha256Hex(`${getDeviceId()}:${input.providerId}`));
+    if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+    assertCurrent?.();
+    const payload = { ...input, identityCard };
+    if (!route) return legacyProviderShareApi.createLink(payload);
     rememberAgentNetSharingService(route);
-    const result = await scopedApi(route).createLink(input);
+    const result = await scopedApi(route).createLink(payload);
     rememberAgentNetSharingHost('provider-share', result.shareId, route);
     addAlias({ ...route, resourceId: result.shareId }, 'invitations', sha256Hex(result.invitation));
     return result;
@@ -133,7 +142,7 @@ export const providerShareApi: ProviderShareApi = {
   preview: invitation => aliasApi('invitations', sha256Hex(invitation)).api.preview(invitation),
   async sendRequest(invitation, card) {
     const { route, api } = aliasApi('invitations', sha256Hex(invitation));
-    const result = await api.sendRequest(invitation, card);
+    const result = await api.sendRequest(invitation, route?.v === 3 ? PRIVATE_IDENTITY_CARD : card);
     if (route) addAlias(route, 'requests', result.requestId);
     return result;
   },
@@ -172,10 +181,10 @@ export function providerShareHiddenByEncryptedOnly(shareId: string): boolean {
 
 /** A V2 invitation carries its public root and service. Validate before pinning;
  * no account token, private root or transport seed is sent to that service. */
-export function resolveAgentNetProviderShareLink(input: string): { invitation: string; api: ProviderShareApi } | null {
+export function resolveAgentNetProviderShareLink(input: string): { invitation: string; identityCard?: string; api: ProviderShareApi } | null {
   const parsed = agentNetSharingInvitationRoute(input, 'provider-share'); if (!parsed) return null;
   const api = scopedApi(parsed.route);
-  return { invitation: parsed.invitation, api: { ...api,
+  return { invitation: parsed.invitation, ...(parsed.route.v === 3 ? { identityCard: PRIVATE_IDENTITY_CARD } : {}), api: { ...api,
     async preview(invitation) {
       const result = await api.preview(invitation);
       if (result.shareId !== parsed.route.resourceId) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');

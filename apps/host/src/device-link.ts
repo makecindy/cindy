@@ -3,7 +3,7 @@
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
@@ -17,6 +17,10 @@ import * as botBoundary from '../../desktop/src/main/device-link/remoteBotSessio
 import * as sharedTasks from '../../desktop/src/main/device-link/sharedTaskDispatch.js';
 import { admitSharedTaskFsWatchTopics } from '../../desktop/src/main/device-link/sharedTaskFileAccess.js';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.js';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../desktop/src/shared/projectArchive.js';
+import { runProjectArchive } from '../../desktop/src/main/localDb/projectArchive.js';
+import { getDbClient } from '../../desktop/src/main/localDb/client/current.js';
+import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
@@ -28,9 +32,10 @@ import { createHostWebSocketAgent } from './outbound.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
-import { MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
-import { getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
+import { normalizeDeviceLinkSetModelWireArgs } from '../../desktop/src/main/maker-ipc/setModelWireArgs.js';
 
 type ServiceResult = { status: number; body: any };
 /** How long a connection waits for this Host's stored Agent-Net identity (the signed transport statement) at most. */
@@ -44,6 +49,9 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
+  isBusyForProjectArchive(sessionId: string): boolean;
+  onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
+  preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
@@ -104,7 +112,86 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => runProjectArchive(input, true, {
+    withLock: withSendToSessionLock,
+    busy: deps.isBusyForProjectArchive,
+    write: async (sessionId, status, beforeWrite, projectGuard) => {
+      const client = getDbClient();
+      beforeWrite();
+      if (status === 'archived') {
+        await client.tx('sessions.setTerminalStatus', { sessionId, status, projectGuard });
+      } else {
+        await client.tx('sessions.setStatus', { sessionIds: [sessionId], status, projectGuard });
+      }
+      assertCurrent();
+      deps.onProjectTaskStatus(sessionId, status);
+    },
+  }));
+  registry.register(MAKER_INVOKE.SET_MODEL, async ([sessionId, model, wireProviderId, revision, wireSelection]) => {
+    const { providerId, selection } = normalizeDeviceLinkSetModelWireArgs(true,
+      deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1),
+      wireProviderId, revision, wireSelection);
+    if (selection && typeof selection === 'object' && 'confirmedContextWindow' in selection) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throw new Error('[PRECONDITION_FAILED] remote model selection requires an owner controller');
+    }
+    if (typeof model !== 'string' || (providerId !== undefined && providerId !== null && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    const axes = selection as { effort?: string; fastMode?: boolean | 'ultrafast' } | undefined;
+    const result = await call('/api/sessions/update', {
+      sessionId,
+      patch: { model, ...(providerId !== undefined ? { providerId } : {}),
+        ...(axes?.effort ? { effort: axes.effort } : {}),
+        ...(axes?.fastMode !== undefined ? { fastMode: axes.fastMode } : {}) },
+    });
+    if (result && typeof result === 'object') dispatch.markRemoteSettingPersistedInsideHandler(result);
+    return result;
+  });
+  registry.register(MAKER_INVOKE.SWITCH_SESSION_AGENT, ([sessionId, targetAgentKind, model, providerId, effort, fastMode, options]) => {
+    if (options && typeof options === 'object') {
+      if ('confirmedContextWindow' in options) {
+        throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+      }
+      if ('agentDeviceId' in options) throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support remote execution');
+    }
+    if (typeof model !== 'string' || !model.trim() ||
+        (providerId !== null && providerId !== undefined && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode });
+  });
+  registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
+    call('/api/sessions/agent-switch-intent', { sessionId }));
   registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
+  registry.register('maker:session:prewarm', async ([id, input]) => {
+    assertCurrent();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
+    const request = input as { purpose?: string; workingDir?: string; pendingPiRoute?: unknown; model?: unknown } | null;
+    if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
+    if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
+      throw new Error('[INVALID_PARAMS] Session and working directory required');
+    const pending = request.pendingPiRoute;
+    if ('confirmedContextWindow' in request || (pending && typeof pending === 'object' && 'confirmedContextWindow' in pending)) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
+    if (pending !== undefined && (!pending || typeof pending !== 'object' || Array.isArray(pending)
+      || ('agentDeviceId' in pending && pending.agentDeviceId != null)
+      || typeof request.model !== 'string' || !request.model)) throw new Error('[INVALID_PARAMS] Unsupported Pi route');
+    const nextInputChars = pending && typeof pending === 'object' && 'nextInputChars' in pending
+      ? pending.nextInputChars : undefined;
+    if (nextInputChars !== undefined && (typeof nextInputChars !== 'number' || !Number.isSafeInteger(nextInputChars) || nextInputChars < 0)) {
+      throw new Error('[INVALID_PARAMS] Invalid next input size');
+    }
+    const route = pending !== undefined
+      ? { model: request.model as string, ...(nextInputChars !== undefined ? { nextInputChars } : {}) }
+      : undefined;
+    await deps.preparePiSkillRuntime(id, request.workingDir, route);
+    assertCurrent();
+    return { accepted: true, piRuntimePrepared: true, ...(route ? { pendingRouteApplied: true } : {}) };
+  });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();
     if (!source || source.sharedTask) throw new Error('[PRECONDITION_FAILED] MCP_APP_OWNER_ONLY');
@@ -307,7 +394,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       case 'interaction_dismissed': emit(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId: id, requestId: event.requestId, reason: event.reason }); break;
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
       case 'message_created': emit('local-db:messages:created', { sessionId: id, message: event.message }); break;
-      case 'project_aliases_changed': emit('local-db:project-aliases:changed', {}); break;
+      case 'project_aliases_changed':
+        emit('local-db:project-aliases:changed', {});
+        if (event.catalogChanged === true) emit('local-db:recent-workdirs:changed', {});
+        break;
       case 'message_deleted': emit('local-db:messages:deleted', event); break;
       case 'error_persisted': emit('local-db:session:error-persisted', { sessionId: id, persistId: event.persistId }); break;
       case 'subagent_runs_changed': emit('local-db:subagent-runs:changed', event); break;

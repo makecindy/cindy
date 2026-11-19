@@ -449,6 +449,13 @@ describe('BillingPage remote catalog rendering', () => {
     });
   });
 
+  it('opens Usage history from the balance usage section', async () => {
+    routerState.search = 'tab=billing';
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.usage.viewUsage' }));
+    expect(routerState.search).toBe('tab=usage');
+  });
+
   it('shows the server ledger total and all three balance pools', async () => {
     render(<BillingPage />);
 
@@ -863,6 +870,44 @@ describe('BillingPage remote catalog rendering', () => {
     );
     view.rerender(<BillingPage />);
     expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the balance and XD models once a gift card is redeemed', async () => {
+    const card = {
+      status: 'AVAILABLE' as const,
+      amount: '20',
+      faceCode: 'cindy',
+      senderName: 'Cindy Team',
+      message: null,
+      claimDeadline: '2026-12-31T16:00:00.000Z',
+      validityDays: 90,
+      claimedAt: null,
+    };
+    window.electronAPI.billing.previewGiftCard = vi.fn(async () => ({ ok: true as const, card }));
+    window.electronAPI.billing.redeemGiftCard = vi.fn(async () => ({
+      ok: true as const,
+      card: { ...card, status: 'CLAIMED_BY_YOU' as const, claimedAt: '2026-11-16T12:00:00.000Z' },
+      credit: { state: 'APPLIED' as const, amount: '20', expiresAt: '2027-02-14T12:00:00.000Z' },
+    }));
+    const getBalance = window.electronAPI.billing.getBalance;
+    render(<BillingPage />);
+    await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.giftCard.action' }));
+    const input = within(await screen.findByRole('alertdialog'));
+    fireEvent.change(input.getByRole('textbox'), { target: { value: 'C0123456789ABCDE' } });
+    fireEvent.click(input.getByRole('button', { name: 'billing.giftCard.continue' }));
+    // 预览后切到确认步骤（另一个对话框）；此时还没有领取，也不刷新目录。
+    const confirm = await screen.findByRole('button', { name: 'billing.giftCard.confirmAction' });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).not.toHaveBeenCalled();
+    fireEvent.click(confirm);
+
+    // 兑换礼品卡与充值等同进入 paid tier：余额与 XD 模型目录都要当场重拉。
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+    expect(getBalance).toHaveBeenCalledTimes(2);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {

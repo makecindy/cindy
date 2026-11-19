@@ -125,6 +125,21 @@ describe('MakerMemoryManager.runReview · reviewOneShot 注入与回退', () => 
     }
   });
 
+  it.each(['suggestion', ''])('meters the legacy route without changing its %j return semantics', async text => {
+    const agent = fakeAgent('must be wrapped');
+    const dispatch = vi.fn(async () => text);
+    const manager = new MakerMemoryManager({ basePath: root, sqliteFactory,
+      agents: { 'claude-code': agent }, logger: noopLogger, initialEnabled: true,
+      reviewAgentOneShot: dispatch,
+    });
+    try {
+      await manager.write(WORKDIR, { type: 'user', name: 'pref', title: 'Preference', description: 'Durable', body: 'Keep it.' });
+      expect((await manager.runReview(WORKDIR)).suggestions).toBe(text);
+      expect(dispatch).toHaveBeenCalledWith('claude-code', expect.any(String), { maxTokens: 800, timeoutMs: 60_000 });
+      expect(agent.oneShot).not.toHaveBeenCalled();
+    } finally { manager.dispose(); }
+  });
+
   it('still short-circuits with no records to review', async () => {
     const manager = new MakerMemoryManager({
       basePath: root,

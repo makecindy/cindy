@@ -249,16 +249,12 @@ export interface ProjectsSectionProps {
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onToggleProject: (projectKey: string) => void;
-  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
+  onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
-  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
-  /**
-   * 段头新建项目：选择一个新项目目录后进入 transient draft route。
-   * 2026-08-12 起段头按钮暂时隐藏(见下方段头注释),prop 保留以便恢复入口。
-   */
-  onCreateProject?: () => void;
+  /** 在设备行指定的电脑上打开新建项目表单；null 表示本机。 */
+  onCreateProject?: (deviceTarget: DialogueDeviceTarget | null) => void;
   /** delayed-create:在该 project 的 workingDir 下进 transient draft route。
    *  父层 wrapper 会处理"预填 workingDir 到 newMakerDraft store + navigate('/cc-agent/new')"。
    *  vendor 由用户在 NewMakerDraftRoute 内的 VendorSegmentedSwitcher 决定(读 draft.vendor)。 */
@@ -267,8 +263,6 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  /** 打开设置 → 任务导入，只看这个项目。 */
-  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -321,15 +315,14 @@ export function ProjectsSection({
   projectOptions,
   onScheduleAction,
   onToggleProject,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -972,10 +965,8 @@ export function ProjectsSection({
       // 按设备分段时段头已写明设备,行内不再重复标注归属(2026-08-12 用户裁决)。
       hideRemoteMachineLabel={deviceGroupingActive}
       onToggle={onToggleProject}
-      isProjectPinned={false}
-      onToggleProjectPin={onToggleProjectPin}
+      onSettings={onSettings}
       onRenameProject={onRenameProject}
-      onRemoveFromSidebar={onRemoveFromSidebar}
       onSessionClick={onSessionClick}
       onAction={onAction}
       onRename={onRename}
@@ -987,7 +978,6 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />
@@ -1240,7 +1230,18 @@ export function ProjectsSection({
                 return (
                   <div key={key} className="flex flex-col">
                     {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                    <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <DeviceSectionHeader
+                      deviceId={section.deviceId}
+                      name={name}
+                      createProjectDisabled={!online}
+                      onCreateProject={
+                        onCreateProject
+                          ? () => onCreateProject(
+                              section.deviceId ? { deviceId: section.deviceId, deviceName: name } : null,
+                            )
+                          : undefined
+                      }
+                    >
                       <button
                         type="button"
                         onClick={() => toggleDeviceSection(key)}

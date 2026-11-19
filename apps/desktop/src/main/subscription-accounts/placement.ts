@@ -324,19 +324,6 @@ export function readOpenAiMergedLegacyAccountsIfReadable(): Readonly<Record<stri
   );
 }
 
-/** Only current members of actually shared pools inherit the pool's revert grant.
- * Historical aliases survive a split for saved tasks; they are not sharing intent.
- */
-export function readSharedOpenAiLegacyAccountsIfReadable(sharedProviders: ReadonlySet<string>): Readonly<Record<string, string>> | null {
-  const aliases = readOpenAiLegacyAccountsIfReadable();
-  file.invalidateIfChanged();
-  if (!aliases || file.isUnreadable()) return null;
-  const members = new Set(readPool('openai')?.accounts.map(account => account.id));
-  return Object.fromEntries(Object.entries(aliases).filter(([providerId, accountId]) =>
-    members.has(accountId) && accountProviderId('openai', accountId) !== providerId
-    && sharedProviders.has(accountProviderId('openai', accountId))));
-}
-
 /**
  * Undo the 2026-11-11 upgrade merge (v0.1.135): every legacy Codex connection that was folded into
  * OpenAI without the user choosing it belongs to its own connection again. Runs on each catalog

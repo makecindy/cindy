@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Maker,
   Session,
+  SessionCreationCleanupPendingError,
   MAIN_OWNED_SEND_CONTEXT,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
@@ -224,10 +225,14 @@ interface SessionHarness {
   send: ReturnType<typeof vi.fn<HarnessSend>>;
   /** maker-core Session.isTurnRunning 的 mock — 模拟接管模式下 desktop 侧 turn 在跑。 */
   isTurnRunning: ReturnType<typeof vi.fn>;
+  /** 运行时状态探针 — 模拟 close 进行中 / close 失败停在 error 态。 */
+  getStatus: ReturnType<typeof vi.fn>;
+  hasStartedClosing: ReturnType<typeof vi.fn>;
   /** maker-core Session.abort 的 mock — !stop 中止路径断言用。 */
   abort: ReturnType<typeof vi.fn>;
   acquireTurnLease: ReturnType<typeof vi.fn>;
   releaseTurnLease: ReturnType<typeof vi.fn>;
+  listenerCount(): number;
   emit(event: AgentEvent): void;
   dispatchInteraction(request: InteractionRequest): Promise<InteractionDecision>;
 }
@@ -255,6 +260,9 @@ function createSessionHarness(
   const abort = vi.fn(async () => undefined);
   const releaseTurnLease = vi.fn();
   const acquireTurnLease = vi.fn(() => releaseTurnLease);
+  // 运行时存活探针: 派发前判活读这两个(maker-core Session 的真实接口)。
+  const getStatus = vi.fn((): string => 'active');
+  const hasStartedClosing = vi.fn(() => false);
   let interactionListener: Parameters<Session['setInteractionListener']>[0] = null;
   const session = {
     id: sessionId,
@@ -264,6 +272,8 @@ function createSessionHarness(
     capabilities: options.capabilities ?? ({} as Capabilities),
     send,
     isTurnRunning,
+    getStatus,
+    hasStartedClosing,
     abort,
     acquireTurnLease,
     onEvent(listener: (event: AgentEvent) => void) {
@@ -283,9 +293,12 @@ function createSessionHarness(
     session,
     send,
     isTurnRunning,
+    getStatus,
+    hasStartedClosing,
     abort,
     acquireTurnLease,
     releaseTurnLease,
+    listenerCount: () => listeners.length,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -5223,6 +5236,512 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
           channelOwned: false,
         });
         expect(localRunner.vendorOptionsForSession('desktop-attached-session')).toBeUndefined();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+  });
+
+  /**
+   * issue #9636：派发前失败在飞书上只剩「❌ 启动 agent 失败：Error」。
+   * 这里锁两件事：(1) 带 code 的运行时失败保留真实原因；
+   * (2) 缓存里的运行时已开始拆除 / 停在 error 态时按 DB 行重建，而不是把消息打回。
+   *
+   * 测试价值
+   * - 生产入口与可观察结果：`createTurnRunner().runAgentTurn` → `makerSession.send`；
+   *   渠道侧是「❌ 启动 agent 失败：<code>」与 `feishu session send failed before dispatch`
+   *   日志里的 `reason` / `error.errorCode`，以及消息是否真的落到运行时。
+   * - Bug／规则依据：issue #9636、#8952（同一派发前失败降级）；规则见
+   *   `docs/dev-rules/im-turn-flow.md` 不变量 6b。
+   * - 现有覆盖缺口：既有用例只钉住「裸 Error → reason: 'Error'」与 `SESSION_RUNNING`
+   *   重排，没有覆盖带 code 的运行时不失败归因，也没有覆盖 `current === previous` 时
+   *   运行时其实已拆除的分支。
+   * - 最小失败输入：`send` 抛 `{code:'SESSION_CLOSING'}`；或 `maker.getSession()`
+   *   返回 `hasStartedClosing() === true` / `getStatus() === 'error'` 的同一实例。
+   * - tier：unit（进程内 fake Maker / Session，无外部资源）。
+   */
+  describe('session runtime liveness (#9636)', () => {
+    const SESSION_ID = 'feishu-session';
+
+    // #11381 diagnostic review: real Maker/Session cleanup must block a second
+    // native startup and report cleanup separately from preparation and send.
+    // Existing fake-Maker cases did not exercise raw handle.close rejection.
+    // Unit: injected transport/storage, synthetic error text, no native process.
+    it.each(['closing-cleanup', 'error-cleanup', 'startup'] as const)(
+      'classifies runtime preparation failure safely (%s)', async (mode) => {
+        let canClose = mode === 'startup';
+        const ended = deferred<void>();
+        const send = vi.fn(async () => undefined);
+        const handle = {
+          id: 'diagnostic-thread', agentKind: 'claude-code', model: 'm', send,
+          close: vi.fn(async () => {
+            if (!canClose) throw new Error('PROMPT_SECRET /private/runtime');
+            ended.resolve();
+          }),
+          isTurnRunning: () => false, setInteractionResolver() {},
+          async *events() { await ended.promise; yield* [] as AgentEvent[]; },
+        } as unknown as AgentSessionHandle;
+        const startSession = vi.fn(async () => handle);
+        const agent = { kind: 'claude-code', capabilities: {}, startSession } as unknown as BaseAgent;
+        const storage = {
+          get: vi.fn(async () => null),
+          create: vi.fn(async meta => ({ ...meta, createdAt: 1, updatedAt: 1 })),
+          update: vi.fn(async () => {}), list: vi.fn(async () => []), delete: vi.fn(async () => {}),
+        } as unknown as SessionStorage;
+        const logger = { ...mocks.logger, trace() {}, fatal() {}, child() { return this; } };
+        const maker = new Maker({ agents: { 'claude-code': agent }, storage, logger });
+        const session = await maker.createSession({ id: SESSION_ID, agentKind: 'claude-code', workingDir: '/repo', model: 'm' });
+        mocks.getMaker.mockReturnValue(maker);
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          acquirePendingAgentSwitch: vi.fn(async () => () => {}),
+        });
+        localRunner.attachSessionOutput(session, 'ou_user');
+        // Both retained-runtime branches are supported by Maker: teardown has
+        // already started, or an error runtime has not started teardown yet.
+        const statusProbe = mode === 'closing-cleanup' ? null
+          : vi.spyOn(session, 'getStatus').mockReturnValue('error');
+        try {
+          if (mode === 'closing-cleanup') await expect(session.close()).rejects.toThrow('PROMPT_SECRET');
+          if (mode === 'startup') {
+            startSession.mockRejectedValueOnce(Object.assign(new Error('PROMPT_SECRET /private/startup'), { code: 'PRECONDITION_FAILED' }));
+          }
+          await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user',
+            userMessageId: 'diagnostic-failure', text: 'hello', attachments: [] });
+          const code = mode === 'startup' ? 'PRECONDITION_FAILED' : 'SESSION_CLEANUP_PENDING';
+          const source = mode === 'startup' ? 'session.prepare' : 'session-cleanup';
+          expectSafeSendOutcomeLog({ source, reason: code });
+          expect(send).not.toHaveBeenCalled();
+          expect(startSession).toHaveBeenCalledTimes(mode === 'startup' ? 2 : 1);
+          if (mode !== 'startup') expect(maker.getSession(SESSION_ID)).toBe(session);
+          const failure = mocks.logger.error.mock.calls.find(call => call[0] === 'feishu session send failed before dispatch');
+          expect(failure?.[1]).toMatchObject({ source, reason: code, error: { errorCode: code, safeMessage: code } });
+          expect(JSON.stringify(failure)).not.toContain('PROMPT_SECRET');
+          expect(mocks.feishuIm.sendText.mock.calls.map(call => String(call[1]))).toContain(`❌ 启动 Agent 失败：${code}`);
+          expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain('PROMPT_SECRET');
+        } finally {
+          statusProbe?.mockRestore();
+          canClose = true;
+          await localRunner.disposeAllSessions();
+          await maker.closeSession(SESSION_ID);
+        }
+      },
+    );
+
+    function createLivenessSetup(options: { onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
+      const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      let live: Session | undefined = previous.session;
+      const maker = {
+        getSession: vi.fn(() => live),
+        // Maker 的真实语义：同一 business id 重建后 activeSessions 里是新实例。
+        createSession: vi.fn(async () => {
+          if (maker.createSession.mock.calls.length === 1) {
+            live = previous.session;
+          } else {
+            // 重建路径会重试旧实例的 close；close 事件在 createSession 返回前就送达宿主。
+            if (maker.createSession.mock.calls.length === 2) {
+              await options.onRebuild?.(previous.session);
+            }
+            live = replacement.session;
+          }
+          return live;
+        }),
+        closeSessionIfCurrent: vi.fn(async (session: Session) => {
+          if (live !== session) return;
+          await session.close();
+          if (live === session) live = undefined;
+        }),
+        on: vi.fn((listener: (event: MakerEvent) => void) => {
+          makerEventListeners.push(listener);
+          return () => {
+            makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+          };
+        }),
+      };
+      mocks.getMaker.mockReturnValue(maker);
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch: vi.fn(async () => () => {}),
+      });
+      const onTurnComplete = vi.fn();
+      const runTurn = () => localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-liveness',
+        text: 'hello',
+        attachments: [],
+        onTurnComplete,
+      });
+      return { previous, replacement, maker, localRunner, runTurn, onTurnComplete,
+        setLive: (session: Session | undefined) => { live = session; } };
+    }
+
+    it('keeps a coded runtime failure diagnosable instead of collapsing it to "Error"', async () => {
+      const h = setupSession(async () => {
+        throw Object.assign(new Error(`Session ${SESSION_ID} is closing`), {
+          code: 'SESSION_CLOSING',
+        });
+      });
+
+      await runDefaultTurn();
+      await flushMicrotasks();
+
+      expectSafeSendOutcomeLog({ source: 'session.send', reason: 'SESSION_CLOSING' });
+      const failureLog = mocks.logger.error.mock.calls.find(
+        (call) => call[0] === 'feishu session send failed before dispatch',
+      );
+      expect((failureLog?.[1] as { error?: unknown }).error).toEqual({
+        errorName: 'Error',
+        errorCode: 'SESSION_CLOSING',
+        safeMessage: 'SESSION_CLOSING',
+      });
+      expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toEqual([
+        '❌ 启动 Agent 失败：SESSION_CLOSING',
+      ]);
+      expect(h.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds a runtime that already started closing instead of failing the message', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding closing runtime before send'),
+        );
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        // 失败的文案不该出现——这条消息已经被重建后的运行时接住。
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        expect(maker.createSession).toHaveBeenCalledTimes(2);
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('rebuilds a runtime left in the error state by a failed close', async () => {
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup();
+      // close 失败的真实形态：status=error，且 teardown 已经开始。
+      previous.getStatus.mockReturnValue('error');
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding status=error runtime before send'),
+        );
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it.each(['unexpected', 'requested', 'agent-switch'] as const)('keeps the turn alive across the replaced runtime close (%s)', async (reason) => {
+      let closedDuringRebuild = false;
+      const { previous, replacement, localRunner, runTurn, onTurnComplete } = createLivenessSetup({
+        onRebuild: (replaced) => {
+          closedDuringRebuild = true;
+          // 重建期间旧实例的 close 事件到达：不能把正在派发的这一轮清掉。
+          emitMakerEvent({
+            type: 'session:closed',
+            sessionId: SESSION_ID,
+            session: replaced,
+            reason,
+          } as MakerEvent);
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(closedDuringRebuild).toBe(true);
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
+        // state 还在（观察者已换绑到新运行时）：这一轮的回复能回到渠道并正常收口。
+        await waitForAssertion(() => expect(replacement.session).toBeDefined());
+        replacement.emit({ type: 'text', data: { text: '重建后的回答', isFinal: true } });
+        replacement.emit({ type: 'done', data: {} });
+        await flushMicrotasks();
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    // #11381/4617476248: failed native teardown must not retain terminal IM state.
+    it.each([['archived', false], ['deleted', false], ['missing', false],
+      ['archived', true], ['deleted', true], ['missing', true]] as const)(
+      'rejects a task made %s while rebuilding its runtime (close failure=%s)', async (status, closeFails) => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
+      previous.hasStartedClosing.mockReturnValue(true);
+      const activeRow = {
+        id: SESSION_ID,
+        status: 'active',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      };
+      // 重建前读一次（可用），重建后再读一次（用户已关任务 → archived）。
+      mocks.desktopSessionRows
+        .mockReturnValueOnce([{ ...activeRow }])
+        .mockReturnValueOnce(status === 'missing' ? [] : [{ ...activeRow, status }]);
+      if (closeFails) vi.mocked(replacement.session.close).mockRejectedValueOnce(new Error('PROMPT_SECRET /private/cleanup'));
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        // 忽略 close 事件不等于可以继续跑：任务已归档，这条消息必须明确失败。
+        expect(replacement.send).not.toHaveBeenCalled();
+        // #11381 review: terminal cleanup may run before startup publishes the
+        // replacement. The runner must retire that exact late runtime as well.
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBe(closeFails ? replacement.session : undefined);
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBeNull();
+        expect(previous.listenerCount()).toBe(0);
+        expect(replacement.listenerCount()).toBe(0);
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding closing runtime before send'),
+        );
+        expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toContain(
+          `❌ 启动 Agent 失败：${closeFails ? 'SESSION_CLEANUP_PENDING' : 'SESSION_CLOSED'}`,
+        );
+        if (closeFails) expectSafeSendOutcomeLog({ source: 'session-cleanup', reason: 'SESSION_CLEANUP_PENDING' });
+        expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain('PROMPT_SECRET');
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    // #11381 review: public disposal during createSession previously allowed a
+    // late listener to survive and observe a later wiring of the same task.
+    // Unit, fake transport; existing Stop coverage only checked that send stops.
+    it('does not rebind after disposal while rebuilding and can wire again without duplicate observers', async () => {
+      const { previous, replacement, localRunner, runTurn, onTurnComplete } = createLivenessSetup({
+        onRebuild: async () => { await localRunner.disposeAllSessions(); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(replacement.listenerCount()).toBe(0);
+        expect(mocks.wireSessionToIpcExternal).not.toHaveBeenCalledWith(replacement.session);
+        // #11381/4617476259: explicit disposal is cancellation, no late failure reply.
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        expect(onTurnComplete).toHaveBeenCalledOnce();
+
+        onTurnComplete.mockClear();
+        await runTurn();
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(replacement.listenerCount()).toBe(1);
+        replacement.emit({ type: 'text', data: { text: 'after rewire', isFinal: true } });
+        replacement.emit({ type: 'done', data: {} });
+        await flushMicrotasks();
+        expect(onTurnComplete).toHaveBeenCalledOnce();
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+      expect(replacement.listenerCount()).toBe(0);
+    });
+
+    // #11381/4616692726: project-switch disposal closes a runtime, whereas
+    // dispose-all only drops this channel's observation. A late replacement
+    // must not survive the single-task disposal with its old project config.
+    it.each([false, true])('retires the late replacement after single-task disposal during rebuilding (close failure=%s)', async (closeFails) => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => { await localRunner.disposeOneSession(SESSION_ID); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      if (closeFails) vi.mocked(replacement.session.close).mockRejectedValueOnce(new Error('PROMPT_SECRET /private/cleanup'));
+      try {
+        await runTurn();
+        expect(previous.session.close).toHaveBeenCalledOnce();
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBe(closeFails ? replacement.session : undefined);
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBeNull();
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(replacement.listenerCount()).toBe(0);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        if (closeFails) expect(mocks.logger.warn).toHaveBeenCalledWith(
+          'session cleanup pending after cancelled dispatch',
+          expect.objectContaining({ source: 'session-cleanup', reason: 'SESSION_CLEANUP_PENDING' }),
+        );
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    // The same cancellation must win if preparation rejects after a direct Stop.
+    it.each([false, true])('does not send after an explicit stop during runtime rebuilding (preparation failure=%s)', async (preparationFails) => {
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => {
+          expect(await localRunner.stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' }))
+            .toMatchObject({ stopped: true });
+          if (preparationFails) throw new SessionCreationCleanupPendingError({ cause: new Error('PROMPT_SECRET /private/stopped') });
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(previous.abort).toHaveBeenCalledOnce();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    // Final review: Stop may be followed by a new message before preparation
+    // rejects. No native done event exists to release that queued successor.
+    it('drains a new message queued after Stop when old preparation fails', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const entered = deferred<void>();
+      const failPreparation = deferred<void>();
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => {
+          entered.resolve();
+          await failPreparation.promise;
+          throw new SessionCreationCleanupPendingError();
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await localRunner.stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' });
+        await runTurn();
+        failPreparation.resolve();
+        await first;
+        await vi.advanceTimersByTimeAsync(600);
+        await flushMicrotasks();
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(mocks.feishuIm.sendText.mock.calls.map(call => String(call[1])).join(' '))
+          .not.toContain('启动 Agent 失败');
+      } finally {
+        await localRunner.disposeAllSessions();
+        vi.useRealTimers();
+      }
+    });
+
+    // #11381/4618311264: bounded Maker wait may reject before real close
+    // settles; the eventual exact old close must not erase a queued successor.
+    it('preserves queued input when old close finishes after cleanup pending', async () => {
+      const entered = deferred<void>();
+      const timeout = deferred<void>();
+      const noticeEntered = deferred<void>();
+      const noticeDone = deferred<void>();
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => { entered.resolve(); await timeout.promise; throw new SessionCreationCleanupPendingError(); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      mocks.feishuIm.sendText.mockImplementationOnce(async () => { noticeEntered.resolve(); await noticeDone.promise; });
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await runTurn();
+        timeout.resolve();
+        await noticeEntered.promise;
+        emitMakerEvent({ type: 'session:closed', sessionId: SESSION_ID,
+          session: previous.session, reason: 'requested' } as MakerEvent);
+        noticeDone.resolve();
+        await first;
+        await waitForAssertion(() => expect(replacement.send).toHaveBeenCalledOnce());
+      } finally {
+        noticeDone.resolve();
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    // #11381/4618311281: a post-switch message must not adopt the obsolete
+    // replacement before the cancelled preparation has retired it.
+    it('waits for disposed preparation retirement before wiring a successor', async () => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const { previous, replacement, maker, localRunner, runTurn, setLive } = createLivenessSetup({
+        onRebuild: async () => { entered.resolve(); await release.promise; },
+      });
+      const successor = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      previous.hasStartedClosing.mockReturnValue(true);
+      const originalCreate = maker.createSession.getMockImplementation()!;
+      maker.createSession.mockImplementation(async () => {
+        if (maker.createSession.mock.calls.length <= 2) return originalCreate();
+        setLive(successor.session);
+        return successor.session;
+      });
+      mocks.peekSessionById.mockResolvedValue({ id: SESSION_ID, agentKind: 'claude-code',
+        workingDir: '/new-project', model: 'claude-opus-4-7', effort: 'xhigh', permissionMode: 'bypassPermissions',
+        fastMode: false, sdkSessionId: null, providerId: null });
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await localRunner.disposeOneSession(SESSION_ID);
+        const second = runTurn();
+        // Drain this known promise chain without allowing the old rebuild to finish.
+        for (let i = 0; i < 30; i++) await Promise.resolve();
+        const createsBeforeRetirement = maker.createSession.mock.calls.length;
+        release.resolve();
+        await Promise.all([first, second]);
+        expect(createsBeforeRetirement).toBe(2);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(successor.session.close).not.toHaveBeenCalled();
+        expect(successor.send).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBe(successor.session);
+      } finally {
+        release.resolve();
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    it('does not retire a replacement explicitly adopted by a successor state', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => {
+          await localRunner.disposeOneSession(SESSION_ID);
+          localRunner.attachSessionOutput(replacement.session, 'ou_user');
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(replacement.session.close).not.toHaveBeenCalled();
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBe(replacement.session);
+        await runTurn();
+        expect(maker.getSession()).toBe(replacement.session);
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(replacement.listenerCount()).toBe(1);
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    it('keeps a healthy runtime and does not rebuild on every message', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(previous.send).toHaveBeenCalledTimes(1);
+        expect(replacement.send).not.toHaveBeenCalled();
+        // 只有接线时的那一次 createSession。
+        expect(maker.createSession).toHaveBeenCalledTimes(1);
+        expect(mocks.logger.info).not.toHaveBeenCalledWith(
+          expect.stringContaining('runtime before send'),
+        );
       } finally {
         localRunner.disposeAllSessions();
       }

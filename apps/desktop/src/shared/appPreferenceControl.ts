@@ -11,6 +11,7 @@ export const appPreferenceSchema = z.strictObject({
   language: z.enum(['system', ...SUPPORTED_LOCALES]).optional(),
   notifications: z.boolean().optional(),
   sendShortcut: z.enum(['enter', 'modifier-enter']).optional(),
+  followUpBehavior: z.enum(['queue', 'steer']).optional(),
   webLinks: z.enum(['external', 'sidebar']).optional(),
   localLinks: z.enum(['external', 'sidebar']).optional(),
   streamFade: z.enum(['on', 'off']).optional(),

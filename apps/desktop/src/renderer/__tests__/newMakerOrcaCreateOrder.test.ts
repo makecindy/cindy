@@ -165,32 +165,6 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
   });
 
-  it('reconciles Pi skill aliases after the user selects a working directory', () => {
-    const workingDirHandler = sessionViewSource
-      .slice(
-        sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
-        sessionViewSource.indexOf('const maybeShowContextUsage'),
-      )
-      .replace(/\r\n/g, '\n');
-
-    expect(sessionViewSource).toContain('const commands = options?.workingDirOverride');
-    expect(workingDirHandler).toContain('workingDirOverride: newDir');
-    expect(workingDirHandler).toContain('piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
-    expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
-    expect(workingDirHandler).toContain("'maker:create-session'");
-    expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
-    expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
-    );
-    expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
-    );
-    expect(workingDirHandler).toMatch(
-      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
-    );
-    expect(workingDirHandler).toContain('slashDispatch.message,');
-  });
-
   it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
     const slashDispatchBranch = sessionViewSource
       .slice(
@@ -199,9 +173,11 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       )
       .replace(/\r\n/g, '\n');
 
+    // Ordinary and steer sends now share one catalog-resolution call; the
+    // second bounded retry belongs to the pending first-message handoff.
     expect(
       slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {

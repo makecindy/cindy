@@ -174,6 +174,7 @@ async function routeHelpTopics(
     const auxiliaryChain = getEffectiveAuxiliaryModelChain();
     const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const utility = await requestUtilityText(maker, prompt, {
+      source: 'help',
       maxTokens: 30,
       timeoutMs: 12_000,
       beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
@@ -190,6 +191,7 @@ async function routeHelpTopics(
       await beforeSessionAgentDispatch()
     ) {
       raw = await maker.oneShot(target.agentKind, prompt, {
+        source: 'help',
         ...target.options,
         maxTokens: 30,
         timeoutMs: 12_000,
@@ -391,6 +393,7 @@ export function registerMakerHelpIpc(maker: Maker): void {
         const auxiliaryChain = getEffectiveAuxiliaryModelChain();
         const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
         const utility = await requestUtilityText(maker, prompt, {
+          source: 'help',
           ...target.options,
           beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
         });
@@ -406,6 +409,7 @@ export function registerMakerHelpIpc(maker: Maker): void {
           await beforeSessionAgentDispatch()
         ) {
           raw = await maker.oneShot(target.agentKind, prompt, {
+            source: 'help',
             ...target.options,
             beforeDispatch: beforeSessionAgentDispatch,
           });

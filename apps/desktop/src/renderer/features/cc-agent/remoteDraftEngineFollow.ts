@@ -104,6 +104,15 @@ export function persistedDraftVendor(ownerId: string | null, current: MakerVendo
     ? entry.localVendor : current;
 }
 
+/** A controller changed this computer's default while this window may be following another one. */
+export function vendorAfterRemotePreferenceWrite(ownerId: string | null, selected: MakerVendor): MakerVendor {
+  if (entry?.ownerId === ownerId && entry.followedVendor && !entry.manuallySelected) {
+    entry.localVendor = selected;
+    return entry.followedVendor;
+  }
+  return selected;
+}
+
 export function resetRemoteDraftEngineFollow(): void {
   entry = null;
 }

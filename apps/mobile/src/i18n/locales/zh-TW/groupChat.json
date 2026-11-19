@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}無法回覆：目前模型不支援圖片。",
         "advice": "請切換至支援圖片的模型。",
-        "details": "請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。"
+        "details": "請切換至支援圖片的模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}無法回覆：目前沒有可用模型。",
