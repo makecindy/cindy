@@ -450,6 +450,9 @@ describe('ProvidersSection — 双栏管理', () => {
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
     await waitFor(() => expect(toast.info).toHaveBeenCalledOnce());
     expect(vi.mocked(toast.info).mock.lastCall![0]).toBe('settings.providers.models.withdrawn.refreshFound');
+    // The refresh save carries the absence receipt Main later requires for removal.
+    expect(vi.mocked(updateCustomProvider).mock.calls[0]![0].runtimes.codex!.models
+      .filter(model => model.missingUpstream).map(model => model.id)).toEqual(['old-a']);
     await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
     const dialog = await screen.findByRole('alertdialog');
     const boxes = within(dialog).getAllByRole('checkbox');

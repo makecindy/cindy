@@ -202,7 +202,9 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 保存，只在所有引擎都不再保留时清除。Pi 官方目录标记在「只删除、其余型号不变」时保留；替换、增删同时
 发生或清空仍按原规则清除。空目录或缺失不少于已标记型号一半时视为可疑：提示与弹窗都说明可能返回不全，
 并默认不勾选。确认删除只把名单交给 main：main 在该连接的变更队列内基于最新已保存配置，只删除
-仍带标记、无 route、非手动名称的行，并回报实际删除项；页面快照或其他窗口的改动不会被覆盖。
+仍带标记、无 route、非手动名称，且带本次刷新缺席回执 `missingUpstream: true` 的行，并回报实际删除项；
+页面快照或其他窗口的改动不会被覆盖。`missingUpstream` 只由观察到缺席的那次完整刷新写入，之后任何刷新
+重新列出该型号即清除，保存时不继承，端点或凭证变化时随标记一并清除。
 同一连接正在刷新时不执行确认删除，新刷新开始会关闭旧提示。实现见
 [列表完整性](../../apps/desktop/src/main/maker-host/model-discovery-pages.ts)、
 [候选判定](../../apps/desktop/src/renderer/lib/customProviders.ts) 的 `findWithdrawnCustomProviderModels`。

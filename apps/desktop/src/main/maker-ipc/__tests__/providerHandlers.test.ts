@@ -1841,21 +1841,24 @@ describe('provider:custom:* CRUD handlers', () => {
   });
 
   // PR #11550 review P1: a confirmed review must be applied to the latest saved
-  // connection, never to the page snapshot: models added since are kept, and rows that
-  // lost the marker (another window changed the key/endpoint) are not removed.
+  // connection, never to the page snapshot: models added since are kept, rows that
+  // lost the marker (another window changed the key/endpoint) are not removed, and a
+  // row relisted by a newer refresh (no current absence receipt) is not removed.
   it('applies confirmed withdrawals to the latest saved connection only', async () => {
     mountDb();
     const harness = new IpcHarness();
     registerProviderHandlers(harness, makeDeps({ readCustomProviderKeyForMutation: vi.fn(() => 'key') }));
-    const row = (id: string, listed = true) => ({ id, name: id, discoveredMetadata: {}, ...(listed ? { listedUpstream: true as const } : {}) });
+    const row = (id: string, listed = true, missing = false) => ({ id, name: id, discoveredMetadata: {},
+      ...(listed ? { listedUpstream: true as const } : {}), ...(missing ? { missingUpstream: true as const } : {}) });
     const base = (models: ReturnType<typeof row>[]): CustomProviderConfig => ({ id: 'withdraw-gw', name: 'Gateway',
       runtimes: { codex: { baseUrl: 'https://gw.example.test/v1', models } } });
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, base([row('gone', false)]), { codex: 'key' });
-    // Latest saved: 'gone' and 'old' are marked, 'fresh' was just added, 'kept' lost its marker.
-    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, base([row('gone'), row('old'), row('fresh'), row('kept', false)]));
-    const stalePage = base([row('gone'), row('old'), row('kept')]);
+    // Latest saved: 'gone' is still absent, 'old' was relisted by a newer refresh,
+    // 'fresh' was just added, 'kept' lost its marker.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, base([row('gone', true, true), row('old'), row('fresh'), row('kept', false)]));
+    const stalePage = base([row('gone', true, true), row('old', true, true), row('kept')]);
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
-      removeWithdrawnModels: [{ agent: 'codex', modelId: 'gone' }, { agent: 'codex', modelId: 'kept' }],
+      removeWithdrawnModels: ['gone', 'old', 'kept'].map(modelId => ({ agent: 'codex' as const, modelId })),
     });
     expect(result).toEqual({ ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'gone' }], withdrawnGoneIds: ['gone'] });
     expect((await getCustomProvider('withdraw-gw'))?.runtimes.codex?.models.map(model => model.id))

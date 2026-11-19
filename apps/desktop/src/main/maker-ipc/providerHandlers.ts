@@ -752,7 +752,7 @@ export function registerProviderHandlers(
             model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId))
           : acceptsModelSourceSnapshot(
             model.id, source, config.id, agent as AgentKind, undefined, model.discoverySnapshotId ?? source?.snapshotId);
-        const { discoveredSource: _source, listedUpstream: submittedListed, ...rest } = model;
+        const { discoveredSource: _source, listedUpstream: submittedListed, missingUpstream: submittedMissing, ...rest } = model;
         // #11298: the upstream-listing marker belongs to the saved route and credentials.
         // Editors that rebuild rows field by field must not drop it, so an unchanged
         // context inherits it; a changed endpoint/key/header drops it, because the new
@@ -762,7 +762,9 @@ export function registerProviderHandlers(
           && JSON.stringify(priorModel.route ?? null) === JSON.stringify(model.route ?? null)));
         // A stale renderer cannot restore a source invalidated by another edit/request.
         return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
-          ...(listedUpstream ? { listedUpstream: true as const } : {}) };
+          ...(listedUpstream ? { listedUpstream: true as const } : {}),
+          // The absence receipt is never inherited: only the refresh that observed it may set it.
+          ...(listedUpstream && submittedMissing === true ? { missingUpstream: true as const } : {}) };
       }) }];
     }),
   ) });

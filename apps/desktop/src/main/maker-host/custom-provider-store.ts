@@ -257,6 +257,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     )) return invalid(`runtime '${agent}' discoveredCost invalid`);
     if (mm.opaqueModelId !== undefined && mm.opaqueModelId !== true) return invalid(`runtime '${agent}' opaqueModelId invalid`);
     if (mm.listedUpstream !== undefined && mm.listedUpstream !== true) return invalid(`runtime '${agent}' listedUpstream invalid`);
+    if (mm.missingUpstream !== undefined && mm.missingUpstream !== true) return invalid(`runtime '${agent}' missingUpstream invalid`);
     if (mm.discoveredSource !== undefined && !validDiscoveredModelSource(mm.discoveredSource)) return invalid(`runtime '${agent}' discoveredSource invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
@@ -603,6 +604,7 @@ function normalizeRuntime(
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
       ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
       ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
+      ...(m.missingUpstream === true ? { missingUpstream: true as const } : {}),
       ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
       ...(typeof m.supportsUltrafastMode === 'boolean'
         ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
@@ -734,7 +736,7 @@ function invalidateEditedProviderMetadata(
     if (context(before, previous.auth) !== context(after, next.auth)) {
       // A different endpoint is a different catalog: drop source receipts and the
       // #11298 upstream-listing marker so its absences are never offered as withdrawals.
-      after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, ...model }) => model);
+      after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, missingUpstream: _missing, ...model }) => model);
     }
     after.models = after.models.map(model => {
       const old = before.models.find(row => row.id === model.id);
@@ -794,7 +796,9 @@ export function removeConfirmedWithdrawnModels(
     const ids = new Set(targets.filter((target) => target.agent === agent).map((target) => target.modelId));
     if (!ids.size) continue;
     runtime.models = runtime.models.filter((model) => {
-      if (!ids.has(model.id) || model.listedUpstream !== true || model.route || model.nameExplicit) return true;
+      // missingUpstream is the latest refresh's absence receipt; a relisted row lost it.
+      if (!ids.has(model.id) || model.listedUpstream !== true || model.missingUpstream !== true
+        || model.route || model.nameExplicit) return true;
       removed.push({ agent, modelId: model.id });
       return false;
     });
@@ -906,6 +910,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 : {}),
               ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
               ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
+              ...(m.missingUpstream === true ? { missingUpstream: true as const } : {}),
               ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }

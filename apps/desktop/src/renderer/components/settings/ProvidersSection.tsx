@@ -3263,6 +3263,11 @@ export function ProvidersSection() {
           } else {
             const result = findWithdrawnCustomProviderModels(merged.models, r.models);
             withdrawnSuspicious ||= result.suspicious;
+            // Persist this complete refresh's absence receipt; Main removes only rows
+            // still carrying it, so a later refresh that relists the model voids the review.
+            const absent = new Set(result.withdrawn.map((model) => model.id));
+            rt.models = rt.models.map((model) =>
+              absent.has(model.id) ? { ...model, missingUpstream: true as const } : model);
             for (const model of result.withdrawn) {
               const entry = withdrawn.get(model.id);
               if (entry) entry.agents.push(agent);

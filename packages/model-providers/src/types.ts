@@ -684,6 +684,12 @@ export interface ProviderRuntimeModelConfig extends ModelMetadata {
    * and pre-upgrade rows stay unmarked and are never offered for removal.
    */
   listedUpstream?: true;
+  /**
+   * Current-absence receipt (#11298): the latest complete Settings refresh did not list
+   * this marked model. A later refresh that lists it again clears it, and it is never
+   * inherited across saves, so only a still-current absence can be confirmed for removal.
+   */
+  missingUpstream?: true;
   /** Transient discovery receipt; normalization excludes it from persistent configuration. */
   discoverySnapshotId?: string;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;

@@ -773,13 +773,15 @@ describe('findWithdrawnCustomProviderModels', () => {
     expect(result.suspicious).toBe(suspicious);
   });
 
-  it('marks only rows the refreshed catalog listed, never manual ones', () => {
+  it('marks only rows the refreshed catalog listed, never manual ones, and voids stale absence', () => {
     const { models } = appendDiscoveredCustomProviderModels(
-      [{ id: 'manual', name: 'Manual' }, { id: 'gone', name: 'Gone', discoveredMetadata: {} }],
-      [{ id: 'manual', name: 'Manual upstream' }, { id: 'fresh', name: 'Fresh' }],
+      [{ id: 'manual', name: 'Manual' }, { id: 'gone', name: 'Gone', discoveredMetadata: {} },
+        { id: 'back', name: 'Back', discoveredMetadata: {}, listedUpstream: true, missingUpstream: true }],
+      [{ id: 'manual', name: 'Manual upstream' }, { id: 'fresh', name: 'Fresh' }, { id: 'back', name: 'Back' }],
     );
     expect(Object.fromEntries(models.map(model => [model.id, model.listedUpstream ?? false])))
-      .toEqual({ fresh: true, manual: false, gone: false });
+      .toEqual({ fresh: true, manual: false, gone: false, back: true });
+    expect(models.find(model => model.id === 'back')?.missingUpstream).toBeUndefined();
   });
 });
 
