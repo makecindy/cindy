@@ -77,6 +77,9 @@
     "back": "돌아가기"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
+    "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
+    "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
     "text": "실패한 자동 실행이 있습니다.",
     "precheck": "자동 확인이 일시적으로 차단되었습니다.",
     "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
@@ -574,6 +577,7 @@
       "taskCost": "세션 비용",
       "actualCost": "실제 비용",
       "estimatedValue": "추정 가치",
+      "tokenUnit": "token",
       "totalTokens": "누적 토큰",
       "seeDetails": "내역 보기",
       "valueUnavailable": "일부 세션 가치를 가져오지 못했습니다",
@@ -866,7 +870,7 @@
   },
   "providerGroupRebalance": {
     "title": "{{label}}(으)로 바꿔서 계속할까요?",
-    "body": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
+    "body": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 이 채팅의 맥락을 이어받습니다. 이전 메시지가 압축될 수 있으며 전체 채팅 기록은 그대로 남습니다.",
     "quota": "{{left}}% 남음",
     "quotaReset": "{{left}}% 남음 · {{reset}} 후 초기화",
     "confirm": "전환",

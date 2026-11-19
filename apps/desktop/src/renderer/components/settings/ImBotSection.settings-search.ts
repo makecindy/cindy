@@ -161,6 +161,18 @@ export const imBotSettings = defineSettings({
     sectionKey: 'settings.imBot.groups.personal',
     aliases: ['Telegram', 'Telegram bot'],
   },
+  // 「插件」分栏只在装了 IM 入口插件时出现；没有时落到本页顶部。
+  plugins: {
+    id: 'imBot.plugins',
+    tab: 'im-bot',
+    targetId: 'im-bot-group-plugins',
+    fallbackTargetId: 'settings-panel-im-bot',
+    titleKey: 'settings.imBot.groups.plugins',
+    sectionKey: 'settings.sections.imBot',
+    descriptionKey: 'settings.imBot.tips.plugins',
+    keywordKeys: ['settings.imBot.plugins.rowHint', 'settings.imBot.plugins.open'],
+    aliases: ['IM plugin', 'plugin'],
+  },
 });
 
 export default {

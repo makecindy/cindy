@@ -47,6 +47,18 @@ describe('tool result compaction marker', () => {
 
 // CU-008: preserve observed uncertainty without retaining private payloads or guessing from prose.
 describe('tool result diagnostics', () => {
+  // Unit: an automation deletes its history before the task is archived. Keep
+  // only the host's bounded closure facts; do not retain arbitrary receipt text.
+  it('preserves an automation closure receipt through archive compaction', () => {
+    const previousFailure = { errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED', firedAt: 100, laterRunSucceeded: true };
+    const diagnostics = extractToolResultDiagnostics({ content: [{ type: 'text', text: JSON.stringify({
+      ok: true, data: { deleted: 'private-id', previousFailure: { ...previousFailure, prompt: 'private text' } },
+    }) }] });
+    expect(diagnostics).toEqual({ ok: true, previousFailure });
+    expect(parseToolResultCompactionMarker({ type: 'tool_result_compacted', version: 1,
+      compactedAt: 200, originalBytes: 1000, diagnostics })?.diagnostics).toEqual(diagnostics);
+  });
+
   it('keeps verification and observation separate from an unknown action', () => {
     expect(extractToolResultDiagnostics(JSON.stringify({
       tool: 'click', ok: false, outcome: { status: 'unknown' },

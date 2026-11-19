@@ -164,6 +164,7 @@ export interface FileBodyViewProps {
     size: number;
     mtimeMs: number;
     truncated: boolean;
+    resolvedPath?: string;
   }) => void;
   /**
    * 来自 URL ?search 参数 — workdir-browse 搜索面板里点命中行时,父组件把命中
@@ -236,13 +237,16 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 用 ref 而不是 state 存 initial value:editor 内部是 uncontrolled 的,
   // 外部不需要为了对比而触发 re-render。
   const initialContentRef = useRef('');
+  const initialResolvedPathRef = useRef<string | undefined>(undefined);
   // initialContentRef 的 LF 归一化镜像:onChange 每键 dirty 判定只做一次
   // 原生 !==,归一化成本挪到基准写入时(setBaseline)一次性支付。
   const initialContentNormalizedRef = useRef('');
   const latestDiskContentRef = useRef('');
+  const latestResolvedPathRef = useRef<string | undefined>(undefined);
 
   /** dirty 比对基准的唯一写入口:同步维护原文与归一化两份。 */
-  const setBaseline = useCallback((raw: string) => {
+  const setBaseline = useCallback((raw: string, resolvedPath?: string) => {
+    initialResolvedPathRef.current = resolvedPath;
     initialContentRef.current = raw;
     initialContentNormalizedRef.current = normalizeBaseline(raw);
   }, []);
@@ -360,6 +364,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (content.kind === 'text') {
       latestDiskContentRef.current = content.content;
+      latestResolvedPathRef.current = content.resolvedPath;
     }
   }, [content]);
 
@@ -389,10 +394,10 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     // 走 setValue 的同时, getValue 比对决定要不要真 dispatch。
     const normalize = (s: string) => s.replace(/\r\n/g, '\n');
     if (normalize(editor.getValue()) === normalize(content.content)) {
-      setBaseline(content.content);
+      setBaseline(content.content, content.resolvedPath);
       return;
     }
-    setBaseline(content.content);
+    setBaseline(content.content, content.resolvedPath);
     editor.setValue(content.content);
   }, [content, editMode, dirty, alwaysEdit, setBaseline]);
 
@@ -409,7 +414,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (content.kind !== 'text') return;
     if (lastInitRelPathRef.current === relPath) return;
     lastInitRelPathRef.current = relPath;
-    setBaseline(content.content);
+    setBaseline(content.content, content.resolvedPath);
     setDirty(false);
     setEditMode(true);
   }, [alwaysEdit, content, relPath, setBaseline]);
@@ -456,7 +461,12 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       opts?.guardExternalChange &&
       normalize(latestDiskContentRef.current) !== normalize(original)
     ) {
-      const msg = t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
+      const targetChanged = initialResolvedPathRef.current !== undefined &&
+        latestResolvedPathRef.current !== undefined &&
+        initialResolvedPathRef.current !== latestResolvedPathRef.current;
+      const msg = targetChanged
+        ? t('ccAgent.workdirBrowse.fileBody.targetChanged')
+        : t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
       setSaveError(msg);
       toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: msg }));
       return false;
@@ -474,16 +484,19 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         remoteHostId,
         relPath,
         content: next,
+        expectedResolvedPath: initialResolvedPathRef.current,
       });
       if (!res.ok) {
-        setSaveError(res.message);
+        const message = res.message.includes('FILE_TARGET_CHANGED')
+          ? t('ccAgent.workdirBrowse.fileBody.targetChanged') : res.message;
+        setSaveError(message);
         // 写盘失败:toast 立即提示 + saveError banner 持续展示详情,两者互补
         // (toast 1.2s 自动消失,banner 留到下一次保存或切文件)。
-        toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: res.message }));
+        toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message }));
         return false;
       }
       // 同步推进 baseline,后续 dirty 比对从磁盘最新内容算起。
-      setBaseline(next);
+      setBaseline(next, res.resolvedPath ?? initialResolvedPathRef.current);
       latestDiskContentRef.current = next;
       setDirty(false);
       // 把刚写到磁盘的内容直接回传给父层(走 setLocal 路径同步推 cache + state),
@@ -495,6 +508,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         size: res.size,
         mtimeMs: res.mtimeMs,
         truncated: false,
+        resolvedPath: initialResolvedPathRef.current,
       });
       if (!opts?.silent) {
         toast.success(t('ccAgent.workdirBrowse.fileBody.saved'));

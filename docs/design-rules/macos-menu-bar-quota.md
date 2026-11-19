@@ -4,6 +4,28 @@
 
 ### macOS menu bar quota panel (owner-approved v6 prototype, 2026-10-11)
 
+Windows 托盘面板（2026-11-18）沿用这里的内容顺序、默认任务数量、管理／账号详情／用量详情、
+品牌资产与数字字体。鼠标在 Windows 托盘图标上连续悬停 100 毫秒后展示预热窗口，移入卡片后可以继续操作。
+卡片只由悬停触发：左键单击保持原有行为，收起卡片并直接打开主窗口；右键收起卡片并弹出托盘菜单。
+卡片收起时不展示额度，因此不算额度读取的使用者：只在卡片可见期间读取；开启「低额度提醒」时提醒需要后台读数，
+才在收起后继续读取。启动时读取一次作为首帧，收起后保留最后一帧供下次展开直接显示，换账号立即清空。
+鼠标停在图标上就会展开，所以展开不能决定请求频率：展开触发的全量刷新最多每 60 秒一次，其间再次展开只复用已有读数；
+收起后继续持有读数 3 分钟且不发起新的读取，鼠标来回划过图标不会重新采集。
+动效与 Mac 面板同曲线同时长（Swift 的 `Motion`），调整时两端同步：液柱液面与 `TubeView`／`LiquidSurface` 同形同参
+（展开时升起并左右晃动后静止，与管壁以圆角相接，有任务在用的账号保持细波纹，鼠标移入时轻晃），额度与月度金额从零滚动到位，
+额度列悬停上抬、按下回弹，翻页时离开的页面滑出后才移除，详情圆环逐环绘出，「打开 Cindy」的品牌箭头滑入，
+刷新图标转一圈，运行中任务的图标向外扩散一圈细线。波纹与扩散线是仅有的两处循环动效，只在卡片可见时运行；
+开启「减少动态效果」时全部静止。液面与数值滚动在 `src/renderer/quota-tray-tube.tsx`，其余在 `styles/quota-tray.css`。
+首页和详情按内容测量高度，仅超过屏幕可用高度的 86% 才滚动。所有页面复用
+`QuotaPanelController` 的取数、隐私处理、设置持久化和操作派发。
+
+两端的尺寸、短屏密度和语义色正本在 `src/shared/quotaPanelDesign.ts`（相对 Desktop）；
+controller 随视图发送，Swift 的 `PanelDesign`／`Palette` 与 Windows 的 CSS 变量共同消费。
+Swift 内的旧值只供旧预览数据缺字段时兼容，调整设计时改共享正本。平台渲染器仍各自维护页面
+结构和原生交互，新增控件须同时适配；Mac 的系统模糊材质与 Windows 的背景合成各自由平台负责。
+Windows 回归入口为 `pnpm ui:check --page quota-tray --theme all --locale all`，
+覆盖首页任务裁剪、管理、账号详情、用量详情与品牌按钮；Mac 仍须运行原生 helper 验证。
+
 Received shared subscriptions (owner correction, 2026-11-05): while the panel is open, authorized weekly allowances use the existing tube and detail layout. The tube shows the sharer’s existing display name (for example dash), falling back to the provider label when absent; detail title places the sharer first, followed by the provider, so a long provider label cannot hide who shared it. The update fact says the localized “Shared by <name>”. This uses the received-share directory identity, never a quota account email or device identity. When Hide personal information is enabled, project every sharer label to the provider brand across tubes, recommendation copy, management rows, detail titles and update facts; do not emit the original nickname. Turning privacy off restores the received name without changing the quota. For groups or multiple accounts, select the readable ready account with the highest unexpired weekly percentage; take all detail windows, reset times and update time from that same account. Partial results may use the readable subset. Label the detail “Shared · highest weekly” and explain that this is the highest readable account allowance, not a combined or personal allowance; selection does not promise a routing destination. A single-account share keeps the existing “Shared” label and account-wide notice. Use neutral detail rings, without account email, device identity, reset-credit controls or local-provider task selection. Unavailable/expired/balance-only accounts do not participate; no eligible account means no tube. Manual refresh within the same owner/share identity retains the displayed source until the new result arrives, so an open detail stays open. Repeated refreshes join the current pending batch instead of stacking requests; a reopened panel or changed identity/relationship starts a new lease without reusing old results; a confirmed failure or unavailable permission removes that share immediately, without waiting for pending siblings. Owner/share changes and closing the panel clear readings immediately. Subscribe to synchronous session invalidation so clearing starts at the account boundary, before asynchronous sign-out cleanup or auth notifications finish. If identity invalidation leaves no usable overview, immediately publish an empty account-free native view instead of waiting for collection: signed-out users see the existing sign-in gate, while a signed-in account switch waits empty for its new build. Access-epoch changes invalidate only affected shares even with unchanged directory DTOs; refusal notifications do not immediately query again or cancel healthy sibling reads, and retries follow the bounded five-second polling schedule. Published windows reproject at their local reset deadline, independently of network refresh, removing expired values or selecting a still-live group account. Authorized raw snapshots for this projection are kept only for the visible-panel lease and cleared on invalidation/close. The same layout applies in every locale and appearance.
 
 Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):

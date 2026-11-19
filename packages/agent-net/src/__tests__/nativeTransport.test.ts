@@ -6,6 +6,77 @@ import { AgentNetSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
 import type { PeerChannel } from '../types.js';
 
+// Unit at the production NativeTransport IO boundary: a poll is still initializing
+// an existing peer when another peer starts dialing. The old snapshot cannot
+// declare that newer connection missing. The handover tests below never dial
+// while a native command is suspended, so they cannot cover this ordering.
+// Expiry remains independent of that snapshot, including a late established
+// reply or initialization completing beyond the existing three-second deadline.
+it.each(['ready', 'old-poll-timeout', 'late-established', 'slow-initialize'] as const)(
+  'keeps newer native dials snapshot-safe and deadline-bounded: %s', async mode => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let release!: () => void, entered!: () => void, connected!: () => void;
+  const initializing = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const dialCreated = new Promise<void>(resolve => { connected = resolve; });
+  const closed: number[] = [], received: number[] = [];
+  let nextStream = 0, first = true, dialed = false, delayed = false;
+  const state = (id: number) => ({ id, established: true, dead: false, closedByPeer: false,
+    unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 });
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null };
+      if (command.op === 'poll') {
+        if (dialed && mode === 'late-established' && !delayed) { delayed = true; vi.advanceTimersByTime(3001); }
+        value = { packets: [], connections: [state(1), ...(dialed ? [state(2)] : [])].filter(s => !closed.includes(s.id)) };
+      }
+      if (command.op === 'connect') { dialed = true; value = 2; connected(); }
+      if (command.op === 'openStream') {
+        if (first) { first = false; entered(); await blocked; }
+        if (command.id === 2 && mode === 'slow-initialize' && !delayed) { delayed = true; vi.advanceTimersByTime(3001); }
+        value = ++nextStream;
+      }
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      if (command.op === 'close') closed.push(command.id as number);
+      return value as T;
+    }, async destroy() {},
+  };
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: () => { received.push(1); } });
+    const poll = vi.advanceTimersByTimeAsync(8);
+    await initializing;
+    let outcome: { channel: PeerChannel } | { error: unknown } | undefined;
+    const result = transport.connect({ id: key, dial: { relayId: remote.deviceId } })
+      .then(channel => ({ channel }), error => ({ error })).then(value => { outcome = value; return value; });
+    await dialCreated;
+    await vi.advanceTimersByTimeAsync(0); // Register the waiter after the bridge command returned.
+    if (mode === 'old-poll-timeout') vi.advanceTimersByTime(3001);
+    release(); await poll;
+    await vi.advanceTimersByTimeAsync(0); // Finish this poll without starting the next eight-ms poll.
+    if (mode === 'old-poll-timeout') {
+      expect(outcome).toMatchObject({ error: new Error('NATIVE_CONNECT_TIMEOUT') });
+      expect(closed).toContain(2);
+      expect(received).toEqual([1]);
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(8);
+    if (mode === 'ready') {
+      expect(await result).toHaveProperty('channel');
+      expect(closed).not.toContain(2);
+    } else {
+      expect(await result).toMatchObject({ error: new Error('NATIVE_CONNECT_TIMEOUT') });
+      expect(closed).toContain(2);
+    }
+    expect(received).toEqual([1]);
+  } finally { release?.(); await transport?.close(); vi.useRealTimers(); }
+});
+
 // Unit at the native engine IO boundary: real NativeTransport/NativeChannel and
 // PortableSocket admission, framing and replies; no fake PeerChannel.close.
 it.each(['late-frame', 'late-response', 'revoked', 'rotated', 'abort', 'deadline'] as const)(

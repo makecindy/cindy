@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Adicionar widget",
+  "widgetGuideIntro": "Widgets são pequenos cartões na tela inicial. Veja a cota restante e os tokens usados hoje sem abrir o Cindy.",
+  "widgetGuideExample": "Um widget do Cindy ao lado dos ícones de apps na tela inicial.",
+  "widgetGuidePicker": "Editar → Adicionar Widget",
+  "widgetGuideIOS": "Mantenha pressionada uma área vazia da Tela de Início e toque em {{picker}}.\n\nBusque Cindy, escolha “Cota das assinaturas” ou “Uso diário” e toque em “Adicionar Widget”.",
+  "widgetGuideAndroid": "Mantenha pressionada uma área vazia da tela inicial e toque em “Widgets”.\n\nEncontre Cindy e arraste “Cota das assinaturas” ou “Uso diário” para a tela inicial.",
+  "widgetGuideHome": "Tela de Início",
+  "widgetGuideLock": "Tela Bloqueada",
+  "widgetGuideLockIOS": "Também na Tela Bloqueada: mantenha-a pressionada e toque em “Personalizar”.",
+  "widgetGuideDismiss": "Entendi",
+  "usageOther": "Outros",
+  "usageTitle": "Resumo de uso",
+  "usageOnlyDevice": "Somente {{name}}",
+  "usagePlans": "Cotas disponíveis",
+  "usageBudget": "Orçamento restante do período",
   "management": {
     "title": "Gerenciamento de dispositivos",
     "openDevice": "Ver detalhes de {{name}}",
@@ -429,7 +444,34 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
       "filterHideAllTeammates": "Ocultar tudo",
-      "filterSelectedTeammates": "{{count}} selecionados"
+      "filterSelectedTeammates": "{{count}} selecionados",
+      "inbox": {
+        "inbox": "Pendentes",
+        "working": "Em andamento",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível salvar o horário. Verifique a conexão e atualize o computador que hospeda esta tarefa.",
+        "hours": "Em {{count}} horas",
+        "hours_one": "Em {{count}} hora",
+        "hours_many": "Em {{count}} horas",
+        "hours_other": "Em {{count}} horas",
+        "thisEvening": "Hoje à noite",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "indefinite": "Indefinidamente",
+        "custom": "Personalizar…",
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
+      },
+      "taskListMode": {
+        "enterInbox": "Caixa de entrada",
+        "leaveInbox": "Lista de tarefas"
+      }
     },
     "search": {
       "placeholder": "Buscar títulos ou conteúdo…",

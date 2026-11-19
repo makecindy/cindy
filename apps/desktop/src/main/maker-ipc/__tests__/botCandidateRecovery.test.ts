@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
+import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
@@ -52,10 +52,20 @@ function harness(bot = true) {
   const runtime = { callbacks };
   if (bot) botFallbackInputs.add(item.createOpts);
   return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
+    beginSchedulerAutoResume: deps.beginSchedulerAutoResume,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
 describe('Bot candidate recovery', () => {
+  // #10802 / unit: the real recovery hook must carry its original cause with
+  // the scheduler lease, even if the retry later fails before a vendor event.
+  it('retains the original cause when claiming recovery for a scheduled run', () => {
+    const h = harness();
+    const message = "You've hit your session limit";
+    const item = { ...h.item, origin: { kind: 'scheduler', scheduleId: 'schedule', runId: 'run' } };
+    expect(h.onResumableTurnError('s', { message }, item)).not.toBeNull();
+    expect(h.beginSchedulerAutoResume).toHaveBeenCalledExactlyOnceWith('s', 'run', 1, message);
+  });
   // #10119 review: use the production enrichment before the production recovery callbacks.
   it('does not turn a text-only permission denial into a provider failure after enrichment', () => {
     const message = 'Permission denied: HTTP 403';
@@ -338,4 +348,12 @@ describe('Bot candidate recovery', () => {
   ] as const)('resumes a required route change after %s (same route retryable: %s) = %s', (outcome, retryable, expected) => {
     expect(canResumeAfterRuntimeFallback(true, { session: null, outcome }, retryable)).toBe(expected);
   });
+});
+
+// Unit: both providers use HTTP 429, but only an explicit quota code rules out the whole connection.
+it.each([
+  ['{"error":{"code":"insufficient_quota"}}', true],
+  ['{"error":{"code":"rate_limit_exceeded"}}', false],
+])('classifies the connection scope of 429 %s', (message, expected) => {
+  expect(isModelGroupConnectionOutOfCredit({ errorStatus: 429, message })).toBe(expected);
 });

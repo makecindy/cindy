@@ -1,6 +1,7 @@
 import { registerModelGroupsTools, type ModelGroupsCallbacks } from './xdt-helper/model_groups.js';
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerSessionToolCatalogTools, type SessionToolCatalogCallbacks } from './xdt-helper/session_tool_catalog.js';
 import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
 import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
 import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
@@ -136,6 +137,7 @@ import { registerTeammateSkillReader } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
+import { registerControlSessionTool } from './xdt-helper/session_control.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
@@ -208,11 +210,11 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'Grok 设备码登录、状态查询与取消（支持远程任务）。',
   ].join(''),
   control: [
-    'list_projects(device) 可查询远程项目。',
+    'list_projects(device)、create_project、get_project_info、update_project_info 支持本机及同账号跨电脑：按名称分配目录、导入 GitHub/GitLab 仓库、读写名称/图标/多个项目目录；创建与目录授权走任务权限流程。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
     '原生任务包导入（import_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；加密包与未指定目录的项目包交原生向导完成；',
-    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目移除（remove_project）、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
@@ -235,7 +237,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
   storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
   discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
-  usage: '只读查询订阅额度、已记录供应商用量与供应组状态。get_subscription_usage 仅查询执行电脑当前 Cindy 账号的本机订阅，返回套餐、额度窗口与更新时间；供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
+  usage: '只读查询订阅额度、任务额度、已记录供应商用量与供应组状态。get_subscription_usage 查询本机订阅；get_session_quota 按任务读取实际执行来源的额度，包含已授权的同账号电脑和供应商分享。供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -523,6 +525,7 @@ export interface XdtHelperMcpDeps {
   sessionQueue?: SessionQueueDeps;
   /** 本机 session 的统一控制面；host 注入后注册队列编辑/撤回、插话、停止与运行探针。 */
   sessionControl?: Omit<SessionControlDeps, 'getSessionContext'>;
+  sessionToolCatalog?: SessionToolCatalogCallbacks;
   /**
    * Session handoff 回调。host 注入后, send_to_session 工具注册到 handoff 类目(走
    * call_tool);不注入则工具不出现。此工具是 skill(如 maker-github-issue)做跨会话
@@ -792,6 +795,7 @@ export function createXdtHelperMcpServer(
     registerStopSessionTurnTool(registry, controlDeps);
     registerGetSessionRuntimeTool(registry, controlDeps);
     registerSetSessionRuntimeTool(registry, controlDeps);
+    registerControlSessionTool(registry, controlDeps);
   }
 
   if (deps.mcpSetup) registerMcpSetupTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpSetup);
@@ -856,6 +860,7 @@ export function createXdtHelperMcpServer(
   if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.modelGroups) registerModelGroupsTools(registry, deps.modelGroups, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.sessionToolCatalog) registerSessionToolCatalogTools(registry, deps.sessionToolCatalog, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {

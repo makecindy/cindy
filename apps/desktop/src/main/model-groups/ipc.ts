@@ -10,29 +10,11 @@ import {
   sanitizeModelGroupSelection,
   type ModelGroupResolveRequest,
 } from '../../shared/modelGroups.js';
-import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
-import { getGoalController } from '../goal-host/index.js';
-import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { bindModelGroupSession, readModelGroupSessionBinding } from './sessionBindings.js';
+import { bindModelGroupSession } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
-import { modelGroupResolver as resolver } from './runtime.js';
-import { computeModelGroupSwitchOffer } from './switchOffer.js';
-
-const switchOfferDeps = {
-  readBinding: readModelGroupSessionBinding,
-  readSession: getSessionRowSnapshot,
-  isShared: isSessionSharedTaskActive,
-  // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。
-  hasGoal: async (sessionId: string) => {
-    const goals = getGoalController();
-    return !goals || (await goals.getStatus(sessionId).catch(() => null)) !== null;
-  },
-  config: readModelGroupsConfig,
-  candidateFacts: resolver.candidateFacts,
-  now: Date.now,
-};
+import { readModelGroupRecoveryOffer, resolver } from './desktopResolver.js';
 
 function sessionIdOf(value: Record<string, unknown>): string {
   const sessionId = value.sessionId;
@@ -101,6 +83,6 @@ export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.SWITCH_OFFER, async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    return computeModelGroupSwitchOffer(switchOfferDeps, sessionIdOf(value));
+    return readModelGroupRecoveryOffer(sessionIdOf(value));
   });
 }

@@ -1223,6 +1223,12 @@ function agentRelocationPlace(
     : t('chat.systemCard.agentSwitch.relocatedElsewhere');
 }
 
+function handoffCoverageKey(data: Record<string, unknown> | undefined) {
+  if (data?.handoffCoverage === 'complete') return 'chat.systemCard.handoffCoverage.complete';
+  if (data?.handoffCoverage === 'condensed') return 'chat.systemCard.handoffCoverage.condensed';
+  return null;
+}
+
 function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; sessionId?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1231,6 +1237,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const fromLabel = engineLabel(data?.fromAgentKind);
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  const coverageKey = handoffCoverageKey(data);
+  const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const modelOnly = data?.modelOnly === true;
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
@@ -1238,7 +1246,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 
   return (
-    <div className="w-full select-none py-2" role="separator" aria-label={label}>
+    <div className="w-full select-none py-2" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
       <div className="flex w-full items-center gap-3">
         <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
         <button
@@ -1264,7 +1272,13 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
               </span>
             </>
           )}
-          {(Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
+          {coverage && (
+            <>
+              <span className="opacity-50">·</span>
+              <span className="min-w-0 break-words">{coverage}</span>
+            </>
+          )}
+          {!coverage && (Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
             <>
               <span className="opacity-50">·</span>
               <span className="shrink-0 whitespace-nowrap">{t(data?.nativeHistory === 'fallback' ? 'chat.systemCard.agentSwitch.fallbackBadge' : 'chat.systemCard.agentSwitch.resumedBadge')}</span>
@@ -1289,9 +1303,11 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
           >
             <div className="mb-1.5 text-11 font-medium text-muted-foreground">
               {t(
-                isEnglishSourceHandoff(handoff)
-                  ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
-                  : 'chat.systemCard.agentSwitch.handoffTitle',
+                coverage
+                  ? 'chat.systemCard.handoffCoverage.details'
+                  : isEnglishSourceHandoff(handoff)
+                    ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
+                    : 'chat.systemCard.agentSwitch.handoffTitle',
               )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">
@@ -1307,6 +1323,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
 function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const coverageKey = handoffCoverageKey(data);
+  const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const reason =
     data?.reason === 'pi-prompt-timeout'
@@ -1327,7 +1345,7 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   );
 
   return (
-    <div className="w-full select-none py-2" role="separator" aria-label={label}>
+    <div className="w-full select-none py-2" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
       <div className="flex w-full items-center gap-3">
         <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
         <button
@@ -1343,6 +1361,12 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
         >
           <RefreshCw size={12} className="shrink-0" />
           <span>{label}</span>
+          {coverage && (
+            <>
+              <span className="opacity-50">·</span>
+              <span className="min-w-0 break-words">{coverage}</span>
+            </>
+          )}
           {handoff && (
             <ChevronRight
               size={12}
@@ -1362,9 +1386,11 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
           >
             <div className="mb-1.5 text-11 font-medium text-muted-foreground">
               {t(
-                isEnglishSourceHandoff(handoff)
-                  ? 'chat.systemCard.contextRebuild.handoffTitleEnglishSource'
-                  : 'chat.systemCard.contextRebuild.handoffTitle',
+                coverage
+                  ? 'chat.systemCard.handoffCoverage.details'
+                  : isEnglishSourceHandoff(handoff)
+                    ? 'chat.systemCard.contextRebuild.handoffTitleEnglishSource'
+                    : 'chat.systemCard.contextRebuild.handoffTitle',
               )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">

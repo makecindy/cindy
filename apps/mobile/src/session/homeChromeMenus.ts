@@ -1,3 +1,4 @@
+import { ListChecks } from "lucide-react-native";
 import type {
   ChromeActionMenuItem,
   NativePullDownAction,
@@ -149,6 +150,7 @@ export interface HomeDisplayMenuState {
   teammateFilter?: HomeTeammateFilter;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   taskInfoFields: readonly HomeTaskInfoField[];
   showCollapsedTeammateAvatars?: boolean;
@@ -315,7 +317,14 @@ export function buildHomeDisplayPullDownActions(input: {
     ],
   );
 
+  const nextMode = state.taskListMode === 'inbox' ? 'tasks' : 'inbox';
   return [
+    section("mode", [{
+      id: `taskListMode.${nextMode}`,
+      title: t(nextMode === 'inbox' ? `${MENU}.taskListMode.enterInbox` : `${MENU}.taskListMode.leaveInbox`),
+      image: "checklist",
+      icon: ListChecks,
+    }]),
     section("organize", organize),
     section("narrow", [
       {
@@ -382,6 +391,8 @@ export function homeDisplayActionPatch(
       return HOME_LAST_ACTIVITY_FILTERS.includes(value as HomeLastActivityFilter)
         ? { lastActivityFilter: value as HomeLastActivityFilter }
         : null;
+    case "taskListMode":
+      return value === 'tasks' || value === 'inbox' ? { taskListMode: value } : null;
     case "view":
       return VIEW_OPTIONS.includes(value as HomeListViewMode) ? { viewMode: value as HomeListViewMode } : null;
     case "taskInfo":

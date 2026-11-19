@@ -421,6 +421,74 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  // #10301, unit: 系统里的 Codex 已登录,但 Windows 普通权限下建不出指向那份凭证的共享
+  // 链接 —— 主侧把这个结论留成稳定 reason,界面必须把它翻成能执行的引导。落到兜底文案
+  // 时用户只看到「回复未完成」,而重登解决不了链接权限。
+  it('explains an unreachable shared Codex login instead of the generic reply failure', async () => {
+    const error =
+      'LAZY_CREATE_FAILED: codex not authenticated: codex_shared_auth_link_unavailable';
+    render(
+      <MemoryRouter>
+        <ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexSharedAuthLinkUnavailable')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    expect(screen.queryByText(error)).toBeNull();
+    // 权限补齐后下一次 reconcile 就能建出链接,所以 Retry 必须留着。
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    // #10301 行动项 2:独立登录这条既有流程早就走得通,断的只是入口 —— 失败表面上必须
+    // 有一条路把用户带到那个入口,否则用户只能自己在设置里翻。入口是横幅里直接发起
+    // mode:'local' 独立登录的按钮(账号池下设置里那张卡走的是 mode:'browser',修不了
+    // 读 Cindy 自己 codex-home 的这个任务)。
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
+    // 点的必须真的是独立登录:mode 'local' 才会把凭证写进 Cindy 自己的 codex-home。
+    await waitFor(() =>
+      expect(mocks.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ mode: 'local' }),
+      ),
+    );
+  });
+
+  // 同一条 reason 在远端任务上不得给本机恢复按钮:凭证在另一台电脑上,控制端点「重新
+  // 登录」写的是控制端自己的 codex-home,修不了被控电脑上失败的那个任务(code review P1)。
+  it.each([{ remoteHostId: 'ssh-host' }, { deviceLinkDeviceId: 'device-1' }, { agentDeviceId: 'agent-device' }])(
+    'keeps the local recovery action off a remote Codex session (%p)',
+    remote => {
+      render(
+        <ErrorBanner
+          error="LAZY_CREATE_FAILED: codex not authenticated: codex_shared_auth_link_unavailable"
+          retryText="retry this turn"
+          onRetry={vi.fn()}
+          agentKind="codex"
+          {...remote}
+        />,
+      );
+
+      expect(screen.getByText('chat.errorBanner.codexSharedAuthLinkUnavailable')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeNull();
+    },
+  );
+
+  // 同一条链路上的其它鉴权原因不归这里管:误报会让「真的没登录」的用户去改 Windows 权限。
+  it('keeps the generic copy for an ordinary unauthenticated Codex session', () => {
+    render(
+      <ErrorBanner
+        error="LAZY_CREATE_FAILED: codex not authenticated: no_oauth"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+      />,
+    );
+
+    expect(screen.queryByText('chat.errorBanner.codexSharedAuthLinkUnavailable')).toBeNull();
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    // 普通未登录不该被指去改 Windows 权限,也不该被指去重新登录(那是另一条流程的入口)。
+    expect(screen.queryByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeNull();
+  });
+
   it('replaces an unsettled account boundary error with retry guidance', () => {
     const error =
       'LAZY_CREATE_FAILED: Ghost skill projection is not stable for the active owner';

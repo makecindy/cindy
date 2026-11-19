@@ -71,6 +71,7 @@ import {
 } from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
 import { UnclassifiedSection } from './UnclassifiedSection';
@@ -117,12 +118,13 @@ import {
   isRemoteSessionActivityActive,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { TaskInbox } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -191,6 +193,10 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 
 export interface ProjectsSectionProps {
   unclassified: Session[];
+  /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
+  inboxSessions?: readonly Session[];
+  /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
+  isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
@@ -236,23 +242,19 @@ export interface ProjectsSectionProps {
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onToggleProject: (projectKey: string) => void;
-  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
+  onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
-  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
-  /**
-   * 段头新建项目：选择一个新项目目录后进入 transient draft route。
-   * 2026-08-12 起段头按钮暂时隐藏(见下方段头注释),prop 保留以便恢复入口。
-   */
-  onCreateProject?: () => void;
+  /** 在设备行指定的电脑上打开新建项目表单；null 表示本机。 */
+  onCreateProject?: (deviceTarget: DialogueDeviceTarget | null) => void;
   /** delayed-create:在该 project 的 workingDir 下进 transient draft route。
    *  父层 wrapper 会处理"预填 workingDir 到 newMakerDraft store + navigate('/cc-agent/new')"。
    *  vendor 由用户在 NewMakerDraftRoute 内的 VendorSegmentedSwitcher 决定(读 draft.vendor)。 */
@@ -261,8 +263,6 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  /** 打开设置 → 任务导入，只看这个项目。 */
-  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -288,6 +288,8 @@ export interface ProjectsSectionProps {
 
 export function ProjectsSection({
   unclassified,
+  inboxSessions,
+  isInboxTeammateTask,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -313,15 +315,14 @@ export function ProjectsSection({
   projectOptions,
   onScheduleAction,
   onToggleProject,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -347,6 +348,7 @@ export function ProjectsSection({
   const localHostProjectOrder = useLocalHostProjectOrder();
   const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
+  const { mode: taskListMode } = useTaskListMode();
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
@@ -579,27 +581,45 @@ export function ProjectsSection({
   const sortingPriorityContext = filter.sortBy === 'priority' ? priorityContext : undefined;
   // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
   // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
-  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。没经过 running
-  // 的快完成靠 TTL。
+  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。
+  // 远程任务没经过 running 推送就结束时(快完成、或完成即已读),以被控端推来的
+  // lastTurnEndedAt 为代次:发送后首次看到时记基线,之后它前进即本轮已结束,
+  // 不再等 TTL(否则收件箱里已完成的远程任务会在「进行中」挂最多 2 分钟)。
+  // 同一台电脑的时钟前后比较,不受两端时钟差影响。
+  const startingSessionIds = useStartingSessionIds();
+  const startingTurnBaselines = useRef(new Map<string, number>());
   useEffect(() => {
     const settled = new Set<string>();
+    const baselines = startingTurnBaselines.current;
     const considerRemote = (session: Session) => {
+      if (!session.deviceLinkDeviceId) return;
       if (
         isRemoteSessionActivityActive(
           getRemoteSessionActivity(session.id, session.deviceLinkDeviceId),
         )
       ) {
         settled.add(session.id);
+        return;
       }
+      if (!startingSessionIds.has(session.id)) return;
+      const endedAt = session.lastTurnEndedAt ?? 0;
+      const baseline = baselines.get(session.id);
+      if (baseline === undefined) baselines.set(session.id, endedAt);
+      else if (endedAt > baseline) settled.add(session.id);
     };
+    for (const id of baselines.keys()) {
+      if (!startingSessionIds.has(id)) baselines.delete(id);
+    }
     for (const project of projects) {
       for (const session of project.sessions) considerRemote(session);
     }
     for (const session of dialogues) considerRemote(session);
     for (const session of unclassified) considerRemote(session);
+    // The inbox spans tasks outside the regular list's scope.
+    for (const session of inboxSessions ?? []) considerRemote(session);
     absorbSessionStarting(settled);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-  }, [projects, dialogues, unclassified, remoteActivityRevision]);
+  }, [projects, dialogues, unclassified, inboxSessions, startingSessionIds, remoteActivityRevision]);
 
   // E 期「按设备分组」:有可选远程设备（含断线缓存）+ 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
@@ -890,9 +910,10 @@ export function ProjectsSection({
   const FoldIcon = foldState === 'expand-all' ? ChevronsUpDown : ChevronsDownUp;
   // 散排行的来源标签:平铺时项目会话也要标项目名,不能只喂 dialogues。
   const flattenedSessionsForSourceLabels = useMemo(() => {
+    if (inboxSessions) return inboxSessions;
     if (filter.groupBy === 'project') return dialogues;
     return [...projects.flatMap((project) => project.sessions), ...dialogues];
-  }, [filter.groupBy, projects, dialogues]);
+  }, [inboxSessions, filter.groupBy, projects, dialogues]);
   const dialogueSourceLabelMap = useMemo(
     () =>
       buildSessionSourceLabelMap(
@@ -944,10 +965,8 @@ export function ProjectsSection({
       // 按设备分段时段头已写明设备,行内不再重复标注归属(2026-08-12 用户裁决)。
       hideRemoteMachineLabel={deviceGroupingActive}
       onToggle={onToggleProject}
-      isProjectPinned={false}
-      onToggleProjectPin={onToggleProjectPin}
+      onSettings={onSettings}
       onRenameProject={onRenameProject}
-      onRemoveFromSidebar={onRemoveFromSidebar}
       onSessionClick={onSessionClick}
       onAction={onAction}
       onRename={onRename}
@@ -959,7 +978,6 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />
@@ -1135,7 +1153,7 @@ export function ProjectsSection({
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
         fold={
-          hasMainListContent && foldState !== null
+          taskListMode === 'tasks' && hasMainListContent && foldState !== null
             ? {
                 label: foldLabel,
                 Icon: FoldIcon,
@@ -1145,7 +1163,7 @@ export function ProjectsSection({
             : null
         }
       />
-      {hasMainListContent ? (
+      {taskListMode === 'tasks' && hasMainListContent ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
           {!deviceGroupingActive &&
             visibleMixedEntries
@@ -1212,7 +1230,18 @@ export function ProjectsSection({
                 return (
                   <div key={key} className="flex flex-col">
                     {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                    <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <DeviceSectionHeader
+                      deviceId={section.deviceId}
+                      name={name}
+                      createProjectDisabled={!online}
+                      onCreateProject={
+                        onCreateProject
+                          ? () => onCreateProject(
+                              section.deviceId ? { deviceId: section.deviceId, deviceName: name } : null,
+                            )
+                          : undefined
+                      }
+                    >
                       <button
                         type="button"
                         onClick={() => toggleDeviceSection(key)}
@@ -1369,6 +1398,27 @@ export function ProjectsSection({
           )}
         </div>
       ) : null}
+      {taskListMode === 'inbox' && inboxSessions && (
+        <TaskInbox
+          sessions={inboxSessions}
+          isTeammateTask={isInboxTeammateTask}
+          priorityContext={priorityContext}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sourceLabelMap={dialogueSourceLabelMap}
+          sessionVariant={mainSessionVariant}
+        />
+      )}
     </div>
   );
 }
@@ -1451,7 +1501,7 @@ export function SessionGroupNode({
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;

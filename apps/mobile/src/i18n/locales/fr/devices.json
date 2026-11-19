@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Ajouter un widget",
+  "widgetGuideIntro": "Les widgets sont de petites cartes sur l’écran d’accueil. Consultez votre quota restant et les tokens utilisés aujourd’hui sans ouvrir Cindy.",
+  "widgetGuideExample": "Un widget Cindy à côté des icônes des apps sur l’écran d’accueil.",
+  "widgetGuidePicker": "Modifier → Ajouter un widget",
+  "widgetGuideIOS": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez {{picker}}.\n\nRecherchez Cindy, choisissez « Quota des abonnements » ou « Usage quotidien », puis touchez « Ajouter le widget ».",
+  "widgetGuideAndroid": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez « Widgets ».\n\nTrouvez Cindy et faites glisser « Quota des abonnements » ou « Usage quotidien » sur l’écran d’accueil.",
+  "widgetGuideHome": "Écran d’accueil",
+  "widgetGuideLock": "Écran verrouillé",
+  "widgetGuideLockIOS": "Aussi sur l’écran verrouillé : appuyez longuement dessus, puis touchez « Personnaliser ».",
+  "widgetGuideDismiss": "Compris",
+  "usageOther": "Autres",
+  "usageTitle": "Aperçu de l’utilisation",
+  "usageOnlyDevice": "{{name}} uniquement",
+  "usagePlans": "Quotas restants",
+  "usageBudget": "Budget restant pour la période",
   "management": {
     "title": "Gestion des appareils",
     "openDevice": "Voir les détails de {{name}}",
@@ -429,7 +444,34 @@
       "filterTeammatesHeading": "Amis",
       "filterAnySource": "Toutes les sources",
       "filterHideAllTeammates": "Tout masquer",
-      "filterSelectedTeammates": "{{count}} sélectionné(s)"
+      "filterSelectedTeammates": "{{count}} sélectionné(s)",
+      "inbox": {
+        "inbox": "À traiter",
+        "working": "En cours",
+        "snoozed": "Reportées",
+        "archived": "Traitées",
+        "snooze": "Reporter la tâche",
+        "complete": "Terminé",
+        "wake": "Réafficher maintenant",
+        "restore": "Restaurer la tâche",
+        "process": "Marquer comme traitée (archiver)",
+        "empty": "La boîte de réception est vide",
+        "snoozeFailed": "Impossible de conserver l’heure du report. Vérifiez la connexion et mettez à jour l’ordinateur hébergeant cette tâche.",
+        "hours": "Dans {{count}} heures",
+        "hours_one": "Dans {{count}} heure",
+        "hours_many": "Dans {{count}} heures",
+        "hours_other": "Dans {{count}} heures",
+        "thisEvening": "Ce soir",
+        "tomorrow": "Demain",
+        "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
+        "custom": "Personnaliser…",
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
+      },
+      "taskListMode": {
+        "enterInbox": "Boîte de réception",
+        "leaveInbox": "Liste des tâches"
+      }
     },
     "search": {
       "placeholder": "Rechercher dans les titres ou le contenu…",

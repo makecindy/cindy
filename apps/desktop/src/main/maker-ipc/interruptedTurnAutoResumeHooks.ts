@@ -5,10 +5,12 @@ import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResu
 import {
   isContinuationOnlyAutoResumeReason,
   isInterruptedTurnError,
+  isUnexpectedWorkerStreamEnd,
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -28,9 +30,13 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
+  resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
+  modelGroupInputs?: { has(createOpts: object): boolean };
+  workerInputs?: { has(createOpts: object): boolean };
+  scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
-  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void;
+  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void;
   getStableSessionForTurnBoundary(sessionId: string): RuntimeSession | null | undefined;
   pendingContinuationOnlyAutoResumeRebuilds: { set(session: RuntimeSession, attemptToken: number): unknown };
   maybeApplySessionRuntimeFallback(
@@ -39,6 +45,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
+    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -61,19 +68,23 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
   notifySchedulerAutoResumeFailed, autoResumeAttemptToken, log,
 }: InterruptedTurnAutoResumeHookPorts<RuntimeSession>) {
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    signals.reason === 'scheduler-snapshot-preparation'
+    item && scheduledQuotaInputs?.has(item.createOpts) && isAccountUsageLimitError(signals)
+      ? false // Same-provider quota waiting owns this run; never enter a cross-route candidate chain.
+      : signals.reason === 'scheduler-snapshot-preparation'
       ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
       : signals.reason === 'orca-report-preparation'
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
+      : signals.reason === 'session_event_loop_crashed'
+      ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
       : isInterruptedTurnError(signals) ||
-        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+        (!!item && (botFallbackInputs.has(item.createOpts) || modelGroupInputs?.has(item.createOpts) === true) && isBotCandidateUnavailable(signals));
   const hooks: {
     onResumableTurnErrorDiscarded: Hook<'onResumableTurnErrorDiscarded'>;
     onResumableTurnError: Hook<'onResumableTurnError'>;
@@ -105,8 +116,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       item: AgentInputQueuedMessage,
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const botInput = botFallbackInputs.has(item.createOpts);
-      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
+      const modelGroupInput = modelGroupInputs?.has(item.createOpts) === true;
+      const configuredInput = modelGroupInput || botFallbackInputs.has(item.createOpts);
+      const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
@@ -149,7 +161,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
           ? item.origin.runId
           : null;
       if (schedulerRunId) {
-        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken, signals.message);
       }
       if (isContinuationOnlyAutoResumeReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);
@@ -180,14 +192,21 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.attemptToken,
                   requireRouteChange,
                   isCurrent,
+                  ...(modelGroupInput ? [{
+                    accountUnavailable: isModelGroupConnectionOutOfCredit(signals),
+                    hasImages: item.files?.some(file => file.category === 'image') === true,
+                  }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
               if (!isCurrent()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
-                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+                const released = autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
                   surfaceBanner: true,
                 });
+                if (released && modelGroupInput && fallback.outcome === 'exhausted' && isAccountUsageLimitError(signals)) {
+                  resumeQuotaWait?.(sessionId, item, signals);
+                }
                 return;
               }
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+const accounting = vi.hoisted(() => ({ record: vi.fn(async () => {}), close: vi.fn() }));
+vi.mock('../../usage/auxiliaryUsage.js', () => ({
+  createAuxiliaryUsageRecorder: () => Object.assign(accounting.record, { close: accounting.close }),
+}));
 
 const undiciFetchMock = vi.fn();
 vi.mock('undici', async (importOriginal) => {
@@ -34,6 +38,7 @@ function chatCompletionSseChunk(content: string): string {
 describe('LiteLlmTextModelClient', () => {
   afterEach(() => {
     undiciFetchMock.mockReset();
+    accounting.record.mockClear(); accounting.close.mockClear();
     reportKeyRejectedMock.mockReset();
     vi.useRealTimers();
   });
@@ -398,4 +403,30 @@ describe('LiteLlmTextModelClient', () => {
     expect(signal.aborted).toBe(true);
     await expect(outcome).resolves.toContain('timed out');
   });
+});
+
+it('accounts for upstream usage when refinement output is invalid JSON', async () => {
+  undiciFetchMock.mockResolvedValueOnce(makeChatCompletionSseResponse([
+    { model: 'served-refiner', choices: [{ delta: { content: 'invalid json' } }] },
+    { usage: { prompt_tokens: 100, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 40 } } },
+  ]));
+  const client = new LiteLlmTextModelClient({ proxyApiKey: 'test', baseUrl: 'https://gateway.invalid' });
+  await expect(client.requestJson({ model: 'alias', system: 'test', user: {}, schemaName: 'test' })).rejects.toThrow();
+  expect(accounting.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 60, outputTokens: 3,
+    cacheReadTokens: 40 }), { model: 'served-refiner' });
+  expect(accounting.close).toHaveBeenCalledOnce();
+});
+
+it('retains a complete usage data line read immediately before a transport failure', async () => {
+  const bytes = new TextEncoder().encode('data: {"model":"actual","usage":{"prompt_tokens":10,"completion_tokens":2}}');
+  let step = 0;
+  const body = new ReadableStream<Uint8Array>({ pull(controller) {
+    if (step++ === 0) controller.enqueue(bytes);
+    else controller.error(new Error('stream disconnected'));
+  } });
+  undiciFetchMock.mockResolvedValueOnce(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+  const client = new LiteLlmTextModelClient({ proxyApiKey: 'test', baseUrl: 'https://gateway.invalid' });
+  await expect(client.requestJson({ model: 'alias', system: 'test', user: {}, schemaName: 'test' })).rejects.toThrow();
+  expect(accounting.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 10, outputTokens: 2 }),
+    { model: 'actual' });
 });

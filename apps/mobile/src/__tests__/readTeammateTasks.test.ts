@@ -103,7 +103,7 @@ it('keeps owner-project membership across mobile parsing and rejects unresolved 
   const companion = parseTaskCompanion({ id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' });
   expect(companion?.taskProjectDir).toBe('/buddy/workspace');
   expect(isTeammateTask(task('group', { source: 'bot', companion }))).toBe(true);
-  expect(isTeammateTask(task('unresolved', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(false);
+  expect(isTeammateTask(task('dialogue', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(true);
 });
 
 it('keeps the legacy routine identity through mobile parsing so routine runs can be grouped', async () => {

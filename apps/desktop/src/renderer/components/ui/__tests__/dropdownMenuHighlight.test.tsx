@@ -574,6 +574,27 @@ describe('shared dropdown menu glide highlight', () => {
     panel.remove();
   });
 
+  // Unit regression: switching a long model list to a short supplier list left an invisible
+  // transformed highlight below its contents, retaining scroll overflow and a blank viewport.
+  it('removes the detached row highlight geometry when the model list changes', async () => {
+    const panel = document.createElement('div');
+    const layer = document.createElement('span');
+    const row = document.createElement('div');
+    row.setAttribute('data-menu-row', '');
+    panel.append(layer, row);
+    document.body.append(panel);
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 200, 400));
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 1600, 200, 50));
+    const detach = attachMenuHighlight(panel, layer, { current: () => row.isConnected ? row : null });
+    try {
+      expect(layer.style.transform).toContain('1600px');
+      await act(async () => { row.remove(); });
+      expect(layer.style.opacity).toBe('0');
+      expect(layer.style.transform).toBe('');
+      expect(layer.style.height).toBe('0px');
+    } finally { detach(); panel.remove(); }
+  });
+
   // #9687: the model picker inserts a cross-engine warning above the same open row.
   // Unit tier: existing placement tests only covered the initial box, not a later layout.
   it('repositions the same active row when content is inserted and removed above it', async () => {

@@ -150,6 +150,8 @@ export interface ThemeColors {
   warningFg: string;
   /** 额度黄（剩余不超过 30%，@cindy/maker-shared/quota-level）；仅额度使用，双模式同值。 */
   quotaBarWarn: string;
+  /** Normal liquid in the widget-style quota tubes, shared with WidgetPalette.plenty. */
+  quotaWidgetPlenty: string;
   /** 额度红（剩余不超过 10%）#EF4444，与 Desktop --quota-bar-crit、Mac 面板、iPhone 组件同值。 */
   quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
@@ -486,6 +488,7 @@ export const lightColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
+  quotaWidgetPlenty: '#14B8A6',
   quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
@@ -587,6 +590,7 @@ export const darkColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
+  quotaWidgetPlenty: '#2DD4BF',
   quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',

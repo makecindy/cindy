@@ -44,6 +44,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { messageCreateToRow, messageToCamel } from '../../localDb/mapper.js';
 import { createRuntimePluginControl } from '../runtimeControl.js';
+import { createPluginToolLifecycle } from '../toolLifecycleControl.js';
 import { createRuntimeContextProviders } from '../runtimeContext.js';
 import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
 
@@ -348,6 +349,37 @@ describe('indexed task content and state events', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(send).toHaveBeenCalledOnce();
     expect(lookup).toHaveBeenCalledTimes(count);
+  });
+
+  // Unit / native recovery: the generic indexed delivery tests perform live
+  // receipt reads. An approved, running subscriber gets the native metadata
+  // without a receipt read or cold start. A replaced sandbox gets no queued event.
+  it('delivers native recovery only to the exact running install without reading receipts', async () => {
+    const g = ghost('reader', { topics: ['native-recovery'] });
+    let exactInstallRunning = false;
+    const findGhostForDelivery = vi.fn(() => g);
+    const wake = vi.fn(async () => {});
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery, wake,
+      isRunningInstall: ghost => ghost === g && exactInstallRunning });
+    const index = new GhostTaskEventIndex();
+    const gateway = vi.fn(() => gw);
+    const data = { sessionId: 'task', engine: 'pi' as const, nativeEvent: 'agent_settled', metadata: { aborted: false } };
+    index.publishNativeRecovery(data, owner, gateway);
+    expect(gateway).not.toHaveBeenCalled();
+    index.replace([g], owner);
+    index.publishNativeRecovery(data, owner, gateway);
+    running.add('reader');
+    exactInstallRunning = true;
+    index.publishNativeRecovery(data, owner, gateway);
+    expect(sent).toEqual([]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => item.payload)).toMatchObject([{ name: 'did-native-recovery', data }]);
+    index.publishNativeRecovery(data, owner, gateway);
+    exactInstallRunning = false;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(findGhostForDelivery).not.toHaveBeenCalled();
+    expect(wake).not.toHaveBeenCalled();
   });
 
   it.each(['disabled', 'revoked'] as const)('rechecks the live install after queueing when %s', async change => {
@@ -2069,6 +2101,58 @@ describe('GhostTurnOriginTracker', () => {
 // plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
 // Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
 describe('control points', () => {
+  // #11054 regression: the real gateway/controller/lifecycle chain must not turn
+  // disabling a selected block-on-failure plugin into native tool cancellation.
+  // Existing tests inject allow or cover legacy points, not installation changes
+  // before delivery, while awaiting a reply, or between reply and host apply.
+  // Unit tier: fake timers and pipe replies, no processes or real waits.
+  it.each((['pi', 'claude-code'] as const).flatMap(engine =>
+    (['call', 'result'] as const).flatMap(phase =>
+      (['before', 'pending', 'after'] as const).map(timing => ({ engine, phase, timing }))),
+  ))('keeps $engine $phase native default when the plugin is disabled $timing delivery', async ({ engine, phase, timing }) => {
+    const point = phase === 'call' ? 'will-tool-call' : 'did-tool-result';
+    const provider = ghost('native', { hooks: [point] });
+    const { gw, sent, running, deps } = makeGateway({ findGhostForDelivery: () => provider });
+    running.add('native');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'native', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async (...args) => {
+        const answer = await gw.screenControlPoint(...args);
+        if (timing === 'after') provider.enabled = false;
+        return answer;
+      } });
+    if (timing === 'before') provider.enabled = false;
+    const pending = createPluginToolLifecycle({ readSettings: () => settings, control: () => control }).run('task', {
+      engine, phase, toolName: engine === 'pi' ? 'bash' : 'Bash', toolCallId: 'call', input: {},
+      ...(phase === 'result' ? { result: { stdout: 'original' } } : {}),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    if (timing === 'pending') {
+      provider.enabled = false;
+      gw.dropGhost('native');
+    } else if (timing === 'after') {
+      gw.handleVerdict('native', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId,
+        action: 'block', reason: 'stale denial' });
+    }
+    expect(await pending).toEqual({});
+    expect(sent).toHaveLength(timing === 'before' ? 0 : 1);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it.each(['call', 'result'] as const)('still blocks %s on a real plugin delivery failure', async phase => {
+    const point = phase === 'call' ? 'will-tool-call' : 'did-tool-result';
+    const provider = ghost('native', { hooks: [point] });
+    const { gw, running } = makeGateway({ findGhostForDelivery: () => provider,
+      sendToGhost: () => { throw new Error('plugin transport failed'); } });
+    running.add('native');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'native', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    expect(await createPluginToolLifecycle({ readSettings: () => settings, control: () => control }).run('task', {
+      engine: 'pi', phase, toolName: 'bash', toolCallId: 'call', input: {},
+    })).toMatchObject({ decision: 'deny' });
+  });
+
   // Native wire contract, unit/fake timers: production pipe verdict parsing must
   // retain tool effects but never accept a plugin-manufactured permission allow.
   // Controller tests inject parsed answers and cannot cover this boundary.
