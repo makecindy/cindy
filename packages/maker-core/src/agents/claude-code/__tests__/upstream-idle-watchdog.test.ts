@@ -660,7 +660,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
   // receive the old SDK result before the next send. Its late error is dropped
   // by the generation guard without resetting turn state, so reset at the next
   // send is essential. Unit tier, controlled SDK only.
-  it('clears Worker dispatch before a late interrupted result is dropped in the next turn', async () => {
+  it.each(['before-stop', 'after-next-send'] as const)('clears Worker dispatch when its receipt arrives %s and the old result is dropped', async (receiptTiming) => {
     const session = await startSessionWithStream();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
@@ -668,10 +668,17 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       session.stream.emit({ type: 'assistant', message: { content: [{
         type: 'tool_use', id: 'dispatch-before-stop', name: 'mcp__cindy_orca__send_to_worker', input: {},
       }] } });
-      session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
-      await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      if (receiptTiming === 'before-stop') {
+        session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      } else {
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'dispatch tool use processed');
+      }
       await session.handle.abort();
       await session.handle.send({ type: 'user', content: 'ordinary follow-up' });
+      if (receiptTiming === 'after-next-send') {
+        session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
+      }
       // The real generation guard consumes the old interrupt marker but must
       // not reset the new turn or accidentally be the dispatch-state cleanup.
       session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,

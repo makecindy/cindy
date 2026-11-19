@@ -3402,6 +3402,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 残留的 true 会让下一条普通任务真正的 thinking-only 收口失去 silent-stop 恢复。
       turnState.completedWorkerDispatch = false;
       turnState.workerDispatchNeedsReport = false;
+      turnState.workerDispatchTurnToolUseIds?.clear();
       turnState.apiCalls = 0;
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;

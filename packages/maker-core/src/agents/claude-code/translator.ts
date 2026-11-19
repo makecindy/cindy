@@ -71,6 +71,8 @@ export interface TurnState {
    * 或要求逐项汇报的 create_workers 批量）。存在时即使派发成功也不能零正文收口。
    */
   workerDispatchNeedsReport?: boolean;
+  /** Root tools from this turn; stale receipts must not change its dispatch exemption. */
+  workerDispatchTurnToolUseIds?: Set<string>;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
   apiCalls: number;
   /** 本 turn 是否已收到 compact_boundary；收到后 result usage 不应覆盖 compact 后 context。 */
@@ -373,6 +375,7 @@ function resetTurnState(turn: TurnState): void {
   turn.toolUses = 0;
   turn.completedWorkerDispatch = false;
   turn.workerDispatchNeedsReport = false;
+  turn.workerDispatchTurnToolUseIds?.clear();
   turn.apiCalls = 0;
   turn.sawCompactBoundary = false;
   turn.hasEmittedText = false;
@@ -1007,7 +1010,7 @@ export function translateSdkMessage(
         const dispatchResults: { toolName: string | undefined; payloadText: string; isError: boolean }[] = [];
         for (const blockRaw of content as unknown[]) {
           const pair = readToolResultFullText(blockRaw);
-          if (!pair) continue;
+          if (!pair || !ctx.turn.workerDispatchTurnToolUseIds?.has(pair.toolUseId)) continue;
           dispatchResults.push({
             toolName: ctx.rt.toolUseIdToName.get(pair.toolUseId),
             payloadText: pair.fullText,
@@ -1747,6 +1750,9 @@ function handleAssistant(
       // });
       const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
       if (toolUseId) {
+        if (!parentToolUseId) {
+          (ctx.turn.workerDispatchTurnToolUseIds ??= new Set()).add(toolUseId);
+        }
         // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
         if (!parentToolUseId) pauseClaudeGenerationForToolUse(ctx, toolUseId);
         ctx.onToolUseStart?.(toolUseId, block.name, block.input, parentToolUseId);
