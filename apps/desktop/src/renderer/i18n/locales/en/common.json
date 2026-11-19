@@ -6075,7 +6075,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatic task model fallback",
-        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+        "description": "On failure, a model group tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
       },
       "toggleAria": "Toggle automatic task model fallback",
       "toast": {

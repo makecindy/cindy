@@ -6075,7 +6075,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatischer Modellwechsel für Aufgaben",
-        "description": "Nach wiederholten Verbindungs- oder Kapazitätsfehlern wird zunächst eine andere verbundene Quelle für dasselbe Modell versucht, dann ein ausdrücklich für den aktuellen Agent empfohlenes Modell. Dabei wird weder der Agent gewechselt noch deine gespeicherte Auswahl geändert. Standardmäßig deaktiviert."
+        "description": "Bei einem Fehler versucht eine Modellgruppe andere verfügbare Modelle der Gruppe. Bei einem Agentenwechsel wird die Aufgabe übergeben und die neue Auswahl gespeichert. Andere Aufgaben versuchen nach wiederholten Fehlern eine andere Quelle oder ein empfohlenes Modell desselben Agenten. Standardmäßig aus."
       },
       "toggleAria": "Automatischen Modellwechsel für Aufgaben umschalten",
       "toast": {

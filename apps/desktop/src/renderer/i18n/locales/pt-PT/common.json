@@ -6133,7 +6133,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Alternativa automática de modelo para tarefas",
-        "description": "Após falhas repetidas de ligação ou capacidade, tentar outra origem ligada para o mesmo modelo e, depois, um modelo explicitamente recomendado para o Agent atual. Nunca muda de Agent nem altera a seleção guardada. Desativado por predefinição."
+        "description": "Em caso de falha, o grupo tenta outros modelos disponíveis no grupo. Ao mudar de agente, a tarefa é transferida e a nova seleção é guardada. Após falhas repetidas, as outras tarefas tentam outra origem ou um modelo recomendado do mesmo agente. Desativado por predefinição."
       },
       "toggleAria": "Ativar ou desativar a alternativa automática de modelo para tarefas",
       "toast": {
