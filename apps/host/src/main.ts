@@ -398,6 +398,7 @@ const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
 const profileInUseAtStartMessage = () => createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale])
   .t('logic.errors.hostProfileInUseByDesktopAtStart');
 let coexistenceMonitor: CoexistenceMonitor | null = null;
+let resumeGeneratedImageRecovery: () => Promise<void>;
 
 /**
  * Rescan the profile while the runtime runs. A desktop that opens the database holds the input
@@ -419,7 +420,7 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
     onInputReleased() {
       // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
       usageRecording.onProfileReleased();
-      void generatedImages.onProfileReleased();
+      void resumeGeneratedImageRecovery();
       hostLog.info('the desktop left this profile; sends are accepted again');
     },
   });
@@ -1237,6 +1238,7 @@ const generatedImages = createHostGeneratedImages({
   createMessage: (sessionId, body, opts) => insertSessionMessage(sessionId, body, opts),
   publish: (event: unknown) => eventHub.publish(event),
   isProfileHeld: () => inputQueue.isHeldForDesktop(),
+  registerProfileRelease: resumeRecovery => { resumeGeneratedImageRecovery = resumeRecovery; },
 });
 
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,

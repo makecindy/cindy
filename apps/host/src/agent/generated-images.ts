@@ -34,6 +34,7 @@ export function createHostGeneratedImages(deps: {
   createMessage: GeneratedImageDeliveryPlatform['createMessage'];
   publish: (event: unknown) => void;
   isProfileHeld: () => boolean;
+  registerProfileRelease: (resumeRecovery: () => Promise<void>) => void;
 }) {
   const log = createLogger('generated-images');
   const delivery = createGeneratedImageDelivery({
@@ -93,6 +94,7 @@ export function createHostGeneratedImages(deps: {
     }
   }
   setGeneratedImageRecovery(recoverFromHistory, () => delivery.reconcile());
+  deps.registerProfileRelease(onProfileReleased);
 
   /** register.ts deliverCodexGeneratedImage: the tool events published for the image, `[]` when none. */
   function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
@@ -107,5 +109,5 @@ export function createHostGeneratedImages(deps: {
       return Promise.resolve([]);
     }
   }
-  return { delivery, deliverCodexGeneratedImage, onProfileReleased };
+  return { delivery, deliverCodexGeneratedImage };
 }

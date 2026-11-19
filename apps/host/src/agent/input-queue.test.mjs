@@ -7810,8 +7810,10 @@ async function generatedImageFixture(t, id) {
   const published = [];
   const hub = { publish: event => published.push(event) };
   const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+  let resumeImageRecovery;
   const images = createHostGeneratedImages({ createMessage: persistMessage, publish: event => hub.publish(event),
-    isProfileHeld: () => h.queue.isHeldForDesktop() });
+    isProfileHeld: () => h.queue.isHeldForDesktop(),
+    registerProfileRelease: resumeRecovery => { resumeImageRecovery = resumeRecovery; } });
   const h = createHarness({ hub, persistMessage, getOwner: getCurrentDbClientSnapshot,
     deliverCodexGeneratedImage: images.deliverCodexGeneratedImage,
     readSession: async sid => ({ id: sid, status: 'active', agentKind: 'codex', model: 'm', workingDir: db.root,
@@ -7838,7 +7840,7 @@ async function generatedImageFixture(t, id) {
     return { session, holds, emitImage, rows, endTurn };
   };
   const first = await openTask(id);
-  return { ...first, db, h, images, published, refs, openTask };
+  return { ...first, db, h, resumeImageRecovery, published, refs, openTask };
 }
 const resultOf = row => JSON.parse(JSON.parse(row.content));
 
@@ -8277,7 +8279,7 @@ test('reading history during a desktop hold defers image recovery until release'
   assert.deepEqual(f.refs(), []);
 
   assert.equal(await f.h.queue.releaseDesktopHold(), true);
-  await f.images.onProfileReleased();
+  await f.resumeImageRecovery();
   assert.equal(resultOf(f.rows()[1]).native_image_delivery.state, 'stored');
   assert.equal(f.refs().length, 1);
 });
