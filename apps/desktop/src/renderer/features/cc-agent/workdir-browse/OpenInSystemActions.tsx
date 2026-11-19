@@ -50,7 +50,8 @@ export function OpenInSystemActions({
 
   return (
     <div className={cn('flex flex-wrap items-center justify-center gap-2', className)}>
-      {systemPreview && ['darwin', 'win32'].includes(window.electronAPI.platform) && (
+      {systemPreview && typeof window.electronAPI.openSystemPreview === 'function' &&
+        ['darwin', 'win32'].includes(window.electronAPI.platform) && (
         <Button variant="secondary" size="md" compact type="button" onClick={async () => {
           if (!(await window.electronAPI.openSystemPreview(absPath).catch(() => false))) toast.error(t('ccAgent.common.openFailed'));
         }}>

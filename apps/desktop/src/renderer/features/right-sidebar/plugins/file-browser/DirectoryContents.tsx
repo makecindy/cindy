@@ -15,7 +15,7 @@ function EntryIcon({ entry, localPath }: { entry: DirEntry; localPath?: string }
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     setSrc(null);
-    if (!localPath) return;
+    if (!localPath || typeof window.electronAPI.getFileThumbnail !== 'function') return;
     let current = true;
     // Let fast scrolling settle before asking the OS to generate a thumbnail.
     const timer = window.setTimeout(() => {
@@ -195,7 +195,8 @@ export function DirectoryContents({
                     const quickLook = platform === 'darwin' && event.key === ' ';
                     const previewPane =
                       platform === 'win32' && event.altKey && event.code === 'KeyP';
-                    if (!localWorkdir || entry.type !== 'file' || (!quickLook && !previewPane))
+                    if (!localWorkdir || entry.type !== 'file' || (!quickLook && !previewPane) ||
+                        typeof window.electronAPI.openSystemPreview !== 'function')
                       return;
                     event.preventDefault();
                     if (event.repeat) return;
