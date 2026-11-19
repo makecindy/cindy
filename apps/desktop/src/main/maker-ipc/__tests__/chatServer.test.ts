@@ -1454,6 +1454,18 @@ describe('Chat Server result delivery and refresh', () => {
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' });
   });
+  // #10951: without a repository the owner's `tools` grant keeps working for other members;
+  // tools were off for them in every group and the teammate told them to use their own Cindy.
+  it('keeps tools for another member with a tools grant in a group without a repository', async () => {
+    fixture.handle.mockImplementation(route => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'tools' }; claimed = true; return { body: { execution: next } }; }
+      return response(route);
+    });
+    await start();
+    const input = vi.mocked(deps.dispatch).mock.calls[0][0];
+    expect(input.toolsDisabled).toBe(false);
+    expect(input.message).toContain('Your owner has authorized this group to use your existing capabilities.');
+  });
   // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
   // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
   // after seconds; a found folder is still served from the cache without reading git again.
