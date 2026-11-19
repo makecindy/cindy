@@ -1,7 +1,7 @@
 import type { ScrollViewInstance } from 'react-native';
 import { IssueConfirmCard, type MobileIssueConfirmRequest } from './IssueConfirmCard';
 import { clearIssueConfirmDraft } from './interactionDraftStore';
-import { askAnswerError, askQuestionOptions, interactionPriority } from '@cindy/maker-shared/interaction';
+import { askAnswerError, askQuestionOptions } from '@cindy/maker-shared/interaction';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
@@ -80,7 +80,7 @@ import {
   remoteInteractionHandling,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
-  sortPendingInteractions,
+  selectPendingInteractionByRequestId,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -225,10 +225,6 @@ function InteractionPanelContent({
   const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const sortedInteractions = useMemo(
-    () => sortPendingInteractions(interactions),
-    [interactions],
-  );
   const [localActiveRequestId, setLocalActiveRequestId] = useState<string | null>(null);
   const activeRequestId = controlledActiveRequestId !== undefined
     ? controlledActiveRequestId
@@ -237,25 +233,21 @@ function InteractionPanelContent({
     if (controlledActiveRequestId !== undefined) onActiveRequestIdChange?.(requestId);
     else setLocalActiveRequestId(requestId);
   };
-  const fallbackInteraction = sortedInteractions[0] ?? null;
-  const activeInteraction = useMemo(() => {
-
-    if (!activeRequestId) return fallbackInteraction;
-    const selected = sortedInteractions.find((item) => readRequestId(item) === activeRequestId);
-    if (!selected || (fallbackInteraction && interactionPriority(fallbackInteraction) < interactionPriority(selected))) return fallbackInteraction;
-    return selected;
-  }, [activeRequestId, fallbackInteraction, sortedInteractions]);
+  const activeInteraction = useMemo(
+    () => selectPendingInteractionByRequestId(interactions, activeRequestId),
+    [interactions, activeRequestId],
+  );
   const { width: screenWidth } = usePaneViewport();
   useEffect(() => {
     if (!activeRequestId) return;
-    if (!sortedInteractions.some((item) => readRequestId(item) === activeRequestId)) {
+    if (!interactions.some((item) => readRequestId(item) === activeRequestId)) {
       setActiveRequestId(null);
     }
-  }, [activeRequestId, sortedInteractions]);
+  }, [activeRequestId, interactions]);
   if (!activeInteraction) return null;
   const kind = interactionKind(activeInteraction);
-  const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
-    maxVisible: sortedInteractions.length || 1,
+  const queuePresentation = buildPendingInteractionQueuePresentation(interactions, {
+    maxVisible: interactions.length || 1,
   }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
