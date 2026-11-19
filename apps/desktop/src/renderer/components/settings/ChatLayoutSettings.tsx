@@ -10,6 +10,7 @@ import { CHAT_WIDTH_PERCENT, useChatLayoutPreference } from '@/hooks/useChatLayo
 import { getChatColumnWidths, STANDARD_CHAT_MESSAGE_WIDTH } from '@/hooks/useProportionalWidth';
 
 import { appearanceSettings } from './AppearanceSection.settings-search';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 function ChatLayoutPreview({ width }: { width: number }) {
   // Scale a wide chat pane so the setting remains demonstrable in a small window.
@@ -31,7 +32,7 @@ function ChatLayoutPreview({ width }: { width: number }) {
         </ChatBubble>
       </div>
       <ComposerCard
-        className="mx-auto mt-1 flex h-3 items-center justify-between rounded px-1"
+        className="mx-auto mt-1 flex h-3 items-center justify-between px-1"
         style={{ width: `${inputWidth / paneWidth * 100}%` }}
       >
         <span className="h-px w-1/5 rounded-full bg-[var(--text-tertiary)] opacity-30" />
@@ -43,7 +44,7 @@ function ChatLayoutPreview({ width }: { width: number }) {
 
 export function ChatLayoutSettings() {
   const { t } = useTranslation();
-  const { mode, width, setMode, setWidth, preview } = useChatLayoutPreference();
+  const { mode, width, savedWidth, setMode, setWidth, preview } = useChatLayoutPreference();
   const layout = appearanceSettings.chatLayout;
   const contentWidth = appearanceSettings.chatWidth;
   const hintId = `${contentWidth.targetId}-hint`;
@@ -67,13 +68,16 @@ export function ChatLayoutSettings() {
         wrap
         title={t(layout.titleKey)}
         trailing={
-          <SegmentedControl
-            data-setting-id={layout.id}
-            aria-label={t(layout.titleKey)}
-            value={mode}
-            onValueChange={setMode}
-            options={layout.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-          />
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+            <DefaultOverrideControls isCustomized={mode === 'wide'} onReset={() => setMode('standard')} />
+            <SegmentedControl
+              data-setting-id={layout.id}
+              aria-label={t(layout.titleKey)}
+              value={mode}
+              onValueChange={setMode}
+              options={layout.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+            />
+          </div>
         }
       />
       {mode === 'wide' && (
@@ -83,23 +87,29 @@ export function ChatLayoutSettings() {
           title={<span id={`${contentWidth.targetId}-label`}>{t(contentWidth.titleKey)}</span>}
           hint={<span id={hintId}>{t(contentWidth.descriptionKey)}</span>}
           trailing={
-            <div className="flex w-full max-w-[320px] items-center gap-3">
-              <Slider
-                data-setting-id={contentWidth.id}
-                aria-labelledby={`${contentWidth.targetId}-label`}
-                aria-describedby={hintId}
-                aria-valuetext={displayWidth}
-                min={CHAT_WIDTH_PERCENT.min}
-                max={CHAT_WIDTH_PERCENT.max}
-                step={CHAT_WIDTH_PERCENT.step}
-                value={[width]}
-                onValueChange={([value]) => preview(value)}
-                onValueCommit={([value]) => setWidth(value)}
-                onPointerCancel={cancelPreview}
-                onLostPointerCapture={cancelPreview}
+            <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+              <DefaultOverrideControls
+                isCustomized={savedWidth !== CHAT_WIDTH_PERCENT.defaultValue}
+                onReset={() => setWidth(CHAT_WIDTH_PERCENT.defaultValue)}
               />
-              <span className="w-10 shrink-0 text-right text-13 tabular-nums text-[var(--settings-section-sublabel)]">{displayWidth}</span>
-              <ChatLayoutPreview width={width} />
+              <div className="flex w-[320px] min-w-0 max-w-full items-center gap-3">
+                <Slider
+                  data-setting-id={contentWidth.id}
+                  aria-labelledby={`${contentWidth.targetId}-label`}
+                  aria-describedby={hintId}
+                  aria-valuetext={displayWidth}
+                  min={CHAT_WIDTH_PERCENT.min}
+                  max={CHAT_WIDTH_PERCENT.max}
+                  step={CHAT_WIDTH_PERCENT.step}
+                  value={[width]}
+                  onValueChange={([value]) => preview(value)}
+                  onValueCommit={([value]) => setWidth(value)}
+                  onPointerCancel={cancelPreview}
+                  onLostPointerCapture={cancelPreview}
+                />
+                <span className="w-10 shrink-0 text-right text-13 tabular-nums text-[var(--settings-section-sublabel)]">{displayWidth}</span>
+                <ChatLayoutPreview width={width} />
+              </div>
             </div>
           }
         />

@@ -51,11 +51,16 @@ export default {
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
     if (ui.data.chatLayout) {
       const row = panel.locator('#settings-chat-layout');
+      const widthRow = panel.locator('#settings-chat-width');
       const slider = panel.getByRole('slider', { name: await ui.t('settings.appearance.chatLayout.width'), exact: true });
       const previewColumn = panel.getByTestId('chat-layout-preview-column');
       const standard = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.standard'), exact: true });
       const wide = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true });
       const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      const restoreName = await ui.t('settings.defaults.restore');
+      const restoreLayout = row.getByRole('button', { name: restoreName, exact: true });
+      const restoreWidth = widthRow.getByRole('button', { name: restoreName, exact: true });
+      const savedMode = () => page.evaluate(() => localStorage.getItem('chat.layoutMode'));
       const savedWidth = () => page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent'));
       // Feedback #12: place both compact controls with the layout settings below Wallpaper.
       assert.ok(await row.evaluate(el => {
@@ -66,6 +71,7 @@ export default {
       await row.scrollIntoViewIfNeeded();
       assert.equal(await standard.getAttribute('aria-checked'), 'true');
       assert.equal(await slider.count(), 0);
+      assert.equal(await restoreLayout.count(), 0);
       await ui.capture('standard');
       await standard.press('ArrowRight');
       await slider.waitFor();
@@ -73,23 +79,26 @@ export default {
       assert.equal(await wide.getAttribute('aria-checked'), 'true');
       assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
       assert.equal(await savedWidth(), null);
+      assert.ok(await restoreLayout.isVisible(), 'A saved layout override can be restored');
+      assert.equal(await restoreWidth.count(), 0);
       const defaultPreviewWidth = (await previewColumn.boundingBox()).width;
       await ui.capture('wide-default');
 
       const track = await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').boundingBox();
       const thumb = await slider.boundingBox();
-      const widthRow = await panel.locator('#settings-chat-width').boundingBox();
-      assert.ok(track.width >= 100 && track.height >= 36 && track.x + track.width <= widthRow.x + widthRow.width,
+      const widthBounds = await widthRow.boundingBox();
+      assert.ok(track.width >= 100 && track.height >= 36 && track.x + track.width <= widthBounds.x + widthBounds.width,
         'Slider keeps its hit area inside the settings row');
-      if (ui.viewport.width >= 1200) assert.ok(widthRow.height <= 90, 'Width controls share a single compact row');
+      if (ui.viewport.width >= 1200) assert.ok(widthBounds.height <= 90, 'Width controls share a single compact row');
       console.log('APPEARANCE_CHAT_LAYOUT', JSON.stringify({ viewport: ui.viewport.width, locale: ui.locale,
-        rowHeight: widthRow.height, trackWidth: track.width }));
+        rowHeight: widthBounds.height, trackWidth: track.width }));
       await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
       await page.mouse.down();
       await page.mouse.move(track.x + track.width * 0.8, track.y + track.height / 2, { steps: 8 });
       const preview = Number(await slider.getAttribute('aria-valuenow'));
       assert.equal(preview, 90);
       assert.equal(await savedWidth(), null);
+      assert.equal(await restoreWidth.count(), 0, 'An uncommitted drag does not shift the control');
       assert.ok((await previewColumn.boundingBox()).width > defaultPreviewWidth);
       await page.mouse.up();
       assert.equal(await savedWidth(), String(preview));
@@ -103,13 +112,21 @@ export default {
       await slider.press('End');
       assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
       assert.equal(await savedWidth(), '100');
-      await standard.click();
+      // PR #11486: the shared restore controls remove each override independently.
+      // This UI scenario covers the reset action missing from the mode/width selection checks.
+      await restoreLayout.click();
       assert.equal(await slider.count(), 0);
+      assert.equal(await savedMode(), null);
       assert.equal(await savedWidth(), '100');
       await wide.click();
       assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
-      assert.equal(await page.evaluate(() => localStorage.getItem('chat.layoutMode')), 'wide');
+      assert.equal(await savedMode(), 'wide');
       await ui.capture('wide-maximum');
+      await restoreWidth.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      assert.equal(await savedMode(), 'wide');
+      assert.equal(await restoreWidth.count(), 0);
       const findWidth = async target => {
         await search.fill(await ui.t('settings.appearance.chatLayout.width'));
         await page.locator('[id="settings-search-result-appearance.chatWidth"]').click();
