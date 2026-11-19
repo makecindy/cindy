@@ -39,7 +39,7 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
       project: memoryProjectArg,
     },
     handler: async ({ sources, target, scope, project }) => {
-      const saved = project ? undefined : deps.beginWrite?.(deps.getSessionContext?.());
+      const saved = deps.beginWrite?.(deps.getSessionContext?.());
       let written: { filename: string } | undefined;
       let writtenScope: MemoryScopeName | undefined;
       const result = await withStore(deps, async (_store, ctx) => {
@@ -67,7 +67,8 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
           await other!.delete(source);
           merged.deletedSources.push(source);
         }
-        if (ctx.scopes.user) writtenScope = dest.scope;
+        // 合并进另一个项目时回执不带 scope (理由见 memory_write)。
+        if (ctx.scopes.user && !(project && dest.scope === 'project')) writtenScope = dest.scope;
         return { ...merged, scope: dest.scope };
       }, { project: project as string | undefined });
       if (!result.isError && written) saved?.({ key: written.filename, title: target.title, action: 'updated',
