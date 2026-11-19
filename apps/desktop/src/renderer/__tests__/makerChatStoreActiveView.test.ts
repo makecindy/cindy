@@ -1504,6 +1504,26 @@ describe('makerChatStore active view tracking', () => {
       expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(5);
     });
 
+    // Unit regression: real store deletion of an off-window ID must notify exact-root
+    // readers even though the visible snapshot is unchanged; no extra history fetch.
+    it('notifies the existing history epoch subscription for an off-window deletion', async () => {
+      const sessionId = sid('off-window-root-delete');
+      await seedSession(sessionId);
+      const snapshot = makerChatStore.getSnapshot(sessionId);
+      const epoch = makerChatStore.getMessageHistoryEpoch(sessionId);
+      const changed = vi.fn();
+      const unsubscribe = makerChatStore.subscribe(sessionId, changed);
+      const reads = vi.mocked(messageService.list).mock.calls.length;
+      makerChatStore.removeMessagesByClientIds(sessionId, ['outside-window-root']);
+      expect(makerChatStore.getSnapshot(sessionId)).toBe(snapshot);
+      expect(makerChatStore.getMessageHistoryEpoch(sessionId)).toBeGreaterThan(epoch);
+      expect(changed).toHaveBeenCalled();
+      expect(vi.mocked(messageService.list).mock.calls.length).toBe(reads);
+      unsubscribe(); changed.mockClear();
+      makerChatStore.removeMessagesByClientIds(sessionId, ['outside-window-root']);
+      expect(changed).not.toHaveBeenCalled();
+    });
+
     it('discards an in-flight paging window after grouped deletion', async () => {
       const sessionId = sid('older-backfill-group-delete-race');
       await seedSession(sessionId);

@@ -12120,6 +12120,8 @@ const _messagesEpoch = new Map<string, number>();
 
 function bumpMessagesEpoch(sessionId: string): void {
   _messagesEpoch.set(sessionId, (_messagesEpoch.get(sessionId) ?? 0) + 1);
+  // Exact-message readers also observe resets when the deleted row is outside this window.
+  emitStateNotifications(sessionId);
 }
 
 /**
@@ -19102,6 +19104,7 @@ export const makerChatStore = {
   subscribe,
   subscribeLight,
   getSnapshot,
+  getMessageHistoryEpoch: (sessionId: string): number => _messagesEpoch.get(sessionId) ?? 0,
   acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {
     setState(sessionId, state => ({ ...state, sharedTaskRecoveryAcknowledged: episode }));
   },

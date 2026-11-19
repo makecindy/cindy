@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   ensure: vi.fn(), reload: vi.fn(), send: vi.fn(), around: vi.fn(),
   params: new URLSearchParams(), pending: null as URLSearchParams | null,
   listeners: new Set<() => void>(), profiles: [] as unknown[],
+  historyEpoch: 0, historyListeners: new Set<() => void>(),
   snapshots: new Map<string, { messages: unknown[] }>(),
 }));
 const setParams = (update: (p: URLSearchParams) => URLSearchParams) => { h.pending = update(h.params); };
@@ -24,7 +25,11 @@ vi.mock('react-router-dom', () => ({ useSearchParams: () => [
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
-  getSnapshot: (id: string) => h.snapshots.get(id), subscribe: () => () => {},
+  getSnapshot: (id: string) => h.snapshots.get(id),
+  getMessageHistoryEpoch: () => h.historyEpoch,
+  subscribe: (_id: string, listener: () => void) => {
+    h.historyListeners.add(listener); return () => { h.historyListeners.delete(listener); };
+  },
 } }));
 vi.mock('@/lib/makerTransport', () => ({ aroundMessagesByClientIdFor: h.around }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => h.profiles }));
@@ -58,6 +63,7 @@ function commitUrl(params = h.pending) {
 async function click(id: string) { await act(async () => { fireEvent.click(screen.getByText('open ' + id)); }); }
 beforeEach(() => {
   setDataOwnerGeneration('test-owner');
+  h.historyEpoch = 0; h.historyListeners.clear();
   h.around.mockReset().mockResolvedValue([]);
   h.ensure.mockReset().mockImplementation(async ({ rootClientId }) => ({ ok: true, sessionId: rootClientId + '-topic', created: true }));
   h.send.mockReset(); h.reload.mockReset(); h.params = new URLSearchParams('thread=old-topic'); h.pending = null;
@@ -230,4 +236,34 @@ it('does not reuse an already fetched source after an owner change and rerender'
   setDataOwnerGeneration('another-owner');
   view.rerender(<Host />);
   expect(screen.queryByText('previous owner source')).toBeNull();
+});
+
+
+it.each(['[1,2,3]', '{"text":"part","other":"keep"}', { text: 'part', other: 'keep' }])(
+  'preserves assistant JSON instead of decoding it as a user envelope: %j', async (content) => {
+    h.snapshots.set('chat', { messages: [] });
+    h.around.mockResolvedValue([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content }]);
+    await act(async () => { render(<Host />); });
+    expect(screen.getByText(typeof content === 'string' ? content : JSON.stringify(content))).toBeTruthy();
+  },
+);
+
+it('invalidates an off-window root and its attachments on history deletion/reset', async () => {
+  h.snapshots.set('chat', { messages: [] });
+  h.around.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'user',
+    content: { text: 'removed source', files: [{ name: 'removed.txt', path: '/fixture/removed.txt' }] } }]);
+  const view = await act(async () => render(<Host />));
+  expect(screen.getByText('removed source')).toBeTruthy();
+  expect(screen.getByText('removed.txt')).toBeTruthy();
+  let stale!: (rows: unknown[]) => void;
+  h.around.mockImplementationOnce(() => new Promise(resolve => { stale = resolve; }));
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  expect(screen.queryByText('removed source')).toBeNull();
+  expect(screen.queryByText('removed.txt')).toBeNull();
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  await act(async () => { stale([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'stale deleted root' }]); });
+  expect(screen.queryByText('stale deleted root')).toBeNull();
+  expect(h.around).toHaveBeenCalledTimes(3);
+  view.unmount();
+  expect(h.historyListeners.size).toBe(0);
 });

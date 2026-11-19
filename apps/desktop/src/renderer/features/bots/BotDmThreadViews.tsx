@@ -45,27 +45,37 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
     () => makerChatStore.getSnapshot(rootSessionId),
     () => makerChatStore.getSnapshot(rootSessionId),
   );
+  const historyEpoch = useSyncExternalStore(
+    (listener) => makerChatStore.subscribe(rootSessionId, listener),
+    () => makerChatStore.getMessageHistoryEpoch(rootSessionId),
+    () => makerChatStore.getMessageHistoryEpoch(rootSessionId),
+  );
   const message = snapshot?.messages?.find((row) => row.clientId === rootClientId);
   const [loaded, setLoaded] = useState<(RootMessage & { sessionId: string;
-    owner: ReturnType<typeof getDataOwnerGeneration> }) | null>(null);
+    owner: ReturnType<typeof getDataOwnerGeneration>; historyEpoch: number }) | null>(null);
   useEffect(() => {
     if (message) return;
     let cancelled = false;
     const owner = getDataOwnerGeneration();
     setLoaded(null);
     void aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).then(rows => {
-      if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+      if (cancelled || !isDataOwnerGenerationCurrent(owner)
+        || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
       const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
       if (row && (row.role === 'user' || row.role === 'assistant')) {
-        const parsed = parseUserContent(row.content);
+        const parsed = row.role === 'user' ? parseUserContent(row.content) : {
+          text: typeof row.content === 'string' ? row.content : JSON.stringify(row.content),
+          images: [], files: [],
+        };
         setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
-          content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner });
+          content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner, historyEpoch });
       }
     }).catch(() => { /* Keep the existing unavailable-root presentation; never substitute another message. */ });
     return () => { cancelled = true; };
-  }, [message, rootClientId, rootSessionId]);
+  }, [message, rootClientId, rootSessionId, historyEpoch]);
   if (message) return message.role === 'user' || message.role === 'assistant' ? message : null;
   return loaded?.sessionId === rootSessionId && loaded.clientId === rootClientId
+    && loaded.historyEpoch === historyEpoch
     && isDataOwnerGenerationCurrent(loaded.owner) ? loaded : null;
 }
 
