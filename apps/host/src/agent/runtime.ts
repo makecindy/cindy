@@ -15,14 +15,16 @@ import { existsSync } from 'node:fs';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
 import { Maker, PiAgent } from '@cindy/maker-core';
 import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { peekClaudeCliLoginStatus } from '../../../desktop/src/main/maker-host/claude-native-cli-status.js';
+import { ensureCliProxyBridge } from '../../../desktop/src/main/maker-host/cli-proxy-bridge.js';
 import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
-import { getHostOutboundPathSnapshotFor } from '../outbound-proxy.ts';
+import { getHostOutboundPathSnapshotFor, resolveHostOutboundProxy } from '../outbound-proxy.ts';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
@@ -843,6 +845,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...PORTS_ONLY_CODEX_READS,
         ...PORTS_ONLY_CLAUDE_AND_CODEX_READ,
         auth: piAuth,
+        getLocalPiHttpsProxy: async env => hasProxyEnvConfig(env)
+          ? undefined
+          : ensureCliProxyBridge(resolveHostOutboundProxy),
         ...options.mcpRuntime.piDeps,
         runtimeConfig: buildPiRuntimeConfig({
           ripgrepPath: runtimeConfigs.getRipgrepBinaryPath(),

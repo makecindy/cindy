@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
+import { once } from 'node:events';
+import { createServer, request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -26,6 +28,8 @@ import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 import { createHostHarnessBinaries, resolveHarnessBinaryPath } from './harness-binary.ts';
 import { AGENT_BINARY_LAYOUT } from '../../../desktop/src/main/agent-binaries/binaryStatus.ts';
+import { closeCliProxyBridge } from '../../../desktop/src/main/maker-host/cli-proxy-bridge.ts';
+import { useHostChromiumProxySession } from '../outbound-proxy.ts';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
@@ -76,6 +80,49 @@ test('Claude gets the desktop read-only allowed tools', { timeout: TEST_TIMEOUT_
   const graph = buildGraph(t, 'engine-deps-allowed');
   assert.deepEqual(graph.agent.deps.claudeAllowedTools, getDesktopClaudeReadOnlyAllowedTools());
   assert.ok(graph.agent.deps.claudeAllowedTools.length > 0);
+});
+
+// Rule: the desktop Pi spawn port in pi-host.ts yields to explicit proxy env, otherwise the
+// shared CONNECT bridge resolves each target through the host runtime's own system proxy session.
+// Gap: the shared bridge tests do not exercise the port on the real Host graph. Minimal input:
+// Pi's empty spawn env and one CONNECT to a synthetic host. Tier: unit with a loopback proxy.
+test('Host Pi preserves explicit proxy settings and uses Host system routing for HTTPS tunnels', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const graph = buildGraph(t, 'engine-deps-pi-proxy');
+  const proxyKeys = Object.keys(process.env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key));
+  const savedProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+  for (const key of proxyKeys) delete process.env[key];
+  t.after(() => Object.assign(process.env, savedProxyEnv));
+  const authorities = [];
+  const upstream = createServer().on('connect', (req, socket) => {
+    authorities.push(req.url);
+    socket.end('HTTP/1.1 200 Connection Established\r\n\r\n');
+  });
+  upstream.listen(0, '127.0.0.1');
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  await once(upstream, 'listening');
+  const targets = [];
+  useHostChromiumProxySession({ resolveProxy: async url => {
+    targets.push(url);
+    return `PROXY 127.0.0.1:${upstream.address().port}`;
+  } });
+  t.after(() => useHostChromiumProxySession(null));
+  t.after(closeCliProxyBridge);
+
+  const getProxy = graph.pi.deps.getLocalPiHttpsProxy;
+  assert.equal(await getProxy({ HTTPS_PROXY: 'http://proxy.example.test:8080' }), undefined);
+  assert.equal(await getProxy({ all_proxy: 'socks5://proxy.example.test:1080' }), undefined);
+  const bridge = new URL(await getProxy({}));
+  assert.equal(bridge.hostname, '127.0.0.1');
+  const connect = request(bridge, { method: 'CONNECT', path: 'pi-host-routing.example.test:443',
+    signal: AbortSignal.timeout(2000) });
+  const connected = once(connect, 'connect');
+  connect.end();
+  const [response, socket] = await connected;
+  socket.destroy();
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(targets, ['https://pi-host-routing.example.test/']);
+  assert.deepEqual(authorities, ['pi-host-routing.example.test:443']);
 });
 
 test('Claude subagent usage goes through the process-wide bridge the loopback proxy fills', { timeout: TEST_TIMEOUT_MS }, t => {

@@ -53,6 +53,7 @@ export const PORTS_ONLY_CODEX_READS = {
 export const PORTS_ONLY_PI_READS = {
   derivePiProxySessionToken: undefined,
   formatPiStartupCloudFileHint: undefined,
+  getLocalPiHttpsProxy: undefined,
   getPiExtensionUiStrings: undefined,
   getRemotePiAgentProxyEnv: undefined,
   getRemotePiFileOps: undefined,
