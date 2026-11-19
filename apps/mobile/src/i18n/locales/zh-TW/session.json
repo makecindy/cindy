@@ -734,6 +734,7 @@
     "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
     "REMOTE_AGENT_RESUME_UNAVAILABLE": "這臺電腦無法恢復任務原來的執行狀態。請選擇其他電腦或供應商的模型，透過上下文交接繼續；原訊息會保留。",
     "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
+    "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢復先前的對話。訊息已保留。請選擇其他引擎繼續，或建立新任務。",
     "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦沒有允許遠端呼叫這個供應商。請在那臺電腦的「設定 → 模型供應商」裡開啟「允許遠端呼叫」，或換一個模型。",

@@ -54,6 +54,8 @@ export function createLocalRouteAdmission(
 ): (o: LocalRouteAdmissionOpts) => Promise<void> {
   const { ensureManagedOllamaReadyForSession, getUserDataDir, assertModelRouteUsable, pinExclusiveSessionProvider } = ports;
   return async (o: LocalRouteAdmissionOpts): Promise<void> => {
+    // Plugin engines are not catalog routes: nothing to admit, reroute or pin.
+    if (o.agentKind === 'acp') return;
     await ensureManagedOllamaReadyForSession({
       providerId: o.providerId,
       remoteHostId: o.remoteHostId ?? null,

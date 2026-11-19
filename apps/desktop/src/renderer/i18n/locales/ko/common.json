@@ -2772,6 +2772,8 @@
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
       "analyticsLabel": "사용 통계",
       "analyticsDescription": "Cindy의 실행 및 지속 사용 현황을 파악하는 데 사용합니다. 기기 모델, OS 버전, 앱 버전, 기기 식별자 등 기기 및 사용 환경 정보를 전송하며 로그인 후에는 계정 ID도 포함됩니다. 대화 내용, 파일, 프롬프트는 전혀 포함하지 않습니다. 끄면 전송이 즉시 중단됩니다.",
+      "productTokenUsage": "모델 사용량 통계 공유",
+      "productTokenUsageHint": "이 기기의 현재 계정에서 새로 사용한 토큰 수를 지역 내에서 연결 경로와 모델별로 집계해 TapDB로 전송합니다.",
       "analyticsEnabledToast": "사용 통계를 켰습니다",
       "analyticsDisabledToast": "사용 통계를 껐습니다",
       "analyticsSaveFailed": "사용 통계 설정을 저장하지 못했습니다",
@@ -4075,6 +4077,25 @@
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
         "refreshReconnect": "모델 목록을 새로고침하지 못했습니다. 이 제공자에 다시 연결한 후 다시 시도하세요.",
         "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
+        "withdrawn": {
+          "refreshFound": "더 이상 제공되지 않는 모델 {{count}}개",
+          "refreshAdded": "새 모델 {{added}}개, 더 이상 제공되지 않는 모델 {{count}}개",
+          "refreshSuspicious": "이번에 모델 {{count}}개가 반환되지 않았습니다. 목록이 일시적으로 불완전할 수 있습니다",
+          "refreshAddedSuspicious": "새 모델 {{added}}개. 이번에 {{count}}개가 반환되지 않았습니다. 목록이 일시적으로 불완전할 수 있습니다",
+          "review": "모델 확인",
+          "heading": "더 이상 제공되지 않는 모델",
+          "intro": "{{provider}}을(를) 새로고침했을 때 다음 모델이 반환되지 않았습니다. 제거할 모델을 선택하세요. 계속 반환하는 엔진에는 영향을 주지 않습니다.",
+          "suspicious": "반환되지 않은 모델이 비정상적으로 많습니다. 일시적으로 목록이 불완전했을 수 있습니다. 잠시 후 다시 새로고침해 확인하거나, 제공이 확실히 종료된 모델만 선택하세요.",
+          "selectAll": "모두 선택",
+          "selected": "{{total}}개 중 {{count}}개 선택됨",
+          "consequence": "제거한 모델은 모델 선택에 더 이상 표시되지 않으며, 이를 사용하는 곳에서는 사용할 수 없음으로 표시됩니다. 다시 제공되면 새로고침해 다시 추가할 수 있습니다.",
+          "confirm": "모델 제거({{count}}개)",
+          "cancel": "제거하지 않음",
+          "removed": "모델 {{count}}개를 제거했습니다",
+          "cleanupIncomplete": "모델 {{count}}개를 제거했지만 일부 표시 또는 비활성화 설정을 지우지 못했습니다",
+          "stale": "연결 설정이 변경되어 제거할 모델이 없습니다. 다시 새로고침한 후 확인하세요",
+          "removeFailed": "모델을 제거하지 못했습니다"
+        },
         "disableModel": "이 모델 비활성화",
         "paymentRequired": "유료",
         "paymentUnlock": "유료로 잠금 해제",
@@ -7906,6 +7927,7 @@
           "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
           "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
           "invalidPackage": "플러그인 패키지에 문제가 있어 설치할 수 없습니다. 게시자에게 문의해 주세요.",
+          "downloadAuthorizationExpired": "플러그인 다운로드 권한이 만료되어 설치를 계속할 수 없습니다. 시스템 날짜와 시간을 확인한 후 설치를 다시 시작하세요.",
           "downloadTimeout": "플러그인 다운로드 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
           "downloadFailed": "플러그인을 다운로드하지 못했습니다. 네트워크 연결을 확인한 후 다시 시도해 주세요.",
           "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요.",
@@ -8222,6 +8244,8 @@
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentModelPreferences": "모델 즐겨찾기 읽기 및 편집, 최근 사용한 모델 읽기",
         "agentModelPreferencesDetail": "이 컴퓨터의 모델 즐겨찾기와 최근 사용한 모델(추론 강도와 Fast 설정 포함)을 읽고, 즐겨찾기를 추가·변경·삭제할 수 있습니다. 변경 사항은 Cindy의 모델 선택기에도 표시됩니다. 플러그인에서 고른 모델은 최근 사용에 기록되지 않습니다. 다른 컴퓨터의 모델이나 공유받은 모델은 포함되지 않으며, 자격 증명도 제공되지 않습니다.",
+        "harnesses": "실행 엔진 제공: {{names}}",
+        "harnessesDetail": "작업에서 작업 디렉터리를 읽고 쓰고 명령을 실행하며, 기본 제공 Pi와 같은 범위의 Cindy 도구를 사용할 수 있습니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
         "agentErrandDetail": "생성된 작업은 Cindy 작업 목록에 표시되며 진행 상황을 확인하고 대화를 이어갈 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
@@ -14148,6 +14172,32 @@
             "label": "전체 접근",
             "description": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "매번 확인",
+            "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
+          },
+          "default": {
+            "label": "기본",
+            "description": "Agent의 기본 방식으로 작업합니다. 권한 요청은 직접 확인합니다."
+          },
+          "acceptEdits": {
+            "label": "편집 자동 승인",
+            "description": "Agent가 파일을 바로 수정합니다. 그 밖의 권한 요청은 직접 확인합니다."
+          },
+          "auto": {
+            "label": "자동",
+            "description": "확인이 필요한 작업은 Agent가 판단합니다. 요청된 권한은 직접 확인합니다."
+          },
+          "plan": {
+            "label": "계획만",
+            "description": "Agent가 분석과 계획만 하고 파일은 수정하지 않습니다."
+          },
+          "bypassPermissions": {
+            "label": "모두 허용",
+            "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."
+          }
         }
       }
     },
@@ -14609,6 +14659,16 @@
       "nowDefault": "기본값으로 설정됨",
       "switchToSteer": "기본값을 끼어들기로",
       "switchToQueue": "기본값을 대기열 추가로"
+    },
+    "pluginEngines": {
+      "group": "플러그인 엔진",
+      "genericName": "플러그인 엔진",
+      "defaultModel": "기본 모델",
+      "defaultModelHint": "엔진 자체의 기본 설정을 사용합니다",
+      "unavailable": "사용할 수 없음",
+      "engineMissing": "이 엔진을 제공하는 플러그인이 꺼져 있거나 제거되었습니다.",
+      "worktreeUnsupported": "플러그인 엔진은 아직 worktree에서 작업을 시작할 수 없습니다. worktree를 끈 뒤 보내세요",
+      "modelChangeFailed": "모델을 전환하지 못했습니다"
     }
   },
   "onboarding": {
@@ -15789,6 +15849,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "이 컴퓨터에서는 세션의 이전 실행 상태를 복원할 수 없습니다. 다른 컴퓨터 또는 제공자의 모델을 선택해 컨텍스트를 전달하고 계속하세요. 기존 메시지는 유지됩니다.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "플러그인 엔진이 이전 대화를 복원하지 못했습니다. 메시지는 보존됩니다. 다른 엔진을 선택하거나 새 작업을 시작하세요.",
       "REMOTE_AGENT_RESUME_REJECTED": "모델을 실행하는 컴퓨터에서 이 세션을 재개할 수 없습니다. 세션 목록에서 새 세션을 만들고 계속하는 데 필요한 내용을 복사하세요. 기존 세션과 전송 대기 중인 메시지는 유지됩니다.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 사용을 허용하지 않았습니다. 내 컴퓨터라면 그 컴퓨터에서 이 제공자의 '원격 사용 허용'을 켜세요. 공유받은 것이라면 소유자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하세요. 다른 모델을 선택할 수도 있습니다.",
@@ -16366,6 +16427,7 @@
       },
       "filterCreatorsHeading": "동반자",
       "filterCreatorsAny": "전체",
+      "filterHideAutomations": "자동화 작업 숨기기",
       "filterCreatorsNone": "모두 숨기기",
       "filterSelectedCreators": "{{count}}명 선택됨",
       "filterProjectsHeading": "프로젝트",
@@ -17281,6 +17343,7 @@
       "promote": {
         "menu": "프로젝트 자동화로 승격",
         "noWorkingDir": "작업 디렉터리가 없는 일정은 승격할 수 없습니다",
+        "pluginEngine": "플러그인 엔진은 이 컴퓨터에서만 실행되므로 프로젝트 자동화로 승격할 수 없습니다",
         "success": "프로젝트 자동화로 승격되었습니다"
       },
       "editProject": {
@@ -17557,6 +17620,7 @@
         "selectThread": "대상 세션을 선택하세요",
         "selectProject": "프로젝트 디렉터리를 선택하세요",
         "modelUnavailable": "{{model}} 모델을 더 이상 사용할 수 없습니다. 다른 모델을 선택하세요.",
+        "pluginEngineUnavailable": "선택한 플러그인 엔진을 지금 사용할 수 없습니다. 다른 모델을 선택하세요.",
         "reasoningInvalid": "Reasoning은 {{values}} 중 하나여야 합니다",
         "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요",
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",

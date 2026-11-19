@@ -22,6 +22,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import type { Logger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
@@ -123,7 +124,7 @@ export function createRecoverRemoteRuntimeAxisPersistence(ports: {
     } catch (recoveryError) {
       if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
       const retainedSession = maker.getSession(sessionId);
-      if (retainedSession) {
+      if (retainedSession && hasBuiltinAgentKind(retainedSession)) {
         const retainedProfile: SessionRuntimeProfile = {
           ...previousProfile,
           agentKind: retainedSession.agentKind,
@@ -174,9 +175,25 @@ export function createStagePendingUserRuntimeAxis(ports: {
     if (!row) throwIpcError('PRECONDITION_FAILED', 'session is unavailable during runtime axis update');
     const targetDeviceId = intent.targetAgentDeviceId === undefined
       ? row.agentDeviceId : intent.targetAgentDeviceId;
-    // Local same-engine selection already validates in SET_MODEL. Its remote
-    // branch only checks route availability, so admit its axes here as well.
-    if (!intent.sameAgentSelection || targetDeviceId) {
+    if (intent.targetAgentKind === 'acp') {
+      if (!intent.providerId || !agentSwitchDeps.admitPluginEngineTarget) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+      }
+      if (patch.fastMode !== undefined && patch.fastMode !== false) {
+        throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+      }
+      const admitted = agentSwitchDeps.admitPluginEngineTarget({
+        providerId: intent.providerId,
+        model: intent.model,
+        effort: updated.effort,
+      });
+      if (patch.effort !== undefined && admitted.effort !== patch.effort) {
+        throwIpcError('INVALID_PARAMS', `effort "${patch.effort}" is unavailable for model "${intent.model}"`);
+      }
+      updated = { ...updated, effort: admitted.effort || undefined, fastMode: false };
+    } else if (!intent.sameAgentSelection || targetDeviceId) {
+      // Local same-engine selection already validates in SET_MODEL. Its remote
+      // branch only checks route availability, so admit its axes here as well.
       const providers = targetDeviceId
         ? await readUsableAgentDeviceProviders(targetDeviceId, intent.targetAgentKind, intent.model, intent.providerId ?? null)
         : await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
@@ -506,11 +523,16 @@ export function createSetSessionFastMode(ports: {
         () => fastProfile?.providerId ?? getSessionProvider(sessionId)).isAllowed();
       if (subscriptionForbidsFast) enabled = false;
       if (enabled === 'ultrafast') {
+        const pendingSelection = isUserPendingAgentSwitchIntent(userIntent) ? userIntent : null;
+        const targetAgentKind = pendingSelection?.targetAgentKind;
+        if (targetAgentKind === 'acp') {
+          throwIpcError('PRECONDITION_FAILED', 'Ultrafast is unavailable for the selected account and model');
+        }
         const profiles = await readSessionRuntimeProfiles(sessionId);
-        const profile = isUserPendingAgentSwitchIntent(userIntent)
-          ? { ...userIntent, agentKind: userIntent.targetAgentKind,
-              agentDeviceId: userIntent.targetAgentDeviceId === undefined
-                ? profiles?.baseline.agentDeviceId : userIntent.targetAgentDeviceId }
+        const profile = pendingSelection && targetAgentKind
+          ? { ...pendingSelection, agentKind: targetAgentKind,
+              agentDeviceId: pendingSelection.targetAgentDeviceId === undefined
+                ? profiles?.baseline.agentDeviceId : pendingSelection.targetAgentDeviceId }
           : profiles?.pendingMutation?.profile ?? profiles?.effective;
         const providers = profile?.agentDeviceId
           ? await readUsableAgentDeviceProviders(profile.agentDeviceId, profile.agentKind, profile.model, profile.providerId ?? null)

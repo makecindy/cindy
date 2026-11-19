@@ -1,1 +1,0 @@
-ALTER TABLE `sessions` ADD `side_chat_promoted` integer DEFAULT false NOT NULL;

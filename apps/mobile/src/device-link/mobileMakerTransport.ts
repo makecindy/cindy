@@ -78,6 +78,7 @@ import {
   type NativeSubscriptionAuth,
 } from "@cindy/model-providers/types";
 import type { RewindPreviewPayload } from "@/session/rewindPreview";
+import { normalizePluginEngines, type MobilePluginEngine } from "@/session/pluginEngines";
 import type {
   MobileRemoteMediaFetchOptions,
   MobileRemoteMediaFetchResult,
@@ -110,7 +111,11 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: "claude-code" | "codex" | "pi";
+  /**
+   * 'acp' = 插件引擎(Desktop docs/plans/acp-plugin-bridge.md)：必须同时带 `acp-plugin:` providerId，
+   * 且不带远程字段；只用于从 listPluginEngines 读到的引擎(旧电脑没有该 channel，手机不会发出)。
+   */
+  agentKind: "claude-code" | "codex" | "pi" | "acp";
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -496,6 +501,13 @@ export interface MobileMakerTransport {
    * 会让用户建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
    */
   listAvailableAgents(): Promise<MobileAgentKind[]>;
+  /**
+   * 被控电脑上插件提供的执行引擎(只读)。旧电脑没有该 channel(CHANNEL_NOT_ALLOWED)或读失败时
+   * 返回空列表：手机按「没有插件引擎」隐藏入口。
+   */
+  listPluginEngines(): Promise<MobilePluginEngine[]>;
+  /** 请被控电脑的引擎插件重新上报模型(那台按插件冷却)；不回结果，失败忽略。 */
+  refreshPluginEngines(): Promise<void>;
   getSessionTree(sessionId: string): Promise<unknown | null>;
   navigateSessionTree(
     sessionId: string,
@@ -593,7 +605,8 @@ export interface MobileMakerTransport {
    */
   switchSessionAgent(
     sessionId: string,
-    targetAgentKind: MobileAgentKind,
+    /** 'acp' = 换到插件引擎，providerId 必须是该引擎的 acp-plugin: 标识(只限本机普通任务)。 */
+    targetAgentKind: MobileAgentKind | "acp",
     model: string,
     providerId: string | null,
     effort?: string,
@@ -1232,6 +1245,12 @@ export function createMobileMakerTransport({
       return call("maker:get-capabilities", [agentKind]);
     }),
     listAvailableAgents: () => call('maker:list-available-agents', []),
+    listPluginEngines: () =>
+      call<unknown>("maker:list-plugin-engines", [])
+        .then(normalizePluginEngines)
+        .catch(() => []),
+    refreshPluginEngines: () =>
+      call<unknown>("maker:refresh-plugin-engines", []).then(() => undefined, () => undefined),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
     // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
     getSessionTree: (sessionId) => call("maker:get-session-tree", [sessionId]),

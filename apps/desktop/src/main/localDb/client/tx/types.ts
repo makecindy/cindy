@@ -5,6 +5,7 @@ import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandl
 
 export type DbTxName =
   | 'mcpApps.viewState.save'
+  | 'usage.recordModelUsage'
   | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
@@ -1334,6 +1335,7 @@ export interface MediaSpendArgs {
 export type DbTxArgsByName = {
   'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordModelUsage': import('../../worker/opHandlers/modelUsageTx.js').ModelUsageWrite;
   'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
@@ -1424,6 +1426,7 @@ export type DbTxArgsByName = {
 
 export type DbTxResultByName = {
   'mcpApps.viewState.save': void;
+  'usage.recordModelUsage': void;
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;

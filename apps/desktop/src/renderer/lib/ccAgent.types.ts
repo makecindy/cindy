@@ -574,8 +574,12 @@ export type MessageRole =
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
-  toAgentKind: 'cc' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎；名称见 fromEngineName / toEngineName。 */
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  toAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  /** 插件引擎那一侧在切换时的名称快照。 */
+  fromEngineName?: string;
+  toEngineName?: string;
   fromModel: string | null;
   toModel: string | null;
   /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */

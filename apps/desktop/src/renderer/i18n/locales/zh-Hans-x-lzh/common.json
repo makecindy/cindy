@@ -2772,6 +2772,8 @@
       "autoUpdateSaveFailed": "自更新之设未能存",
       "analyticsLabel": "使用统计",
       "analyticsDescription": "助吾等知 Cindy 之启动与留存。所报者为设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登门后兼含君之名籍 ID；不含任何言谈内容、卷或提示词。阖之则即止上报。",
+      "productTokenUsage": "参与模型用量统计",
+      "productTokenUsageHint": "开启后，本机上此账号新增的 token 数按接入来源和模型计数。所属区域汇总后发送至 TapDB。",
       "analyticsEnabledToast": "已启使用统计",
       "analyticsDisabledToast": "已阖使用统计",
       "analyticsSaveFailed": "使用统计之设未能存",
@@ -4075,6 +4077,25 @@
         "refreshFailed": "模型清单重整未成，请稍后再试",
         "refreshReconnect": "模型清单重整未成。请重连此供方，再试。",
         "refreshFetchDisabled": "模型目录远程获取未启，已略重整",
+        "withdrawn": {
+          "refreshFound": "上游已不复供 {{count}} 个模型",
+          "refreshAdded": "新得 {{added}} 个模型，另有 {{count}} 个上游已不复供",
+          "refreshSuspicious": "此番 {{count}} 个模型未见回传，或上游一时未全",
+          "refreshAddedSuspicious": "新得 {{added}} 个模型，另有 {{count}} 个未见回传，或上游一时未全",
+          "review": "观其模型",
+          "heading": "上游不复供之模型",
+          "intro": "重整「{{provider}}」时，上游未再回传下列模型。择所欲除者；仍回传之引擎不受影响。",
+          "suspicious": "此番未回传之模型甚多，恐上游一时所传未全。宜稍后再重整以核之，或仅择确已下架者。",
+          "selectAll": "尽选",
+          "selected": "已择 {{count}} 个，共 {{total}} 个",
+          "consequence": "除之，则此等模型不复见于模型之选，已用之处将示为不可用。上游若复供之，再重整即可增回。",
+          "confirm": "除 {{count}} 个模型",
+          "cancel": "姑且不除",
+          "removed": "已除 {{count}} 个模型",
+          "cleanupIncomplete": "已除 {{count}} 个模型，然部分显示或停用之设未能清除",
+          "stale": "连线之设已易，无可除之模型。请重整后再观",
+          "removeFailed": "除模型未成"
+        },
         "disableModel": "停此模型",
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
@@ -7905,6 +7926,7 @@
           "accessDenied": "此法器操作不被允许，或已取消。",
           "notConfigured": "此环境未设法器坊。",
           "invalidPackage": "法器安装包有异，不可纳，请联系发布者。",
+          "downloadAuthorizationExpired": "法器下载授权已过期，无法续装。请核对系统日期与时间后重新安装",
           "downloadTimeout": "法器取下逾时，请稍后再试。",
           "downloadFailed": "法器取下未成，请查网络后再试。",
           "brokerRedirectPortRequired": "此法器声明授权 broker，然同一 OAuth 设置缺 redirectPort，故不能自法器坊纳之。请联系发布者补此字段并重新发布。",
@@ -8208,6 +8230,8 @@
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentModelPreferences": "可读改君之模型珍藏，并读君近用之模型",
         "agentModelPreferencesDetail": "可读此机之模型珍藏与近用之模型（含思之深浅与 Fast），并可增、改、去珍藏，所改亦见于 Cindy 之择模。于法器中所择之模型不记入近用。不含君他机之模型与人所分享者，亦不予凭证。",
+        "harnesses": "供执行引擎：{{names}}",
+        "harnessesDetail": "得于君之差事中读写工作目录、行命令，并用与内置 Pi 同范之 Cindy 工具。",
         "agentErrand": "可立差事、行事并读结果",
         "agentErrandDetail": "所立差事现于 Cindy 差事录中，可观其历程并续言谈。",
         "agentSchedule": "可请君新立自运",
@@ -14148,6 +14172,32 @@
             "label": "完全访问",
             "description": "常规操作径许，可访问工作区外之卷，亦可联网执行命令。"
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐项确认",
+            "description": "Agent 求权时由君裁可；Agent 未求确认之举，Cindy 无从拦阻。"
+          },
+          "default": {
+            "label": "常法",
+            "description": "依 Agent 之常法行事；其请权限，由君定之。"
+          },
+          "acceptEdits": {
+            "label": "许修改",
+            "description": "Agent 径改文件；他事请权限，由君定之。"
+          },
+          "auto": {
+            "label": "自断",
+            "description": "Agent 自断何事须确认；其请权限，由君定之。"
+          },
+          "plan": {
+            "label": "但谋划",
+            "description": "Agent 唯析事谋划，不改文件。"
+          },
+          "bypassPermissions": {
+            "label": "尽许",
+            "description": "Agent 所求之权，一概自许。"
+          }
         }
       }
     },
@@ -14609,6 +14659,16 @@
       "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
       "switchToQueue": "默改排队"
+    },
+    "pluginEngines": {
+      "group": "法器引擎",
+      "genericName": "法器引擎",
+      "defaultModel": "预设模型",
+      "defaultModelHint": "从引擎自身之预设",
+      "unavailable": "暂不可用",
+      "engineMissing": "供此引擎之法器已停用或卸除",
+      "worktreeUnsupported": "法器引擎尚不能于 worktree 中新建差事，请先取消勾选 worktree 再发",
+      "modelChangeFailed": "未能易模型"
     }
   },
   "onboarding": {
@@ -15780,6 +15840,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 于彼机不可用。请于彼机安装或登门后再试，或易一 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此机不能复差事旧态。请选择他机或供方之模型，交接上下文以续行；旧讯皆存。",
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能复前话。消息犹存。可择他引擎续之，或新建任务。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机为此供方开「许远程调用」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
@@ -16366,6 +16427,7 @@
       },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
+      "filterHideAutomations": "隐自动之务",
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已择 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17281,6 +17343,7 @@
       "promote": {
         "menu": "升为案之自运",
         "noWorkingDir": "无 workingDir 之差事，不可升",
+        "pluginEngine": "法器引擎唯行于此机，不可升为项目之差事",
         "success": "已升为案之自运"
       },
       "editProject": {
@@ -17538,6 +17601,7 @@
         "selectThread": "请择所向差事",
         "selectProject": "请择案之目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请另择",
+        "pluginEngineUnavailable": "所择法器引擎今不可用，请另择模型",
         "reasoningInvalid": "Reasoning 须为 {{values}} 之一",
         "preRunHookCommandRequired": "请填预检脚本命令",
         "templateParamRequired": "请填{{label}}",

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4ed849c7-b868-4020-8f93-eee27b00369e",
+  "id": "c7396702-c87c-4ba3-b9bc-0ebbc7cdf813",
   "prevId": "343d673c-0459-40bd-85cc-d1ba9687b434",
   "tables": {
     "account_usage_snapshots": {
@@ -2426,6 +2426,82 @@
             "cost_currency"
           ],
           "name": "daily_spend_day_cost_currency_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "daily_token_attribution": {
+      "name": "daily_token_attribution",
+      "columns": {
+        "day": {
+          "name": "day",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "billing_source": {
+          "name": "billing_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cache_read_tokens": {
+          "name": "cache_read_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cache_create_tokens": {
+          "name": "cache_create_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "daily_token_attribution_day_provider_billing_source_model_pk": {
+          "columns": [
+            "day",
+            "provider",
+            "billing_source",
+            "model"
+          ],
+          "name": "daily_token_attribution_day_provider_billing_source_model_pk"
         }
       },
       "uniqueConstraints": {},
@@ -6157,14 +6233,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'desktop'"
-        },
-        "side_chat_promoted": {
-          "name": "side_chat_promoted",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
         },
         "feishu_open_id": {
           "name": "feishu_open_id",
