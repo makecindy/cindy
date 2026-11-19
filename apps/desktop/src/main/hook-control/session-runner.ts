@@ -728,20 +728,25 @@ export function createMakerHookSessionRunner(deps: {
   const runner = {
     isBusy: (sessionId) => isSessionInTurn(sessionId),
 
-    async inspect(sessionId) {
+    async inspect(sessionId, checkArchivedDir) {
       const [meta, row] = await Promise.all([
         getMaker().getSessionMeta(sessionId),
         getSessionRowSnapshotStrict(sessionId),
       ]);
       if (!meta && !row) return null;
-      const usable =
-        !!row &&
-        row.status !== 'archived' &&
-        row.status !== 'deleted' &&
-        row.remoteHostId == null &&
-        row.orcaRole !== 'worker';
-      // workDir 以 maker meta 为权威(scheduler 同做法), row 兜底
+      const localTask = !!row && row.remoteHostId == null && row.orcaRole !== 'worker';
+      const usable = localTask && row.status !== 'archived' && row.status !== 'deleted';
       const workingDir = meta?.workDir ?? row?.workingDir ?? null;
+      if (localTask && row.status === 'archived' && !row.orcaRemoteLead && row.source !== 'bot'
+        && workingDir && checkArchivedDir?.(workingDir)) {
+        // Archive cleanup can remove a dedicated worktree. Only resume in a surviving directory.
+        try {
+          return { workingDir, usable, resumableArchive: (await fs.stat(workingDir)).isDirectory() };
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
+      }
       return { workingDir, usable };
     },
 

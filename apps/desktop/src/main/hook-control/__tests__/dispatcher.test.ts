@@ -236,6 +236,7 @@ function makeDispatcher(overrides?: {
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
+  restoreArchivedSession?: HookDispatcherDeps['restoreArchivedSession'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
@@ -260,6 +261,7 @@ function makeDispatcher(overrides?: {
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     archiveSessionRow: overrides?.archiveSessionRow,
+    restoreArchivedSession: overrides?.restoreArchivedSession,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
@@ -1588,7 +1590,46 @@ describe('dispatcher 核心语义', () => {
     fr2.finish();
   });
 
-  it('绑定的会话已归档/删除 -> 静默重建, 不向渠道追加说明', async () => {
+  it.each([null, 'previous'])('Done 后同一绑定接回原任务（指定任务 %s）', async (sessionId) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous } });
+    const { d } = makeDispatcher({
+      runner: fr.runner, bindings,
+      restoreArchivedSession: async () => { previous.usable = true; },
+    });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.sessionId).toBe('previous');
+    expect(fr.calls[0]).toMatchObject({ sessionId: 'previous', isNew: false });
+    fr.finish();
+    await tick();
+  });
+
+  it.each([
+    { sessionId: 'other-task', workingDir: WS_DIR },
+    { sessionId: null, workingDir: path.resolve('/outside-the-project') },
+  ])('未绑定或已移出项目的归档任务保持归档 ($sessionId)', async ({ sessionId, workingDir }) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const archived = { workingDir, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous: archived, 'other-task': archived } });
+    const restoreArchivedSession = vi.fn(async () => { archived.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  it('绑定的会话已删除 -> 静默重建, 不向渠道追加说明', async () => {
     const bindings = memoryBindings();
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
