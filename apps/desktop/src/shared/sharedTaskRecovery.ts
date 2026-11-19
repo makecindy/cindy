@@ -1,4 +1,5 @@
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+import { BREAKER_PROBE_BACKOFF_MAX_MS } from '@cindy/maker-shared/device-responsiveness';
 import { isQuotaExhaustedErrorMessage } from './providerErrors';
 
 /** Public, bounded diagnostics: never forward upstream messages, URLs or identities to a guest. */
@@ -110,19 +111,52 @@ export function canRecoverUndeliveredOrcaReport(error: unknown): boolean {
 }
 
 /** Retry only the same idempotent probe, keeping its grant and cancellation fence.
- * The immediate retry preserves the fast path; later retries allow a brief reconnect. */
-export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: () => Promise<T>, assertCurrent: () => void): Promise<T> {
-  const delays = [0, 1_000, 3_000];
+ * A restarted executor can outlive the old four-second window. Keep one immediate
+ * retry, then bounded exponential jitter; never restart allocation/open/send. */
+export async function probeSharedTask<T>(
+  stage: SharedTaskRecoveryStage,
+  probe: () => Promise<T>,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<T> {
+  // Cover one existing breaker cooldown plus its 30s RPC / 5s tick, with
+  // bounded slack. Retrying faster must not bypass that shared breaker.
+  const deadline = performance.now() + BREAKER_PROBE_BACKOFF_MAX_MS + 60_000;
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     assertCurrent();
     try {
       const value = await probe();
+      signal?.throwIfAborted();
       assertCurrent();
       return value;
     } catch (error) {
+      signal?.throwIfAborted();
       assertCurrent();
-      if (attempt < delays.length && canRetrySharedTaskRecovery(error)) {
-        if (delays[attempt]) await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+      const remaining = deadline - performance.now();
+      if (attempt < 16 && remaining > 0 && canRetrySharedTaskRecovery(error)) {
+        const base = attempt === 0 ? 0 : Math.min(1_000 * 2 ** (attempt - 1), 20_000);
+        const delay = Math.min(Math.round(base * (0.75 + Math.random() * 0.5)), 20_000);
+        // Do not start another probe after the retry budget. An existing RPC
+        // keeps its own timeout; racing it here would lose its real outcome.
+        if (delay >= remaining) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
+        if (delay) await new Promise<void>((resolve, reject) => {
+          const finish = () => {
+            signal?.removeEventListener('abort', abort);
+            resolve();
+          };
+          const timer = setTimeout(finish, delay);
+          const abort = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', abort);
+            reject(signal?.reason);
+          };
+          signal?.addEventListener('abort', abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+        signal?.throwIfAborted();
+        assertCurrent();
+        if (performance.now() >= deadline) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
         continue;
       }
       throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
