@@ -453,9 +453,8 @@
         "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
       },
       "taskListMode": {
-        "heading": "Mode des tâches",
-        "tasks": "Liste des tâches",
-        "inbox": "Boîte de réception"
+        "enterInbox": "Boîte de réception",
+        "leaveInbox": "Liste des tâches"
       }
     },
     "search": {

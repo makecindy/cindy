@@ -2,6 +2,12 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+## 新消息独立回复（2026-11-18，待发布）
+
+服务端通过 `/me.capabilities.independentReplies: 1` 声明支持。新客户端只对新群消息和话题回复提交 `independentReplies: true`。在支持该能力的服务器上，多位被点名的伙伴各有执行，可以同时领取；伙伴接力沿用原消息的策略和请求人权限。旧消息、旧客户端、旧安排及已持久化的重试请求沿用原语义。发布时先升级全部服务端实例，再发布客户端。
+
+## 旧版发言队列
+
 Chat Server `/me` 追加 `capabilities.groupSingleSpeaker: 1`，服务端派发随之改变且对所有客户端生效：
 主群里 @ 多位直接建 `kind=talk` 的队列；没有定向接收人的普通消息由现有 `responseMode` 决定：
 `all` 排全部可答伙伴，`mentioned` 不产生执行、不创建或替换队列。只有一位可答伙伴时直接回答，不建队列；不再自动续圈。旧客户端照常可用——

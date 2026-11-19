@@ -449,9 +449,8 @@
         "invalidTime": "1年以内の未来の日時を選択してください。"
       },
       "taskListMode": {
-        "heading": "タスクモード",
-        "tasks": "タスク一覧",
-        "inbox": "受信トレイ"
+        "enterInbox": "受信トレイへ",
+        "leaveInbox": "タスク一覧へ"
       }
     },
     "search": {

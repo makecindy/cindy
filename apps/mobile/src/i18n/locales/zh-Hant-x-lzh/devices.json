@@ -449,9 +449,8 @@
         "invalidTime": "請選擇來歲以內之未來日期時辰。"
       },
       "taskListMode": {
-        "heading": "任務模式",
-        "tasks": "任務列表",
-        "inbox": "收件匣"
+        "enterInbox": "轉至收件匣",
+        "leaveInbox": "轉至任務列"
       }
     },
     "search": {

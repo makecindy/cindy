@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy が作業中です",
-    "hint": "任意のキーまたは Touch ID キーでロックし、指紋またはパスワードで解除します",
+    "hint": "いずれかのキーを押すとロック解除画面が表示されます",
     "lockFailed": {
       "status": "Cindy はこの Mac をロックできませんでした",
       "hint": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Touch ID またはパスワードで確認すると外せます。蓋を閉じるか電源ボタンを押してロックすることもできます。",
       "hintWindows": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Windows Hello または PIN で確認すると外せます。Windows ロゴ キー + L でロックすることもできます。"
     },
-    "hintWindows": "任意のキーでロックし、Windows Hello またはパスワードで解除します",
-    "hintLinux": "任意のキーでロックし、パスワードで解除します",
+    "hintWindows": "いずれかのキーを押すとロック解除画面が表示されます",
+    "hintLinux": "いずれかのキーを押すとロック解除画面が表示されます",
     "verifyReason": "プライバシースクリーンを外す"
   },
   "appBadge": {
@@ -3442,7 +3442,7 @@
         "end": "ここまでは {{source}} からインポートした記録です",
         "endHandoff": "ここまでは {{source}} からインポートした記録です。ここから {{harness}} が続けます。"
       },
-      "projectMenu": "このプロジェクトのほかのツールのセッションをインポート…"
+      "projectMenu": "タスクをインポート…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "モデルを更新し、参考の音声モデルを 1 件追加しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "paymentRequired": "有料",
@@ -11444,7 +11445,7 @@
         "projectDirChoose": "フォルダを選択",
         "projectDirChange": "フォルダを変更",
         "projectDirClear": "クリア",
-        "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
+        "projectDirNote": "このコンピュータにある既存のプロジェクトを選べます。未選択の場合はリポジトリに対応するプロジェクト、次に担当する仲間のプロジェクトを使います。Git での分担には専用のワークツリーを使います。",
         "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください",
         "allowMemberInvites": "全メンバーによる友達の招待を許可",
@@ -11783,15 +11784,15 @@
           "replyModeAssistant": "Cindy が返信",
           "replyModeAssistantNote": "グループの Cindy が返信します。",
           "work": "役割分担",
-          "ownFolder": "グループ専用フォルダ",
+          "ownFolder": "自動選択",
           "projectDirHint": "このコンピュータでのみ有効です。",
-          "projectDirClearHint": "グループ専用フォルダに戻します",
+          "projectDirClearHint": "プロジェクトを自動選択に戻す",
           "project": "プロジェクト",
           "projectCaption": "仲間はグループでの返信も役割分担もこのプロジェクトで行います。リポジトリはグループで共有され、フォルダはこのコンピュータにだけ保存されます。",
           "githubRepo": "GitHub リポジトリ",
-          "githubRepoHint": "owner/name の形式で入力します。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "リポジトリ",
-          "repositoryHint": "GitHub は owner/name、GitLab（自社運用を含む）や CNB などはリポジトリのリンクを貼り付けます。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "repositoryHint": "GitHub の場合は owner/name、それ以外はリポジトリの URL を入力してください。このコンピュータ上で一致するプロジェクトが 1 件あれば使用します。",
           "repositoryPlaceholder": "owner/name またはリポジトリのリンク",
           "githubRepoSaveFailed": "リポジトリを保存できませんでした。確認してもう一度お試しください。",
           "folderRepoFilled": "このフォルダからリポジトリ {{repo}} を設定しました。グループのほかのメンバーのパソコンもこれを使います。",
@@ -14949,6 +14950,7 @@
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "accountBoundaryPending": "Cindy がアカウント状態を切り替え中のため、まだこのタスクを開始できません。少し待ってから「再試行」を押してください。繰り返し表示される場合は Cindy を再起動してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
+      "codexSharedAuthLinkUnavailable": "このコンピューターでは Codex にログイン済みですが、このセッションはそのログイン情報を読み取れません。そのログイン情報へのリンクを作成できないためです（Windows の標準アカウントでは通常作成できません）。このコンピューターで {{appName}} がリンクを作成できる権限があるか確認してください（Windows では管理者として一度実行するか、開発者モードを有効にしてください）。その後「再試行」を押してください。「ChatGPT に再ログイン」を押して、Cindy がこのセッション用に独自のログイン情報を使うようにすることもできます。",
       "codexResumeNotReady": "Codex は現在このタスクを再開できません。しばらくしてからもう一度お試しください。",
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
       "claudeSubscriptionOpusPlanMismatch": "接続中の Claude Pro プランでは Opus を利用できません。プランに含まれるモデルに切り替えてください。最近プランを変更した場合は、設定で Anthropic を再接続してから再試行してください。",
@@ -16423,7 +16425,7 @@
       "confirmArchive": {
         "title": "セッションをアーカイブ",
         "description": "このセッションをアーカイブしますか？アーカイブ後はリストから消えます。",
-        "dirtyWorktreeWarning": "未コミットの変更はアーカイブ前に保存されます。タスクから復元できます。",
+        "dirtyWorktreeWarning": "このタスクには未コミットのファイル変更があります。アーカイブ時には既定で変更が保存され、後からタスク内で復元できます。",
         "discardChanges": "未コミットの変更を破棄",
         "discardWarning": "未コミットの変更と新しいファイルは復元できなくなります。",
         "discardAndArchive": "破棄してアーカイブ",
@@ -16462,6 +16464,7 @@
         "empty": "この自動化にはアーカイブできるセッションがありません"
       },
       "archiveAll": {
+        "projectTitle": "「{{name}}」のすべてのタスクをアーカイブしますか？",
         "title": "すべてのセッションをアーカイブ",
         "confirm": "すべてアーカイブ",
         "cancel": "キャンセル",
@@ -16606,18 +16609,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」のプロジェクトメニュー",
+        "previewFailed": "このプロジェクトのタスクを読み込めませんでした。もう一度お試しください。",
+        "remotePreviewFailed": "リモートプロジェクトのタスクを読み込めません。接続を確認し、リモート側の Cindy を最新版にしてください。",
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
-        "removeFromSidebar": "サイドバーからプロジェクトを削除",
-        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebar": "Cindy からプロジェクトを削除…",
+        "removeFromSidebarConfirmTitle": "Cindy から「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "未アーカイブのタスク {{count}} 件は「会話」で引き続き使用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
-        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
-        "showFiles": "ファイルを表示",
-        "archivedAll": "すべてアーカイブ",
-        "unarchiveAll": "すべてアーカイブ解除",
-        "openInExplorer": "ファイルマネージャーで開く",
+        "removeFromSidebarFailed": "プロジェクトを削除できませんでした。",
+        "archiveOnRemove": "タスクもアーカイブ（{{count}} 件）",
+        "keepSkippedOnRemove": "対象外のタスク（{{skip}}）は「会話」に残ります。",
+        "removedArchived": "{{count}} 件のタスクをアーカイブに移動します。",
+        "removeAndArchive": "プロジェクトを削除してタスクをアーカイブ",
+        "removeKeepFiles": "プロジェクトのピン留め、カスタム名、アイコンは解除されます。ファイルとフォルダーは保持されます。",
+        "showFiles": "サイドバーでタスクのファイルを表示",
+        "archivedAll": "すべてのタスクをアーカイブ",
+        "unarchiveAll": "すべてのタスクのアーカイブを解除",
+        "openInFinder": "Finder でプロジェクトフォルダを開く",
+        "openInExplorer": "エクスプローラーでプロジェクトフォルダーを開く",
+        "openInFileManager": "ファイルマネージャーでプロジェクトフォルダーを開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "プロジェクトリンクをコピー",
         "search": "このプロジェクト内のセッションを検索"
@@ -19731,6 +19744,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "rolloverName": "繰り越し分",
         "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
@@ -19968,6 +19982,8 @@
       "basicModels": "一部のモデルを利用",
       "subscription": "サブスクリプション",
       "rollover": "未使用残高は{{period}}も利用可能（最大 {{amount}}）",
+      "rolloverMonthly": "未使用残高を最大{{amount}}まで繰り越し、特典残高に\n1か月間有効、再繰り越し不可\nプラン残高とチャージ残高より先に使用",
+      "rolloverMonthlySummary": "未使用残高を最大{{amount}}まで繰り越し、1か月間有効",
       "nextPeriod": {
         "MONTH": "翌月",
         "YEAR": "翌年",

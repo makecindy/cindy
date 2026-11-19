@@ -1,5 +1,5 @@
 import { useProjectInfo } from './hooks/useProjectInfo';
-import { SessionProjectSettingsDialog } from './sidebar/SessionProjectSettingsButton';
+import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';

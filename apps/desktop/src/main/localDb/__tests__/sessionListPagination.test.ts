@@ -93,11 +93,12 @@ it('lists existing group lanes in their companion project including private dige
         // 「每次新建任务」的例行任务专线在规则 id 后追加 `:<uuid>`。
         : role === 'routine' ? 'routine:daily-1:3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b' : null);
     }
-    sqlite.exec("UPDATE sessions SET working_dir='/buddy/workspace', workspace_kind='project' WHERE id='canonical'; UPDATE sessions SET working_dir='/group/repository', project_dir='/group/repository' WHERE id='group'");
+    sqlite.exec("UPDATE sessions SET working_dir='/buddy/workspace', workspace_kind='project' WHERE id='canonical'; UPDATE sessions SET working_dir='/group/repository', project_dir='/group/repository', workspace_kind='project' WHERE id='group'");
     for (const [id, route] of [['group-thread', 'group:g:thread:root'], ['group-plan', 'group:g:plan:p'], ['group-digest', 'group:g:personal-digest']]) {
       insert.run(id, 'bot', id === 'group-plan' ? 'archived' : 'active');
       link.run('owner', id, 'group', route);
     }
+    sqlite.exec("UPDATE sessions SET working_dir='/temporary/plan', workspace_kind='dialogue' WHERE id='group-plan'");
     insert.run('routine-persistent', 'bot', 'active');
     link.run('owner', 'routine-persistent', 'routine', 'routine:daily-1');
     for (const id of ['unlinked', 'removed', 'hidden']) insert.run(id, 'bot', 'active');
@@ -110,6 +111,7 @@ it('lists existing group lanes in their companion project including private dige
     expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'group', 'group-digest', 'group-plan', 'group-thread', 'ordinary', 'routine', 'routine-persistent']);
     expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
       .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
+    expect(flattenSessionReadRow(rows.find(row => row.session.id === 'group-plan')!).companion?.taskProjectDir).toBeUndefined();
     const group = flattenSessionReadRow(rows.find(row => row.session.id === 'group')!);
     expect(group.companion).toMatchObject({ id: 'owner', role: 'group', taskProjectDir: '/group/repository' });
     expect(group.workingDir).toBe('/group/repository');

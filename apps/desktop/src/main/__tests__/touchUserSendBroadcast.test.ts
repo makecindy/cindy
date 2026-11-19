@@ -64,7 +64,7 @@ const h = vi.hoisted(() => {
   };
 
   return {
-    upsertRecentWorkdir: vi.fn(async () => true),
+    touchRecentWorkdir: vi.fn(async () => true),
     ownerCurrent: true,
     captureOwnerScope: false,
     tapWindowBroadcast: vi.fn(),
@@ -110,7 +110,7 @@ vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.
 vi.mock('../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
+vi.mock('../localDb/ipc/recentWorkdirs', () => ({ touchRecentWorkdir: h.touchRecentWorkdir }));
 vi.mock('../device-link/broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() =>
     h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
@@ -157,7 +157,7 @@ beforeEach(() => {
   h.tapWindowBroadcast.mockReset();
   h.ownerCurrent = true;
   h.captureOwnerScope = false;
-  h.upsertRecentWorkdir.mockResolvedValue(true);
+  h.touchRecentWorkdir.mockResolvedValue(true);
   h.updateSetCalls.length = 0;
   h.selectResults.length = 0;
   h.updateErrors.length = 0;
@@ -325,7 +325,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
       },
     ]);
     await touchUserSendInDb('sess-project', atMs);
-    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+    expect(h.touchRecentWorkdir).toHaveBeenCalledWith(
       projectDir,
       atMs,
       process.platform,
@@ -354,7 +354,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
       },
     ]);
     await touchUserSendInDb('sess-other', atMs);
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
   });
 
   it('suppresses project refresh after an owner switch during persistence', async () => {
@@ -371,12 +371,12 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
         remoteHostId: null,
       },
     ]);
-    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+    h.touchRecentWorkdir.mockImplementationOnce(async () => {
       h.ownerCurrent = false;
       return true;
     });
     await touchUserSendInDb('sess-project', atMs);
-    expect(h.upsertRecentWorkdir).toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).toHaveBeenCalled();
     expect(
       h.webContentsSend.mock.calls.filter(
         ([channel]) => channel === 'local-db:recent-workdirs:changed',
@@ -433,7 +433,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     expect(h.updateSetCalls).toHaveLength(1); // UPDATE 调用了，但 WHERE 阻止了写入
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.webContentsSend).not.toHaveBeenCalled();
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
   });
 
   it('MAX updatedAt: 广播使用 RETURNING 读回的实际 updatedAt，防止 finishedAt 被 firedAt 回退', async () => {
