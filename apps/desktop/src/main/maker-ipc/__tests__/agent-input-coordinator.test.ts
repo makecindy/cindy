@@ -981,6 +981,57 @@ describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
       .toEqual(['kept', 'delivery-2']);
   });
 
+  it('releases the crash-restored pause when an authorized retry hits the duplicate guard', async () => {
+    // #7512 review P1:直连房间的 clientId 由 execution+source_message 决定。「已入队
+    // 落盘、进程未结算」之间崩溃后,恢复出的队列里已有这条投递;服务器重试同一条
+    // clientId 会命中去重守卫。修复前守卫直接 return,放行块永远走不到 —— 重试已报
+    // 成功而队列停在崩溃恢复暂停。守卫内也要放行,且放行后补一次 drain:队首已在
+    // 内存里,没有新项入队,靠正常入队路径不会被调度。
+    const h = createHarness();
+    const sid = 'duplicate-authorized-release';
+    h.setLoadQueueSnapshot(async () => [makeItem('chat-direct:execution-1:message-1', 'room message')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      persistedContent: 'room message',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'room message' });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('keeps the restart-held pause when an authorized retry hits the duplicate guard', async () => {
+    // 守卫里的放行只认崩溃恢复暂停:「重启伙伴」按住的队列(暂停来源已随快照落盘)
+    // 不因同 clientId 重发解开,重试只确认投递,不重放用户已收手的请求。
+    const h = createHarness();
+    const sid = 'duplicate-restart-hold-kept';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('chat-direct:execution-2:message-2', 'room message')],
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-2:message-2',
+      message: 'room message',
+      persistedContent: 'room message',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['chat-direct:execution-2:message-2']);
+  });
+
   it('does not let an external delivery release a legacy snapshot that records a user stop', async () => {
     // 旧快照没有 queue-pause-held 标记(升级前写的):「用户显式 Stop / 「重启伙伴」」
     // 那条路径只会留下 orca-report-stop 标记。旧快照分不清「用户收手」与「崩溃恢复」,

@@ -2247,6 +2247,23 @@ export class AgentInputCoordinator {
         sessionId,
         clientId: item.clientId,
       });
+      // 授权投递撞去重也要先解崩溃恢复暂停(#7512 review P1):直连房间的
+      // clientId 由 execution+source_message 确定,「已入队落盘、进程未结算」
+      // 之间崩溃后,服务器重试同一条会命中这里;若直接 return,放行块永远
+      // 走不到,队列停在暂停态而重试已报成功。只放行崩溃恢复暂停——「重启
+      // 伙伴」按住的队列不因重发解开。放行后补一次 drain:队首已在内存里,
+      // 没有新项入队,靠下面的入队路径不会被调度。
+      if (opts?.resumeCrashRestoredPausedQueue && state.queuePaused && state.queuePausedByCrashRestore) {
+        state.queuePaused = false;
+        state.queuePausedByRestore = false;
+        state.queuePausedByCrashRestore = false;
+        log.info('crash-restored paused queue released by an external Bot DM delivery', {
+          sessionId,
+          clientId: item.clientId,
+          duplicate: true,
+        });
+        this.scheduleDrain(sessionId, 'duplicate-authorized-release');
+      }
       opts?.onDuplicate?.();
       return this.getProjection(sessionId);
     }

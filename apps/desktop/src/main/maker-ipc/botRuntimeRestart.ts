@@ -3,6 +3,13 @@ export async function restartBotRuntime(
   sessionId: string,
   assertOwnerCurrent: () => void,
   deps: {
+    /**
+     * stop 之前把队列快照读回内存。未恢复的会话上 stop 只能标内存态,随后的
+     * maybePersistQueueSnapshot 会因「未恢复不写」早退,flush 空转 —— 重启报成功
+     * 而快照里没有暂停来源,进程退出后会被当成崩溃恢复暂停(#7512 review P1,
+     * 与 explicitStopImpl 的 恢复→stop→落盘 同序)。
+     */
+    ensureQueueRestored(sessionId: string): Promise<void>;
     stopInput(sessionId: string): void;
     /**
      * Stop 之后把队列快照(连同「暂停来源」标记)落盘。
@@ -20,6 +27,8 @@ export async function restartBotRuntime(
     assertOwnerCurrent();
     controller.signal.throwIfAborted();
   };
+  assertCurrent();
+  await deps.ensureQueueRestored(sessionId);
   assertCurrent();
   deps.stopInput(sessionId);
   let timer: ReturnType<typeof setTimeout> | undefined;

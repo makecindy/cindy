@@ -13209,9 +13209,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Chat-only dispatch allocates a queue id; keep the server execution identity
       // so error recovery can restore the group's full background as well.
       if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
+      // 外部已授权投递(伙伴房间带附件)只能放行**崩溃恢复**暂停,不能用
+      // resumeRestorePausedQueue —— 后者会连「重启伙伴」按住的队列一起解开,
+      // 让带附件的房间消息重放用户已收手的请求(#7512 review P1,与无附件
+      // 路径 enqueueSendToSessionMessage 同一把尺子)。非外部调用方(群派活、
+      // 欢迎语)维持原样:它们本就代表一次新的显式派发。
+      const authorizedExternal = isAuthorizedExternalDelivery({
+        externalAuthorizedDelivery: params.externalAuthorizedDelivery,
+        origin: queued.origin,
+      });
       const enqueue = () => {
         params.assertDispatchCurrent?.();
-        inputCoordinator.enqueue(params.targetSessionId, queued, { resumeRestorePausedQueue: true });
+        inputCoordinator.enqueue(params.targetSessionId, queued, authorizedExternal
+          ? { resumeCrashRestoredPausedQueue: true }
+          : { resumeRestorePausedQueue: true });
       };
       if (params.toolsDisabled) {
         if (!await welcomeDispatchReceipts.dispatch(params.targetSessionId, clientId, enqueue, params.invitationWelcome === true)) {
@@ -13385,6 +13396,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const recovery = contextOverflowRolloverHolder;
     if (!recovery) throwIpcError('PRECONDITION_FAILED', 'Bot recovery is not ready');
     await restartBotRuntime(sessionId, assertOwnerCurrent, {
+      // 与 explicitStopImpl 同序:先恢复队列,stop 才能在真实队列上标暂停来源,
+      // 随后的 flush 才不是空操作(#7512 review P1)。
+      ensureQueueRestored: (id) => inputCoordinator.ensureQueueRestored(id),
       stopInput: (id) => {
         // Save the visible partial reply before abort/close clears the stream buffers.
         flushAssistantBlock(id);

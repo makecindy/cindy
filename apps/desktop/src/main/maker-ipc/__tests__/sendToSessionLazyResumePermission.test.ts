@@ -31,6 +31,7 @@ import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
+import { isAuthorizedExternalDelivery } from '../crashRestoreQueueRelease.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
@@ -295,6 +296,9 @@ function botTaskDispatchHarness(
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
     isBotGroupInTaskClientId,
+    isAuthorizedExternalDelivery,
+    // toTaskFile 切片用真实 node:path 解析附件路径。
+    path,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
@@ -737,6 +741,54 @@ describe('group dispatch cancellation during preparation', () => {
     expect(await dispatch).toMatchObject({ ok: false });
     expect(enqueue).not.toHaveBeenCalled();
     expect(h.sentTo).toEqual([]);
+  });
+});
+
+// #7512 review P1: dispatchBotSessionMessage 的 files 分支此前无条件
+// resumeRestorePausedQueue —— 外部已授权投递(伙伴房间带附件)会连「重启伙伴」
+// 按住的队列一起解开。无附件路径 enqueueSendToSessionMessage 的尺子是
+// isAuthorizedExternalDelivery:授权外部只解崩溃恢复暂停;非外部调用方
+// (群派活、欢迎语)代表一次新的显式派发,维持 resumeRestorePausedQueue。
+// 执行生产 dispatch 闭包,断言最终交给 inputCoordinator.enqueue 的 flag。
+describe('bot dispatch files-branch pause-release flag', () => {
+  function flagHarness() {
+    const enqueue = vi.fn();
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => false, enqueue },
+      buildSessionControlInputItem: async (input: Record<string, unknown>) => ({ ...input }),
+    });
+    h.scope.enqueueSendToSessionMessage = h.enqueueGroupMessage;
+    return { h, enqueue };
+  }
+
+  it('releases only the crash-restore pause for an authorized external delivery with attachments', async () => {
+    const { h, enqueue } = flagHarness();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message with attachment',
+      persistedContent: 'room message with attachment',
+      files: [{ id: 'f1', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }],
+      externalAuthorizedDelivery: true,
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0]?.[2]).toEqual({ resumeCrashRestoredPausedQueue: true });
+  });
+
+  it('keeps resumeRestorePausedQueue for a group dispatch with attachments', async () => {
+    const { h, enqueue } = flagHarness();
+    const result = await h.groupDispatch({
+      targetSessionId: 'child',
+      clientId: 'bot-group:run-1',
+      message: 'group task with attachment',
+      persistedContent: 'group task with attachment',
+      attachments: [{ id: 'file', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }],
+      onAccepted: vi.fn(),
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'queued' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0]?.[2]).toEqual({ resumeRestorePausedQueue: true });
   });
 });
 
