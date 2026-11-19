@@ -71,6 +71,10 @@ export interface TurnState {
    * 或要求逐项汇报的 create_workers 批量）。存在时即使派发成功也不能零正文收口。
    */
   workerDispatchNeedsReport?: boolean;
+  /** Mandatory create_workers report survives later tool batches. */
+  workerDispatchBatchReportPending?: boolean;
+  /** Globally unique queued messages awaiting required steer promotion. */
+  workerDispatchPendingPromotions?: Set<string>;
   /** Root tools from this turn; stale receipts must not change its dispatch exemption. */
   workerDispatchTurnToolUseIds?: Set<string>;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
@@ -375,6 +379,8 @@ function resetTurnState(turn: TurnState): void {
   turn.toolUses = 0;
   turn.completedWorkerDispatch = false;
   turn.workerDispatchNeedsReport = false;
+  turn.workerDispatchBatchReportPending = false;
+  turn.workerDispatchPendingPromotions?.clear();
   turn.workerDispatchTurnToolUseIds?.clear();
   turn.apiCalls = 0;
   turn.sawCompactBoundary = false;
@@ -468,6 +474,16 @@ function observeWorkerDispatchBatch(
   results: readonly { toolName: string | undefined; payloadText: string; isError: boolean }[],
 ): void {
   for (const result of results) {
+    if (result.toolName === 'mcp__cindy_orca__move_queued_message') {
+      const payload = readOrcaPayload(result.payloadText);
+      const messageId = payload?.queued_message_id;
+      if (!result.isError && payload?.ok === true && payload.position === 0
+        && hasIdentifier(payload.worker_id) && typeof messageId === 'string'
+        && turn.workerDispatchPendingPromotions?.delete(messageId)) {
+        turn.completedWorkerDispatch = true;
+      } else if (result.isError) turn.workerDispatchNeedsReport = true;
+      continue;
+    }
     const tool = parseOrcaDispatchTool(result.toolName);
     if (!tool) {
       // 同批里非派发工具的失败项（如 Read / Bash 报错）也必须有人汇报：
@@ -480,6 +496,7 @@ function observeWorkerDispatchBatch(
     if (tool.kind === 'batch') {
       // 批量派发要求逐项转告 user_report / 失败项，不能当作正常收口。
       turn.workerDispatchNeedsReport = true;
+      turn.workerDispatchBatchReportPending = true;
       continue;
     }
     if (result.isError) {
@@ -487,6 +504,11 @@ function observeWorkerDispatchBatch(
       continue;
     }
     const payload = readOrcaPayload(result.payloadText);
+    if (tool.name === 'send_to_worker' && payload?.ok === true
+      && payload.wake_kind === 'queued' && hasIdentifier(payload.steer_fallback_reason)
+      && typeof payload.queued_message_id === 'string' && hasIdentifier(payload.queued_message_id)) {
+      (turn.workerDispatchPendingPromotions ??= new Set()).add(payload.queued_message_id);
+    }
     // 解析不出回执就当作无法确认派发：宁可多一次续跑，也不要静默停在没人干活的 turn 上。
     if (!payload || !hasOrcaDispatchSignal(tool.name, payload)) {
       turn.workerDispatchNeedsReport = true;
@@ -2545,7 +2567,8 @@ function handleResult(
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
     ctx.turn.uiEmittedText.length === 0 &&
-    !(ctx.turn.completedWorkerDispatch && !ctx.turn.workerDispatchNeedsReport) &&
+    !(ctx.turn.completedWorkerDispatch && !ctx.turn.workerDispatchNeedsReport
+      && !ctx.turn.workerDispatchBatchReportPending && !ctx.turn.workerDispatchPendingPromotions?.size) &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {

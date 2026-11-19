@@ -798,6 +798,50 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
     }
   });
 
+  // #9221: send starts a provider request before its first SDK event exists.
+  // An accepted steer must not transfer ownership of that running request.
+  it.each(['old-request', 'new-request', 'superseded-error', 'late-old-tool-result'] as const)('preserves initiated request ownership before its first event (%s)', async (kind) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'initial work' });
+      if (kind === 'late-old-tool-result') {
+        session.stream.emit({ type: 'assistant', message: { id: 'old-tool-request', content: [{
+          type: 'tool_use', id: 'old-unfinished-tool', name: 'Read', input: {},
+        }] } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      if (kind === 'superseded-error' || kind === 'late-old-tool-result') {
+        await session.handle.abort();
+        await session.handle.send({ type: 'user', content: 'next request' });
+      }
+      if (kind === 'superseded-error' || kind === 'late-old-tool-result') {
+        session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+          total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      if (kind === 'new-request') {
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'old-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        session.stream.emit({ type: 'assistant', message: { id: 'old-request', content: [{ type: 'thinking', thinking: '', signature: 'old' }] } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await session.handle.steer!({ type: 'user', content: 'new work' });
+      if (kind === 'late-old-tool-result') session.stream.emit(userToolResult('old-unfinished-tool'));
+      session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'dispatch-request' } } });
+      session.stream.emit({ type: 'assistant', message: { id: 'dispatch-request', content: [{
+        type: 'tool_use', id: 'late-first-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('late-first-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      session.stream.emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '', signature: 'new-ending' }] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn', total_cost_usd: 0,
+        usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'request ended');
+      expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
+        .toBe(kind === 'new-request' ? undefined : true);
+    } finally { session.stream.end(); await session.handle.close(); await session.collected; }
+  });
+
   // #9221: init provenance can await while SDK events keep arriving. Preserve
   // which work accepted the entire tool event, not just an already-seen ID.
   // Compare a pre-steer queued handoff with a genuinely post-steer handoff.
@@ -825,6 +869,13 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
         session.stream.emit({ type: 'stream_event', event: {
           type: 'message_start', message: { id: 'deferred-request', model: 'claude-opus-4-6', usage: { input_tokens: 1000 } },
         } });
+        await vi.advanceTimersByTimeAsync(1);
+      } else {
+        // A genuinely new provider request needs the previous response to end;
+        // mere post-steer arrival was not evidence of a new request.
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'completed-old-request' } } });
+        session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
+        session.stream.emit({ type: 'assistant', message: { id: 'completed-old-request', content: [] } });
         await vi.advanceTimersByTimeAsync(1);
       }
       await session.handle.steer!({ type: 'user', content: 'new work' });

@@ -512,6 +512,41 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(doneSilentStopFlag(events)).toBeUndefined();
   });
 
+  // #9221: only promotion of this pending Worker message completes a steer
+  // fallback. Observe production done; unrelated, failed or non-front moves do not.
+  it.each(['promoted', 'wrong-message', 'not-front', 'failed', 'own-queue', 'unrelated'] as const)('tracks pending steer promotion (%s)', async (kind) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    if (kind !== 'unrelated') pushWorkerToolResult(queue, ctx, {
+      id: 'fallback', name: 'mcp__cindy_orca__send_to_worker',
+      payload: { ok: true, target_session_id: 'session-1', wake_kind: 'queued', queued_message_id: 'message-1', steer_fallback_reason: 'BUSY' },
+    });
+    pushWorkerToolResult(queue, ctx, {
+      id: 'promotion', name: 'mcp__cindy_orca__move_queued_message', isError: kind === 'failed',
+      payload: { ok: kind !== 'failed', worker_id: kind === 'own-queue' ? null : 'worker-1',
+        queued_message_id: kind === 'wrong-message' ? 'other-message' : 'message-1', position: kind === 'not-front' ? 1 : 0 },
+    });
+    finishWithEmptyThinking(queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue))).toBe(kind === 'promoted' ? undefined : true);
+  });
+
+  // #9221: create_workers user_report is mandatory even if the Lead wrongly
+  // serializes another dispatch before reporting; ordinary corrected Read errors
+  // still have their separate, existing per-batch recovery coverage.
+  it.each([false, true])('retains a batch report across later dispatch (visible report=%s)', async (reported) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushWorkerToolResult(queue, ctx, { id: 'batch', name: 'mcp__cindy_orca__create_workers',
+      payload: { ok: true, request_count: 2, success_count: 1, failure_count: 1, user_report: 'one role failed', results: [] } });
+    pushWorkerToolResult(queue, ctx, { id: 'later', name: 'mcp__cindy_orca__send_to_worker',
+      payload: { ok: true, wake_kind: 'resumed' } });
+    if (reported) translateSdkMessage({ type: 'assistant', message: { content: [
+      { type: 'text', text: 'one role failed' },
+    ] } }, queue, ctx);
+    finishWithEmptyThinking(queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue))).toBe(reported ? undefined : true);
+  });
+
   it('keeps silent-stop detection when a send_to_worker steer fell back to the queue', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();

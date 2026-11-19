@@ -3371,6 +3371,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 跨消息累积:一个 turn 内 SDK 会发多个 assistant message,这里把 text 拼起来,
     // 在 result 缺少正文时作为 finalText 兜底。
     let workerDispatchInputEpoch = 0;
+    let workerDispatchRequest = { inputEpoch: 0, pending: false };
     const turnState: TurnState = {
       text: '',
       toolUses: 0,
@@ -3403,6 +3404,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 残留的 true 会让下一条普通任务真正的 thinking-only 收口失去 silent-stop 恢复。
       turnState.completedWorkerDispatch = false;
       turnState.workerDispatchNeedsReport = false;
+      turnState.workerDispatchBatchReportPending = false;
+      turnState.workerDispatchPendingPromotions?.clear();
       turnState.workerDispatchTurnToolUseIds?.clear();
       turnState.apiCalls = 0;
       turnState.sawCompactBoundary = false;
@@ -5876,7 +5879,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       terminalBackgroundTaskIds.clear();
       void (async () => {
         try {
-          const sdkInput = observeSdkInputEpoch(currentQ, () => workerDispatchInputEpoch);
+          // Each Query owns its request phase; a late event from a replaced
+          // Query must not change the active Query's input ownership.
+          const requestOwnership = { inputEpoch: workerDispatchInputEpoch, pending: turnInFlight };
+          workerDispatchRequest = requestOwnership;
+          const sdkInput = observeSdkInputEpoch(currentQ, () => workerDispatchInputEpoch, requestOwnership,
+            () => Boolean(turnState.interruptRequested && turnState.generation !== turnState.interruptGeneration));
           for await (const rawMsg of sdkInput.messages) {
             const inputEpoch = sdkInput.inputEpoch(rawMsg);
             if (closed) break;
@@ -7190,11 +7198,15 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           workerDispatchInputEpoch += 1;
+          workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
+          workerDispatchRequest.pending = true;
           // Old SDK work can arrive during asynchronous content preparation,
           // after beginNewTurn cleared these fields. Acceptance owns the new
           // input, so discard that speculative dispatch state once more.
           turnState.completedWorkerDispatch = false;
           turnState.workerDispatchNeedsReport = false;
+          turnState.workerDispatchBatchReportPending = false;
+          turnState.workerDispatchPendingPromotions?.clear();
           turnState.workerDispatchTurnToolUseIds?.clear();
           userInputAccepted = true;
           rollbackUnacceptedFork = undefined;
@@ -7295,8 +7307,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         // the steered response from silent-stop recovery. Rejected steers above
         // leave the existing handoff untouched.
         workerDispatchInputEpoch += 1;
+        if (!workerDispatchRequest.pending) {
+          workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
+          workerDispatchRequest.pending = true;
+        }
         turnState.completedWorkerDispatch = false;
         turnState.workerDispatchNeedsReport = false;
+        turnState.workerDispatchBatchReportPending = false;
+        turnState.workerDispatchPendingPromotions?.clear();
         turnState.workerDispatchTurnToolUseIds?.clear();
         const awaitingClaim = activeContinuationClaim();
         if (awaitingClaim?.state === 'awaiting') {
@@ -8646,7 +8664,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 }
 
 /** Observe ownership without adding an async hop to the normal SDK stream. */
-function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpoch: () => number) {
+function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpoch: () => number,
+  providerRequest: { inputEpoch: number; pending: boolean }, isInterruptedResultStale: () => boolean) {
   const iterator = source[Symbol.asyncIterator]();
   const receivedEpochs = new WeakMap<T, number>();
   let pending: Promise<IteratorResult<T>> | undefined;
@@ -8656,7 +8675,7 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
   let prefetching = false;
   const read = async () => {
     const result = await iterator.next();
-    if (!result.done) receivedEpochs.set(result.value, getEpoch());
+    if (!result.done) receivedEpochs.set(result.value, observeOwnership(result.value));
     return result;
   };
   const pump = () => {
@@ -8670,6 +8689,45 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
     }, () => { prefetching = false; });
   };
   let request: { id: string; inputEpoch: number } | undefined;
+  const toolOwners = new Map<string, number>();
+  const observeOwnership = (message: T): number => {
+    const raw = message as { type?: string; is_error?: unknown; parent_tool_use_id?: unknown;
+      message?: { id?: unknown; content?: unknown }; event?: { type?: string; message?: { id?: unknown } } };
+    if (typeof raw.parent_tool_use_id === 'string' && raw.parent_tool_use_id.length > 0) return getEpoch();
+    let epoch = providerRequest.pending ? providerRequest.inputEpoch : getEpoch();
+    if (raw.type === 'stream_event' && raw.event?.type === 'message_start') {
+      providerRequest.inputEpoch = epoch;
+      providerRequest.pending = true;
+      if (typeof raw.event.message?.id === 'string') request = { id: raw.event.message.id, inputEpoch: epoch };
+    } else if (raw.type === 'assistant') {
+      if (request && raw.message?.id === request.id) epoch = request.inputEpoch;
+      if (Array.isArray(raw.message?.content)) for (const block of raw.message.content) {
+        if (block?.type === 'tool_use' && typeof block.id === 'string') toolOwners.set(block.id, epoch);
+      }
+      if (epoch >= providerRequest.inputEpoch) providerRequest.pending = false;
+    } else if (raw.type === 'stream_event' && raw.event?.type === 'message_stop') {
+      if ((request?.inputEpoch ?? epoch) >= providerRequest.inputEpoch) providerRequest.pending = false;
+    } else if (raw.type === 'user' && Array.isArray(raw.message?.content)
+      && raw.message.content.some((block: { type?: string }) => block?.type === 'tool_result')) {
+      // Tool completion initiates the next provider request before its first
+      // token arrives. A later accepted steer does not own that request.
+      const owners = raw.message.content.flatMap((block: { type?: string; tool_use_id?: string }) => {
+        const owner = block?.type === 'tool_result' && block.tool_use_id ? toolOwners.get(block.tool_use_id) : undefined;
+        if (block.tool_use_id) toolOwners.delete(block.tool_use_id);
+        return owner === undefined ? [] : [owner];
+      });
+      if (owners.some(owner => owner >= providerRequest.inputEpoch)) {
+        epoch = getEpoch();
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+      }
+    } else if (raw.type === 'result' && !(raw.is_error && isInterruptedResultStale())) {
+      providerRequest.pending = false;
+      request = undefined;
+      toolOwners.clear();
+    }
+    return epoch;
+  };
   return {
     messages: {
       [Symbol.asyncIterator]() {
@@ -8700,19 +8758,7 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
       prefetching = false;
     },
     inputEpoch(message: T) {
-      let inputEpoch = receivedEpochs.get(message) ?? getEpoch();
-      const raw = message as { type?: string; parent_tool_use_id?: unknown; message?: { id?: unknown };
-        event?: { type?: string; message?: { id?: unknown } } };
-      if (typeof raw.parent_tool_use_id !== 'string' || raw.parent_tool_use_id.length === 0) {
-        if (raw.type === 'stream_event' && raw.event?.type === 'message_start' && typeof raw.event.message?.id === 'string') {
-          request = { id: raw.event.message.id, inputEpoch };
-        } else if (raw.type === 'assistant' && request && raw.message?.id === request.id) {
-          inputEpoch = request.inputEpoch;
-        } else if (raw.type === 'result') {
-          request = undefined;
-        }
-      }
-      return inputEpoch;
+      return receivedEpochs.get(message) ?? observeOwnership(message);
     },
   };
 }
