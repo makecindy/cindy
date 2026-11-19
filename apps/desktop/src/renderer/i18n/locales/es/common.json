@@ -882,8 +882,7 @@
         "loading": "Leyendo cuota…",
         "unavailable": "No se puede leer la cuota de esta computadora en este momento",
         "none": "Este proveedor no tiene información de cuota",
-        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota",
-        "share": "La cuota no se muestra para computadoras compartidas por otros"
+        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota"
       },
       "runningCount_one": "{{count}} tarea en ejecución",
       "runningCount_other": "{{count}} tareas en ejecución",

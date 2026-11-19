@@ -882,8 +882,7 @@
         "loading": "Lecture du quota…",
         "unavailable": "Impossible de lire le quota de cet ordinateur pour le moment",
         "none": "Ce fournisseur ne dispose d'aucune information de quota",
-        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu",
-        "share": "Le quota n'est pas affiché pour les ordinateurs partagés par d'autres personnes"
+        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu"
       },
       "runningCount_one": "{{count}} tâche en cours d'exécution",
       "runningCount_other": "{{count}} tâches en cours d'exécution",
