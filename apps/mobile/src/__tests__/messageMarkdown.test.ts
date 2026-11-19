@@ -2484,6 +2484,32 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / current review: non-table pipes remain paragraphs; root
+  // definitions after lists use content indentation, not marker indentation.
+  // Unit production entry; earlier table/list cases omitted these boundaries.
+  it('does not let non-table pipe lines introduce definitions', () => {
+    for (const line of ['| note', '| note <!-- comment -->']) {
+      const source = '[site][s]\n\n' + line + '\n[s]: https://example.com/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+    }
+  });
+
+  it('distinguishes root definitions from list content indentation', () => {
+    for (const [item, rootIndent, nestedIndent] of [['- item', ' ', '  '], ['10. item', '   ', '    '], ['9. first\n10. second', '   ', '    '], ['- parent\n  10. child', ' ', '  '], ['  - item', '   ', '    ']]) {
+      const prefix = '[site][s]\n\n' + item + '\n\n';
+      expect(inlines(prefix + rootIndent + '[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(inlines(prefix + nestedIndent + '[s]: https://wrong.example/').some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      const source = prefix + rootIndent + '[s]: https://example.com/';
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

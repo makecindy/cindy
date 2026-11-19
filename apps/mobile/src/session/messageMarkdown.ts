@@ -129,7 +129,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
   let math = false;
   let html = false;
   let rawHtmlEnd: RegExp | undefined;
-  let listIndent: number | undefined;
+  const listContentIndents: number[] = [];
   let paragraph = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
@@ -182,14 +182,18 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       }
       const list = /^(\s*)(?:[-*]|\d+[.)])\s+/.exec(line);
       const indent = leadingIndentColumns(line);
-      if (list) listIndent = listIndent === undefined ? indent : Math.min(listIndent, indent);
-      else if (listIndent !== undefined && indent <= listIndent) listIndent = undefined;
+      // Retain enclosing items, but replace siblings: marker width can change
+      // (for example 9. to 10.) and therefore changes the content column.
+      while (listContentIndents.length && indent < listContentIndents[listContentIndents.length - 1]) {
+        listContentIndents.pop();
+      }
+      if (list) listContentIndents.push(leadingIndentColumns(list[0].replace(/\S/g, ' ')));
     }
     const startsInComment = comment;
     comment = advanceHtmlCommentState(line, comment);
     if (startsInComment || comment || line.includes('<!--')) {
       // An inline comment does not close the paragraph it belongs to.
-      if (!startsInComment) paragraph = !/^(?: {0,3}<!--|#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s|\s*\|)/.test(line);
+      if (!startsInComment) paragraph = !/^(?: {0,3}<!--|#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line);
       continue;
     }
     if (!line.trim()) { html = false; paragraph = false; continue; }
@@ -202,7 +206,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     }
     if (/^ {0,3}<\/?[A-Za-z!]/.test(line)) html = true;
     if (html) continue;
-    const definition = !paragraph && listIndent === undefined
+    const definition = !paragraph && listContentIndents.length === 0
       ? readMarkdownReferenceDefinition(lines, index) : null;
     if (definition) {
       if (!definitions.has(definition.label)) definitions.set(definition.label, definition.url);
@@ -210,7 +214,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       index--;
       continue;
     }
-    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s|\s*\|)/.test(line);
+    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line);
   }
   return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([[...definitions], [...definitionLines]]) : '' };
 }
