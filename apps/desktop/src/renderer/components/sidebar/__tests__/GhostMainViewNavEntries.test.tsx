@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const items = [
   {
@@ -11,7 +11,7 @@ const items = [
     title: 'Alpha',
     icon: 'puzzle',
     manifest: { id: 'alpha', name: 'Alpha Plugin' },
-    installedGhost: {},
+    installedGhost: { iconDataUrl: undefined as string | undefined },
   },
   {
     ghostId: 'workspace',
@@ -19,7 +19,7 @@ const items = [
     title: 'Workspace',
     icon: 'globe',
     manifest: { id: 'workspace', name: 'Workspace Plugin' },
-    installedGhost: {},
+    installedGhost: { iconDataUrl: undefined as string | undefined },
   },
 ];
 
@@ -63,6 +63,39 @@ function LocationProbe() {
 }
 
 describe('GhostMainViewNavEntries', () => {
+  beforeEach(() => {
+    for (const item of items) item.installedGhost.iconDataUrl = undefined;
+  });
+
+  it('shows the installed logo, falls back on image error, and accepts a replacement', () => {
+    items[0].installedGhost.iconDataUrl = 'data:image/png;base64,original';
+    const view = render(
+      <MemoryRouter initialEntries={['/apps/alpha']}>
+        <GhostMainViewNavEntries variant="row" />
+      </MemoryRouter>,
+    );
+    const button = screen.getByRole('button', { name: 'Alpha' });
+    const image = button.querySelector('img')!;
+    expect(image.getAttribute('src')).toBe(items[0].installedGhost.iconDataUrl);
+    expect(image.getAttribute('width')).toBe('15');
+    expect(image.getAttribute('alt')).toBe('');
+    expect(button.querySelector('svg')).toBeNull();
+
+    fireEvent.error(image);
+    expect(button.querySelector('.lucide-puzzle')).not.toBeNull();
+    items[0].installedGhost.iconDataUrl = 'data:image/png;base64,replacement';
+    view.rerender(
+      <MemoryRouter initialEntries={['/apps/alpha']}>
+        <GhostMainViewNavEntries variant="rail" />
+      </MemoryRouter>,
+    );
+    const railButton = screen.getByRole('button', { name: 'Alpha' });
+    expect(railButton.querySelector('img')?.getAttribute('src')).toBe(
+      items[0].installedGhost.iconDataUrl,
+    );
+    expect(railButton.querySelector('img')?.getAttribute('width')).toBe('18');
+  });
+
   it('renders the shared order, active state and encoded navigation', () => {
     render(
       <MemoryRouter initialEntries={['/apps/alpha']}>
