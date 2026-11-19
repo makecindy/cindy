@@ -3155,6 +3155,8 @@ interface DriverUpdateCheckProbe {
 async function fetchDriverUpdateCheck(
   fetchImpl: typeof fetch,
   rejectedVersion: string | null = null,
+  /** 缓存里正在兜售的入口:清单推进到缺包的新版本时,复用前先重新 HEAD 它自己。 */
+  keepTarget: string | null = null,
 ): Promise<DriverUpdateCheckProbe> {
   // 只在这场检查读到清单后才有值:网络失败与限流不产生它,缓存就此保留旧入口。
   let missingVersion: string | null = null;
@@ -3190,6 +3192,13 @@ async function fetchDriverUpdateCheck(
     // 下一次检查会重试。latestVersion 保持 null,由 commit 决定旧入口留不留。
     if (!asset) {
       missingVersion = latestVersion;
+      // 复用旧入口之前重新核对它自己:新版本缺包不代表旧目标还能下,撤过包的旧目标
+      // 不能因为「清单停在一个缺包的版本上」而永久留在设置页里。
+      if (keepTarget !== null && keepTarget !== latestVersion) {
+        const kept = await probeCuaDriverReleaseAsset(keepTarget, fetchImpl);
+        if (!kept) missingVersion = keepTarget;
+        else cachedDriverReleaseAssets = kept.size > 0 ? [kept] : [];
+      }
       return done({ currentVersion, latestVersion: null, updateAvailable: false });
     }
 
@@ -3272,7 +3281,14 @@ function completedDriverUpdateCheck(
 
 function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
   if (!driverUpdateCheckInFlight) {
-    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl)
+    const keepTarget = cachedDriverUpdateCheck?.updateAvailable
+      ? cachedDriverUpdateCheck.latestVersion
+      : null;
+    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(
+      fetchImpl,
+      null,
+      keepTarget,
+    )
       .then(({ result, missingVersion }) => {
         const completed = completedDriverUpdateCheck(result);
         // An installation can invalidate a check that started against the old binary.

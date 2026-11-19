@@ -4941,15 +4941,46 @@ describe('computer driver update check', () => {
     });
 
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const newerWithoutAsset = vi
-      .fn()
-      .mockResolvedValueOnce(publishedVersionResponse('0.8.0'))
-      .mockResolvedValue({ ok: false, status: 404 });
+    // 0.8.0 没传包,但复用前会重新 HEAD 缓存的 0.7.0——它还能下。
+    const newerWithoutAsset = vi.fn(async (input: string) =>
+      input.includes('releases/download')
+        ? { ok: !input.includes('v0.8.0'), status: input.includes('v0.8.0') ? 404 : 200,
+            headers: { get: (n: string) => (n === 'content-length' ? '1024' : null) } }
+        : publishedVersionResponse('0.8.0'),
+    );
     await expect(
       checkComputerDriverUpdate(newerWithoutAsset as unknown as typeof fetch, { force: true }),
     ).resolves.toMatchObject({
       latestVersion: '0.7.0',
       updateAvailable: true,
+    });
+  });
+
+  it('drops the cached offer once that same version is withdrawn while a newer one has no asset', async () => {
+    // 清单停在缺包的 0.8.0,但缓存的 0.7.0 也已经被撤包:复用前的重新核对必须发现,
+    // 否则设置页会一直摆一个点下去必失败的入口。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const offered = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: true, status: 200, headers: { get: (n: string) => (n === 'content-length' ? '1024' : null) } });
+    await expect(checkComputerDriverUpdate(offered as unknown as typeof fetch)).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+    });
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const withdrawn = vi.fn(async (input: string) =>
+      input.includes('releases/download')
+        ? { ok: false, status: 404, headers: { get: () => null } }
+        : publishedVersionResponse('0.8.0'),
+    );
+    await expect(
+      checkComputerDriverUpdate(withdrawn as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      currentVersion: '0.5.8',
+      latestVersion: null,
+      updateAvailable: false,
     });
   });
 
