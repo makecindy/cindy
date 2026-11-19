@@ -866,8 +866,7 @@
         "loading": "正在读取配额…",
         "unavailable": "暂时读不到这台电脑的配额",
         "none": "这个供应商没有配额信息",
-        "offline": "这台电脑不在线，读不到配额",
-        "share": "别人分享的电脑不显示配额"
+        "offline": "这台电脑不在线，读不到配额"
       },
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",

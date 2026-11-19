@@ -872,8 +872,7 @@
         "loading": "Kontingent wird gelesen…",
         "unavailable": "Das Kontingent dieses Computers kann gerade nicht gelesen werden",
         "none": "Für diesen Anbieter liegen keine Kontingentinformationen vor",
-        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden",
-        "share": "Für Computer, die andere freigegeben haben, wird kein Kontingent angezeigt"
+        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden"
       },
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",

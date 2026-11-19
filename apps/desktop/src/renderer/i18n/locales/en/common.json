@@ -872,8 +872,7 @@
         "loading": "Reading quota…",
         "unavailable": "Can’t read this computer’s quota right now",
         "none": "This provider has no quota information",
-        "offline": "This computer is offline, so its quota can’t be read",
-        "share": "Quota isn’t shown for computers shared by others"
+        "offline": "This computer is offline, so its quota can’t be read"
       },
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",

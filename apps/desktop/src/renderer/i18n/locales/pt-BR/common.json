@@ -882,8 +882,7 @@
         "loading": "Consultando cota…",
         "unavailable": "Não é possível consultar a cota deste computador agora",
         "none": "Este provedor não tem informações de cota",
-        "offline": "Este computador está offline, então não é possível consultar sua cota",
-        "share": "A cota não é exibida para computadores compartilhados por outras pessoas"
+        "offline": "Este computador está offline, então não é possível consultar sua cota"
       },
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
