@@ -81,7 +81,7 @@ export function RunningTokenRatePopover({
   history,
   onPinnedChange,
 }: {
-  elapsedText: string;
+  elapsedText: string | null;
   rate: string | null;
   rateText: string | null;
   isTokenCount?: boolean;
@@ -205,15 +205,14 @@ export function RunningTokenRatePopover({
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
                 className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
                 aria-label={
-                  rateText
-                    ? `${elapsedText} · ${isTokenCount ? rateText : `${t('chat.runningStatus.currentRate')}: ${rateText}`}`
-                    : elapsedText
+                  [elapsedText, rateText && (isTokenCount ? rateText : `${t('chat.runningStatus.currentRate')}: ${rateText}`)]
+                    .filter(Boolean).join(' · ') || t('chat.runningStatus.currentRate')
                 }
               >
-                <span>{elapsedText}</span>
+                {elapsedText && <span>{elapsedText}</span>}
                 {rateText && (
                   <>
-                    <span aria-hidden="true">&middot;</span>
+                    {elapsedText && <span aria-hidden="true">&middot;</span>}
                     {isTokenCount && <ArrowDown size={13} aria-hidden="true" />}
                     <span>
                       {isTokenCount && tokenUsage !== undefined

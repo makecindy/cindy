@@ -180,7 +180,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
         <span className="composer-send-beam-bloom" />
       </span>
       <span aria-hidden className="composer-send-ring" />
-      <span className="relative grid h-3.5 w-3.5 place-items-center" aria-hidden>
+      <span className="relative grid h-4 w-4 place-items-center" aria-hidden>
         {companionVoice && (
           <span
             className={cn(

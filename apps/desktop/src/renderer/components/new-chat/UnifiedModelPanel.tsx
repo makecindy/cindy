@@ -381,6 +381,7 @@ export interface UnifiedModelPanelProps {
    * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
    */
   panelWidthFluid?: boolean;
+  readableRows?: boolean;
 }
 
 /**
@@ -449,6 +450,7 @@ export function UnifiedModelPanel({
   panelElement,
   overlayClassName,
   panelWidthFluid = false,
+  readableRows = false,
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
@@ -1319,6 +1321,7 @@ export function UnifiedModelPanel({
     const rowElement = (
       <UnifiedModelRow
         key={key}
+        readable={readableRows}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1461,6 +1464,7 @@ export function UnifiedModelPanel({
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
             'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 pb-3 [scrollbar-gutter:stable]',
+            readableRows && 'overflow-x-hidden',
             // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
             // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
@@ -1623,6 +1627,7 @@ export function UnifiedModelPanel({
                   return (
                     <UnifiedModelRow
                       key={key}
+                      readable={readableRows}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}

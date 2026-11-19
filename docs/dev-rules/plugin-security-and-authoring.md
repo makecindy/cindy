@@ -971,8 +971,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `modalities`、Guide operation 与当前客户端协议支持度，只投影当前可执行模型。单模型
   Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
   `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
-  付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
-  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办保留
+  付费请求前 Core 必须再次校验。当前 Agent 可通过永久 Core `media` 工具生成媒体。
+  获准插件也可通过下述 Cindy AI 专用入口直接发起请求。存量 `cindy-request` 媒体代办保留
   原接口：Host 完成原有权限、配额、参考图归属与账号校验后，将旧参数适配到已有 Core
   `prepare/request/poll`；可用模型由 Server operation 的输入是否可表达决定，不按 Guide ID
   筛选。兼容入口不向插件开放任意 Core 操作，不另起 Agent，也不重复入仓。插件工具通过现有 `tool-result` 返回普通 JSON，
@@ -981,6 +981,21 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- Cindy AI 媒体直调复用 `cindy-request`。插件声明 `"cindy": { "models": ["media_request"] }`，
+  经现有安装或更新流程批准后，调用 `cindy.send({ type: 'cindy-request', kind: 'media_request',
+  operation, model, ...args })`。Host 只用当前账号的 Cindy AI 连接，校验实际模型和操作后代发。
+  插件提供该模型的请求参数，Host 掌握 URL、方法、认证和路由头。此入口无需 Agent 会话。
+  - `image.generate`、`video.generate`、`audio.speech` 使用 `body` 对象。
+    图像和视频走该模型官方 Guide 中的 JSON 接口。Host 写入协议指定的模型字段。
+  - `audio.transcribe` 使用文本字段组成的 `body`，并通过 `audioHash` 提供该插件有权使用的
+    受管音频指纹。可先通过 `deposit_media` 寄存已有音频。Host 构造文件表单。
+  - 异步视频的成功提交响应在可识别任务 ID 时附带 `jobRef`。用相同 `model` 和该引用请求
+    `video.poll`。仅当协议提供独立下载接口时可以请求 `video.content`。引用绑定账号和插件，
+    保留 30 分钟，Host 重启或引用容量淘汰后失效。插件管理查询时机和结果。
+  - `ok: true` 表示收到网关响应，包括 HTTP 错误。检查 `status` 后按 `contentType` 和
+    `encoding` 解读 `body`，二进制使用 base64。Host 限制输入和响应体积（最多 32 MiB，
+    Guide 可设更低限制）。Host 拒绝或无法取得响应时返回 `ok: false`。提交结果未知时，
+    插件应避免自动重提。旧宿主请按不支持此操作处理。
 - 回环嵌入是第二个、也是更窄的页面网络例外：插件同时声明一种自绘页面（`panel`、`mainView`
   或 `taskView`）、`node` 工作进程和 `preview.hosts` 中的 `localhost` / `127.0.0.1` 时
   （`ghostPanelLoopbackEmbedAllowed`），

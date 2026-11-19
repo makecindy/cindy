@@ -725,6 +725,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
+import { formatTaskTopicTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { withBotGroupUiMock } from './botGroupUiMock.js';
@@ -1601,6 +1602,7 @@ import { createBusinessSessionId } from '../sessionIds.js';
 import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
 import {
   isSessionAutoTitleEligible,
+  refineCreatedTaskTitle,
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
@@ -1611,6 +1613,7 @@ import {
   publishUiTurnDispatching,
   publishUiTurnUndispatched,
 } from './uiContinuationSignal.js';
+import { hasTelegramQuestionRoute, stampTelegramQuestionAnswer } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, noteChannelTurnSource } from './channelTurnSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
@@ -3890,7 +3893,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
-let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>) | undefined;
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -6413,9 +6416,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
 
-  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId, displayText) => {
+  session.setAsyncQuestionAnswerDispatcher((...answer) => {
     if (!asyncQuestionInputDispatcher) throw new Error('Question input dispatcher is unavailable');
-    return asyncQuestionInputDispatcher(session, text, signal, requestId, displayText);
+    return asyncQuestionInputDispatcher(session, ...answer);
   });
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
@@ -12647,7 +12650,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           inherited = createDefaults!;
         }
-        const newTitle = title?.trim() || message.split('\n')[0].slice(0, 60);
+        const titleOwner = getCurrentDbClientSnapshot();
+        const newTitle = title?.trim() || normalizeAutoTitle(message);
         const createOpts = buildCreateOptsWithStderr({
           ...(handoffWorktree ? { id: handoffWorktree.sessionId } : {}),
           agentKind: inherited.agentKind,
@@ -12746,6 +12750,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
           }
           assertDesktopSendDispatched(sendResult, 'send_to_session create');
+        }
+        if (!params.sourcePlugin && !title?.trim() && titleOwner === getCurrentDbClientSnapshot()) {
+          void refineCreatedTaskTitle(session.id, message, { initialTitle: newTitle });
         }
         log.info('sendToSession created new session', {
           dispatcherSessionId,
@@ -13458,6 +13465,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
+    refineTitle: (id, subject, initial) => { void refineCreatedTaskTitle(id, subject, { initialTitle: initial }); },
     listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
     create: createRemoteSessionOpener({
       openSession,
@@ -13618,7 +13626,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // A turn is running or queued in a companion's main task: no context rebuild, no hand-over.
   const companionTurnActive = (sessionId: string) => !!maker.getSession(sessionId)?.isTurnRunning?.()
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
+  const refineGroupTopic: NonNullable<BotGroupChatServiceDeps['refineTopicTitle']> = (id, initial, topic) => {
+    void refineCreatedTaskTitle(id, topic.text, initial ? {
+      initialTitle: initial, format: value => formatTaskTopicTitle(value, topic.channel, { participant: topic.participant }),
+    } : undefined);
+  };
   const botGroupChatDeps: BotGroupChatServiceDeps = {
+    refineTopicTitle: refineGroupTopic,
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
     readLaneContext: (id) => {
       const session = maker.getSession(id);
@@ -13636,7 +13650,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : await localExecutionProject(input.groupId, input.botId);
           projectDir = resolved ?? undefined;
         }
-        return await ensureBotGroupLaneSession({ ...input, projectDir }, registeredTaskProject);
+        const lane = await ensureBotGroupLaneSession({ ...input, projectDir }, registeredTaskProject);
+        if (!input.chatAccess && lane.ok && lane.created && input.topic) refineGroupTopic(lane.sessionId, input.title, input.topic);
+        return lane;
       } catch (error) {
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
@@ -13695,7 +13711,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
-    // like a new task of this user's (new-task model and permission), titled with the group's name.
+    // like a new task of this user's (new-task model and permission).
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
       const assertOwner = captureSessionOwner();
       try {
@@ -20582,7 +20598,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
-  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText) => {
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText, origin) => {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
@@ -20608,7 +20624,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isDeviceLinkInvoke(), readDeviceLinkInvokeSourceDevice(),
     );
     assertCurrent();
-    if (!pausedBeforeAnswer) {
+    const channelAnswer = !sharedTask && hasTelegramQuestionRoute(origin);
+    if (channelAnswer) stampTelegramQuestionAnswer(item, origin);
+    if (!pausedBeforeAnswer && (!channelAnswer || session.getCurrentTurnOrigin() === origin)) {
       const outcome = await inputCoordinator.steerControlInput(session.id, { item }, {
         session, turnGeneration: session.getTurnGeneration(), beforeMutation: async () => assertCurrent(),
       });

@@ -62,6 +62,7 @@ import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
   DEEP_LINK_URL_PREFIX,
+  buildTaskDeepLink,
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
@@ -318,8 +319,7 @@ export function buildSessionDeepLink(
   sessionId: string,
   opts?: { deviceId?: string | null },
 ): string {
-  const device = opts?.deviceId ? `?device=${encodeURIComponent(opts.deviceId)}` : '';
-  return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}${device}`;
+  return buildTaskDeepLink(sessionId, opts?.deviceId);
 }
 
 /** History tools use qualified ids for remote tasks; links always name the owning computer. */

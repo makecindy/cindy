@@ -296,14 +296,19 @@ export interface RemoteAgentHostDeps {
     /** O accepts fresh relay history; native history must stay on its recorded M. */
     acceptDelegated?(controller: string, sessionId: string): Promise<void>;
     beginDelegatedTurn?(controller: string, sessionId: string, executionId: string,
-      captureCompletion: (complete: () => Promise<void>) => void): Promise<void>;
+      captureCompletion: (complete: () => Promise<void>, countsLocally?: true) => void): Promise<void>;
     acceptRelay?(controller: string, sessionId: string, hasNativeHistory: boolean): Promise<void>;
-    allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
+    allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' | 'standby-prepare' }>): Promise<
+      { deviceId: string; generation: string; leaseDurationMs?: number; standby?: true; canPrepareStandby?: true }
+      | { deviceId?: never; generation?: never; standbyRetry: true }
+      | { deviceId?: never; generation?: never; canPrepareStandby: true } | null>;
+    admitStandby?(controller: string, request: Extract<RemoteAgentRequest, { op: 'standby-admit' }>): Promise<{ generation: string; leaseDurationMs: number }>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
     release(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): Promise<void>;
+    releaseStandby?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): boolean;
     switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string; generation?: string }>;
-    switched?(controller: string, sessionId: string, token: string): Promise<void>;
-    sessionAllowed(controller: string, sessionId: string): boolean;
+    switched?(controller: string, sessionId: string, token: string): Promise<boolean | void>;
+    sessionAllowed(controller: string, sessionId: string, agentKind?: RemoteAgentKind): boolean;
     /** Unlike sessionAllowed, true only for a current, local G→M delegation. */
     sessionDelegated(controller: string, sessionId: string): boolean;
     usage(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-usage' }>): Promise<void> | void;
@@ -505,7 +510,8 @@ interface Run {
   /** 换模型/来源串行，避免失败回滚覆盖后一次选择。 */
   modelChange?: Promise<void>;
   /** Executor-owned receipt; retained after revocation until this turn has stopped. */
-  standbyTurn?: { complete(): Promise<void>; pending: boolean; stopped?: boolean; completing?: Promise<void> };
+  standbyTurn?: { complete(): Promise<void>; pending: boolean; countsLocally?: true; stopped?: boolean; completing?: Promise<void> };
+  standbyAdmission?: { cancelled: boolean };
   usageMeter?: ReturnType<typeof createGuestUsageMeter>;
   lastState?: string;
   stateTimer?: ReturnType<typeof setInterval>;
@@ -2076,7 +2082,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
     // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。受邀者自己填的转分享键不转发。
-    const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
+    const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, requireGroupSwitchToken: _required,
+      reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
     // 分享来的组内电脑按这个人的转分享键核对它的主人是否同意过(provider-sharing.md §4.3)。
     const reshareKey = member.sameAccount ? undefined : reshareKeyForGuest(run.controller);
     return {
@@ -2796,7 +2803,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   function delegatedRunAllowed(run: Run): boolean {
     return run.trust !== 'guest' || (deps.isControllerAuthorized(run.controller)
       && (!!run.relayKey || !deps.directGuestExecution
-        || (run.sessionId !== undefined && deps.directGuestExecution.sessionAllowed(run.controller, run.sessionId))));
+        || (run.sessionId !== undefined && deps.directGuestExecution.sessionAllowed(run.controller, run.sessionId, run.kind))));
   }
 
   async function call(run: Run, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
@@ -2831,12 +2838,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (run.relay?.started) return relayCall(run, run.relay, callId, method, payload);
     const handle = run.handle;
     let rollbackProvider: (() => void) | undefined;
+    let admission: Run['standbyAdmission'];
     let standbyTurn: Run['standbyTurn'];
     let sendInvoked = false;
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       if (!handle) fail('REMOTE_AGENT_UNAVAILABLE', 'agent has not started');
+      if (method === 'send' && run.trust === 'guest' && run.sessionId
+        && deps.directGuestExecution?.beginDelegatedTurn && deps.directGuestExecution.sessionDelegated(run.controller, run.sessionId)) {
+        if (run.standbyAdmission) throw new TurnDispatchRejectedError('previous shared turn is still being admitted');
+        run.standbyAdmission = admission = { cancelled: false };
+      }
       const raw = await resolvePayload(run.controller, payload);
       const rawArgs = Array.isArray(raw) ? raw : [];
       const args = method === 'send' ? rawArgs : takeGroupNewRound(run, callId, method, rawArgs);
@@ -2908,13 +2921,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         rollbackProvider = () => binding.setProvider(previousProviderId);
       }
       let value: unknown;
-      if (method === 'send' && run.trust === 'guest' && run.sessionId
-        && deps.directGuestExecution?.sessionDelegated(run.controller, run.sessionId)) {
+      if (admission && run.sessionId) {
         await completeStandbyTurn(run);
-        if (run.standbyTurn) fail('REMOTE_AGENT_UNAVAILABLE', 'previous shared turn is still running');
-        await deps.directGuestExecution.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`, complete => {
-          run.standbyTurn = standbyTurn = { complete, pending: true };
+        if (admission.cancelled) throw new TurnDispatchRejectedError('shared turn was stopped before dispatch');
+        if (run.standbyTurn) throw new TurnDispatchRejectedError('previous shared turn is still running');
+        await deps.directGuestExecution?.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`, (complete, countsLocally) => {
+          run.standbyTurn = standbyTurn = { complete, pending: true, countsLocally };
         });
+        if (admission.cancelled) throw new TurnDispatchRejectedError('shared turn was stopped before dispatch');
         if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
         if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       }
@@ -2965,6 +2979,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           deps.log?.warn('standby completion deferred', { runId: run.id, error: String(error) });
         });
       }
+      if (admission) run.standbyAdmission = undefined;
       run.calls.set(callId, 'done');
       if (run.calls.size > MAX_REMEMBERED_CALLS) {
         for (const [id, status] of run.calls) {
@@ -2984,6 +2999,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     wanted: ReadonlyArray<{ runId: string; cursor: number; hold?: true }>,
     waitMs: number,
     signal?: AbortSignal,
+    /** 控制端按回程速度要的上限（协议里已限在 POLL_MIN–POLL_MAX）；旧控制端不带，按 POLL_MAX。 */
+    maxBytes: number = REMOTE_AGENT_POLL_MAX_BYTES,
   ): Promise<RemoteAgentPollResult> {
     const touch = (updateHold: boolean) => {
       const t = now();
@@ -3009,7 +3026,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (!anyReady && waitMs > 0) await waitForAny(initial.map(({ run }) => run.log), waitMs, signal);
     touch(false);
     const out: RemoteAgentPollResult = { runs: [] };
-    let budget = REMOTE_AGENT_POLL_MAX_BYTES;
+    let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
     const start = wanted.length ? pollRotation++ % wanted.length : 0;
     for (let index = 0; index < wanted.length; index += 1) {
       const { runId, cursor } = wanted[(start + index) % wanted.length];
@@ -3308,26 +3325,47 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       case 'direct-locate':
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution?.locate) fail('REMOTE_AGENT_INVALID', 'location is only for shared users');
         return deps.directGuestExecution.locate(controller, request);
-      case 'allocate': {
+      case 'allocate':
+      case 'standby-prepare': {
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'allocation is only for shared users');
-        if (!directLocked) return withDirectGuestLock(controller, () => handleRequest(controller, request, signal, true));
+        if (request.op === 'allocate' && !directLocked) return withDirectGuestLock(controller, () => handleRequest(controller, request, signal, true));
         // An existing O-hosted task stays on its legacy route, even when an old
         // controller asks to allocate it again without a native resume ID.
-        if (deps.directGuestExecution.locate
+        if (request.op === 'allocate' && deps.directGuestExecution.locate
           && !await deps.directGuestExecution.locate(controller, { op: 'direct-locate', sessionId: request.sessionId })) {
           const record = (await loadGuestIndex()).get(guestDigest(controller));
           if (record?.hostSessionIds.includes(hostSessionIdFor(controller, request.sessionId))
             || [...runs.values()].some((run) => run.controller === controller && !run.relayKey
               && run.sessionId === request.sessionId)) return null;
         }
-        return deps.directGuestExecution.allocate(controller, request);
+        const allocation = await deps.directGuestExecution.allocate(controller, request);
+        return allocation && { ...allocation, directStatusBatch: true };
       }
       case 'direct-status':
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'status is only for shared users');
         deps.directGuestExecution.status(controller, request);
         return {};
+      case 'direct-status-batch':
+        if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'status is only for shared users');
+        for (const status of request.statuses) deps.directGuestExecution.status(controller, { op: 'direct-status', ...status });
+        return {};
+      case 'standby-admit': {
+        if (trustOf(controller) !== 'guest' || !deps.directGuestExecution?.admitStandby) {
+          fail('REMOTE_AGENT_INVALID', 'standby is only for shared users');
+        }
+        if (!deps.isAgentAvailable(request.agentKind) || !GUEST_SUPPORTED_AGENTS.has(request.agentKind)) {
+          fail('REMOTE_AGENT_UNSUPPORTED', 'the shared executor does not offer this agent');
+        }
+        return withDirectGuestLock(controller, () => deps.directGuestExecution!.admitStandby!(controller, request));
+      }
       case 'direct-release':
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'release is only for shared users');
+        if (deps.directGuestExecution.releaseStandby && deps.directGuestExecution.sessionDelegated(controller, request.sessionId)) {
+          if (!directLocked) return withDirectGuestLock(controller, () => handleRequest(controller, request, signal, true));
+          const active = [...runs.values()].some(run => run.controller === controller && run.sessionId === request.sessionId
+            && run.closedAt === undefined && !run.relayKey);
+          if (!active && deps.directGuestExecution.releaseStandby(controller, request)) return {};
+        }
         await deps.directGuestExecution.release(controller, request);
         return {};
       case 'direct-switch':
@@ -3351,12 +3389,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             throw error;
           }
         }
-        if (request.action === 'revoke' && revoked) {
+        if (revoked) {
           await Promise.all([...runs.values()].filter((run) => {
             const peer = parseProviderSharePeer(run.controller);
             return peer?.role === 'guest' && peer.shareId === request.shareId
               && peer.memberId === request.memberId && peer.deviceId === request.guestDeviceId
-              && run.sessionId === request.sessionId;
+              && (request.action === 'revoke' && run.sessionId === request.sessionId || !delegatedRunAllowed(run));
           }).map((run) => finishRun(run, 'access-revoked', 'navigation')));
         }
         return {};
@@ -3372,7 +3410,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         const guest = controllerTrust === 'guest' || !!request.relay;
         if (controllerTrust === 'guest' && !request.relay
-          && deps.directGuestExecution && !deps.directGuestExecution.sessionAllowed(controller, request.sourceSessionId)) {
+          && deps.directGuestExecution && !deps.directGuestExecution.sessionAllowed(controller, request.sourceSessionId, request.agentKind)) {
           fail('REMOTE_AGENT_INVALID', 'this shared task is not authorized on this computer');
         }
         const scope = guestScopeOf(controller, request.relay);
@@ -3381,7 +3419,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
           }
           if (controllerTrust === 'guest' && !request.relay && deps.directGuestExecution
-            && !deps.directGuestExecution.sessionAllowed(controller, request.sourceSessionId)) {
+            && !deps.directGuestExecution.sessionAllowed(controller, request.sourceSessionId, request.agentKind)) {
             fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
           }
           if (controllerTrust === 'guest' && request.relay && deps.reshare
@@ -3527,6 +3565,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
             ? { directGuestExecution: true } : {}),
+          ...(deps.directGuestExecution?.admitStandby ? { directGuestStandby: true as const } : {}),
           ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
@@ -3629,7 +3668,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         const trust: RemoteAgentControllerTrust = relayKey ? 'guest' : controllerTrust;
         if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)) {
+          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, request.agentKind)) {
           fail('REMOTE_AGENT_INVALID', 'this shared task is not authorized on this computer');
         }
         if (relayKey && guestUnsupported) {
@@ -3660,6 +3699,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
           && !!deps.groupRelay;
+        if (payload.requireGroupSwitchToken && (!groupRouted || payload.options.resumeSessionId)) {
+          fail('REMOTE_AGENT_INVALID', 'this standby task cannot be handed off on this computer');
+        }
         // 供应商授权：来源落到本机已开放的供应商上，并以显式来源启动(核对的就是实际用的)。
         let providerId: string | undefined;
         if (deps.providerAccess) {
@@ -3694,13 +3736,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               hostSessionIdFor(controller, payload.sessionId),
               payload.groupSwitchToken,
             );
+            if (payload.requireGroupSwitchToken && !switchExclusion) {
+              fail('REMOTE_AGENT_INVALID', 'the standby task handoff has expired or is no longer authorized');
+            }
             avoid = switchExclusion ?? [];
             if (switchExclusion && payload.groupSwitchToken) {
               // A valid token binds this guest and task to the move. Retire its
               // old direct assignment before planning a new executor, so a
               // failed open can retry with the token without reviving old M.
-              await deps.directGuestExecution?.switched?.(controller, payload.sessionId,
+              const confirmed = await deps.directGuestExecution?.switched?.(controller, payload.sessionId,
                 payload.groupSwitchToken);
+              if (payload.requireGroupSwitchToken && confirmed !== true) {
+                fail('REMOTE_AGENT_INVALID', 'the standby task handoff could not be confirmed');
+              }
             }
             const plan = await deps.groupRelay.plan({
               kind: request.agentKind,
@@ -3755,7 +3803,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         // 供应商查询/组分配有 await；最终检查与登记间不能再等待，防止并发 open 超额。
         if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)) {
+          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, request.agentKind)) {
           reserved?.release();
           fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
         }
@@ -3839,6 +3887,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           return {};
         }
         run.calls.set(request.callId, 'running');
+        if (request.method === 'abort' && run.standbyAdmission) run.standbyAdmission.cancelled = true;
         if (request.method === 'send' || request.method === 'abort' || request.method === 'compactSession'
           || request.method === 'commitRewindFiles' || request.method === 'setModel') {
           run.nativeHistoryCheckpoint = undefined;
@@ -3848,7 +3897,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return {};
       }
       case 'poll':
-        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal);
+        return poll(controller, request.runs, request.waitMs ?? REMOTE_AGENT_READ_WAIT_MS, signal, request.maxBytes);
       case 'reply': {
         const run = requireRun(controller, request.runId);
         const pending = run.pending.get(request.requestId);
@@ -4032,8 +4081,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
      */
     turnRunningProviders(): string[] {
       return [...runs.values()]
-        .filter((run) => run.closedAt === undefined && !run.closing && !run.relay && run.providerId)
-        .filter((run) => (safeCall(run.handle?.isTurnRunning?.bind(run.handle)) ?? run.turnRunning) === true)
+        .filter((run) => run.closedAt === undefined && !run.relay && run.providerId)
+        .filter((run) => run.standbyTurn?.countsLocally
+          || (!run.closing && (safeCall(run.handle?.isTurnRunning?.bind(run.handle)) ?? run.turnRunning) === true))
         .map((run) => run.providerId!);
     },
     /** 测试与诊断用。 */

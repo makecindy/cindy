@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
@@ -995,6 +996,7 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            {src && <DownloadImageMenuItem src={src} />}
             {canCopy && (
               <DropdownMenuItem onClick={handleCopyImage}>
                 <Copy className="mr-2 h-4 w-4" />
