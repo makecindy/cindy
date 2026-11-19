@@ -9655,7 +9655,8 @@ export function registerGhostIpc(): void {
       ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
       : [];
     const ghCliAvailable =
-      ghCliSecretDecls.length > 0 ? await getSharedGhCliTokenSource().probeAvailability() : false;
+      method === 'GET' && pathname === '/secrets' && ghCliSecretDecls.length > 0
+        ? await getSharedGhCliTokenSource().probeAvailability() : false;
     return handleGhostSecretsRequest({
       method,
       pathname,
