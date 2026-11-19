@@ -92,6 +92,7 @@ import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-brid
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createCodexCollaborationMarkerTransform } from './codex-collaboration-marker.js';
 import {
   getActiveCatalog,
   getCatalogModelContextWindow,
@@ -3729,6 +3730,7 @@ async function createCodexProxyHandle(
       return chainResponseTransforms(
         createResponsesNullArrayRepairTransform(response),
         execAdapter.createResponseTransform(ctx.reqId, response),
+        createCodexCollaborationMarkerTransform(response),
       );
     },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
