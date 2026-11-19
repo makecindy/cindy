@@ -51,6 +51,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
+    "@cindy/a2ui-renderer": "workspace:*",
     "@babel/parser": "^7.29.7",
     "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/anthropic-responses-bridge": "workspace:*",

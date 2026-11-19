@@ -19,6 +19,7 @@
 
 import { RICH_ANSWER_GUIDE } from '@cindy/maker-shared/rich-answer-guide';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { A2UI_MESSAGE_GUIDE } from './a2uiGuide';
 
 export interface CapabilityEntry {
   key: string;
@@ -28,6 +29,12 @@ export interface CapabilityEntry {
 }
 
 export const CAPABILITIES: readonly CapabilityEntry[] = [
+  {
+    key: 'a2ui-messages',
+    title: 'A2UI 精读卡片',
+    oneLiner: '电脑端官方 A2UI 渲染、段落切换与显式作答提交；查询固定版本、支持目录及消息格式。手机原生与 IM 使用 Markdown。',
+    detail: A2UI_MESSAGE_GUIDE,
+  },
   {
     key: 'rich-answers',
     title: '流式正文与可组合组件',

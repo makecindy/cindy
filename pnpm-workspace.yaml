@@ -22,6 +22,10 @@ overrides:
   "@anthropic-ai/sdk": 0.93.0
   js-yaml@^4.0.0: ^4.3.0
   zod: 4.3.6
+  "@a2ui/web_core": 0.15.0
+  "@a2ui/web_core@0.15.0>zod": 3.25.76
+  "@a2ui/react@0.15.0>zod": 3.25.76
+  "@cindy/a2ui-renderer>zod": 3.25.76
   tmp: ^0.2.7
   fast-uri: ^3.1.4
   sharp: ^0.35.0

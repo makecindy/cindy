@@ -127,6 +127,18 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  it('discovers the on-demand desktop A2UI format through the existing public tool', async () => {
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, sessionCtx));
+    try {
+      const payload = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { key: 'a2ui-messages' },
+      } }));
+      expect(payload).toMatchObject({ ok: true, capability: {
+        key: 'a2ui-messages', detail: expect.stringContaining('cindy.sendMessage'),
+      } });
+      expect(listCapabilityIndex().some(entry => entry.key === 'a2ui-messages')).toBe(true);
+    } finally { await h.cleanup(); }
+  });
   // Pi uses this route for advanced syntax beyond its resident basic protocol.
   // Verify the real public envelope returns the complete protocol.
   it('serves the complete rich answer protocol through call_tool for Pi', async () => {
