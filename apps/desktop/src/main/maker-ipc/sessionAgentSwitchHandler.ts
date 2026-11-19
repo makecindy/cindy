@@ -1719,6 +1719,19 @@ export function applyPendingAgentSwitchIfIdle(
   return run;
 }
 
+/** SWITCH_SESSION_AGENT's 7th argument: the picker's confirmed window (shared with the Node Host's entry). */
+export function readSwitchOptionsConfirmedContextWindow(options: unknown): unknown {
+  return options && typeof options === 'object' && !Array.isArray(options)
+    ? (options as { confirmedContextWindow?: unknown }).confirmedContextWindow : undefined;
+}
+
+/** SWITCH_SESSION_AGENT's 7th argument: the Agent's computer, when it moves (shared with the Node Host's entry). */
+export function readSwitchOptionsAgentDeviceId(options: unknown): unknown {
+  return options && typeof options === 'object' && !Array.isArray(options) && 'agentDeviceId' in options
+    ? (options as { agentDeviceId?: unknown }).agentDeviceId
+    : undefined;
+}
+
 export function registerMakerSessionAgentSwitchHandler(
   registry: IpcHandlerRegistry,
   deps: MakerSessionAgentSwitchHandlerDeps,
@@ -1739,17 +1752,13 @@ export function registerMakerSessionAgentSwitchHandler(
       thinking?: unknown,
     ) => {
       const context = getDeviceLinkInvokeContext();
-      const confirmedContextWindow = options && typeof options === 'object' && !Array.isArray(options)
-        ? (options as { confirmedContextWindow?: unknown }).confirmedContextWindow : undefined;
+      const confirmedContextWindow = readSwitchOptionsConfirmedContextWindow(options);
       // Same trust boundary as SET_MODEL: remote controllers cannot authorize a
       // destructive local-context rebuild by supplying a confirmation number.
       if (isDeviceLinkInvoke() && confirmedContextWindow !== undefined) {
         throwIpcError('PRECONDITION_FAILED', 'remote model-window confirmation is unsupported');
       }
-      const agentDeviceId =
-        options && typeof options === 'object' && !Array.isArray(options) && 'agentDeviceId' in options
-          ? (options as { agentDeviceId?: unknown }).agentDeviceId
-          : undefined;
+      const agentDeviceId = readSwitchOptionsAgentDeviceId(options);
       // 共享任务的访客只能在主人给的范围内改设置，不能把 Agent 挪到主人的其他电脑上。
       if (agentDeviceId !== undefined && context?.sharedTask) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'shared task guests cannot move the agent to another computer');

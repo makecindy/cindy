@@ -9574,6 +9574,31 @@
     "preparing": "Conectando ao login",
     "preparingSubtitle": "Carregando os métodos disponíveis para esta região",
     "unavailable": "Login indisponível no momento",
+    "hostUnavailable": {
+      "title": "Serviço em segundo plano da Cindy",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estes dados pertencem a uma conta diferente do login salvo pelo serviço em segundo plano da Cindy.",
+          "action": "Execute cindy-host login com a conta original, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Outro aplicativo da Cindy está usando estes dados.",
+          "action": "Feche-o, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Não é possível abrir os dados desta conta.",
+          "action": "Se você usou recentemente uma versão mais nova da Cindy, atualize primeiro a Cindy neste computador para a versão mais recente, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente. Caso contrário, execute cindy-host status para ver o motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "O serviço em segundo plano da Cindy não conseguiu acessar o serviço de login ao iniciar.",
+          "action": "Verifique sua rede, reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente."
+        },
+        "HOST_START_FAILED": {
+          "body": "O serviço em segundo plano da Cindy encontrou um erro ao iniciar.",
+          "action": "Reinicie o serviço em segundo plano da Cindy e abra a Cindy novamente. Se acontecer de novo, execute cindy-host status para ver o motivo."
+        }
+      }
+    },
     "retry": "Tentar novamente",
     "browserWaiting": "Conclua a verificação no navegador",
     "browserCallback": {
@@ -19378,6 +19403,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Um arquivo de instruções disponível apenas na nuvem pode estar atrasando a inicialização do Pi: {{path}}. Baixe este arquivo no Finder, espere até que esteja disponível localmente e tente novamente. O tempo limite excedido pode ter outra causa.",
+      "hostProfileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
+      "hostProfileInUseByDesktopAtStart": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então o serviço em segundo plano da Cindy não foi iniciado. Feche-o, reinicie o serviço em segundo plano da Cindy e abra esta janela da Cindy novamente.",
+      "hostProfileInUseByDesktopRetry": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho, então não dá para alterar agora. Feche-o e tente novamente.",
       "openFileFailed": "Não foi possível abrir o arquivo no sistema",
       "emptyResponse": "O modelo não retornou conteúdo. Tente novamente. Se o contexto for muito longo, troque de modelo.",
       "turnFailed": "A tarefa falhou (o modelo não retornou detalhes do erro) — tente novamente.",
@@ -22079,14 +22107,14 @@
     "openFailed": "Não foi possível abrir o GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando ao Cindy…",
+    "connecting": "Conectando ao serviço em segundo plano da Cindy…",
     "restoring": "Restaurando o estado das tarefas…",
     "retrying": "Tarefas ainda não sincronizadas. Tentando novamente…",
     "pairing": "É necessário autorizar a conexão",
-    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o pareamento na nova página e volte aqui.",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o serviço em segundo plano da Cindy, execute novamente o comando para abrir o cliente web. Faça o pareamento na nova página e volte aqui.",
     "keepDraft": "Seu rascunho será mantido. As tarefas serão sincronizadas quando a conexão for restabelecida.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Atualize as configurações de conexão do Host no terminal de inicialização e reabra este cliente experimental."
+    "desktopAuthHelp": "Atualize as configurações de conexão do serviço em segundo plano da Cindy no terminal de inicialização e reabra este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "Permitir o controle remoto deste computador?",
