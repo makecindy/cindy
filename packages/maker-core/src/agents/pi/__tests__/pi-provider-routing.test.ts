@@ -7678,6 +7678,99 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.args).toEqual([]);
   });
 
+  // #9148: the existing rejection covered only an absent reachability capability.
+  // Exercise actual PiAgent startup/configuration and model switching, not a copied gate.
+  // unit tier: remote file/RPC ports are in-memory; no SSH, native Pi or HTTP is claimed.
+  it.each(["explicit", "inferred"])("starts a reachable remote loopback BYOM (%s route) without forwarding it", async (route) => {
+    const probe = vi.fn(async () => true);
+    const baseUrl = "http://127.0.0.1:23425/v1";
+    const deps = byomDeps(async () => ({ providers: [{
+      id: "shared-loopback", name: "Shared loopback", baseUrl,
+      api: "openai-completions", models: [{ id: "local-model" }],
+    }], env: {} }));
+    const agent = new PiAgent({
+      ...deps,
+      probeRemotePiProviderEndpoint: probe,
+      resolveRemotePiBinaryPath: async () => "/remote/pi",
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (file, content) => { captured.remoteModels.set(file, content); },
+        stat: async () => null, rm: async () => {}, listDir: async () => [],
+        readFile: async (file) => captured.remoteModels.get(file) ?? "",
+        sha256File: async () => "unused",
+      }),
+      getRemotePiTransport: async (host, options) => {
+        expect(host).toBe("shared-network-host");
+        expect(options.hostProxyForwards).toEqual([]);
+        captured.args = [...options.args];
+        captured.env = { ...options.env };
+        return { writeLine: async () => {}, onLine: () => () => {}, onStderr: () => () => {},
+          onClose: () => () => {}, close: async () => {}, isClosed: () => false,
+          pid: undefined, killRemoteSession: async () => {}, remoteBinaryPath: "/remote/pi" };
+      },
+    });
+    const handle = await agent.startSession({ sessionId: `remote-reachable-${route}`, workingDir: cwd,
+      model: "local-model", ...(route === "explicit" ? { providerId: "shared-loopback" } : {}),
+      remoteHostId: "shared-network-host" });
+    try {
+      expect(probe).toHaveBeenCalledExactlyOnceWith("shared-network-host", baseUrl);
+      const models = JSON.parse([...captured.remoteModels].find(([file]) => file.endsWith("/models.json"))![1]);
+      expect(models.providers["shared-loopback"].baseUrl).toBe(baseUrl);
+      // Recheck on an explicit route operation: success at startup must not become a
+      // permanent exemption if the service disappears, nor affect the current route.
+      probe.mockResolvedValue(false);
+      captured.requests.length = 0;
+      await expect(handle.setModel!("local-model", { providerId: "shared-loopback" }))
+        .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
+      expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: "set_model" }));
+      expect(handle.model).toBe("local-model");
+      // A late successful probe must not write a route snapshot after teardown.
+      let releaseProbe!: (reachable: boolean) => void;
+      let enteredProbe!: () => void;
+      const probing = new Promise<void>(resolve => { enteredProbe = resolve; });
+      probe.mockImplementationOnce(() => new Promise<boolean>(resolve => {
+        releaseProbe = resolve;
+        enteredProbe();
+      }));
+      const switching = handle.setModel!("local-model", { providerId: "shared-loopback" })
+        .catch(error => error);
+      await probing;
+      await handle.close();
+      const filesAfterClose = [...captured.remoteModels];
+      releaseProbe(true);
+      expect(await switching).toBeInstanceOf(Error);
+      expect([...captured.remoteModels]).toEqual(filesAfterClose);
+    } finally {
+      await handle.close();
+      await agent.dispose();
+    }
+  });
+
+  it.each(["unreachable", "probe-error"])("keeps remote loopback startup fail-closed when %s", async (mode) => {
+    const transport = vi.fn();
+    const writeFile = vi.fn();
+    const agent = new PiAgent({
+      ...byomDeps(async () => ({ providers: [{ id: "local", name: "Local",
+        baseUrl: "http://127.0.0.1:23425/v1?secret=invalid-test-secret", api: "openai-completions",
+        models: [{ id: "local-model" }] }], env: {} })),
+      probeRemotePiProviderEndpoint: async () => {
+        if (mode === "probe-error") throw new Error("invalid-test-secret");
+        return false;
+      },
+      getRemotePiTransport: transport,
+      getRemotePiFileOps: () => ({ mkdirp: async () => {}, writeFile, stat: async () => null,
+        rm: async () => {}, listDir: async () => [], readFile: async () => "", sha256File: async () => "" }),
+    });
+    try {
+      const error = await agent.startSession({ sessionId: "remote-probe-failure", workingDir: cwd,
+        model: "local-model", providerId: "local", remoteHostId: "remote-host" }).catch(error => error);
+      expect(String(error)).toContain("[REMOTE_LOCAL_ONLY_PROVIDER]");
+      expect(String(error)).not.toContain("invalid-test-secret");
+      expect(transport).not.toHaveBeenCalled();
+      expect(writeFile).not.toHaveBeenCalled();
+    } finally { await agent.dispose(); }
+  });
+
   it("rejects a local-only OpenAI context profile before resolving or spawning remote Pi", async () => {
     const resolver = vi.fn(async () => ({ providers: [], env: {} }));
     const transport = vi.fn(async () => {

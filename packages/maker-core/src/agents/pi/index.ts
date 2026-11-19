@@ -2889,10 +2889,28 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
-    // 轮 42 P2(codex-connector):远端 Pi 会话 + baseUrl 指向本机 loopback 的 BYOM
-    // provider 必须拒绝 —— 远端 pi 进程在 SSH 主机上连 localhost 连的是**远端
-    // 自己**, 用户本机的 Ollama 等服务不可达, 首回合必然失败/错配(甚至连到远端
-    // 无关服务)。与订阅 provider 拒绝同款 fail-fast, 引导换网关或远端可达的 BYOM。
+    // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
+    // the configured endpoint, so require a host-side probe rather than rejecting its name.
+    // Only hostProxyForward authorizes forwarding to Desktop; never infer that ownership
+    // from probe success or failure. A failed/unsupported probe keeps the old fail-closed gate.
+    const assertRemoteNativeProviderReachable = async (runtimeProviderId: string): Promise<void> => {
+      if (!opts.remoteHostId) return;
+      const native = nativeProviderById.get(runtimeProviderId);
+      if (!native || !isLoopbackOnlyBaseUrl(native.baseUrl) || native.hostProxyForward) return;
+      let reachable = false;
+      try {
+        reachable = await this.deps.probeRemotePiProviderEndpoint?.(opts.remoteHostId, native.baseUrl) === true;
+      } catch {
+        // Probe errors may contain endpoint credentials or remote command output.
+      }
+      if (!reachable) {
+        throw new Error(
+          `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${resolveSourceProvider(runtimeProviderId)}' ` +
+            'loopback endpoint could not be reached from the SSH host; ' +
+            'check the service on that host or use an endpoint reachable from it.',
+        );
+      }
+    };
     // 同时校验显式 providerId 与 legacy/default 路由 resolve 出的 native provider
     // (providerId 未持久化时 resolveProviderForModel 也能选出 BYOM)。
     if (opts.remoteHostId) {
@@ -2905,14 +2923,7 @@ export class PiAgent extends BaseAgent {
         candidateRuntimeIds.add(initialProvider);
       }
       for (const runtimeProviderId of candidateRuntimeIds) {
-        const loopbackNative = nativeProviderById.get(runtimeProviderId);
-        if (loopbackNative && isLoopbackOnlyBaseUrl(loopbackNative.baseUrl) && !loopbackNative.hostProxyForward) {
-          throw new Error(
-            `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${resolveSourceProvider(runtimeProviderId)}' baseUrl ${loopbackNative.baseUrl} is loopback-only — ` +
-              'a remote Pi session runs on the SSH host and cannot reach a service on this machine; ' +
-              'pick the XD gateway or a BYOM endpoint reachable from that host.',
-          );
-        }
+        await assertRemoteNativeProviderReachable(runtimeProviderId);
       }
     }
     const initialWireModel = resolveWireModel(initialProvider, opts.model);
@@ -7577,6 +7588,10 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, effectiveProviderId);
       const wireModel = resolveWireModel(provider, model);
+      await assertRemoteNativeProviderReachable(provider);
+      if (closed || piProcessExited || proc.isClosed) {
+        throw new Error('pi: session closed while checking provider reachability');
+      }
       if (effectiveProviderId && effectiveProviderId !== PI_PROVIDER_ID &&
           effectiveProviderId !== 'xd' && provider === PI_PROVIDER_ID) {
         throw new Error(`pi: provider '${effectiveProviderId}' cannot serve model '${model}'`);
