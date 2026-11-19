@@ -151,6 +151,9 @@ function FeishuReplyColumns({ editing }: { editing: boolean }) {
       replyContext: [
         '[林岚] 2026-11-19 00:00 UTC [合并转发消息]',
         '[周晴] <p>这是<strong>上一版记录</strong>。<br>第二行备注。</p>',
+        '[周晴] ```html',
+        '<p><strong>示例原文</strong></p>',
+        '```',
         '[图片]',
         '[文件: 演示记录.pdf]',
         '(被引消息的 2 个附件已随本轮一并提供)',

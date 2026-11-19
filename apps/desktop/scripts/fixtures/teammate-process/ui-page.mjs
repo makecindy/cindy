@@ -74,6 +74,8 @@ export default {
       assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
       await toggle.press('Enter');
       const quote = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.referencedMessages', { count: 1 }) });
+      const group = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 2 }) });
+      await group.waitFor();
       await ui.capture('expanded');
       await checkSourceCards();
       assert.equal(await user('feishu-history').locator('[data-selection-quote-body]').textContent(),
@@ -82,8 +84,9 @@ export default {
       const quotedText = await quote.textContent();
       assert.match(quotedText, /\[林岚\].*\[合并转发消息\]\n\[周晴\]/);
       assert.match(quotedText, /\[图片\]\n\[文件: 演示记录.pdf\]\n\(被引消息的 2 个附件已随本轮一并提供\)/);
-      assert.doesNotMatch(quotedText, /<\/?(?:p|br)\b/);
-      const group = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 2 }) });
+      const literalCode = '```html\n<p><strong>示例原文</strong></p>\n```';
+      assert.ok(quotedText.includes(literalCode));
+      assert.doesNotMatch(quotedText.replace(literalCode, ''), /<\/?(?:p|br)\b/);
       assert.match(await group.textContent(), /\[林岚\] 11-19 08:42 上一版已核对。\n\n新版保留已确认的条目。 \[文件: 记录.pdf\]/);
       assert.match(await group.textContent(), /\[周晴\] 11-19 08:43 \[合并转发消息\]\n\[林岚\] 两版差异已整理。 \[图片\]/);
       assert.doesNotMatch(await group.textContent(), /<\/?p\b/);

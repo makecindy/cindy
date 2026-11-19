@@ -108,21 +108,41 @@ const groupParagraphs = new RegExp(
   String.raw`^(${groupAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
   'gim',
 );
+const replyAuthor = String.raw`(?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?`;
 const replyParagraphs = new RegExp(
-  String.raw`^((?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?)(${contextParagraphRun})${contextParagraphEnd}`,
+  String.raw`^(${replyAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
   'gim',
 );
 // The group snapshot timestamps only the outer forward, not its child messages.
-const groupForwards = new RegExp(
-  String.raw`^(${groupAuthor}\[合并转发消息\][ \t]*\r?\n)((?:(?!^${groupAuthor})[\s\S])*)`,
-  'gm',
-);
+const groupEntryStart = new RegExp(String.raw`^${groupAuthor}`, 'gm');
+const forwardHeading = new RegExp(String.raw`^${groupAuthor}\[合并转发消息\][ \t]*\r?\n`);
 const forwardedParagraphs = new RegExp(
   String.raw`^(${contextAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
   'gim',
 );
 
-function replaceContextParagraphs(_matched: string, prefix: string, markup: string): string {
+// Feishu prefixes a stored quote's first line with its author and time.
+const fenceLines = new RegExp(String.raw`^(${replyAuthor})[ \t]{0,3}(\x60{3,}|~{3,})([^\r\n]*)`, 'gm');
+const fenceAttachmentSuffix = /^(?:[ \t]*\[(?:图片|文件[:：][^\]\r\n]*)\])*[ \t]*$/;
+
+function contextFenceRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let open: { marker: string; start: number } | undefined;
+  for (const match of text.matchAll(fenceLines)) {
+    const [line, author, marker, suffix] = match;
+    if (!open) {
+      if (marker[0] !== '`' || !suffix.includes('`')) open = { marker, start: match.index };
+    } else if (!author && marker[0] === open.marker[0] && marker.length >= open.marker.length
+      && fenceAttachmentSuffix.test(suffix)) {
+      ranges.push({ start: open.start, end: match.index + line.length });
+      open = undefined;
+    }
+  }
+  if (open) ranges.push({ start: open.start, end: text.length });
+  return ranges;
+}
+
+function replaceContextParagraphs(prefix: string, markup: string): string {
   const truncation = '[…已截断]';
   return markup.endsWith(truncation)
     ? prefix + paragraphsAsText(markup.slice(0, -truncation.length)) + truncation
@@ -138,12 +158,26 @@ export function displayImContext(im: string, text: string, kind: 'group' | 'repl
     : -1;
   const context = appendix < 0 ? text : text.slice(0, appendix);
   const trailing = appendix < 0 ? '' : text.slice(appendix);
-  if (kind === 'reply') return context.replace(replyParagraphs, replaceContextParagraphs);
-  const displayed = context
-    .replace(groupForwards, (_, heading: string, children: string) =>
-      heading + children.replace(forwardedParagraphs, replaceContextParagraphs))
-    .replace(groupParagraphs, replaceContextParagraphs);
-  return displayed + trailing;
+  const fences = contextFenceRanges(context);
+  const overlapsFence = (start: number, end: number) =>
+    fences.some(fence => start < fence.end && fence.start < end);
+  const project = (source: string, pattern: RegExp, offset = 0) =>
+    source.replace(pattern, (matched, prefix: string, markup: string, index: number) => {
+      const start = offset + index;
+      return overlapsFence(start, start + matched.length)
+        ? matched
+        : replaceContextParagraphs(prefix, markup);
+    });
+  if (kind === 'reply') return project(context, replyParagraphs);
+
+  const entries = [...context.matchAll(groupEntryStart)]
+    .filter(match => !overlapsFence(match.index, match.index + match[0].length));
+  const leading = context.slice(0, entries[0]?.index ?? context.length);
+  const displayed = entries.map((match, index) => {
+    const entry = context.slice(match.index, entries[index + 1]?.index ?? context.length);
+    return project(entry, forwardHeading.test(entry) ? forwardedParagraphs : groupParagraphs, match.index);
+  });
+  return leading + displayed.join('') + trailing;
 }
 
 /**
