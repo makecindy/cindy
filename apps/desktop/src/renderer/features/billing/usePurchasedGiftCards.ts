@@ -211,12 +211,20 @@ export function usePurchasedGiftCards() {
 
   const emailRoundsRef = useRef(0);
 
-  /** 发到邮箱；成功后就地更新这张卡并重新开始有限次的状态刷新。 */
+  /**
+   * 发到邮箱；成功后就地更新这张卡并重新开始有限次的状态刷新。请求在途期间列表已从别的途径更新
+   * （比如关掉弹窗后兑换了这张卡、重读完成）时，返回的卡可能是更旧的快照：不拿它覆盖，改为重读一次，
+   * 以服务端当前状态为准（那次重读可能早于发信生效，直接丢掉会漏掉发信状态）。
+   */
   const sendEmail = useCallback(
     async (card: BillingPurchasedGiftCard, email: string): Promise<BillingSendGiftCardEmailResult> => {
+      const freshness = freshnessRef.current;
       const result = await billingApi.sendPurchasedGiftCardEmail(card.cardId, email);
       if (!mountedRef.current) return result;
-      if (result.ok) {
+      if (result.ok && freshness !== freshnessRef.current) {
+        emailRoundsRef.current = 0;
+        void reload();
+      } else if (result.ok) {
         emailRoundsRef.current = 0;
         freshnessRef.current += 1;
         mergeCards([result.card]);

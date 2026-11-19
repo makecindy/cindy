@@ -1458,6 +1458,39 @@ describe('BillingPage remote catalog rendering', () => {
       unmount();
     });
 
+    // 评审发现（PR #11412）：发信请求在途时列表已重读（比如关掉弹窗后兑换了这张卡），晚到的发信结果不能
+    // 把已兑换的卡改回未领取、重新放出操作；改为再重读一次，以服务端当前状态为准。
+    it('does not let a late send-to-email result overwrite a newer reload', async () => {
+      const pending = card();
+      const redeemed = { ...pending, status: 'REDEEMED_BY_YOU' as const, claimedAt: '2026-11-19T08:10:00.000Z' };
+      let resolveSend: (value: unknown) => void = () => undefined;
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(
+        () => new Promise((resolve) => { resolveSend = resolve; }),
+      ) as never;
+      const list = vi.fn()
+        .mockResolvedValueOnce(page([pending]))
+        .mockResolvedValue(page([redeemed]));
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+      await act(async () => {
+        await result.current.reload();
+      });
+      let sent: Promise<unknown> = Promise.resolve();
+      act(() => {
+        sent = result.current.sendEmail(pending, 'friend@example.com');
+      });
+      await act(async () => {
+        await result.current.reload();
+      });
+      await act(async () => {
+        resolveSend({ ok: true, card: { ...pending, email: delivery('PENDING') } });
+        await sent;
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+      expect(result.current.state.cards.map((item) => item.status)).toEqual(['REDEEMED_BY_YOU']);
+      unmount();
+    });
+
     // 评审发现（PR #11412）：重读之前发出的发信状态刷新晚到时，不能用旧快照把刚兑换的卡改回未领取、
     // 重新放出操作。
     it('drops an email-status refresh that started before a newer reload', async () => {
