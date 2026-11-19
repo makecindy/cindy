@@ -119,9 +119,9 @@ export async function probeSharedTask<T>(
   assertCurrent: () => void,
   signal?: AbortSignal,
 ): Promise<T> {
-  // Cover one existing breaker cooldown plus its 30s RPC / 5s tick, with
-  // bounded slack. Retrying faster must not bypass that shared breaker.
-  const deadline = performance.now() + BREAKER_PROBE_BACKOFF_MAX_MS + 60_000;
+  // Cover an already-running 30s probe, the 120s cooldown, a 5s tick and
+  // another 30s probe, with 25s slack. Never bypass the shared breaker.
+  const deadline = performance.now() + BREAKER_PROBE_BACKOFF_MAX_MS + 90_000;
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     assertCurrent();
@@ -134,12 +134,11 @@ export async function probeSharedTask<T>(
       signal?.throwIfAborted();
       assertCurrent();
       const remaining = deadline - performance.now();
-      if (attempt < 16 && remaining > 0 && canRetrySharedTaskRecovery(error)) {
+      if (attempt < 20 && remaining > 0 && canRetrySharedTaskRecovery(error)) {
         const base = attempt === 0 ? 0 : Math.min(1_000 * 2 ** (attempt - 1), 20_000);
-        const delay = Math.min(Math.round(base * (0.75 + Math.random() * 0.5)), 20_000);
-        // Do not start another probe after the retry budget. An existing RPC
-        // keeps its own timeout; racing it here would lose its real outcome.
-        if (delay >= remaining) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
+        // Keep a final probe at the deadline instead of abandoning the last
+        // partial delay. Twenty retries cover the window even at minimum jitter.
+        const delay = Math.min(Math.round(base * (0.75 + Math.random() * 0.5)), 20_000, remaining);
         if (delay) await new Promise<void>((resolve, reject) => {
           const finish = () => {
             signal?.removeEventListener('abort', abort);
@@ -156,7 +155,9 @@ export async function probeSharedTask<T>(
         });
         signal?.throwIfAborted();
         assertCurrent();
-        if (performance.now() >= deadline) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
+        // A delayed timer must not start a stale request. An RPC started within
+        // the budget keeps its own timeout and real outcome, including at its end.
+        if (performance.now() > deadline) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
         continue;
       }
       throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
