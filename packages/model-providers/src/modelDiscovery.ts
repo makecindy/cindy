@@ -47,6 +47,34 @@ function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
   return pickModelMetadata({ efforts: [...new Set(levels.filter(level => level !== "none"))] }).efforts;
 }
 
+/** Catalog modalities use the internal four-way vocabulary, but some providers declare
+ * MIME subtypes (`image/jpeg`) instead of the bare family. Map them onto the family so
+ * one declaration has one meaning for the picker, saved metadata and Pi's `input`.
+ * Anything else is kept verbatim; metadata validation still decides whether it survives.
+ */
+const MIME_MODALITY = /^(text|image|video|audio)\/[a-z0-9][a-z0-9.+-]*$/i;
+function normalizedModalityList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) return undefined;
+  return [...new Set(value.map((item: string) =>
+    MIME_MODALITY.exec(item.trim())?.[1].toLowerCase() ?? item))];
+}
+
+function normalizeDeclaredModalities(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as { input?: unknown; output?: unknown };
+  const input = normalizedModalityList(record.input);
+  const output = normalizedModalityList(record.output);
+  if (input === undefined && output === undefined) return value;
+  return { ...value, ...(input ? { input } : {}), ...(output ? { output } : {}) };
+}
+
+function withoutImageInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as { input?: unknown };
+  if (!Array.isArray(record.input) || !record.input.includes('image')) return value;
+  return { ...value, input: record.input.filter((modality) => modality !== 'image') };
+}
+
 /**
  * 解析 OpenAI / Anthropic「列模型」响应的三种形状（`{data:[{id}]}` / `{models:[{id|slug}]}` /
  * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
@@ -174,10 +202,19 @@ export function parseModelsListResponse(
             : record.default_reasoning_level !== undefined
               ? record.default_reasoning_level
               : record.reasoningEffort;
-    const modalities = record.modalities ??
+    // An explicit capability declaration outranks the modality list, exactly as
+    // mergeModelMetadata documents. A denied image input must not survive inside the
+    // same snapshot, or consumers reading `modalities.input` would flip it back on.
+    const declaredImageInput =
+      record.supports_image_input ?? info.supports_vision ?? capabilities.vision;
+    const normalizedModalities = normalizeDeclaredModalities(record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
-        ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
-    const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
+        ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined));
+    const modalities = declaredImageInput === false
+      ? withoutImageInput(normalizedModalities)
+      : normalizedModalities;
+    const inputModalities = normalizedModalityList(
+      (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities);
     const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;
     const additionalSpeedTiers = record.additional_speed_tiers;
@@ -253,10 +290,8 @@ export function parseModelsListResponse(
           : Array.isArray(additionalSpeedTiers)
             ? additionalSpeedTiers.includes('fast') : undefined),
       supportsImageInput:
-        record.supports_image_input ?? info.supports_vision ?? capabilities.vision ??
-        (Array.isArray(inputModalities) && inputModalities.every(value => typeof value === 'string')
-          ? inputModalities.includes("image")
-          : undefined),
+        declaredImageInput ??
+        (inputModalities ? inputModalities.includes("image") : undefined),
     }) };
     // Check the normalized pair so every spelling (including model_info) obeys
     // the same capacity constraint, without discarding the valid working window.

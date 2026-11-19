@@ -500,6 +500,69 @@ describe('Sub2API manifest capabilities', () => {
     expect(models.map(m => m.discoveredMetadata?.supportsFastMode)).toEqual([undefined, undefined, false, false, undefined]);
     expect(models.every(m => m.discoveredMetadata?.contextWindowMax === undefined)).toBe(true);
   });
+
+  // #11446: OpenCode-compatible catalogs declare `modalities.input` as MIME types
+  // (`image/jpeg`, `image/png`…). The internal vocabulary only knows `image`, and
+  // metadata validation rejects `/`, so the whole declaration was dropped and the
+  // model was persisted as text-only until the user ticked the capability by hand.
+  it('normalizes an image MIME declaration into the internal modality vocabulary', () => {
+    const [flash, pro] = parseModelsListResponse({ data: [
+      { id: 'deepseek-v4.1-flash',
+        modalities: { input: ['text', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+          output: ['text'] } },
+      { id: 'deepseek-v4-pro', modalities: { input: ['text'], output: ['text'] } },
+    ] })!;
+    expect(flash.discoveredMetadata).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'], output: ['text'] } });
+    expect(pro.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+      modalities: { input: ['text'], output: ['text'] } });
+  });
+
+  it('does not invent image input from PDF-only or image-output declarations', () => {
+    const [pdf, outputOnly] = parseModelsListResponse({ data: [
+      { id: 'pdf-model', modalities: { input: ['text', 'application/pdf'], output: ['text'] } },
+      { id: 'image-output', modalities: { input: ['text'], output: ['image/png'] } },
+    ] })!;
+    expect(pdf.discoveredMetadata?.supportsImageInput).not.toBe(true);
+    expect(pdf.discoveredMetadata?.modalities?.input ?? []).not.toContain('image');
+    expect(outputOnly.discoveredMetadata?.supportsImageInput).not.toBe(true);
+    expect(outputOnly.discoveredMetadata?.modalities?.input ?? []).not.toContain('image');
+  });
+
+  it('keeps explicit capability declarations ahead of MIME inference', () => {
+    const [denied, granted] = parseModelsListResponse({ data: [
+      { id: 'denied', supports_image_input: false,
+        modalities: { input: ['text', 'image/png'], output: ['text'] } },
+      { id: 'granted', supports_image_input: true,
+        modalities: { input: ['text'], output: ['text'] } },
+    ] })!;
+    expect(denied.discoveredMetadata?.supportsImageInput).toBe(false);
+    expect(denied.discoveredMetadata?.modalities?.input ?? []).not.toContain('image');
+    expect(granted.discoveredMetadata?.supportsImageInput).toBe(true);
+  });
+
+  it('normalizes MIME values from OpenRouter-style architecture declarations', () => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'relay-vision',
+      architecture: { input_modalities: ['text', 'image/webp'], output_modalities: ['text'] } }] })!;
+    expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'], output: ['text'] } });
+  });
+
+  it('corrects a stored text-only snapshot on refresh and hands Pi an image model', () => {
+    // Snapshot written by the buggy parser: modality dropped, capability persisted as false.
+    const saved = [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek',
+      discoveredMetadata: { supportsImageInput: false, contextWindow: 1_000_000 } }];
+    const refreshed = mergeDiscoveredRuntimeModels(saved, parseModelsListResponse({ data: [{
+      id: 'deepseek-v4.1-flash', context_window: 1_000_000,
+      modalities: { input: ['text', 'image/jpeg'], output: ['text'] } }] })!);
+    expect(refreshed[0].discoveredMetadata).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'], output: ['text'] }, contextWindow: 1_000_000 });
+    const models = JSON.parse(JSON.stringify(refreshed));
+    const provider = buildUserProvider({ id: 'opencode-go', name: 'OpenCode Go', runtimes: {
+      pi: { baseUrl: 'https://opencode.ai/zen/go/v1', models } } });
+    expect(provider.models.pi?.[0]).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'] } });
+  });
 });
 
 describe('mergeDiscoveredRuntimeModels 排序', () => {
