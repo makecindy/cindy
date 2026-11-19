@@ -11,7 +11,7 @@ import { RemoteExecutor, type ExecutorConfirmation, type RemoteExecutorOptions }
 import { EXECUTOR_APPROVAL_TTL_MS, ExecutorGate, executorGateModeFor, type ExecutorAction } from '../gate';
 import type { PdfTextExtractor } from '../files';
 import type { GitCredentialHistory } from '../gitCredentials';
-import { findWindowsGitBash, runOnce, truncateOutput } from '../shell';
+import { findWindowsGitBash, resolveExecutorShell, runOnce, truncateOutput } from '../shell';
 import type { GuardedFetch } from '../webFetch';
 import { ExecutorWorkspace } from '../workspace';
 
@@ -447,6 +447,50 @@ describe.runIf(posix)('Claude Code style Bash', () => {
 });
 
 describe('raw operations for Pi', () => {
+  // #11500: unit-tier Windows shell smoke through the production executor. Existing
+  // POSIX/Git Bash cases do not cover cmd with current-directory lookup disabled.
+  // Minimal failure: exec.run('echo hello') with NoDefaultCurrentDirectoryInExePath=1.
+  it.runIf(!posix)('runs cmd wrappers in the real task directory with current-directory lookup disabled', async () => {
+    const exists = fs.existsSync.bind(fs);
+    const probe = vi.spyOn(fs, 'existsSync').mockImplementation((file) =>
+      /[/\\]bash\.exe$/i.test(String(file)) ? false : exists(file));
+    vi.stubEnv('NoDefaultCurrentDirectoryInExePath', '1');
+    const taskDir = path.join(project, 'task with spaces');
+    fs.mkdirSync(taskDir);
+    fs.writeFileSync(path.join(taskDir, 'marker.txt'), 'real-task-marker');
+    const alias = '/Users/agent/Library/Application Support/Cindy/task';
+    const { executor } = makeExecutor('full', { aliases: [{ from: alias, to: taskDir }] });
+    try {
+      expect(resolveExecutorShell().dialect).toBe('cmd');
+      const hello = await executor.handle('exec.run', { command: 'echo hello', cwd: alias }) as { output: string; exitCode: number };
+      expect(hello.exitCode).toBe(0);
+      expect(Buffer.from(hello.output, 'base64').toString().trim()).toBe('hello');
+      const result = await executor.handle('exec.run', {
+        command: 'type marker.txt\r\necho policy=%NoDefaultCurrentDirectoryInExePath%\r\nexit /b 7', cwd: alias,
+      }) as { output: string; exitCode: number };
+      expect(result.exitCode).toBe(7);
+      expect(Buffer.from(result.output, 'base64').toString()).toContain('real-task-marker');
+      expect(Buffer.from(result.output, 'base64').toString()).toContain('policy=1');
+      const foreground = await executor.callTool('Bash', { command: 'echo foreground' });
+      expect(foreground.isError).not.toBe(true);
+      expect(text(foreground)).toBe('foreground');
+      const started = await executor.callTool('Bash', { command: 'echo background\r\nexit /b 9', run_in_background: true });
+      expect(started.isError).not.toBe(true);
+      const id = /ID: (bash_[0-9a-f]+)/.exec(text(started))?.[1];
+      expect(id).toBeTruthy();
+      let output = '';
+      await vi.waitFor(async () => {
+        output += text(await executor.callTool('BashOutput', { bash_id: id }));
+        expect(output).toContain('<status>completed</status>');
+      });
+      expect(output).toContain('background');
+      expect(output).toContain('<exit_code>9</exit_code>');
+    } finally {
+      await executor.close();
+      probe.mockRestore();
+    }
+  });
+
   it('reads, writes, lists, stats and detects image types', async () => {
     const { executor } = makeExecutor();
     await executor.handle('fs.mkdir', { path: 'src' });
