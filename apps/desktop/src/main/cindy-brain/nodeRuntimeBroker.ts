@@ -5,6 +5,7 @@ import type {
   PluginAuthorizationInput,
 } from '../plugin-oauth/deviceCard.js';
 import { parseDeviceAuthorizationUrl } from '@cindy/device-link';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '../plugin-oauth/targetPolicy.js';
 /**
  * nodeRuntimeBroker — 随意识安装的本地 Node 工作进程守门与 stdio 中继。
@@ -100,6 +101,8 @@ export interface NodeWorkerProcess {
   stderr: NodeWorkerReadable;
   pid?: number;
   killed?: boolean;
+  /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
+  reconcileExit?(): boolean;
   on(event: 'exit', listener: (code: number | null, signal: string | null) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   once(event: 'spawn', listener: () => void): this;
@@ -340,6 +343,7 @@ function harnessIdentity(ghost: InstalledGhost): string {
 
 /** 已 fork 但尚未完成 spawn 握手的代启子进程。 */
 interface StartingChildProcEntry {
+  exited: boolean;
   ghostId: string;
   proc: NodeWorkerProcess;
   hardKillTimer: NodeJS.Timeout | null;
@@ -1136,6 +1140,10 @@ export class GhostNodeRuntimeBroker {
     return count;
   }
 
+  private reconcileProcessExits(ghostId: string): void {
+    for (const proc of [...(this.liveProcesses.get(ghostId) ?? [])]) proc.reconcileExit?.();
+  }
+
   /**
    * 代生在途预约(ghostId → 数量):spawn 要等子进程就绪才记账,并发申请会在
    * 记账前一起挤过数量顶——预约位在检查的同一同步段占坑,堵死这条竞态。
@@ -1158,6 +1166,7 @@ export class GhostNodeRuntimeBroker {
     message: Extract<GhostNodeChildToHostMessage, { type: 'spawn-child' }>,
   ): Promise<void> {
     const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    this.reconcileProcessExits(ghostId);
     const fail = (reason: string): void => {
       this.deps.log?.warn('ghost node child spawn rejected', { ghostId, reason });
       this.replyToWorker(entry, {
@@ -1271,6 +1280,7 @@ export class GhostNodeRuntimeBroker {
         proc.once('spawn', () => settle(resolve));
         proc.once('error', (error) => settle(() => reject(error)));
         proc.once('exit', (code) => settle(() => reject(new Error(`子进程启动前退出(code=${code})`))));
+        if (proc.reconcileExit?.()) settle(() => reject(new Error('子进程已退出')));
       });
     } catch (error) {
       // error 只表示进程通道失败，不保证 OS 进程已经退出。保留 starting
@@ -1280,6 +1290,13 @@ export class GhostNodeRuntimeBroker {
       return;
     } finally {
       signal?.removeEventListener('abort', abortStarting);
+    }
+
+    // ready resolves asynchronously: an exit in the same turn must not promote
+    // a dead process back into children, including custom adapters without probes.
+    if (startingChild.exited || proc.reconcileExit?.()) {
+      fail('子进程就绪后已退出');
+      return;
     }
 
     // worker 在等待答复期间死了/被停:孩子不能变孤儿,就地收掉。
@@ -1417,9 +1434,12 @@ export class GhostNodeRuntimeBroker {
    * 片段。插件停用、更新、卸载与账号切换时,broker 在替换安装目录前结束这些进程。
    */
   async spawnHarness(ghostId: string, harnessId: string): Promise<NodeWorkerProcess> {
-    const reject = (reason: string): never => {
+    const logRejection = (reason: string): void => {
       this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
-      throw new Error(reason);
+    };
+    const reject = (reason: string): never => {
+      logRejection(reason);
+      throw new AgentStartupStoppedError(new Error(reason));
     };
     if (this.destroyed) reject('Plugin runtime is shutting down');
     if (this.harnessSpawnBlocked.has(ghostId)) {
@@ -1450,11 +1470,18 @@ export class GhostNodeRuntimeBroker {
     const processes = this.harnessProcesses.get(ghostId) ?? new Set<HarnessProcEntry>();
     processes.add(entry);
     this.harnessProcesses.set(ghostId, processes);
-    proc.once('exit', () => this.forgetHarnessProcess(entry));
+    let exited = false;
+    const whenStopped = new Promise<void>((resolve) => {
+      proc.once('exit', () => {
+        exited = true;
+        this.forgetHarnessProcess(entry);
+        resolve();
+      });
+    });
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
-    this.logHarnessStderr(entry);
     try {
+      this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
         const settle = (outcome: () => void) => {
@@ -1469,20 +1496,31 @@ export class GhostNodeRuntimeBroker {
         proc.once('error', (error) => settle(() => fail(error)));
         proc.once('exit', (code) => settle(() => fail(new Error(`Task engine exited before it was ready (code=${code})`))));
       });
+      // Recheck admission after the handshake, before yielding the process.
+      const current = this.deps.getGhost(ghostId);
+      if (
+        this.destroyed || exited || entry.stopping || this.harnessSpawnBlocked.has(ghostId)
+        || (this.stopGeneration.get(ghostId) ?? 0) !== generation
+        || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)
+        || !current || harnessIdentity(current) !== identity || !this.resolveHarness(current, harnessId)
+      ) {
+        throw new Error('The plugin changed while the task engine was starting');
+      }
     } catch (error) {
-      this.stopHarnessProcess(entry, true);
-      return reject(error instanceof Error ? error.message : 'Task engine failed to start');
-    }
-    // 握手期间可能已停用、更新、卸载或换账号:就地收掉,不交出孤儿进程。
-    const current = this.deps.getGhost(ghostId);
-    if (
-      this.destroyed || entry.stopping || this.harnessSpawnBlocked.has(ghostId)
-      || (this.stopGeneration.get(ghostId) ?? 0) !== generation
-      || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)
-      || !current || harnessIdentity(current) !== identity || !this.resolveHarness(current, harnessId)
-    ) {
-      this.stopHarnessProcess(entry, true);
-      return reject('The plugin changed while the task engine was starting');
+      if (!exited) this.stopHarnessProcess(entry, true);
+      const cause = error instanceof Error ? error : new Error('Task engine failed to start');
+      logRejection(cause.message);
+      if (exited) throw new AgentStartupStoppedError(cause);
+      throw new AgentStartupCleanupPendingError(cause.message, {
+        cause,
+        whenStopped,
+        retryCleanup: async () => {
+          if (exited) return;
+          const stopped = this.waitForProcessExit(proc, ghostId);
+          try { proc.kill('SIGKILL'); } catch { /* Wait for the exit event. */ }
+          await stopped;
+        },
+      });
     }
     this.deps.log?.info('ghost harness spawned', { ghostId, harnessId, pid: proc.pid });
     return proc;
@@ -1580,6 +1618,7 @@ export class GhostNodeRuntimeBroker {
   async stopAndWait(ghostId: string): Promise<void> {
     // 先封住新的 child spawn；这段没有 await，随后快照可覆盖所有已 fork 的进程。
     this.stoppedGhosts.add(ghostId);
+    this.reconcileProcessExits(ghostId);
     // 以真实进程账本为准，而不是 workers/children 的业务状态。错误事件、父进程
     // 退出或上一次停止超时都可能先移除业务记账；只要没有真实 exit，重试更新
     // 仍必须等待同一 OS 进程，不能绕过 Windows 文件锁保护。
@@ -1642,12 +1681,15 @@ export class GhostNodeRuntimeBroker {
 
   private trackStartingChild(ghostId: string, proc: NodeWorkerProcess): StartingChildProcEntry {
     this.trackLiveProcess(ghostId, proc);
-    const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false };
+    const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false, exited: false };
     const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
     children.add(entry);
     this.startingChildren.set(ghostId, children);
     // error 不是进程已退出的证明，任何路径都保留记账直到真实 exit。
-    proc.once('exit', () => this.forgetStartingChild(entry));
+    proc.once('exit', () => {
+      entry.exited = true;
+      this.forgetStartingChild(entry);
+    });
     return entry;
   }
 
@@ -1663,7 +1705,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private stopStartingChild(entry: StartingChildProcEntry, force = false): void {
-    if (entry.stopping) return;
+    if (entry.exited || entry.stopping) return;
     entry.stopping = true;
     try {
       entry.proc.kill(force ? 'SIGKILL' : 'SIGTERM');

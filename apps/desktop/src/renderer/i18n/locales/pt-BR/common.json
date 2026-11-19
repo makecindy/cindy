@@ -6871,6 +6871,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
         "peerSwitch": {

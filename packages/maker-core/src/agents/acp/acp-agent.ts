@@ -42,6 +42,7 @@ export function acpProviderIdForHarness(key: string): string {
 
 /** Host side: starts the endpoint process for one task and adapts it to a line transport. */
 export interface AcpEndpointLauncher {
+  /** Known failures carry startup exit proof or the failed process's cleanup receipt. */
   connect(harnessKey: string): Promise<AcpLineTransport>;
 }
 
@@ -132,17 +133,19 @@ export class AcpAgent extends BaseAgent {
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     // Maker already refuses plugin engines on another computer; SSH and hosted guests are refused here.
     if (opts.remoteHostId || opts.deviceHosted) {
-      throw new NotSupportedError('remoteSession', {
+      throw new AgentStartupStoppedError(new NotSupportedError('remoteSession', {
         supported: false,
         reason: 'not-implemented',
         message: 'Plugin engines run on this computer only',
-      });
+      }));
     }
     if (opts.reviewMode) {
-      throw new NotSupportedError('reviewMode', { supported: false, reason: 'not-implemented' });
+      throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', { supported: false, reason: 'not-implemented' }));
     }
     const harnessKey = acpHarnessKeyFromProviderId(opts.providerId);
-    if (!harnessKey) throw new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)');
+    if (!harnessKey) {
+      throw new AgentStartupStoppedError(new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)'));
+    }
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     let extra: PiExtraSpawnConfig | null = null;
