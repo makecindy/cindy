@@ -61,6 +61,30 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
+    const photo = (guid: string) => ({ guid, transferName: guid + '.png', mimeType: 'image/png' });
+    f.message('a', { text: '', attachments: [photo('one'), photo('two')] });
+    f.message('b', { attachments: [photo('two'), photo('missing'), photo('three')] });
+    f.message('elsewhere', { chats: [f.otherChat], attachments: [photo('private')] });
+    f.message('question', { threadOriginatorGuid: 'a' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async id => {
+      if (id === 'missing') throw new Error('unavailable');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = f.received[0]!;
+    expect(event.imessageReplyGuid).toBe('a');
+    const result = await f.im.contextMedia(event, ['elsewhere', 'a', 'b']);
+    expect(result.reply?.messageId).toBe('a');
+    expect(result.attachments.map(file => [file.kind, file.originalName])).toEqual([
+      ['image', 'one.png'], ['image', 'two.png'], ['image', 'three.png']]);
+    expect(result.unavailable).toEqual(['missing.png', '原消息不可用']);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'missing', 'three']);
+  });
+
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
   // ignore excluded pending inputs before restoring the old chat allowlist.
   it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {

@@ -291,6 +291,8 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /** Verified BlueBubbles inline-reply root, resolved in the same connected chat. */
+  imessageReplyGuid?: string;
   /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
