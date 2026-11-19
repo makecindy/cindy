@@ -55,7 +55,7 @@ h2 { font-size:17px; font-weight:650; line-height:1.4; }
 .spread { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .row { display:block; width:100%; text-align:left; border-radius:8px; padding:13px 14px; }
 .row[aria-expanded=true] { border-color:var(--focus); }
-.row-title { display:block; font-weight:650; }
+.row-title { display:block; font-weight:650; overflow-wrap:anywhere; }
 .dot { display:inline-block; width:7px; height:7px; background:var(--accent); border-radius:50%; margin-right:8px; vertical-align:2px; }
 .result { margin:0 0 20px; color:var(--accent); }
 .result:empty { display:none; }
@@ -119,7 +119,7 @@ textarea { display:block; width:100%; min-height:128px; resize:vertical; backgro
       <p id="catalog-empty" class="muted" hidden>没有找到匹配的插件。</p>
     </section>
     <section id="market" aria-labelledby="market-title" hidden>
-      <button type="button" class="go-back" data-back>← 插件</button>
+      <button type="button" class="go-back" data-back="open-plugin">← 插件</button>
       <header class="hero">
         <div class="tile" aria-hidden="true">桌</div>
         <div><h1 id="market-title" tabindex="-1">桌面伙伴</h1><p class="small">社区插件 · v1.3.11</p></div>
@@ -132,7 +132,7 @@ textarea { display:block; width:100%; min-height:128px; resize:vertical; backgro
       </div>
     </section>
     <section id="author" aria-labelledby="author-title" hidden>
-      <button type="button" class="go-back" data-back>← 插件</button>
+      <button type="button" class="go-back" data-back="my-plugins">← 插件</button>
       <div class="spread intro">
         <h1 id="author-title" tabindex="-1">我的插件</h1>
         <button type="button" disabled title="预览未接入发布">发布插件</button>
@@ -196,10 +196,10 @@ const authorButtons = [...document.querySelectorAll('[data-author]')];
 const search = byId('plugin-search');
 let activeCatalog = 'installed';
 
-function showPage(page) {
+function showPage(page, focusId = page + '-title') {
   for (const id of pageIds) byId(id).hidden = id !== page;
   byId('catalog-toolbar').hidden = page === 'author';
-  byId(page + '-title').focus();
+  byId(focusId).focus();
 }
 
 function selectPanel(buttons, attribute, panel) {
@@ -228,7 +228,7 @@ for (const button of authorButtons) button.addEventListener('click', () => {
   selectPanel(authorButtons, 'author', button.dataset.author);
 });
 for (const button of document.querySelectorAll('[data-back]')) {
-  button.addEventListener('click', () => showPage('catalog'));
+  button.addEventListener('click', () => showPage('catalog', button.dataset.back));
 }
 search.addEventListener('input', filterCatalog);
 byId('open-plugin').addEventListener('click', () => showPage('market'));
