@@ -7186,7 +7186,7 @@ export function RunningStatusBar({
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   // 工具执行期间(host 已 pause)不显示流速:那不是生成速度,残留读数只会误导。
   const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate' && !(tokenSpeed && !tokenSpeed.streaming)
+    !isHidden && !reconnecting && usageMeta.kind === 'rate' && (!tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0))
       ? latestRateText !== null
         ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
         : null
@@ -7289,10 +7289,7 @@ export function RunningStatusBar({
             {!preparing && showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
-                // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
-                // 结束前的读数(60s 内仍新),打开浮窗会显示成仍在跑。平均速度与峰值
-                // 仍然保留,它们描述的是已经发生的生成。
-                rate={tokenSpeed && !tokenSpeed.streaming ? null : latestRateText}
+                rate={latestRateText}
                 rateText={
                   workflowWaiting ||
                   sideTaskRunning ||

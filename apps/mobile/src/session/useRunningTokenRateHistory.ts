@@ -91,7 +91,6 @@ export function useRunningTokenRateHistory(input: {
     return () => clearTimeout(timer);
   }, [history.latestSampleAt, history.latestRate]);
   const visibleHistory =
-    tokenSpeed?.streaming === false ||
     history.latestSampleAt === undefined ||
     Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
       ? { ...history, latestRate: null }
