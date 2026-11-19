@@ -160,12 +160,22 @@ function nullableTime(value: unknown): string | null {
 }
 
 /**
+ * 去掉字符串末尾的 0。用循环而不是 /0+$/：后者遇到一长串 0 时匹配耗时随长度平方增长
+ * （CodeQL「对不受控数据使用多项式正则」）。
+ */
+function trimTrailingZeros(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 48) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
  * 礼品卡金额（卡面与到账额度）：十进制，去掉小数末尾的 0 后最多两位小数。服务端发卡也限两位，
  * 卡面按分印；比分更细的金额卡面与文字会对不上，按坏响应处理。
  */
 function amount(value: unknown): string {
   if (typeof value !== 'string' || !DECIMAL_PATTERN.test(value)) invalid();
-  if ((value.split('.')[1] ?? '').replace(/0+$/, '').length > 2) invalid();
+  if (trimTrailingZeros(value.split('.')[1] ?? '').length > 2) invalid();
   return value;
 }
 
@@ -206,7 +216,11 @@ function destinationOf(value: Record<string, unknown>): GiftCardDestination {
 
 /** 两个十进制金额是否相等（去掉小数末尾的 0 再比，如 100 与 100.000000000）。 */
 function sameAmount(left: string, right: string): boolean {
-  const normalize = (value: string) => (value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value);
+  const normalize = (value: string) => {
+    if (!value.includes('.')) return value;
+    const trimmed = trimTrailingZeros(value);
+    return trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+  };
   return normalize(left) === normalize(right);
 }
 

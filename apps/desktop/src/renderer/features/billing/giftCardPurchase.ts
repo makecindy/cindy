@@ -82,6 +82,16 @@ export function customGiftCardRange(
 }
 
 /**
+ * 去掉字符串末尾的 0。用循环而不是 /0+$/：后者遇到一长串 0 时匹配耗时随长度平方增长
+ * （CodeQL「对不受控数据使用多项式正则」）。
+ */
+function trimTrailingZeros(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 48) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
  * 买家填的面额：合法时返回规范写法（去掉多余的 0，如 0100 → 100、100.50 → 100.5），否则返回问题。
  * 面额最多两位小数，与卡面和兑换入账的精度一致。
  */
@@ -98,7 +108,7 @@ export function parseCustomGiftCardAmount(
   // 范围读不出来时不放行：宁可这次填不了，也不让低于下限或高于上限的面额去下单。
   if (min === null || max === null || unit < min || unit > max) return { issue: 'range' };
   const whole = Math.floor(unit / 100);
-  const fraction = String(unit % 100).padStart(2, '0').replace(/0+$/, '');
+  const fraction = trimTrailingZeros(String(unit % 100).padStart(2, '0'));
   return { amount: fraction ? `${whole}.${fraction}` : String(whole) };
 }
 
@@ -109,7 +119,7 @@ export function parseCustomGiftCardAmount(
 function cents(amount: string): number | null {
   const match = /^(\d{1,12})(?:\.(\d{1,9}))?$/.exec(amount);
   if (!match) return null;
-  const fraction = (match[2] ?? '').replace(/0+$/, '');
+  const fraction = trimTrailingZeros(match[2] ?? '');
   if (fraction.length > 2) return null;
   return Number(match[1]) * 100 + Number(fraction.padEnd(2, '0'));
 }

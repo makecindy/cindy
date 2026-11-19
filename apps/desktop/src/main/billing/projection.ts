@@ -117,12 +117,25 @@ function decimal(value: unknown): string | null {
 }
 
 /**
+ * 去掉字符串末尾的 0。用循环而不是 /0+$/：后者遇到一长串 0 时匹配耗时随长度平方增长
+ * （CodeQL「对不受控数据使用多项式正则」）。
+ */
+function trimTrailingZeros(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 48) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
  * 两个 decimal() 金额是否相等：去掉小数末尾的 0 再比（如 20 与 20.000000000）。
  * DECIMAL_PATTERN 不允许整数部分前导 0，所以只需处理小数部分。
  */
 function sameDecimal(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value;
+  const normalize = (value: string) => {
+    if (!value.includes('.')) return value;
+    const trimmed = trimTrailingZeros(value);
+    return trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+  };
   return normalize(left) === normalize(right);
 }
 
@@ -132,7 +145,7 @@ function sameDecimal(left: string, right: string): boolean {
  */
 function isGiftCardMoney(value: string): boolean {
   const fraction = value.split('.')[1] ?? '';
-  return fraction.replace(/0+$/, '').length <= 2;
+  return trimTrailingZeros(fraction).length <= 2;
 }
 
 /** 读礼品卡金额字段：合法十进制且满足 isGiftCardMoney，否则为 null。 */
