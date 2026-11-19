@@ -26,6 +26,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import { configureBotModelSelectionCoordinator, createBotModelSelectionCoordinator } from '../../../maker-ipc/botModelSelectionCoordinator';
+import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosaveStatus } from '../../../../renderer/features/bots/botSettingsAutosave';
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
@@ -77,6 +78,7 @@ const h = await vi.hoisted(async () => {
   const userDataDir = mkdtempSync(join(tmpdir(), 'cindy-bot-test-'));
   return ({
   userDataDir,
+  dbReady: true,
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as Database.Database | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
@@ -168,7 +170,7 @@ vi.mock('../../client/current', () => ({
     };
   })(),
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
-  tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  tryGetDbClient: () => h.dbReady ? ({ drizzle: h.db, tx: h.tx }) : null,
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
@@ -524,6 +526,7 @@ const capabilityDeps = {
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  h.dbReady = true;
   setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });
   h.toolsetsAvailable = false;
@@ -615,6 +618,68 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  // DB regression: an unanswered host write is not cancelled by the UI timeout.
+  // Prior persistence tests always awaited its receipt; unit form tests use a
+  // memory fake. Exercise real IPC + SQLite and read back the last chosen route.
+  it('persists the latest model after an unconfirmed settings save finally completes', async () => {
+    const original = await invoke('local-db:bots:get', 'bot-1');
+    let baseline = normalizeBotSettingsPayload(original, original.name);
+    const route = { ...baseline.capabilities.modelChain[0]!, model: 'first-choice' };
+    const selection = (model: string) => ({ ...baseline, capabilities: { ...baseline.capabilities,
+      ...route, model, modelChain: [{ ...route, model }], modelChainOverride: [{ ...route, model }],
+      modelOverride: { model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode } } });
+    let draft = selection(route.model);
+    let version = original.currentVersion;
+    let entered!: () => void;
+    const hostEntered = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const hostGate = new Promise<void>(resolve => { release = resolve; });
+    configureBotModelSelectionCoordinator(async (_ids, operation) => {
+      entered();
+      await hostGate;
+      return operation();
+    });
+    let confirmed!: () => void;
+    const latestConfirmed = new Promise<void>(resolve => { confirmed = resolve; });
+    const statuses: BotAutosaveStatus[] = [];
+    const save = createBotSettingsAutosave({ readBaseline: () => baseline, readPayload: () => draft,
+      commit: async payload => {
+        const saved = await invoke('local-db:bots:update', {
+          id: 'bot-1', capabilities: payload.capabilities, acceptSavedModelSelectionVersion: version,
+        });
+        version = saved.currentVersion;
+        baseline = normalizeBotSettingsPayload(saved, saved.name);
+        if (saved.capabilities.model === 'latest-choice') confirmed();
+      },
+      onStatusChange: status => statuses.push(status),
+    });
+    vi.useFakeTimers();
+    try {
+      const firstWait = save.flush();
+      await hostEntered;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await firstWait;
+      expect(statuses).toEqual(['saving', 'error']);
+      expect((await invoke('local-db:bots:get', 'bot-1')).currentVersion).toBe(original.currentVersion);
+      draft = selection('latest-choice');
+      save.schedule('model');
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await latestConfirmed;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statuses.filter(status => status === 'saved')).toHaveLength(1);
+      expect(save.isDirty()).toBe(false);
+      const reread = await invoke('local-db:bots:get', 'bot-1');
+      expect(reread.capabilities.modelChain).toEqual([{ ...route, model: 'latest-choice' }]);
+      expect(reread.currentVersion).toBe(original.currentVersion + 2);
+    } finally {
+      release();
+      save.cancel();
+      configureBotModelSelectionCoordinator(async (_ids, operation) => operation());
+      vi.useRealTimers();
+    }
+  });
+
   it('reads the stored 代输入 and follow-by-scheduler choices back into the settings profile', async () => {
     expect((await invoke('local-db:bots:get', 'bot-1')).capabilities).not.toHaveProperty('inputHandoff');
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false, allowSchedulerFollow: true } });
@@ -1190,6 +1255,7 @@ describe('Bot canonical Session lifecycle', () => {
       await expect(host.materializer!.createProfile(draft(), { assertCurrent() {} }))
         .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return [actor];
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: actor.name, description: '', soul: field === 'identitySource' ? source : '',
           systemPrompt: '', user: field === 'userContextSource' ? source : '',
@@ -1249,6 +1315,7 @@ describe('Bot canonical Session lifecycle', () => {
       const publish = () => host.homes.update(companionSnapshot({ enabled: true, selfDeviceId: 'self', humanActorId: 'human', actors,
         demotedBotIds: state.demotedBotIds() }));
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return actors;
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: 'Cloud Cindy', description: '', soul: 'Cloud identity', systemPrompt: '', user: '', templateId: 'cindy',
         } }] : { revision: 1 };
@@ -3310,8 +3377,8 @@ describe('Bot canonical Session lifecycle', () => {
       },
     }, { persistSnapshot: false });
 
-    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
-    expect(snapshot?.resolutionStatus).toBe('applied');
+    // The session starts with a degraded snapshot. No individual skill was identified as missing.
+    expect(snapshot?.resolutionStatus).toBe('degraded');
     expect(snapshot?.unavailableSkills).toEqual([]);
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
   });
@@ -5635,4 +5702,19 @@ it('rejects an owner switch during batched runtime snapshot reads', async () => 
   });
   await expect(invoke('local-db:bots:get', 'bot-1')).rejects.toThrow('PRECONDITION_FAILED');
   expect(queries).toBe(1);
+});
+
+// #9706 / db: invoke the production registered handler against the existing real
+// SQLite fixture. CRUD coverage never withheld publication of the DbClient.
+// The same stored buddy must appear once ready; no synthetic empty success.
+it('rejects a roster read before DbClient publication instead of reporting no buddies', async () => {
+  h.dbReady = false;
+  try {
+    await expect(invoke('local-db:bots:list', undefined)).rejects.toThrow('not ready');
+  } finally {
+    h.dbReady = true;
+  }
+  await expect(invoke('local-db:bots:list', undefined)).resolves.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]),
+  );
 });

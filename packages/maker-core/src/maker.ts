@@ -180,6 +180,7 @@ export interface MakerDeps {
 
 /** A previous attempt still owns native resources; retry without changing route/history. */
 export class SessionCreationCleanupPendingError extends Error {
+  readonly code = 'SESSION_CLEANUP_PENDING';
   constructor(options?: ErrorOptions) {
     super('Previous session startup cleanup is still pending; retry the task.', options);
     this.name = 'SessionCreationCleanupPendingError';
@@ -356,6 +357,22 @@ async function mergePiRuntimeSkillStatuses(
     skills: [...nonManagedSkills, ...managedSkills],
   };
   if (manifest?.status !== 'loaded') return sessionResult;
+  // Pi CLI packages can be loaded in the live session without appearing in
+  // Cindy's managed package store. Use only user-package skills attested by Pi.
+  const listedNames = new Set(sessionResult.skills.map((skill) => skill.name));
+  for (const command of manifest.commands) {
+    const { path: sourcePath, origin, scope } = command.sourceInfo;
+    if (command.source !== 'skill' || origin !== 'package' || scope !== 'user'
+      || !sourcePath || !command.name.startsWith('skill:')) continue;
+    const name = command.name.slice('skill:'.length);
+    if (!name || listedNames.has(name)) continue;
+    listedNames.add(name);
+    sessionResult.skills.push({
+      kind: 'agent-skill', name, description: command.description, source: 'skill',
+      path: sourcePath, scope: 'user', origin: 'package', enabled: true,
+      runtimeStatus: 'loaded', runtimeCommandName: command.name,
+    });
+  }
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
   const changedProjectSkills = new Map<string, string>();
@@ -739,7 +756,13 @@ export class Maker {
       return this.createSessionWhileRunning(opts, signal);
     }
     if (existing?.getStatus() === 'error') {
-      await existing.close();
+      try {
+        await existing.close();
+      } catch (error) {
+        // This is still the old runtime's teardown, not replacement startup.
+        throw error instanceof SessionCreationCleanupPendingError
+          ? error : new SessionCreationCleanupPendingError({ cause: error });
+      }
       signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);

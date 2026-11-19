@@ -2807,6 +2807,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('routes model resume through the same retained-session helper and returns its generation id', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
+    // #9705: resume must snapshot the live parent settings, not a stale child home.
+    const settingsFile = path.join(knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!, 'settings.json');
+    const settings = { ...JSON.parse(readFileSync(settingsFile, 'utf8')),
+      shellPath: '/fixture/current shell', shellCommandPrefix: ' export PREFIX=live\n' };
+    writeFileSync(settingsFile, JSON.stringify(settings));
     const resumedId = '123e4567-e89b-42d3-a456-426614174098';
     const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun').mockResolvedValue(resumedId);
     try {
@@ -2819,6 +2824,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       })));
       expect(resumeSpy).toHaveBeenCalledWith(expect.any(String), '123e4567-e89b-42d3-a456-426614174097',
         'check again', expect.objectContaining({ runtimeOwnerId: expect.any(String), launchRunner: expect.any(Function) }), 'one-child');
+      expect(JSON.parse(resumeSpy.mock.calls[0]![3].runtimeSnapshot!.settingsJson!.toString('utf8'))).toMatchObject({
+        shellPath: settings.shellPath, shellCommandPrefix: settings.shellCommandPrefix,
+      });
     } finally { await handle.close(); }
   });
 

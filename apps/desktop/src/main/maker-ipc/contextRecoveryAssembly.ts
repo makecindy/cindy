@@ -1,3 +1,4 @@
+import { handoffPreviewText } from './agentHandoff.js';
 import type { ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
@@ -148,7 +149,11 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
             role: 'assistant',
             content: '',
             agentKind: cardAgentKind,
-            agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
+            agentMeta: { contextRebuild: {
+              reason: meta.reason,
+              handoff: handoffPreviewText(handoff),
+              handoffCoverage: meta.handoffCoverage,
+            } } as AgentMeta,
           },
           {
             broadcastOwnerScope: ownerScope,

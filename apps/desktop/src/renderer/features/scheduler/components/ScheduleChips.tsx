@@ -42,6 +42,7 @@ import {
   DEFAULT_SCHEDULE_INTERVAL_MS,
   resolveScheduleTimingPresentation,
   summarizeConfig,
+  formatIntervalDuration,
   switchScheduleTimingMode,
   WEEKDAY_LABELS,
   DEFAULT_CONFIG,
@@ -290,22 +291,6 @@ const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'intervalMinutes',
   'interval',
 ];
-
-function formatIntervalDuration(intervalMs: number, locale: string): string {
-  const units: ReadonlyArray<{ factor: number; unit: string }> = [
-    { factor: 24 * 60 * 60_000, unit: 'day' },
-    { factor: 60 * 60_000, unit: 'hour' },
-    { factor: 60_000, unit: 'minute' },
-    { factor: 1_000, unit: 'second' },
-    { factor: 1, unit: 'millisecond' },
-  ];
-  const selected = units.find(({ factor }) => intervalMs % factor === 0) ?? units[units.length - 1];
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: selected.unit,
-    unitDisplay: 'long',
-  }).format(intervalMs / selected.factor);
-}
 
 const WEEKDAY_SHORT: Record<number, string> = {
   1: 'Mo',

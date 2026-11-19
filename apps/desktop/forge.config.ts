@@ -2243,6 +2243,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/im/imessage/archiveWorker.ts',
+          config: 'vite.node-worker.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/main/bot-import/openclawCronWorker.ts',
           config: 'vite.node-worker.config.ts',
           target: 'preload',

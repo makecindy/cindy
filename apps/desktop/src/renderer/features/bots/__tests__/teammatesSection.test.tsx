@@ -1222,9 +1222,38 @@ describe('startup roster read failures', () => {
     window.electronAPI.localDb!.bots = { list } as never;
     const pending = store.ensureBotProfilesLoaded();
     await renderSidebar();
-    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
-    await act(async () => { finish([]); await pending; });
+    try {
+      expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    } finally {
+      await act(async () => { finish([]); await pending; });
+    }
+    expect(screen.queryByRole('status')).toBeNull();
     expect(screen.getByRole('button', { name: 'bots.add' })).toBeTruthy();
     expect(list).toHaveBeenCalledOnce();
   });
+});
+
+// #9706 / unit-jsdom: loading must remain visible in all sidebar presentation
+// modes. Execute the production store/section and settle the read in finally.
+it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until its current-owner read succeeds (%s)', async mode => {
+  mocks.realStore = true;
+  writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+  writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+  const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+  setDataOwnerGeneration(`startup-pending-${mode}`);
+  let finish!: (rows: unknown[]) => void;
+  const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+  window.electronAPI.localDb!.bots = { list } as never;
+  const pending = store.ensureBotProfilesLoaded();
+  await renderSidebar();
+  try {
+    expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+  } finally {
+    await act(async () => { finish([bot({ id: 'existing', name: 'Existing buddy' })]); await pending; });
+  }
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
+  expect(list).toHaveBeenCalledOnce();
 });

@@ -869,7 +869,7 @@
   },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 續之？",
-    "body": "為均耗各名籍之限額，宜將此訊改由 {{label}} 遣出（{{quota}}）。改過去將攜近數輪言談與摘要，更早之細節或記不全。",
+    "body": "為均耗各名籍之限額，宜將此訊改由 {{label}} 遣出（{{quota}}）。改則承其言談之脈，舊訊或約，原錄猶存。",
     "quota": "尚餘 {{left}}%",
     "quotaReset": "尚餘 {{left}}%，{{reset}}後重置",
     "confirm": "改之",
