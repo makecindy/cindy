@@ -2803,6 +2803,8 @@
       "autoUpdateSaveFailed": "Einstellungen für automatische Updates konnten nicht gespeichert werden",
       "analyticsLabel": "Nutzungsstatistiken",
       "analyticsDescription": "Hilft uns zu verstehen, wie oft Cindy gestartet und weiter genutzt wird. Übermittelt Informationen zum Gerät und zur Nutzungsumgebung — etwa Gerätemodell, Betriebssystemversion, App-Version und Gerätekennung — sowie nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts. Wenn du dies deaktivierst, wird die Übermittlung sofort beendet.",
+      "productTokenUsage": "Modellnutzung teilen",
+      "productTokenUsageHint": "Neue Token dieses Kontos auf diesem Gerät werden regional nach Quelle und Modell zusammengefasst und an TapDB gesendet.",
       "analyticsEnabledToast": "Nutzungsstatistiken aktiviert",
       "analyticsDisabledToast": "Nutzungsstatistiken deaktiviert",
       "analyticsSaveFailed": "Einstellungen für Nutzungsstatistiken konnten nicht gespeichert werden",

@@ -7,6 +7,7 @@ export interface AnalyticsSettingsState {
   analyticsEnabledCustomized: boolean;
   /** allowed = isReportingBuild && 已同意隐私政策 && 统计开关开启(dev 默认 false,XDT_TAPDB_DEV=1 可放行)。 */
   allowed: boolean;
+  productTokensEnabled: boolean;
   loading: boolean;
 }
 
@@ -15,6 +16,7 @@ const INITIAL: AnalyticsSettingsState = {
   analyticsEnabled: true,
   analyticsEnabledCustomized: false,
   allowed: false,
+  productTokensEnabled: false,
   loading: true,
 };
 
@@ -24,6 +26,7 @@ function normalize(payload: AnalyticsSettingsPayload): AnalyticsSettingsState {
     analyticsEnabled: payload.analyticsEnabled === true,
     analyticsEnabledCustomized: payload.analyticsEnabledCustomized === true,
     allowed: payload.allowed === true,
+    productTokensEnabled: payload.productTokensEnabled === true,
     loading: false,
   };
 }
