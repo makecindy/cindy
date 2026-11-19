@@ -210,6 +210,8 @@ export function usePurchasedGiftCards() {
   const inFlight = state.cards.some(isGiftCardEmailInFlight);
   const visible = useDocumentVisible(inFlight);
   const refreshingRef = useRef(false);
+  // 每轮刷新结束（成功或失败）都推进一次，失败时卡片没变也会排上下一轮，总轮数仍受上限约束。
+  const [refreshTick, setRefreshTick] = useState(0);
   useEffect(() => {
     if (!inFlight || !visible || state.loading) return undefined;
     if (emailRoundsRef.current >= EMAIL_REFRESH_MAX_ROUNDS) return undefined;
@@ -232,10 +234,11 @@ export function usePurchasedGiftCards() {
         })
         .finally(() => {
           refreshingRef.current = false;
+          if (mountedRef.current) setRefreshTick((tick) => tick + 1);
         });
     }, EMAIL_REFRESH_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [inFlight, mergeCards, state.cards, state.loading, visible]);
+  }, [inFlight, mergeCards, refreshTick, state.cards, state.loading, visible]);
 
   return { state, reload, loadMore, reveal, copy, forget, sendEmail };
 }

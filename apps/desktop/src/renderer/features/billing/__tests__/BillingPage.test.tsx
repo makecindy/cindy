@@ -1354,13 +1354,20 @@ describe('BillingPage remote catalog rendering', () => {
       ['keeps waiting', () => delivery('SENDING'), 'visible', 1 + EMAIL_REFRESH_MAX_ROUNDS],
       ['stops once sent', () => delivery('SENT'), 'visible', 2],
       ['pauses while hidden', () => delivery('SENDING'), 'hidden', 1],
+      // 某一轮读取失败后仍按剩余轮数继续读，而不是停在那一轮。
+      ['keeps going after a failed read', 'fail-then-sent', 'visible', 3],
     ] as const)('re-reads delivery status at most a few times (%s)', async (_label, next, visibility, reads) => {
       vi.useFakeTimers();
       const visibilityState = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(visibility);
       try {
-        const list = vi.fn()
-          .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
-          .mockResolvedValue(page([card({ email: next() })]));
+        const list = next === 'fail-then-sent'
+          ? vi.fn()
+            .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValue(page([card({ email: delivery('SENT') })]))
+          : vi.fn()
+            .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
+            .mockResolvedValue(page([card({ email: next() })]));
         window.electronAPI.billing.listPurchasedGiftCards = list;
         const { result, unmount } = renderHook(() => usePurchasedGiftCards());
         await act(async () => {
