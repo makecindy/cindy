@@ -1,10 +1,11 @@
 /**
  * 会话自动起名的**唯一权威实现**(main 侧)。
  *
- * 两条输入路径都收敛到这里:
+ * 各入口都收敛到这里:
  *   - 本机发送:renderer 经 `maker:auto-title` IPC 调进来;
  *   - device-link 远控:被控端 `maker:input:enqueue` 直接调(控制端 renderer 不
- *     参与起名,只在自己的投影层显示预览)。
+ *     参与起名,只在自己的投影层显示预览);
+ *   - 群聊、IM 和任务委托:执行端提供自己刚创建的占位和渠道格式。
  *
  * 为什么必须单一持有:同一个会话既可能被本机用户发送,也可能被另一台设备远控。
  * 占位归属若分散在 renderer 与 main 两份内存里,一端写的合成占位会被另一端当成
@@ -32,8 +33,11 @@ import {
   setOnUserSessionTitleWritten,
   type OverwritableAutoTitleTarget,
 } from '../localDb/ipc/sessions.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 
+import { installTaskTitleWriter, type CreatedTaskTitle } from './createdTaskTitles.js';
 import { generateMakerSessionTitle } from './title.js';
 
 const log = createLogger('maker-ipc/session-auto-title');
@@ -130,6 +134,11 @@ function enqueuePerSession<T>(sessionId: string, task: () => Promise<T>): Promis
  */
 const manuallyRenamed = new Set<string>();
 
+// A channel may open a task before it has words (e.g. /new or a photo).
+// Keep only the creating owner's metadata until the first actual subject arrives.
+let pendingTitleOwner: WeakRef<object> | null = null;
+const awaitingTopicText = new Map<string, CreatedTaskTitle>();
+
 /**
  * 是否装有启用中的 will-user-message 拦截意识。由 register 注入(避免
  * maker-ipc → cindy-brain 的额外静态依赖),未注入时按"没有"处理。
@@ -143,8 +152,10 @@ let isUserMessageScreeningActive: (() => boolean) | null = null;
 export function registerSessionAutoTitleHooks(hooks?: {
   isUserMessageScreeningActive?: () => boolean;
 }): void {
+  installTaskTitleWriter({ refine: refineCreatedTaskTitle, mayRefine: mayRefineTaskTitle, persistInitial: persistInitialTaskTitle });
   setOnUserSessionTitleWritten((sessionId) => {
     manuallyRenamed.add(sessionId);
+    awaitingTopicText.delete(sessionId);
     synthesizedPlaceholders.delete(sessionId);
   });
   if (hooks?.isUserMessageScreeningActive) {
@@ -157,6 +168,8 @@ export function __resetSessionAutoTitleStateForTest(): void {
   synthesizedPlaceholders.clear();
   manuallyRenamed.clear();
   queues.clear();
+  awaitingTopicText.clear();
+  pendingTitleOwner = null;
 }
 
 /** 会话是否还需要自动起名(标题仍是系统占位、且用户没手动改过名)。 */
@@ -174,7 +187,7 @@ export async function isSessionAutoTitleEligible(sessionId: string): Promise<boo
 }
 
 async function runUnsynchronized(
-  request: SessionAutoTitleRequest,
+  request: Omit<SessionAutoTitleRequest, 'agentKind'>,
   deps: SessionAutoTitleDeps,
 ): Promise<SessionAutoTitleResult> {
   const seedText = request.text.trim();
@@ -330,6 +343,70 @@ async function runUnsynchronized(
   // 两段都没写进去才是真失败,applied/done 皆为 false,下一条带文字的消息重试。
   const applied = smartPersisted || placeholderLive;
   return { applied, done: applied };
+}
+
+/**
+ * A host that created a named placeholder can refine it with the ordinary title pipeline.
+ * The expected title comes from creation, never from an IPC caller requesting a rename.
+ * The formatter adds channel identity locally; only the subject goes to the auxiliary model.
+ */
+export async function refineCreatedTaskTitle(
+  sessionId: string,
+  text: string,
+  creation?: CreatedTaskTitle,
+): Promise<string | null> {
+  if (!creation && !awaitingTopicText.has(sessionId)) return null;
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner || isAppSessionBoundaryPending() || manuallyRenamed.has(sessionId)) return null;
+  const current = () => getCurrentDbClientSnapshot() === owner && !isAppSessionBoundaryPending();
+  if (pendingTitleOwner?.deref() !== owner) {
+    awaitingTopicText.clear();
+    pendingTitleOwner = new WeakRef(owner);
+  }
+  const naming = creation ?? awaitingTopicText.get(sessionId);
+  if (!naming) return null;
+  if (!text.trim()) {
+    if (creation) awaitingTopicText.set(sessionId, creation);
+    return null;
+  }
+  awaitingTopicText.delete(sessionId);
+  const { initialTitle, format = normalizeAutoTitle, compose } = naming;
+  let applied: string | null = null;
+  try {
+    await enqueuePerSession(sessionId, () => runUnsynchronized({ sessionId, text, placeholderText: format(text) }, {
+      resolveOverwritableTitle: async (id, attempted) => {
+        if (!current()) return null;
+        const expected = attempted ?? initialTitle;
+        const row = await getOverwritableAutoTitle(id, expected);
+        return row?.title === expected && current() ? row : null;
+      },
+      generateTitle: async (seed, kind, id) => {
+        if (!current()) return null;
+        const topic = await generateMakerSessionTitle(seed, kind, id);
+        if (!topic || !current()) return null;
+        return (await compose?.(topic)) || format(topic);
+      },
+      persistTitle: async (id, title, expected) => {
+        if (!current() || manuallyRenamed.has(id)) return false;
+        const saved = await persistSessionTitleIfStillDraft(id, title, expected);
+        if (saved && current()) applied = normalizeAutoTitle(title);
+        return saved;
+      },
+    }));
+  } catch (error) {
+    log.warn('created task title unavailable', { sessionId, errorName: error instanceof Error ? error.name : 'unknown' });
+  }
+  return current() && !manuallyRenamed.has(sessionId) ? applied : null;
+}
+
+/** Even a manual save identical to the current placeholder takes precedence. */
+export function mayRefineTaskTitle(id: string): boolean {
+  return !manuallyRenamed.has(id);
+}
+
+/** Native channel names need the same manual-rename protection without a model request. */
+export async function persistInitialTaskTitle(id: string, title: string, initialTitle: string): Promise<boolean> {
+  return mayRefineTaskTitle(id) && persistSessionTitleIfStillDraft(id, title, initialTitle);
 }
 
 /** 起名主入口:同一会话串行执行。 */

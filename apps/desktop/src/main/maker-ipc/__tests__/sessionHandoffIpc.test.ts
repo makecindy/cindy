@@ -89,7 +89,7 @@ describe('maker:session:handoff (receiving computer)', () => {
     const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
     expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
       model: 'destination-default', projectDir: '/destination/project' });
-    expect(rows.get(id)).toMatchObject({ permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
+    expect(rows.get(id)).toMatchObject({ title: 'hello', permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
       workingDir: '/destination/project', workspaceKind: 'project' });
     expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,

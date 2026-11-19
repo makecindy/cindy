@@ -4631,6 +4631,8 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         'feishu-session',
         '帮我修个 bug',
         '[飞书·DM] ',
+        '飞书 · u_user',
+        undefined,
       );
     });
 
