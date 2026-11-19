@@ -5607,6 +5607,42 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.lastCall?.[1]).toEqual([]);
   });
 
+  // Unit: alert callers must fall back while the selected display is absent.
+  // The previous regression only checked frames and missed notification ownership.
+  it.each([false, true])('releases alert ownership while disconnected (live activity=%s)', async (liveOwnsAlerts) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, available: true, publish },
+      liveActivity: { sync: vi.fn(), ownsAlerts: () => liveOwnsAlerts } as unknown as AgentIslandLiveActivity,
+    });
+    service.registerIpc();
+    service.setEnabled(true);
+    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: true });
+    service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'message',
+      mentioned: true, preview: 'hello', lastMessageAt: 1, members: [] });
+    const display = { id: 7, label: 'Studio Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 } };
+    await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
+      mode: 'display', displayId: display.id, displayName: display.label,
+    });
+    const ownsTaskAlerts = () => (['done', 'needs-reply', 'error'] as const).map(kind => service.ownsTaskAlert(kind));
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
+
+    mocks.displays.push(display);
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    displayEvents.get('display-added')!();
+    expect(ownsTaskAlerts()).toEqual([true, true, true]);
+    expect(service.notifyGroupChat('group')).toBe(true);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
+  });
+
   it('remaps by persisted identity before trusting a reused display id', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

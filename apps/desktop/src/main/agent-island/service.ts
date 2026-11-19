@@ -875,7 +875,7 @@ export class AgentIslandService {
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
     // Keep the OS notification when this event has no enabled Cindy sound.
     if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
-    if (this.isEnabled()) return true;
+    if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
 
@@ -1001,7 +1001,7 @@ export class AgentIslandService {
 
   /** True means this surface owns the alert; otherwise the caller uses the OS notification. */
   notifyGroupChat(groupId: string): boolean {
-    if (!this.isEnabled() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
+    if (!this.hasIslandDisplay() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
     const chat = this.state.sessions.get(groupChatIslandId(groupId))?.groupChat;
     if (!chat) return false;
     const window = this.deps.getMainWindow();
@@ -2705,6 +2705,11 @@ export class AgentIslandService {
       defaultContentWidth,
       minimumContentWidth,
     ).contentWidth;
+  }
+
+  /** Notification ownership requires a connected display that can show the island. */
+  private hasIslandDisplay(): boolean {
+    return this.isEnabled() && this.getTargetDisplays().length > 0;
   }
 
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {
