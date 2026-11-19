@@ -1,4 +1,5 @@
 import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
+import { withCopilotForwardHeaders } from './copilot-account-url.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -11,6 +12,7 @@ import {
 import {
   isCustomRoutedProvider,
   availableModelInterfaces,
+  copilotModelsUrl,
   modelWithInterface,
   resolveModelMetadata,
   BUNDLED_CATALOG,
@@ -22,6 +24,7 @@ import {
   type CatalogModel,
   type Effort,
   type Provider,
+  type RoutingDescriptor,
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
@@ -1260,6 +1263,16 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
  * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
  * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
  */
+function isCopilotOAuthResponses(model: CatalogModel | undefined, routing: RoutingDescriptor): boolean {
+  return model?.api === 'openai-responses' && model.catalogPresetId === 'github-copilot'
+    && routing.authStrategy === 'oauth-token' && !!copilotModelsUrl(routing.upstream);
+}
+
+function needsNativeBridge(model: CatalogModel | undefined, routing: RoutingDescriptor | null | undefined): boolean {
+  return !!model?.api && (model.api !== 'openai-responses' || !!routing &&
+    requiresNativeProviderAuth(invocationModelRecord(model, routing.upstream)));
+}
+
 function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
@@ -1357,8 +1370,13 @@ function createChatBridgeDecision(
         }) ?? body;
       }
       if (standard && isPlainObject(body)) {
-        const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
-          !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
+        const copilotOAuth = isCopilotOAuthResponses(selected, route.routing);
+        const providerHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) =>
+          !['authorization', 'x-api-key'].includes(name.toLowerCase())));
+        const nativeHeaders = overrideHeadersCaseInsensitive(
+          copilotOAuth ? providerHeaders : withChatBridgeUserAgent(providerHeaders),
+          resolveConversationSessionHeaders(ctx?.headers),
+        );
         if (standard.execution.pi.api === 'anthropic-messages' && (actualModel.endsWith('[1m]')
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
@@ -1382,6 +1400,7 @@ function createChatBridgeDecision(
         const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream,
+          copilotOAuth,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
@@ -1697,7 +1716,7 @@ function createLocalBridgeDecision(
   if (!route) return null;
   const catalogNativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
   const nativeModel = catalogNativeModel && modelWithInterface(catalogNativeModel, route.routing.modelInterface);
-  if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && (nativeModel.api !== 'openai-responses' || requiresNativeProviderAuth(invocationModelRecord(nativeModel, route.routing.upstream))))) {
+  if (route.routing.wireProtocol === 'openai-chat' || needsNativeBridge(nativeModel, route.routing)) {
     const decision = createChatBridgeDecision(
       route,
       instructions,
@@ -3183,11 +3202,16 @@ function resolveCodexCustomProviderRoutingDecision(
         : null;
     const catalogSelectedModel = getActiveCatalog().providers.find(p => p.id === explicitProviderId)?.models.codex?.find(m => m.id === model);
     const selectedModel = catalogSelectedModel && modelWithInterface(catalogSelectedModel, selectedRouting?.modelInterface);
+    const selectedOAuthResponses = !!model && selectedRouting?.authStrategy === 'oauth-token'
+      && (selectedRouting.wireProtocol ?? 'openai-responses') === 'openai-responses';
+    const withSelectedCopilotHeaders = (decision: RoutingDecision | null) => withCopilotForwardHeaders(
+      decision, selectedOAuthResponses, ctx,
+    );
     const selectedUsesLocalBridge =
       ctx.method === 'POST'
       && Boolean(model)
       && (
-        (selectedModel?.api && (selectedModel.api !== 'openai-responses' || (selectedRouting && requiresNativeProviderAuth(invocationModelRecord(selectedModel, selectedRouting.upstream)))))
+        needsNativeBridge(selectedModel, selectedRouting)
         || selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
@@ -3252,7 +3276,7 @@ function resolveCodexCustomProviderRoutingDecision(
         'codex',
         gatewayKey,
         subagentRoute.catalogModel,
-      ).then((resolved) => resolved?.decision ?? unresolvedCollabSpawnRouteDecision());
+      ).then((resolved) => withSelectedCopilotHeaders(resolved?.decision ?? null) ?? unresolvedCollabSpawnRouteDecision());
     }
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。thread-id header → threadToSession 反解 xdt sessionId。
@@ -3280,7 +3304,9 @@ function resolveCodexCustomProviderRoutingDecision(
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
       const perSession = resolveSessionRouteDecision(sessionId, 'codex', gatewayKey, model || undefined);
-      if (perSession) return perSession;
+      if (perSession) return perSession instanceof Promise
+        ? perSession.then(withSelectedCopilotHeaders)
+        : withSelectedCopilotHeaders(perSession);
       // scope 门放下来的请求在 provider-oauth spawn 下没有可用凭证兜底:子进程只带占位
       // env key,直落默认网关必 401(#890 Codex review 第二轮指出)。换网关 key 给它一条
       // 真正可用的默认路由(与 cc ② 段 oauth-spawn 默认换 key 同语义);没网关 key 时保持
