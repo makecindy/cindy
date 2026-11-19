@@ -1,6 +1,7 @@
 import { recordStandbyUsage, flushStandbyUsage } from '../../device-link/providerShareAvailabilityUsage.js';
 import { prepareShareAvailability, acceptShareAvailability, beginShareAvailabilityTurn } from '../../device-link/providerShareAvailability.js';
 import { assertMemberBudget, memberBudgetDenial, memberBudgetAllows } from '../../device-link/providerShareBudgetRuntime.js';
+import { generateSharedSubscriptionImage } from '../../cindy-media/providerMediaRuntime.js';
 import { readRemoteAgentLimitsState } from './limitsStore.js';
 /**
  * 远程 Agent 运行服务的被控端接线：把 `maker:remote-agent:v1` 接到本机 Maker 的 Agent。
@@ -1102,6 +1103,14 @@ export function installRemoteAgentHost(options: {
     recordOwnerUsage: (controller, sample) => recordDeviceUsage(controller, sample, 'device'),
     // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转(provider-groups.md §4)。
     groupRelay,
+    generateSharedImage: generateSharedSubscriptionImage,
+    sharedImageMemberAllowed: (providerId, member, reshareKey) => {
+      const current = readProviderGroup(providerId)?.members.find(candidate => candidate.key === member.memberKey);
+      return !!current && !current.paused && current.providerId === member.providerId
+        && (current.kind === 'local' ? !member.agentDeviceId :
+          current.agentDeviceId === member.agentDeviceId
+          && (current.kind === 'device' || providerGroupReshare.allows(member.agentDeviceId, reshareKey)));
+    },
     canSwitchLocalAccount: async ({ providerId, hostSessionId, model }) => {
       if (readProviderGroup(providerId)?.autoSwitch === false) return false;
       return await canSwitchHostedSubscriptionAccount(providerId, hostSessionId, model)

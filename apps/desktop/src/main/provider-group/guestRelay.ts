@@ -17,7 +17,7 @@ import type { RemoteAgentInvoke, RemoteAgentPoller } from '../remote-agent/contr
 import { RemoteAgentRunClient } from '../remote-agent/controller/runClient.js';
 import { readSharedGroupStatus } from './sharedStatus.js';
 import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from './remoteHandler.js';
-import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
+import { providerGroupImageModelId, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
 import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals } from './failurePolicy.js';
 import type { ProviderGroupOwnerScope } from './runtime.js';
 
@@ -124,12 +124,15 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
       }
       const { member } = pick;
       if (member.kind === 'local' || !member.agentDeviceId) return { kind: 'local', ...(load ? { load } : {}) };
+      const view = capability ? pick.resolved.find(row => row.member.key === member.key)?.view : undefined;
+      const imageModelId = view ? providerGroupImageModelId(view, providerId, model) : undefined;
       return {
         kind: 'member',
         memberKey: member.key,
         agentDeviceId: member.agentDeviceId,
         providerId: member.providerId,
         sameAccount: member.kind === 'device',
+        ...(imageModelId ? { imageModelId } : {}),
         ...(load ? { load } : {}),
       };
     },

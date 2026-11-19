@@ -177,8 +177,12 @@ export type RemoteAgentRequest =
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
   | { op: 'shared-image'; action: 'start'; requestId: string; providerId: string; model: string;
-      prompt: string; size?: string; aspectRatio?: string; quality?: string; relay?: string; reshareKey?: string }
+      prompt: string; size?: string; aspectRatio?: string; quality?: string;
+      outputFormat?: 'png' | 'jpeg' | 'webp'; outputCompression?: number;
+      background?: 'auto' | 'transparent' | 'opaque'; moderation?: 'auto' | 'low';
+      relay?: string; reshareKey?: string }
   | { op: 'shared-image'; action: 'read'; requestId: string; offset: number }
+  | { op: 'shared-image'; action: 'release'; requestId: string }
   /** Native image recovery is scoped to the caller's task; never accepts file paths. */
   | { op: 'images'; sessionId: string; relay?: string; action: 'list'; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
@@ -312,6 +316,7 @@ export interface RemoteAgentCaps {
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
+  sharedImageGeneration?: boolean;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
@@ -649,7 +654,8 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
     }
     case 'shared-image': {
       const requestId = id(v.requestId);
-      const action = oneOf(v.action, ['start', 'read'] as const);
+      const action = oneOf(v.action, ['start', 'read', 'release'] as const);
+      if (action === 'release') return { op: 'shared-image', action, requestId };
       if (action === 'read') {
         return { op: 'shared-image', action, requestId, offset: count(v.offset, Number.MAX_SAFE_INTEGER) };
       }
@@ -660,6 +666,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       for (const field of ['size', 'aspectRatio', 'quality'] as const) {
         if (v[field] !== undefined) result[field] = text(v[field], 64);
       }
+      if (v.outputFormat !== undefined) result.outputFormat = oneOf(v.outputFormat, ['png', 'jpeg', 'webp'] as const);
+      if (v.outputCompression !== undefined) result.outputCompression = count(v.outputCompression, 100);
+      if (v.background !== undefined) result.background = oneOf(v.background, ['auto', 'transparent', 'opaque'] as const);
+      if (v.moderation !== undefined) result.moderation = oneOf(v.moderation, ['auto', 'low'] as const);
       for (const field of ['relay', 'reshareKey'] as const) {
         if (v[field] === undefined) continue;
         const key = text(v[field], 64);
@@ -866,6 +876,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.nativeHistoryBackup === true ? { nativeHistoryBackup: true } : {}),
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
+    ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.groupContinuity === true ? { groupContinuity: true as const } : {}),

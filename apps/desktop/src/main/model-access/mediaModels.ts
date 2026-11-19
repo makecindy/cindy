@@ -18,6 +18,7 @@ import {
 } from '../../shared/mediaInvocation.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
+import { listSharedImageModels } from '../cindy-media/sharedImageCatalog.js';
 import { supportsLegacyMediaInput } from '../cindy-media/legacyMediaInvocation.js';
 import { listProviderMediaModels, providerMediaGuideScope, providerMediaGuideProtocol, providerMediaGuideTarget } from '../cindy-media/providerMediaRuntime.js';
 import { resolveMediaGuide, type MediaGuideSource } from '../cindy-media/guideResolver.js';
@@ -153,8 +154,9 @@ export function isMediaModelExecutableForLegacyInput(
 
 export { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 
-function availableProviderMediaModels(capabilities: readonly MediaCapability[] = []): ExecutableMediaModel[] {
-  return listProviderMediaModels(capabilities)
+async function availableProviderMediaModels(capabilities: readonly MediaCapability[] = [], includeSharedImages = true): Promise<ExecutableMediaModel[]> {
+  const shared = includeSharedImages && capabilities.every(capability => capability === 'image.generate') ? await listSharedImageModels() : [];
+  return [...listProviderMediaModels(capabilities), ...shared]
     .filter(
       (model) => capabilities.every(capability => supportsMediaCapability(model.modalities, capability)),
     )
@@ -264,7 +266,7 @@ export async function listAvailableMediaModels(
   capability?: MediaCapability,
   options?: { skipGateway?: boolean },
 ): Promise<ExecutableMediaModel[]> {
-  const providerModels = availableProviderMediaModels(capability ? [capability] : []);
+  const providerModels = await availableProviderMediaModels(capability ? [capability] : []);
   if (options?.skipGateway) return providerModels;
   try {
     const gatewayModels = filterEnabledGatewayMediaModels(
@@ -525,9 +527,9 @@ async function getExecutableMediaSnapshot(forceRefresh = false): Promise<Executa
  */
 export async function listExecutableMediaModels(
   capabilities: readonly MediaCapability[] = [],
-  options: { includeDisabled?: boolean; forceRefresh?: boolean; skipGateway?: boolean } = {},
+  options: { includeDisabled?: boolean; forceRefresh?: boolean; skipGateway?: boolean; includeSharedImages?: boolean } = {},
 ): Promise<ExecutableMediaModelsResult> {
-  const providerModels = availableProviderMediaModels(capabilities);
+  const providerModels = await availableProviderMediaModels(capabilities, options.includeSharedImages);
   if (options.skipGateway || (!options.includeDisabled && isProviderDisabled(readModelDisableOverrides(), CINDY_AI_PROVIDER_ID)))
     return { models: providerModels, unavailable: [], candidateCount: providerModels.length };
   let snapshot: ExecutableMediaSnapshot;

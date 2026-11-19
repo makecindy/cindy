@@ -150,7 +150,7 @@ function harness(
 
 it('routes a shared image model only to a group member that offers it', async () => {
   const model = 'openai/gpt-image-2';
-  const remote = { ...SHARE_A, providerId: 'openai' };
+  const remote = { ...SHARE_A, providerId: 'openai-independent' };
   const local = { ...LOCAL, providerId: 'openai' };
   const directory: ProviderGroupDirectory = {
     async resolveMembers(_providerId, config) {
@@ -160,7 +160,7 @@ it('routes a shared image model only to a group member that offers it', async ()
         state: 'ok',
         view: {
           ...view(member.providerId),
-          imageModels: [{ id: model, name: model, disabled: member.kind === 'local' }],
+          imageModels: [{ id: `${member.providerId}/gpt-image-2`, name: model, disabled: member.kind === 'local' }],
         },
       }));
     },

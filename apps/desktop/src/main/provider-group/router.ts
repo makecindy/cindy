@@ -32,6 +32,21 @@ import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_G
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
 export { PROVIDER_GROUP_FAILURE_COOLDOWN_MS, type ProviderGroupPersistedCooling } from './cooling.js';
 
+/** Subscription image IDs may be scoped to the member connection. Only map the connection prefix. */
+export function providerGroupImageModelId(
+  view: NonNullable<ResolvedProviderGroupMember['view']>,
+  providerId: string,
+  model: string,
+): string | undefined {
+  const sourcePrefix = `${providerId}/`;
+  const memberModel = model.startsWith(sourcePrefix) ? `${view.id}/${model.slice(sourcePrefix.length)}` : model;
+  return view.imageModels?.find(item => item.id === memberModel && !item.disabled
+    && item.availability !== 'requires_payment'
+    && (!view.remoteModelIds || view.remoteModelIds.includes(item.id))
+    && (!view.availableMediaModelIds || view.availableMediaModelIds.includes(item.id))
+    && (!item.modalities || (item.modalities.input.includes('text') && item.modalities.output.includes('image'))))?.id;
+}
+
 /** 撞到用量上限但拿不到重置时刻时，默认冷却多久。 */
 export const PROVIDER_GROUP_DEFAULT_COOLDOWN_MS = 30 * 60_000;
 /**
@@ -284,15 +299,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */
   function offersModel(
     resolved: ResolvedProviderGroupMember,
-    { agentKind, model, capability }: Pick<ProviderGroupPickInput, 'agentKind' | 'model' | 'capability'>,
+    { agentKind, model, capability, providerId }: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>,
   ): boolean {
     if (resolved.state !== 'ok' || !resolved.view) return false;
     if (capability === 'image.generate') {
-      const allowed = resolved.view.remoteModelIds;
-      if (allowed && !allowed.includes(model)) return false;
-      return resolved.view.imageModels?.some((item) => item.id === model && !item.disabled
-        && item.availability !== 'requires_payment'
-        && (!item.modalities || (item.modalities.input.includes('text') && item.modalities.output.includes('image')))) === true;
+      return providerGroupImageModelId(resolved.view, providerId, model) !== undefined;
     }
     const found = findCatalogModel(resolved.view, model, agentKind);
     return found !== undefined

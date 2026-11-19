@@ -5316,7 +5316,7 @@ async function getGhostConfigurableMediaModels(
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels(true) : [];
     const availability = await loadPluginMediaAvailability(type, localVideoModels.length, () =>
-      listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway }),
+      listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway, includeSharedImages: type === 'image' }),
     );
     const candidates = selectExecutableCoreMediaModels([...availability.models, ...localVideoModels], type)
       .filter((model) =>
@@ -5945,6 +5945,35 @@ function resolveCustomVideoConnection(providerId: string, modelId: string, agent
 }
 
 configureProviderMediaRuntime({
+  async generateSharedSubscriptionImage(request, assertAllowed, signal) {
+    const { providerId, model, prompt, size, aspectRatio, quality } = request;
+    const beforeDispatch = () => {
+      assertAllowed();
+      const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
+      if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
+        || !listLocalProviderMediaModels(true, ['image.generate']).some(candidate =>
+          candidate.providerId === providerId && candidate.id === model)) {
+        throw new Error('SHARED_IMAGE_UNAVAILABLE');
+      }
+    };
+    beforeDispatch();
+    const channel = createCodexImageChannel({
+      providerId,
+      hasOAuthLogin: () => providerId === 'openai' ? hasCodexOAuthLoginReadOnly() : getCodexImageAuthBinding().hasAuth?.(providerId) === true,
+      getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
+      onAuthFailure: async failure => { await getCodexImageAuthBinding().onAuthFailure(failure, providerId); },
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch,
+    });
+    if (!channel.ready()) throw new Error('SHARED_IMAGE_UNAVAILABLE');
+    const nativeParameters = {
+      ...(request.outputFormat !== undefined ? { output_format: request.outputFormat } : {}),
+      ...(request.outputCompression !== undefined ? { output_compression: request.outputCompression } : {}),
+      ...(request.background !== undefined ? { background: request.background } : {}),
+      ...(request.moderation !== undefined ? { moderation: request.moderation } : {}),
+    };
+    return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, nativeParameters, signal }));
+  },
   guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
