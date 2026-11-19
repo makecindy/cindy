@@ -396,6 +396,56 @@ describe('terminateManagedChromePortOwner', () => {
 });
 
 describe('BrowserProxyAuthCoordinator', () => {
+  // #11600 review regression: a successful stop only means signals were sent.
+  // Existing injected liveness tests cannot expose the default TCP probe
+  // rejecting a port that is still closing. Exercise both public stop paths
+  // against a loopback listener; no browser, profile, or OS signal is involved.
+  it.each(['stop', 'switch'] as const)('waits for delayed port release after %s', async action => {
+    const server = createServer((_request, response) => response.end('{}'));
+    const port = await listen(server);
+    let running = true;
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const closeAdoptedBrowser = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend({
+      call: async request => ({ ok: true, action: request.action, status: 200, data: { running } }),
+    }, { warn: vi.fn() }, {
+      cdpHttpUrl: `http://127.0.0.1:${port}`,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser,
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      createRuntime: () => ({
+        call: async request => {
+          if (request.action === 'start') running = true;
+          if (request.action === 'stop') {
+            running = false;
+            // real-wait: model OS port release after a stop receipt; production TCP/HTTP probes must observe the delay.
+            release = setTimeout(() => server.close(), 100);
+          }
+          return {
+            ok: true, action: request.action, status: 200,
+            data: request.action === 'stop' ? { stopped: true } : { running },
+          };
+        },
+      }),
+    });
+    try {
+      expect((await backend.call({ action: 'start' })).ok).toBe(true);
+      // No rescue can mask the absence-confirmation regression after stop.
+      closeAdoptedBrowser.mockResolvedValue(false);
+      closeAdoptedBrowser.mockClear();
+      const result = await backend.call(action === 'stop'
+        ? { action: 'stop' }
+        : { action: 'start', proxyServer: 'http://proxy.test:8080', proxyAllowedHostnames: ['allowed.example'] });
+
+      expect(result.ok).toBe(true);
+      expect(server.listening).toBe(false);
+      expect(closeAdoptedBrowser).not.toHaveBeenCalled();
+      expect((await backend.call({ action: 'tabs' })).ok).toBe(true);
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
   // #8992: use the real default liveness probe against the existing loopback
   // fixture, not an immediate injected verdict. HTTP can answer while the
   // runtime's WebSocket readiness is false. Two 10s exit-confirmation probes

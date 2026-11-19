@@ -1698,6 +1698,22 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
   });
 
+  // #11600: quit disposes the active external backend and then its reusable
+  // wrapper. Only terminal quiescence may share cleanup; backend switches must
+  // still re-probe because this external instance can be reused afterwards.
+  it.each([true, false])('shares repeated disposal only during quit (quiescing=%s)', async quiescing => {
+    const runtime = fakeRuntime();
+    const isBrowserGone = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(runtime, fakeLogger(), { isBrowserGone });
+    if (quiescing) backend.beginQuiescence();
+
+    await Promise.all([backend.dispose(), backend.dispose()]);
+    await backend.dispose();
+
+    expect(isBrowserGone).toHaveBeenCalledTimes(quiescing ? 1 : 3);
+    expect(runtime.call).not.toHaveBeenCalled();
+  });
+
   it('swallows dispose errors and skips a verifiably absent unused browser without dispatch', async () => {
     const unused = fakeRuntime();
     const isBrowserGone = vi.fn(async () => true);
