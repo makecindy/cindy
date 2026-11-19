@@ -16990,6 +16990,12 @@
       "unspecifiedDir": "未定目錄"
     },
     "workdirBrowse": {
+      "previewFile": "預覽",
+      "filterDirectory": "篩此目錄…",
+      "projectTree": "項目樹",
+      "systemPreview": "系統預覽",
+      "listView": "列表",
+      "gridView": "縮圖",
       "backToProjects": "返諸案",
       "switchProject": "易案",
       "activeSessionCount_one": "{{count}} 個活躍差事",

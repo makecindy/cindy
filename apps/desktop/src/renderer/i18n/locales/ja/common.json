@@ -16990,6 +16990,12 @@
       "unspecifiedDir": "ディレクトリ未指定"
     },
     "workdirBrowse": {
+      "previewFile": "プレビュー",
+      "filterDirectory": "このフォルダーを絞り込み…",
+      "projectTree": "プロジェクトツリー",
+      "systemPreview": "システムプレビュー",
+      "listView": "リスト",
+      "gridView": "サムネイル",
       "backToProjects": "プロジェクトに戻る",
       "switchProject": "プロジェクトを切り替え",
       "activeSessionCount_one": "アクティブなセッション {{count}} 件",

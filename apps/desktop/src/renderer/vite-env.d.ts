@@ -3542,6 +3542,8 @@ interface ElectronAPI {
   /** 图片 lightbox 字节层:http / cindy-remote-media 源取字节(标注/位图复制)。 */
   readImageBytes: (params: { url: string }) => Promise<{ base64: string; mimeType: string }>;
 
+  openSystemPreview: (filePath: string) => Promise<boolean>;
+
   /**
    * 附件卡缩略图:本机文件走系统缩略图服务(macOS QuickLook / Windows Shell)。
    * 路径越界 / 不是文件 / stat 失败 → 整体回 null;文件在但出不了图(系统不支持、
@@ -5666,6 +5668,7 @@ interface ElectronAPI {
    * 跟 localDb 平级放在 ElectronAPI 顶层。
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload) => Promise<unknown>;
     /** webview dom-ready 后调,上报 (sessionId, tabId, webContentsId)。 */
     report: (input: {
       sessionId: string;

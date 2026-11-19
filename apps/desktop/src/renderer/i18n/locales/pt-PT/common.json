@@ -17227,6 +17227,12 @@
       "unspecifiedDir": "Diretório não especificado"
     },
     "workdirBrowse": {
+      "previewFile": "Pré-visualizar",
+      "filterDirectory": "Filtrar esta pasta…",
+      "projectTree": "Árvore do projeto",
+      "systemPreview": "Pré-visualização do sistema",
+      "listView": "Lista",
+      "gridView": "Miniaturas",
       "backToProjects": "Voltar aos projetos",
       "switchProject": "Mudar de projeto",
       "activeSessionCount_one": "{{count}} sessão ativa",

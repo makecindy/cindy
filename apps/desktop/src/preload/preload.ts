@@ -4848,6 +4848,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readImageBytes: (params: { url: string }): Promise<{ base64: string; mimeType: string }> =>
     ipcRenderer.invoke('media:read-image-bytes', params),
 
+  openSystemPreview: (filePath: string): Promise<boolean> => ipcRenderer.invoke('file:system-preview', filePath),
+
   // 附件卡缩略图:本机文件交给系统缩略图服务(macOS QuickLook / Windows Shell)
   // 出一张小预览,顺带回传复核那一刻的当前字节数。整体不可用(路径越界 / 文件不在)
   // 回 null;文件在但出不了图时 dataUrl 为 null,调用方回落自绘文件图标。
@@ -6666,6 +6668,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  - onPin / onUnpin:main → renderer 推 automation pin 状态
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;
       tabId: string;

@@ -16990,6 +16990,12 @@
       "unspecifiedDir": "디렉터리 미지정"
     },
     "workdirBrowse": {
+      "previewFile": "미리보기",
+      "filterDirectory": "이 폴더 필터링…",
+      "projectTree": "프로젝트 트리",
+      "systemPreview": "시스템 미리보기",
+      "listView": "목록",
+      "gridView": "미리보기 이미지",
       "backToProjects": "프로젝트로 돌아가기",
       "switchProject": "프로젝트 전환",
       "activeSessionCount_one": "활성 세션 {{count}}개",
