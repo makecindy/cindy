@@ -979,21 +979,29 @@ export class AppServerHost {
   ): Promise<R> {
     const threadId = method === Method.ThreadResume ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
     if (typeof threadId !== 'string') {
-      const result = await this.dispatchRequest<R>(method, params, opts);
-      if (opts?.threadOwner && (method === Method.ThreadStart || method === Method.ThreadFork)) {
+      const owner = opts?.threadOwner && (method === Method.ThreadStart || method === Method.ThreadFork) ? opts.threadOwner : undefined;
+      if (!owner) return this.dispatchRequest<R>(method, params, opts);
+      this.beginThreadOwnerAcquisition(owner);
+      let dispatched = false;
+      try {
+        const result = await this.dispatchRequest<R>(method, params, { ...opts, beforeDispatch: () => {
+          opts?.beforeDispatch?.();
+          this.beginThreadOwnerAcquisition(owner);
+          dispatched = true;
+        } });
         const createdId = (result as { thread?: { id?: unknown } })?.thread?.id;
-        if (typeof createdId === 'string') {
-          this.releasedThreadOwners.delete(opts.threadOwner);
-          this.threadResumeOwners.set(createdId, { owner: opts.threadOwner, phase: 'ready' });
-        }
+        if (typeof createdId === 'string') this.threadResumeOwners.set(createdId, { owner, phase: 'ready' });
+        return result;
+      } catch (error) {
+        if (!dispatched || error instanceof AppServerResponseError) this.confirmUnownedThreadOwner(owner);
+        throw error;
       }
-      return result;
     }
     const previous = this.threadResumeOwners.get(threadId);
     const claim: ThreadResumeClaim = {
       owner: opts?.threadOwner ?? (this.subscribers.has(threadId) ? previous?.owner : undefined) ?? {}, previous, phase: 'preparing',
     };
-    this.releasedThreadOwners.delete(claim.owner);
+    this.beginThreadOwnerAcquisition(claim.owner);
     this.threadResumeOwners.set(threadId, claim);
     let dispatched = false;
     const beganAt = Date.now();
@@ -1009,9 +1017,10 @@ export class AppServerHost {
       const remaining = opts?.timeoutMs == null ? undefined : opts.timeoutMs - (Date.now() - beganAt);
       if (remaining !== undefined && remaining <= 0) throw new Error('Codex thread cleanup consumed the resume timeout budget');
       claim.phase = 'pending';
-      this.releasedThreadOwners.delete(claim.owner);
       const result = await this.dispatchRequest<R>(method, params, { ...opts, ...(remaining === undefined ? {} : { timeoutMs: remaining }), beforeDispatch: () => {
         opts?.beforeDispatch?.();
+        if (this.threadResumeOwners.get(threadId) !== claim) throw new Error('Codex thread resume was superseded before dispatch');
+        this.beginThreadOwnerAcquisition(claim.owner);
         dispatched = true;
       } });
       claim.phase = 'ready'; // Subscription, not the native response, commits a takeover.
@@ -1135,6 +1144,13 @@ export class AppServerHost {
     const promise = new Promise<void>(yes => { resolve = yes; });
     this.threadOwnerCleanupProofs.set(owner, { promise, resolve });
     return promise;
+  }
+
+  private beginThreadOwnerAcquisition(owner: object): void {
+    // Proof belongs to the previous acquisition, not the reusable handle identity.
+    // Register before startup/write: start/fork may time out without returning an id.
+    this.releasedThreadOwners.delete(owner);
+    this.whenThreadOwnerReleased(owner);
   }
 
   private confirmThreadOwnerCleanup(owner: object): void {

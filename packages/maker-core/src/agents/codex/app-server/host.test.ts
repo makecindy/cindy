@@ -223,6 +223,92 @@ describe('AppServerHost isolated account lifecycle', () => {
 });
 
 describe('AppServerHost assistant text delta routing', () => {
+  // Unit: old process exit while startup awaits must not prove a subsequent
+  // write stopped. Resume additionally needs its reservation at the actual write.
+  it.each(['thread/start', 'thread/fork', 'thread/resume'] as const)('keeps %s proof current across a startup shutdown', async method => {
+    const oldTransport = new NotificationTransport();
+    const transport = new NotificationTransport();
+    const createTransport = vi.fn().mockReturnValueOnce(oldTransport).mockReturnValue(transport);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    await host.ensureStarted();
+    let releaseStartup!: () => void;
+    const startupGate = new Promise<void>(resolve => { releaseStartup = resolve; });
+    let markPreparing!: () => void;
+    const preparing = new Promise<void>(resolve => { markPreparing = resolve; });
+    const ensureStarted = host.ensureStarted.bind(host);
+    vi.spyOn(host, 'ensureStarted').mockImplementationOnce(async () => { markPreparing(); await startupGate; return ensureStarted(); });
+    let markWritten!: () => void;
+    const written = new Promise<void>(resolve => { markWritten = resolve; });
+    const write = transport.writeLine.bind(transport);
+    vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+      if (JSON.parse(line).method === method) { transport.lines.push(line); markWritten(); return; }
+      await write(line);
+    });
+    vi.useFakeTimers();
+    const owner = {};
+    try {
+      const pending = host.request(method, { threadId: 'startup-owner' }, { threadOwner: owner, timeoutMs: 50 }).catch(error => error);
+      await preparing;
+      await host.shutdown();
+      releaseStartup();
+      if (method !== 'thread/resume') await written;
+      await vi.advanceTimersByTimeAsync(50);
+      const error = await pending;
+      if (method === 'thread/resume') {
+        expect(error).toMatchObject({ message: expect.stringMatching(/superseded/) });
+        await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+      } else await expect(host.releaseUncommittedThreadOwner(owner)).rejects.toThrow(/unconfirmed|awaiting host exit/);
+    } finally { releaseStartup(); await host.shutdown(); vi.useRealTimers(); }
+  });
+
+  // Unit: a prior rejected resume is not proof about a later start/fork with
+  // the same handle owner. Exercise every acquisition outcome via real RPC.
+  it.each(['thread/start', 'thread/fork'] as const)('invalidates old proof before %s acquisition outcomes', async method => {
+    for (const outcome of ['accepted', 'rejected', 'before-dispatch', 'timeout', 'write-failed'] as const) {
+      const transport = new NotificationTransport();
+      const host = new AppServerHost({ createTransport: () => transport, logger,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+      const owner = {};
+      const write = transport.writeLine.bind(transport);
+      let writtenId: unknown;
+      let markWritten!: () => void;
+      const written = new Promise<void>(resolve => { markWritten = resolve; });
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const msg = JSON.parse(line);
+        if (msg.method === 'thread/resume') {
+          transport.emit({ id: msg.id, error: { code: -32600, message: 'no rollout found for thread id old-thread' } }); return;
+        }
+        if (msg.method === method) {
+          transport.lines.push(line); writtenId = msg.id; markWritten();
+          if (outcome === 'timeout') return;
+          if (outcome === 'write-failed') throw new Error('fixture native write failed');
+          if (outcome === 'rejected') transport.emit({ id: msg.id, error: { code: -32000, message: 'fixture acquisition rejected' } });
+          else transport.emit({ id: msg.id, result: { thread: { id: 'new-thread' } } });
+          return;
+        }
+        await write(line);
+      });
+      try {
+        await expect(host.request('thread/resume', { threadId: 'old-thread' }, { threadOwner: owner })).rejects.toThrow('no rollout');
+        await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+        vi.useFakeTimers();
+        const acquisition = host.request(method, {}, { threadOwner: owner, timeoutMs: 50,
+          beforeDispatch: () => { if (outcome === 'before-dispatch') throw new Error('fixture cancelled before write'); },
+        }).catch(error => error);
+        if (outcome === 'timeout') { await written; await vi.advanceTimersByTimeAsync(50); }
+        await acquisition;
+        if (outcome === 'timeout' || outcome === 'write-failed') {
+          await expect(host.releaseUncommittedThreadOwner(owner)).rejects.toThrow(/unconfirmed|awaiting host exit/);
+          // Late acceptance after the client deadline still cannot revive old proof.
+          transport.emit({ id: writtenId, result: { thread: { id: 'late-thread' } } });
+          await expect(host.releaseUncommittedThreadOwner(owner)).rejects.toThrow(/unconfirmed|awaiting host exit/);
+        } else await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+        await host.shutdown();
+        await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+      } finally { await host.shutdown(); vi.useRealTimers(); }
+    }
+  });
+
   // Unit: confirmed refusal releases only that attempt, never a live same owner.
   it.each([false, true])('settles rejected startup proof with same live owner=%s', async sameOwner => {
     const transport = new NotificationTransport();
