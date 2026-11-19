@@ -25,7 +25,9 @@ describe('new task remote Agent wiring', () => {
     expect(select).toContain('setRemoteAgentChoice(null);');
     // 普通创建与目标模式都把远程选择落进草稿,且不按被控电脑的目录 / 登录拦。
     expect(source.split('applyRemoteAgentPick(draft, remoteAgentPick)')).toHaveLength(3);
-    expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
+    expect(source.split(
+      'const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({',
+    )).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
     // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
