@@ -63,6 +63,7 @@ const deps = {
   STATUS_BAR_FADE_MS: 400,
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
+  useTurnElapsed: vi.fn<() => number | null>(() => 1000),
   formatRecentOutputTokenRate,
   formatRunningTokenCount,
   resolveRunningUsageMeta,
@@ -318,4 +319,17 @@ it('shows streamed token count while tokenSpeed is warming up with rate 0', () =
   );
   expect(trigger()?.textContent).toContain('chat.runningStatus.tokenCount');
   expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
+});
+
+it('shows tokens alone until the executing device supplies elapsed time', () => {
+  deps.useTurnElapsed.mockReturnValue(null);
+  try {
+    const { container } = render(<RunningStatusBar visible status="Thinking" startedAt={1}
+      tokenUsage={1000} outputTokens={100} generationDurationMs={5000} />);
+    const meta = container.querySelector('[data-running-status-meta]')!;
+    expect(meta.textContent).toContain('tokenCount');
+    expect(meta.textContent).not.toMatch(/·|0s/);
+  } finally {
+    deps.useTurnElapsed.mockReturnValue(1000);
+  }
 });

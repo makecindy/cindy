@@ -435,6 +435,7 @@ import {
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
+import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
@@ -2483,6 +2484,24 @@ export function ChatInput({
     null,
   );
   draftSaveSchedulerRef.current ??= createComposerDraftSaveScheduler();
+  const piDraftContextKey = JSON.stringify([
+    currentModelAgentKind, (sessionId ? initialWorkingDir : workingDir) ?? null,
+    remoteHostId ?? null, deviceLinkDeviceId ?? null, effectiveAgentDeviceId ?? null,
+  ]);
+  const previousPiDraftContextRef = useRef({ storageKey, contextKey: piDraftContextKey });
+  useEffect(() => {
+    const previous = previousPiDraftContextRef.current;
+    previousPiDraftContextRef.current = { storageKey, contextKey: piDraftContextKey };
+    // A directory/engine/device choice changes what /name means. Keep the text,
+    // but release the old selection; ordinary sends resolve in the new context.
+    // Switching between draft keys is hydration, not an execution-context edit.
+    if (!storageKey || previous.storageKey !== storageKey || previous.contextKey === piDraftContextKey) return;
+    draftSaveSchedulerRef.current?.flush();
+    const draft = getComposerDraft(storageKey);
+    if (draft?.piProjectSkillIntent) {
+      saveComposerDraft(storageKey, { ...draft, piProjectSkillIntent: undefined });
+    }
+  }, [storageKey, piDraftContextKey]);
   useEffect(() => storageKey ? registerDraftFlush(storageKey, () => {
     if (storageKeyForDraftRef.current === storageKey) draftSaveSchedulerRef.current?.flush();
   }) : undefined, [storageKey]);
@@ -3510,8 +3529,10 @@ export function ChatInput({
     attachments: AttachedFile[];
     comments: BrowserCommentDraftItem[];
   } | null>(null);
+  const recordingSamplesRef = useRef<RecordingSamplesRef['current']>(null);
   const voiceInputOptions = useMemo(
     () => ({
+      onSamples: (pcm: ArrayBuffer) => recordingSamplesRef.current?.(pcm),
       onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
       shouldApplyToEditor: () =>
         voiceOwnerStorageKeyRef.current === undefined ||
@@ -10464,6 +10485,7 @@ export function ChatInput({
                   )}
                   {!queueEditActive && (
                     <VoiceInputButton
+                      samplesRef={recordingSamplesRef}
                       state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
                       // The surrounding controls stay locked during voice input, but
                       // this control must remain enabled so the recording can stop.
@@ -10731,6 +10753,7 @@ export function ChatInput({
 }
 
 function VoiceInputButton({
+  samplesRef,
   state,
   onHoldChange,
   emptyComposer,
@@ -10745,6 +10768,7 @@ function VoiceInputButton({
   onReleaseToSendChange,
   className,
 }: {
+  samplesRef: RecordingSamplesRef;
   state: import('@cindy/voice-input-core').VoiceInputState;
   onHoldChange: (holding: boolean) => void;
   emptyComposer: boolean;
@@ -10784,7 +10808,7 @@ function VoiceInputButton({
 
   // ── 录音态宽度形变 + 计时(DESIGN.md §14.4「Desktop composer send / stop」)──
   // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
-  // 文案已移除):三根红色音量条(复用已登记的 voice-mic-wave 循环)+ 计时。
+  // 文案已移除):三根实时录音音量条+ 计时。
   // 会话内与新建对话框共用同一套(不再按 create-agent 分叉)。
   // 计时数字 tabular-nums 等宽,配合"分钟位数变化才重新量宽",秒跳动不抖框。
   const [recSeconds, setRecSeconds] = useState(0);
@@ -11018,13 +11042,8 @@ function VoiceInputButton({
           <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
             <Mic size={15} />
           </span>
-          <span
-            data-voice-mic-active={activeRecording ? 'true' : undefined}
-            className={cn(iconLayer, 'h-4 gap-[2px]', showBars ? iconShown : iconHidden)}
-          >
-            <span data-voice-mic-bar="1" className="h-[10px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
-            <span data-voice-mic-bar="2" className="h-[14px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
-            <span data-voice-mic-bar="3" className="h-[10px] w-[2.5px] rounded-full bg-[var(--settings-badge-error)]" />
+          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
+            <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
           </span>
           <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
             <Spinner size={15} spinning={showProcessing} />

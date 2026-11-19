@@ -147,6 +147,7 @@ const SCHEDULER_DDL = [
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
       model_agent_device_id TEXT,
+      inherited_project_dir TEXT,
       model TEXT,
       provider_id TEXT,
       agent_device_id TEXT,
@@ -412,6 +413,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      // DB tier: a PR checkout retains the creator project across insert/get/update.
+      inheritedProjectDir: '/projects/app',
+      workingDir: '/checkouts/pr',
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
@@ -435,6 +439,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'paused',
         updatedAt: 1_700_000_200_000,
       });
+      expect(updated?.inheritedProjectDir).toBe('/projects/app');
+      expect(updated?.workingDir).toBe('/checkouts/pr');
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);
