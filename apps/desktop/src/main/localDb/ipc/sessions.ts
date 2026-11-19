@@ -143,6 +143,8 @@ import {
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
+import { assertSessionDeleteTarget } from '../sessionDeleteTarget.js';
 import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
 import { isTaskListBotLane, restoreArchivedTaskForSend } from '../archivedTaskRestore.js';
 import { applyAgentSwitchResumeFallbackAtomicallyWithPorts, applyAgentSwitchToSessionRowWithPorts, type AgentSwitchRowPatch } from '../agentSwitchRows.js';
@@ -159,9 +161,28 @@ import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
+
+/** Only a committed worker for this lead can detach a side chat from its parent. */
+export async function promoteSideChatLeadInDb(sessionId: string, teamId: string, workerId: string): Promise<void> {
+  const dbClient = getDbClient();
+  const ownerScope = captureOwnerScope();
+  return withSessionRouteLock(sessionId, async () => {
+    if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+    const changed = await dbClient.drizzle.update(sessions)
+      .set({ sideChatPromoted: true })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.source, 'side-chat'),
+        eq(sessions.sideChatPromoted, false), ne(sessions.status, 'deleted'), sql`EXISTS (
+          SELECT 1 FROM orca_teams team JOIN orca_workers worker ON worker.team_id = team.id
+          WHERE team.id = ${teamId} AND team.lead_session_id = ${sessionId} AND worker.id = ${workerId}
+        )`))
+      .returning({ parentSessionId: sessions.parentSessionId });
+    if (!changed.length || !isOwnerScopeCurrent(ownerScope)) return;
+    broadcastSessionPatched(sessionId, { source: 'desktop', sideChatPromoted: true, parentSessionId: changed[0].parentSessionId }, ownerScope);
+  });
+}
 
 function readCurrentDbClientSnapshot(): {
   client: DbClient;
@@ -272,6 +293,7 @@ async function withStatusWriteLock<T>(
   recycleAfterWrite = false,
   discardWorktreeChanges?: true,
   preserveFiles = false,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
@@ -279,6 +301,7 @@ async function withStatusWriteLock<T>(
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
       beforeWrite?.();
+      if (status === 'deleted') await assertDeleteTargetInDb(db, sessionId, deleteTarget);
       let discardOnTransition = false;
       if (discardWorktreeChanges) {
         const [current] = await db.select({ status: sessions.status })
@@ -398,14 +421,18 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
-  idleArchiveCutoff?: number,
-  unusedOnly?: boolean,
-  projectGuard?: ProjectArchiveGuard,
+  { idleArchiveCutoff, unusedOnly, projectGuard, deleteTarget }: {
+    idleArchiveCutoff?: number;
+    unusedOnly?: boolean;
+    projectGuard?: ProjectArchiveGuard;
+    deleteTarget?: SessionDeleteTarget;
+  } = {},
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
       ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
       ...(projectGuard && { projectGuard }),
+      ...(deleteTarget !== undefined && { deleteTarget }),
       ...(unusedOnly ? { unusedOnly: true } : {}) });
     return result.deletedSideChats;
   } catch (error) {
@@ -452,10 +479,11 @@ async function deleteDependentSideChats(
   }
   // Compatibility for callers without the transaction API (legacy adapters).
   const children = await dbClient.drizzle.select({ id: sessions.id }).from(sessions)
-    .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.source, 'side-chat'), ne(sessions.status, 'deleted')));
+    .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.source, 'side-chat'),
+      eq(sessions.sideChatPromoted, false), ne(sessions.status, 'deleted')));
   for (const child of children) {
     if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
-    await patchSessionMetaInDb(child.id, { status: 'deleted' });
+    await patchSessionMetaInDb(child.id, { status: 'deleted', deleteTarget: 'side-chat' });
   }
 }
 
@@ -1676,16 +1704,44 @@ export function registerSessionIpc(
 async function cancelValidatedCreation(
   dbClient: DbClient, sessionId: string, status: unknown,
   assertCurrent: () => void,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<void> {
   if (status !== 'archived' && status !== 'deleted') return;
   const cancel = captureSessionCreationCancellation(dbClient, sessionId);
-  const [target] = await dbClient.drizzle.select({ source: sessions.source })
+  const [target] = await dbClient.drizzle.select({ source: sessions.source, sideChatPromoted: sessions.sideChatPromoted })
     .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
+  if (status === 'deleted') assertDeleteTarget(target, deleteTarget);
   await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId);
   assertCurrent();
   if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+  // Follow-ups are already persisted. A pending close must not cancel their runtime before commit.
+  if (status === 'deleted' && target.source === 'side-chat') return;
   cancel();
+}
+
+function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean }, target?: SessionDeleteTarget): void {
+  try {
+    assertSessionDeleteTarget(row, target);
+  } catch (err) {
+    throwIpcError('PRECONDITION_FAILED', (err as Error).message);
+  }
+}
+
+async function assertDeleteTargetInDb(
+  db: DbClient['drizzle'], id: string, target?: SessionDeleteTarget,
+): Promise<void> {
+  const [row] = await db.select({ source: sessions.source, sideChatPromoted: sessions.sideChatPromoted })
+    .from(sessions).where(eq(sessions.id, id)).limit(1);
+  if (row) assertDeleteTarget(row, target);
+}
+
+function validateDeleteTarget(value: unknown, status: unknown): SessionDeleteTarget | undefined {
+  if (value === undefined) return undefined;
+  if ((value !== 'side-chat' && value !== 'task') || status !== 'deleted') {
+    throwIpcError('INVALID_PARAMS', 'deleteTarget requires status deleted');
+  }
+  return value;
 }
 
 function validateDiscardWorktreeChanges(value: unknown, status: unknown): true | undefined {
@@ -1698,7 +1754,7 @@ function validateDiscardWorktreeChanges(value: unknown, status: unknown): true |
 
 export async function updateSessionInDb(
   sid: string,
-  { discardWorktreeChanges: discardRequested, ...p }: Record<string, unknown>,
+  { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, ...p }: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
   moveGuard?: {
     /** Identity only: also used after commit and inside transcript relocation. */
@@ -1712,6 +1768,7 @@ export async function updateSessionInDb(
   moveGuard?.assertCurrent();
   validateSnoozeTime(p.snoozedUntil);
   const discardWorktreeChanges = validateDiscardWorktreeChanges(discardRequested, p.status);
+  const deleteTarget = validateDeleteTarget(deleteRequested, p.status);
   if (discardWorktreeChanges && p.workingDir !== undefined) {
     throwIpcError('INVALID_PARAMS', 'cannot change workingDir when discarding worktree changes');
   }
@@ -1784,7 +1841,7 @@ export async function updateSessionInDb(
     await cancelValidatedCreation(dbClient, sid, p.status, () => {
       moveGuard?.assertCurrent();
       if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
-    });
+    }, deleteTarget);
     let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
     await withStatusWriteLock(
       db,
@@ -1800,7 +1857,7 @@ export async function updateSessionInDb(
           if (typeof dbClient.tx === 'function') {
             const { status: _status, ...nonTerminalPatch } = setObj;
             await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
-            deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted');
+            deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted', { deleteTarget });
           } else {
             const prepared = await prepareSharedTaskClosure(sid, dbClient);
             try {
@@ -1830,6 +1887,8 @@ export async function updateSessionInDb(
       false,
       false,
       discardWorktreeChanges,
+      false,
+      deleteTarget,
     );
     moveGuard?.assertCurrent();
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
@@ -2005,6 +2064,7 @@ export async function patchSessionMetaInDb(
   rawPatch: {
     status?: 'active' | 'archived' | 'deleted';
     discardWorktreeChanges?: true;
+    deleteTarget?: SessionDeleteTarget;
     title?: string;
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
@@ -2012,8 +2072,9 @@ export async function patchSessionMetaInDb(
   options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
-  const { discardWorktreeChanges: discardRequested, ...patch } = rawPatch;
+  const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, ...patch } = rawPatch;
   const discardWorktreeChanges = validateDiscardWorktreeChanges(discardRequested, patch.status);
+  const deleteTarget = validateDeleteTarget(deleteRequested, patch.status);
   validateSnoozeTime(patch.snoozedUntil);
   for (const k of Object.keys(rawPatch)) {
     if (!REMOTE_EDITABLE_META.has(k)) {
@@ -2051,7 +2112,7 @@ export async function patchSessionMetaInDb(
       throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
     }
     beforeWrite();
-  });
+  }, deleteTarget);
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     beforeWrite();
@@ -2061,7 +2122,12 @@ export async function patchSessionMetaInDb(
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         beforeWrite();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff, options.unusedOnly, options.projectGuard);
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', {
+          idleArchiveCutoff: options.idleArchiveCutoff,
+          unusedOnly: options.unusedOnly,
+          projectGuard: options.projectGuard,
+          deleteTarget,
+        });
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2108,7 +2174,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles);
+  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget);
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }

@@ -1079,6 +1079,13 @@
       "when": 1795070787385,
       "tag": "0153_schedule_inherited_project",
       "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "6",
+      "when": 1795103021881,
+      "tag": "0154_promote_orca_side_chat",
+      "breakpoints": true
     }
   ]
 }

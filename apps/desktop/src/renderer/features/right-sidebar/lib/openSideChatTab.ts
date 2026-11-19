@@ -193,7 +193,7 @@ export async function openSideChatTab(
       }
     } catch (error) {
       // A failed tab write must not leave an unreachable branch running or listed.
-      await setStatus(child.id, 'deleted', deviceId ? { kind: 'device-link', deviceId } : { kind: 'local' });
+      await setStatus(child.id, 'deleted', deviceId ? { kind: 'device-link', deviceId } : { kind: 'local' }, undefined, 'side-chat');
       if (deviceId) remoteProjectsStore.applyPatch(deviceId, child.id, { status: 'deleted' });
       // These files still belong to the parent's rejected send; do not recycle them.
       clearDraft(child.id);

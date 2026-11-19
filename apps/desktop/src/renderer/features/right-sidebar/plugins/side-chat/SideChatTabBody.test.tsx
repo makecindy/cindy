@@ -93,7 +93,31 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.status).not.toHaveBeenCalled();
     mocks.confirm.mockResolvedValue(true); mocks.status.mockRejectedValueOnce(new Error('offline'));
     await expect(close!()).resolves.toBe(false);
-    expect(mocks.status).toHaveBeenCalledWith('child', 'deleted', { kind: 'device-link', deviceId: 'host' });
+    expect(mocks.status).toHaveBeenCalledWith('child', 'deleted', { kind: 'device-link', deviceId: 'host' }, undefined, 'side-chat');
+  });
+
+  // Unit regression: a confirmation awaiting a click must not delete the now-independent task.
+  // A real mounted panel receives the promotion push before the old dialog resolves.
+  it.each([true, false])('retires the promoted follow-up tab and only navigates when visible (%s)', async active => {
+    let confirm!: (accepted: boolean) => void;
+    mocks.confirm.mockReturnValue(new Promise<boolean>(resolve => { confirm = resolve; }));
+    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active={active} />); });
+    const closing = close!();
+    await act(async () => {
+      mocks.subscribe.mock.calls[0][0]({ deviceId: 'host', channel: 'local-db:sessions:patched',
+        payload: { sessionId: 'child', patch: { source: 'desktop', sideChatPromoted: true } } });
+      confirm(true);
+      await closing;
+    });
+    expect(mocks.closeTab).toHaveBeenCalledWith('parent', 'tab', { skipBeforeClose: true });
+    expect(mocks.status).not.toHaveBeenCalled();
+    if (active) {
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/child?device=host', {
+        state: { orcaWorkersReveal: { leadSessionId: 'child' } },
+      });
+    } else {
+      expect(mocks.navigate).not.toHaveBeenCalled();
+    }
   });
 
   it('shows a return action in the restricted sidebar window without mounting a chat editor', () => {

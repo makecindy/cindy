@@ -624,6 +624,7 @@ import {
   applyAgentSwitchToSessionRow,
   applyAgentSwitchResumeFallbackAtomically,
   broadcastSessionPatched,
+  promoteSideChatLeadInDb,
   setSessionStatusPatchedListener,
   touchSessionActivityInDb,
   captureSessionRecycleScope,
@@ -16374,6 +16375,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const orcaUiAssignmentDispatchClaims = createOrcaUiAssignmentDispatchClaims();
 
   const orcaLifecycleService = createOrcaLifecycleService({
+    promoteSideChatLead: async (sessionId, teamId, workerId, assertCurrent) => {
+      try {
+        await assertCurrent?.();
+        await promoteSideChatLeadInDb(sessionId, teamId, workerId);
+      } catch (err) {
+        // Worker creation has already committed. A display write must not report it as failed.
+        log.warn('Could not promote side-chat lead', { err });
+      }
+    },
     getActiveTeamByLead,
     isOrphanedTeamInit,
     createActiveTeam: async (leadSessionId) => createActiveTeam({ leadSessionId }),

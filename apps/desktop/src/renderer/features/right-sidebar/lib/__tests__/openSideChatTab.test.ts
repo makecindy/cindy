@@ -120,7 +120,7 @@ describe('side chat task entry', () => {
     mocks.device = 'execution-host';
     mocks.add.mockRejectedValueOnce(new Error('disk full'));
     expect(await openSideChatTab('parent', { prompt: 'question' })).toBe(false);
-    expect(mocks.status).toHaveBeenCalledExactlyOnceWith('child', 'deleted', { kind: 'device-link', deviceId: 'execution-host' });
+    expect(mocks.status).toHaveBeenCalledExactlyOnceWith('child', 'deleted', { kind: 'device-link', deviceId: 'execution-host' }, undefined, 'side-chat');
     expect(mocks.patch).toHaveBeenCalledWith('execution-host', 'child', { status: 'deleted' });
     expect(mocks.clear).toHaveBeenCalledWith('child');
     expect(mocks.reveal).not.toHaveBeenCalled();

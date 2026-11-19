@@ -442,6 +442,8 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** This independent task was previously attached to its parent as a follow-up. */
+  sideChatPromoted?: true;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
   companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */

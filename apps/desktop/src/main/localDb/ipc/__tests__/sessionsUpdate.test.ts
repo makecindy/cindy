@@ -201,6 +201,7 @@ import {
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
+  promoteSideChatLeadInDb,
   restoreArchivedSessionForSend,
   persistSessionFields,
   registerSessionIpc,
@@ -278,6 +279,7 @@ function createDb(): void {
       forked_at_message_id TEXT,
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
@@ -439,6 +441,29 @@ afterEach(async () => {
     rmSync(dir, { recursive: true, force: true });
     h.userDataDir = null;
   }
+});
+
+// DB IPC regression: a committed worker promotes only its owning follow-up.
+// The production update and detail read must leave the raw provenance and native identity intact.
+it('makes a follow-up independently visible only when its worker exists', async () => {
+  h.sqlite!.exec(`
+    CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT);
+    CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
+    INSERT INTO orca_teams VALUES ('team', 'codex-local');
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      sdk_session_id = 'native-fork', orca_role = 'lead' WHERE id = 'codex-local';
+  `);
+  const read = () => h.handlers.get('local-db:sessions:get')!({}, 'codex-local');
+  await promoteSideChatLeadInDb('codex-local', 'team', 'worker');
+  expect(await read()).toMatchObject({ source: 'side-chat', sdkSessionId: 'native-fork' });
+  h.sqlite!.exec("INSERT INTO orca_workers VALUES ('worker', 'team')");
+  await promoteSideChatLeadInDb('codex-local', 'team', 'worker');
+  expect(await read()).toMatchObject({
+    id: 'codex-local', source: 'desktop', sideChatPromoted: true, parentSessionId: 'cc-local',
+    sdkSessionId: 'native-fork', orcaRole: 'lead', agentKind: 'codex',
+  });
+  const raw = h.sqlite!.prepare("SELECT source, side_chat_promoted FROM sessions WHERE id = 'codex-local'").get();
+  expect(raw).toEqual({ source: 'side-chat', side_chat_promoted: 1 });
 });
 
 // DB tier: the remote preview must cover the owning project even when only one task

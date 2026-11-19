@@ -186,10 +186,10 @@ test('side-chat binding returns the contract shape from a real database, unchang
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
     .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
-  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at) VALUES
-    ('second','parent','side-chat','archived',2,2), ('first','parent','side-chat','active',1,1),
-    ('gone','parent','side-chat','deleted',3,3), ('fork','parent','desktop','active',4,4),
-    ('other','elsewhere','side-chat','active',5,5)`);
+  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at,side_chat_promoted) VALUES
+    ('second','parent','side-chat','archived',2,2,0), ('first','parent','side-chat','active',1,1,0),
+    ('gone','parent','side-chat','deleted',3,3,0), ('fork','parent','desktop','active',4,4,0),
+    ('other','elsewhere','side-chat','active',5,5,0), ('promoted','parent','side-chat','active',6,6,1)`);
   const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(client, 'isolated');
   t.after(() => clearCurrentDbClient(client));
@@ -248,8 +248,8 @@ test('desktop proxy and Host route agree over real HTTP with the production bind
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
     .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
-  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at) VALUES
-    ('child','parent','side-chat','active',1,1)`);
+  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at,side_chat_promoted) VALUES
+    ('child','parent','side-chat','active',1,1,0)`);
   const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(client, 'isolated');
   t.after(() => clearCurrentDbClient(client));

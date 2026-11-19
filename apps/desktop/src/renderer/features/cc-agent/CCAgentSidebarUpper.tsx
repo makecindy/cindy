@@ -3349,6 +3349,7 @@ function ExpandedView({
     await runSessionAction(sessionId, action, {
       activeSessionId: viewedSessionId,
       deleteRedirectRoute,
+      deleteTarget: action === 'delete' && session?.sideChatPromoted ? 'task' : undefined,
     });
     setConfirm(CONFIRM_INITIAL);
   }, [closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
@@ -3399,7 +3400,8 @@ function ExpandedView({
           // 先固定本次状态写目标:关闭远端控制后,复制库里与 sticky origin 同 ID 的任务
           // 必须按本地任务删除；真正远端任务仍固定经隧道写被控端。
           const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
-          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget);
+          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget, undefined,
+            session.sideChatPromoted ? 'task' : undefined);
           makerChatStore.purgeSession(session.id);
           discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是

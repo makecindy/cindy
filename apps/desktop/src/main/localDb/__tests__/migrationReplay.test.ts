@@ -79,6 +79,42 @@ function maxMigrationSeq(): number {
   return Math.max(...listMigrations(drizzleDir()).map((migration) => migration.seq));
 }
 
+// Migration tier: a follow-up that already has an Orca worker becomes visible after upgrading.
+// A team with no worker stays attached, and replay after reopening must not touch native IDs.
+describeMigrationReplay('existing side-chat teams', () => {
+  it('marks only follow-ups with a successful worker link and keeps native identity after reopening', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, status TEXT, sdk_session_id TEXT);
+        CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
+        CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
+        INSERT INTO sessions VALUES ('live', 'side-chat', 'active', 'native-live'),
+          ('empty', 'side-chat', 'active', 'native-empty'), ('failed', 'side-chat', 'active', 'native-failed');
+        INSERT INTO orca_teams VALUES ('team-live', 'live', 'active'),
+          ('team-empty', 'empty', 'active'), ('team-failed', 'failed', 'failed');
+        INSERT INTO orca_workers VALUES ('worker', 'team-live'), ('failed-worker', 'team-failed');
+      `);
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 153 });
+      const reopened = createBetterSqliteDatabase(db.name);
+      try {
+        expect(reopened.prepare('SELECT id, source, sdk_session_id, side_chat_promoted FROM sessions ORDER BY id').all())
+          .toEqual([
+            { id: 'empty', source: 'side-chat', sdk_session_id: 'native-empty', side_chat_promoted: 0 },
+            { id: 'failed', source: 'side-chat', sdk_session_id: 'native-failed', side_chat_promoted: 0 },
+            { id: 'live', source: 'side-chat', sdk_session_id: 'native-live', side_chat_promoted: 1 },
+          ]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 // Migration tier: 0.1.122 hid every automatic association on a real upgraded profile.
 // The previous fixture asserted row retention but accepted disappearance from UI reads.
 // Exercise direct and already-upgraded databases through the runner and production store.
@@ -193,7 +229,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -373,7 +409,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

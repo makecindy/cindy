@@ -67,7 +67,7 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
   if (!source || source.status !== 'active') {
     throw forkError('SOURCE_NOT_FOUND', 'Source task is unavailable');
   }
-  if (source.source === 'side-chat' || source.source === 'review' || source.source === 'bot') {
+  if ((source.source === 'side-chat' && !source.sideChatPromoted) || source.source === 'review' || source.source === 'bot') {
     throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
   }
   const inFlight = (source.activeTurnStartedAt ?? 0) > (source.lastTurnEndedAt ?? 0);

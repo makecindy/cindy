@@ -533,6 +533,7 @@ export function SessionContentHeader({
     await runSessionAction(session.id, 'delete', {
       activeSessionId: session.id,
       deleteRedirectRoute,
+      deleteTarget: session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined,
     });
   }, [
     confirmDialog,
@@ -540,6 +541,8 @@ export function SessionContentHeader({
     routeSessionById,
     runSessionAction,
     session.id,
+    session.sideChatPromoted,
+    session.source,
     showRemoteWriteBlockedToast,
     t,
   ]);

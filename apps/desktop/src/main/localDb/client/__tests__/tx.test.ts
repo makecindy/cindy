@@ -101,6 +101,7 @@ CREATE TABLE sessions (
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   source TEXT NOT NULL DEFAULT 'desktop',
+  side_chat_promoted INTEGER NOT NULL DEFAULT 0,
   extra_dirs TEXT NOT NULL DEFAULT '[]',
   writable_dirs TEXT NOT NULL DEFAULT '[]',
   im_bot_context_id TEXT,
@@ -1942,6 +1943,13 @@ describe('db worker tx handlers', () => {
       await seedSession(client, 'active-child', { source: 'side-chat', parentSessionId: 'parent' });
       await seedSession(client, 'archived-child', { source: 'side-chat', parentSessionId: 'parent', status: 'archived' });
       await seedSession(client, 'ordinary-fork', { parentSessionId: 'parent' });
+      // An older controller or a confirmation opened before promotion must not delete this task.
+      await seedSession(client, 'promoted', { source: 'side-chat', parentSessionId: 'parent' });
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'promoted'");
+      for (const deleteTarget of [undefined, 'side-chat'] as const) {
+        await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'promoted', status: 'deleted', deleteTarget }))
+          .rejects.toThrow('now an independent task');
+      }
       for (const session of ['parent', 'active-child', 'archived-child', 'ordinary-fork']) {
         await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', '{}', 1)", [session, session, session]);
         await client.exec("INSERT INTO mcp_app_view_states VALUES (?, ?, 'fixture', 'revision', NULL, '{}', 2)", [session, session]);
@@ -1955,6 +1963,7 @@ describe('db worker tx handlers', () => {
       await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
         { id: 'active-child', status: 'active' }, { id: 'archived-child', status: 'archived' },
         { id: 'ordinary-fork', status: 'active' }, { id: 'parent', status: 'active' },
+        { id: 'promoted', status: 'active' },
       ]);
       await expect(client.query("SELECT session_id FROM shared_task_events WHERE kind = 'local-close'")).resolves.toEqual([]);
       expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(4);
@@ -1975,7 +1984,10 @@ describe('db worker tx handlers', () => {
       await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
         { id: 'active-child', status: 'deleted' }, { id: 'archived-child', status: 'deleted' },
         { id: 'ordinary-fork', status: 'active' }, { id: 'parent', status: 'deleted' },
+        { id: 'promoted', status: 'active' },
       ]);
+      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'promoted', status: 'deleted', deleteTarget: 'task' }))
+        .resolves.toMatchObject({ sessionId: 'promoted', status: 'deleted' });
       await expect(client.query("SELECT session_id FROM shared_task_events WHERE kind = 'local-close' ORDER BY session_id"))
         .resolves.toEqual([{ session_id: 'active-child' }, { session_id: 'parent' }]);
     }, { useInlineWorker });

@@ -129,6 +129,7 @@ export interface OrcaLifecycleDeps {
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<void>;
   rollbackCreatedWorker(params: { workerId: string; workerSessionId: string }): Promise<void>;
+  promoteSideChatLead?(leadSessionId: string, teamId: string, workerId: string, assertCurrent?: () => Promise<void>): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
 }
@@ -309,6 +310,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
       return internalFailure(err);
     }
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {
@@ -510,6 +512,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       });
     }
 
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {

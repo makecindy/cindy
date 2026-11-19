@@ -10,6 +10,7 @@ import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
+import { assertSessionDeleteTarget } from '../../sessionDeleteTarget.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
@@ -2258,10 +2259,11 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
       || !db.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
       throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = db.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
-      | { id: string; status: string; source: string } | undefined;
+    const existing = db.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
+      | { id: string; status: string; source: string; sideChatPromoted: number } | undefined;
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    if (status === 'deleted') assertSessionDeleteTarget(existing, payload.deleteTarget);
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
@@ -2277,9 +2279,9 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     // Hidden children must become unreachable in the same commit as the parent.
     // A failure in either the status write or its closure fence rolls back all rows.
-    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+    const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
-          WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted'
+          WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted'
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];

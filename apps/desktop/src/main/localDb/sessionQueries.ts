@@ -20,6 +20,7 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
     or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id

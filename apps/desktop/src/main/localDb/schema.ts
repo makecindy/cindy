@@ -256,6 +256,8 @@ export const sessions = sqliteTable(
      * 进入桌面 sidebar；feishu 仍由飞书模块独立查询，不混进桌面主列表。
      */
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
+    /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
+    sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
+import { useSidebarNavigate } from '@/features/cc-agent/sidebar/sidebarNavigation';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { useDocumentVisible, useWindowVisible } from '@/hooks/useWindowVisible';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -17,7 +18,7 @@ import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import { mergeSidebarWindowBack } from '../../lib/mergeSidebarWindowBack';
 import { closeTab } from '../../store';
 import type { TabKindBodyProps } from '../../types';
-import type { SideChatState } from './state';
+import { sideChatTaskRoute, type SideChatState } from './state';
 
 export function SideChatTabBody({ state, ctx, active, shellVisible = true }: TabKindBodyProps<SideChatState>) {
   const { t } = useTranslation();
@@ -42,11 +43,15 @@ export function SideChatTabBody({ state, ctx, active, shellVisible = true }: Tab
 function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBodyProps<SideChatState>) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const navigate = useSidebarNavigate();
   const windowVisible = useWindowVisible(Boolean(active && shellVisible));
   const documentVisible = useDocumentVisible(Boolean(active && shellVisible));
   const viewVisible = Boolean(active && shellVisible && windowVisible);
   const chatRealtime = Boolean(active && shellVisible && documentVisible);
   const childId = state.sessionId;
+  const visibleRef = useRef(viewVisible);
+  visibleRef.current = viewVisible;
+  const retiredChildRef = useRef<string | null>(null);
   const [remoteSession, setRemoteSession] = useState<Session | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -65,14 +70,23 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     let unavailable = false;
     let bufferedPatch: Partial<Session> = {};
     const valid = () => !disposed && isDataOwnerGenerationCurrent(owner);
-    const dismiss = () => {
+    const dismiss = (promoted = false) => {
       if (!valid() || unavailable) return;
       unavailable = true;
+      retiredChildRef.current = childId;
       // Unmount the composer immediately, even while tab persistence settles.
       setUnavailableChild(childId);
-      makerChatStore.closeSessionQuery(childId);
-      makerChatStore.purgeSession(childId);
-      discardDraft(childId);
+      if (promoted) {
+        if (visibleRef.current) {
+          navigate(sideChatTaskRoute(childId, deviceId), {
+            state: { orcaWorkersReveal: { leadSessionId: childId } },
+          });
+        }
+      } else {
+        makerChatStore.closeSessionQuery(childId);
+        makerChatStore.purgeSession(childId);
+        discardDraft(childId);
+      }
       void closeTab(ctx.sessionId, ctx.tabId, { skipBeforeClose: true })
         .catch(() => { if (valid()) toast.error(t('chat.sideChat.closeFailed')); });
     };
@@ -80,6 +94,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       if (!valid() || unavailable || payload?.sessionId !== childId || !payload.patch) return;
       bufferedPatch = { ...bufferedPatch, ...payload.patch };
       if (payload.patch.status === 'deleted') { dismiss(); return; }
+      if (payload.patch.sideChatPromoted === true) { dismiss(true); return; }
       if (deviceId) {
         setRemoteSession(previous => previous?.id === childId
           ? { ...previous, ...payload.patch, id: childId, source: 'side-chat', deviceLinkDeviceId: deviceId }
@@ -100,9 +115,12 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [childId]) as Session;
       if (!valid() || unavailable) return;
       if (!value) { dismiss(); return; }
-      if (value.id !== childId || value.source !== 'side-chat' || value.parentSessionId !== ctx.sessionId) {
+      if (value.id !== childId || value.parentSessionId !== ctx.sessionId) {
         throw new Error('Side chat owner mismatch');
       }
+      if (value.status === 'deleted') { dismiss(); return; }
+      if (value.sideChatPromoted) { dismiss(true); return; }
+      if (value.source !== 'side-chat') throw new Error('Side chat owner mismatch');
       const snapshot: Session = { ...value, ...bufferedPatch, id: childId, source: 'side-chat', deviceLinkDeviceId: deviceId };
       if (snapshot.status === 'deleted') { dismiss(); return; }
       // The shared editor also reads metadata from the remote task store. Restore
@@ -113,24 +131,28 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     };
     void read().catch(() => { if (valid() && !unavailable) setLoadFailed(true); });
     return () => { disposed = true; off(); };
-  }, [active, childId, ctx.sessionId, ctx.tabId, retry, state.deviceId, t]);
+  }, [active, childId, ctx.sessionId, ctx.tabId, navigate, retry, state.deviceId, t]);
   const close = useCallback(async () => {
-    if (!childId || unavailableChild === childId) return true;
+    if (!childId) return true;
+    if (retiredChildRef.current === childId) return false;
+    const owner = getDataOwnerGeneration();
     if (!await confirm({
       title: t('chat.sideChat.closeTitle'), description: t('chat.sideChat.closeDescription'),
       confirmText: t('chat.sideChat.closeConfirm'),
     })) return false;
+    if (retiredChildRef.current === childId || !isDataOwnerGenerationCurrent(owner)) return false;
     try {
-      await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' });
+      await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' },
+        undefined, 'side-chat');
       makerChatStore.closeSessionQuery(childId);
       makerChatStore.purgeSession(childId);
       discardDraft(childId);
       return true;
     } catch {
-      toast.error(t('chat.sideChat.closeFailed'));
+      if (retiredChildRef.current !== childId) toast.error(t('chat.sideChat.closeFailed'));
       return false;
     }
-  }, [childId, confirm, state.deviceId, t, unavailableChild]);
+  }, [childId, confirm, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
   if (unavailableChild && unavailableChild === childId) return null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
