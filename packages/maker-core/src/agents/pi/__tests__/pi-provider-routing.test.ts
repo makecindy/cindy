@@ -7683,14 +7683,21 @@ describe("Pi provider-aware model routing", () => {
   // unit tier: remote file/RPC ports are in-memory; no SSH, native Pi or HTTP is claimed.
   it.each(["explicit", "inferred"])("starts a reachable remote loopback BYOM (%s route) without forwarding it", async (route) => {
     const probe = vi.fn(async () => true);
-    const baseUrl = "http://127.0.0.1:23425/v1";
-    const deps = byomDeps(async () => ({ providers: [{
-      id: "shared-loopback", name: "Shared loopback", baseUrl,
+    let baseUrl = "http://127.0.0.2:23425/v1";
+    let refreshedBaseUrl: string | undefined;
+    const deps = byomDeps(async input => ({ providers: [{
+      id: "shared-loopback", name: "Shared loopback",
+      baseUrl: input.purpose === 'live-refresh' ? refreshedBaseUrl ?? baseUrl : baseUrl,
       api: "openai-completions", models: [{ id: "local-model" }],
+    }, {
+      id: "other-loopback", name: "Other loopback", baseUrl: "http://127.0.0.3:23425/v1",
+      api: "openai-completions", models: [{ id: "other-model", baseUrl: "http://127.0.0.5:23425/v1" }],
     }], env: {} }));
     const agent = new PiAgent({
       ...deps,
       probeRemotePiProviderEndpoint: probe,
+      getRemotePiAgentProxyEnv: async () => ({ HTTP_PROXY: 'http://proxy.test:8080',
+        NO_PROXY: 'localhost,127.0.0.1,::1', no_proxy: 'corp.test' }),
       resolveRemotePiBinaryPath: async () => "/remote/pi",
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -7716,6 +7723,14 @@ describe("Pi provider-aware model routing", () => {
       expect(probe).toHaveBeenCalledExactlyOnceWith("shared-network-host", baseUrl);
       const models = JSON.parse([...captured.remoteModels].find(([file]) => file.endsWith("/models.json"))![1]);
       expect(models.providers["shared-loopback"].baseUrl).toBe(baseUrl);
+      // #11573 P1: successful --noproxy probe must agree with the keyed Pi
+      // process, for the selected alias and an initially unselected catalog route.
+      expect(captured.env.NO_PROXY?.split(',')).toEqual(expect.arrayContaining([
+        '127.0.0.2', '127.0.0.3', '127.0.0.5', '127.0.0.1', 'localhost', '::1', 'corp.test',
+      ]));
+      expect(captured.env.no_proxy).toBeUndefined();
+      expect(captured.env.HTTP_PROXY).toBe('http://proxy.test:8080');
+      expect(captured.env.NO_PROXY?.split(',')).not.toContain('*');
       // Recheck on an explicit route operation: success at startup must not become a
       // permanent exemption if the service disappears, nor affect the current route.
       probe.mockResolvedValue(false);
@@ -7724,6 +7739,21 @@ describe("Pi provider-aware model routing", () => {
         .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
       expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: "set_model" }));
       expect(handle.model).toBe("local-model");
+      const filesBeforeRefresh = [...captured.remoteModels];
+      const probesBeforeRefresh = probe.mock.calls.length;
+      baseUrl = 'http://127.0.0.4:23425/v1';
+      await expect(handle.previewModelSwitch!('local-model', { providerId: 'shared-loopback' }))
+        .resolves.toMatchObject({ action: 'rebuild', reason: expect.stringContaining('proxy bypass') });
+      await expect(handle.setModel!('local-model', { providerId: 'shared-loopback' })).rejects.toThrow(/restart/);
+      expect([...captured.remoteModels]).toEqual(filesBeforeRefresh);
+      expect(probe).toHaveBeenCalledTimes(probesBeforeRefresh);
+      // A resolver changing after a safe preview must also fail before writes.
+      baseUrl = 'http://127.0.0.2:23425/v2';
+      refreshedBaseUrl = 'http://127.0.0.4:23425/v1';
+      await expect(handle.setModel!('local-model', { providerId: 'shared-loopback' })).rejects.toThrow(/proxy bypass/);
+      expect([...captured.remoteModels]).toEqual(filesBeforeRefresh);
+      refreshedBaseUrl = undefined;
+      baseUrl = 'http://127.0.0.2:23425/v1';
       // A late successful probe must not write a route snapshot after teardown.
       let releaseProbe!: (reachable: boolean) => void;
       let enteredProbe!: () => void;

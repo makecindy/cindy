@@ -7,7 +7,7 @@ import { createPiRemoteProviderForwardLease, probePiRemoteProviderEndpoint } fro
 // existed. Verify credential stripping, bounded/no-redirect execution and failure
 // semantics here; a separate local integration executes this command against HTTP.
 describe('Pi remote provider reachability', () => {
-  it.each(['http://127.0.0.1:23425', 'https://[::1]:23425', 'http://localhost:23425'])(
+  it.each(['http://127.0.0.1:23425', 'http://127.0.0.2:23425', 'https://[::1]:23425', 'http://localhost:23425'])(
     'probes only the configured execution-host origin: %s', async (origin) => {
       const exec = vi.fn(async () => ({ stdout: '401', stderr: '', exitCode: 0, signal: null }));
       expect(await probePiRemoteProviderEndpoint({ exec }, origin.replace('://', '://user:invalid-test-secret@') + '/private?token=invalid-test-secret#fragment')).toBe(true);

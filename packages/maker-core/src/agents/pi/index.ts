@@ -571,13 +571,20 @@ function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
   }
 }
 
+function loopbackProviderHosts(providers: readonly PiNativeProviderSpec[]): string[] {
+  return providers.flatMap(provider => [provider.baseUrl,
+    ...provider.models.map(model => model.baseUrl ?? provider.baseUrl)])
+    .filter(isLoopbackOnlyBaseUrl)
+    .map(baseUrl => new URL(baseUrl).hostname.replace(/^\[|\]$/g, ''));
+}
+
 /**
  * NO_PROXY 兜底:pi 的模型请求打的是 Cindy 本地 compat proxy(loopback),bridge 的
  * MCP fetch 也是 localhost —— 用户设了全局 HTTP_PROXY 时这些请求不能进代理隧道。
  * 合并用户已有 NO_PROXY,同时吞并小写 no_proxy 并删除,防止大小写双份互相覆盖
  * (与 codex/env-builder.ts 同一策略)。
  */
-function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
+function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv, providers: readonly PiNativeProviderSpec[] = []): void {
   const existing = [env.NO_PROXY, env.no_proxy]
     .filter((v): v is string => typeof v === 'string')
     .flatMap((s) => s.split(','))
@@ -585,7 +592,11 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .filter(Boolean);
   // NO_PROXY 使用裸 IPv6 地址，避免 [::1] 使 Python httpx 初始化失败（#7632）。
   // Bun 对裸 ::1 的匹配不一致；MCP bridge 对已校验的回环 URL 使用独立直连。
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
+  // The remote probe uses direct HTTP. Keep every configured loopback BYOM
+  // host direct in Pi too, including catalog routes selected later. Do not
+  // bypass an entire subnet or change how non-loopback providers use the proxy.
+  const providerHosts = loopbackProviderHosts(providers);
+  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1', ...providerHosts])).join(',');
   delete env.no_proxy;
 }
 
@@ -5886,7 +5897,7 @@ export class PiAgent extends BaseAgent {
           spawnEnv.https_proxy = proxy;
         }
       }
-      mergeLoopbackNoProxy(spawnEnv);
+      mergeLoopbackNoProxy(spawnEnv, remote ? nativeProviders : []);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       companionEnvironment?.assertCurrent?.();
@@ -7109,6 +7120,12 @@ export class PiAgent extends BaseAgent {
         budget ?? this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
+    const loopbackProxyRebuildReason = 'Pi must restart to apply the changed loopback provider proxy bypass';
+    const needsLoopbackProxyRestart = (providers: readonly PiNativeProviderSpec[]): boolean => {
+      if (!remote) return false;
+      const bypass = new Set((durableSpawnEnv.NO_PROXY ?? '').split(',').map(host => host.trim()));
+      return !bypass.has('*') && loopbackProviderHosts(providers).some(host => !bypass.has(host));
+    };
     const previewPiModelSwitch = async (
       model: string,
       target?: { providerId?: string | null; contextWindowBudget?: number | null },
@@ -7236,6 +7253,12 @@ export class PiAgent extends BaseAgent {
         }
       }
       const targetContextWindow = configuredWindow ? Math.max(configuredWindow, workingWindow) : null;
+      // Registry refresh cannot update Pi's process-level NO_PROXY. Reuse the
+      // existing rebuild path before publishing a catalog with a new alias.
+      if (needsLoopbackProxyRestart(latestProviders)) {
+        return { action: 'rebuild', targetContextWindow, windowVerified: false,
+          reason: loopbackProxyRebuildReason };
+      }
       // A refresh may change any provider block, so all credentials it references
       // must be synchronised with the running Pi process before it is published.
       // The private refresh bridge owns this update; this preview never handles a key.
@@ -7328,6 +7351,9 @@ export class PiAgent extends BaseAgent {
           }
         }
       }
+      // The resolver can change between preview and refresh. Check again before
+      // any configuration/registry mutation rather than accepting a late alias.
+      if (needsLoopbackProxyRestart(nextProviders)) throw new Error(loopbackProxyRebuildReason);
       const nextDescriptor = this.deps.resolvePiRuntimeModelDescriptor
         ? this.deps.resolvePiRuntimeModelDescriptor(sourceId, model)
         : this.capabilities.availableModels.find((candidate) => candidate.id === model);
