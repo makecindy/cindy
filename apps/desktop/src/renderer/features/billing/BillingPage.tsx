@@ -1425,6 +1425,11 @@ export function BillingSettingsSection({
         open={giftCardDialog.open}
         initialCode={giftCardDialog.code}
         onClose={() => setGiftCardDialog({ open: false, code: null })}
+        onCodeUnusable={(code) => {
+          // 查询或领取时发现码已用不了（比如在另一台设备上兑换过）：同样清掉缓存并重读列表。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+        }}
         onRedeemed={(code) => {
           void loadBalance();
           // 兑换的可能是自己买的卡：先清掉缓存的这张卡的码（重读列表失败时也不能再复制出已兑换的码），

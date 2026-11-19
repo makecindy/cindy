@@ -34,15 +34,17 @@ const card: BillingGiftCard = {
 function open(initialCode: string | null = null) {
   const onClose = vi.fn();
   const onRedeemed = vi.fn();
+  const onCodeUnusable = vi.fn();
   render(
     <GiftCardRedeemDialog
       open
       initialCode={initialCode}
       onClose={onClose}
       onRedeemed={onRedeemed}
+      onCodeUnusable={onCodeUnusable}
     />,
   );
-  return { onClose, onRedeemed };
+  return { onClose, onRedeemed, onCodeUnusable };
 }
 
 const click = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
@@ -129,6 +131,34 @@ describe('GiftCardRedeemDialog', () => {
     await screen.findByText('billing.giftCard.confirmTitle');
     click('billing.giftCard.confirmAction');
     await screen.findByText('billing.giftCard.errors.voidedPurchased');
+  });
+
+  // 评审发现（PR #11412）：买家缓存过码的卡在别处兑换后，查询结果「已是你的」也要让计费页清掉缓存的码
+  // 并重读列表；被别人领走、作废、过期（查询或领取时）同样。
+  it.each([
+    ['already yours', { ok: true, card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' } }],
+    ['claimed by someone else', { ok: true, card: { ...card, status: 'CLAIMED' } }],
+    ['voided', { ok: true, card: { ...card, status: 'VOIDED' } }],
+    ['reported as already claimed', { ok: false, reason: 'ALREADY_CLAIMED' }],
+  ])('reports a code that can no longer be used when the preview says it is %s', async (_label, preview) => {
+    api.previewGiftCard.mockResolvedValue(preview);
+    const { onCodeUnusable, onRedeemed } = open(CODE);
+    await waitFor(() => expect(onCodeUnusable).toHaveBeenCalledExactlyOnceWith(CODE));
+    expect(onRedeemed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ALREADY_CLAIMED', 'billing.giftCard.errors.alreadyClaimed', true],
+    ['RATE_LIMITED', 'billing.giftCard.errors.rateLimited', false],
+  ] as const)('reports a code that fails to redeem with %s only when it can no longer be used', async (reason, text, unusable) => {
+    api.previewGiftCard.mockResolvedValue({ ok: true, card });
+    api.redeemGiftCard.mockResolvedValue({ ok: false, reason });
+    const { onCodeUnusable } = open(CODE);
+    await screen.findByText('billing.giftCard.confirmTitle');
+    click('billing.giftCard.confirmAction');
+    await screen.findByText(text);
+    if (unusable) expect(onCodeUnusable).toHaveBeenCalledExactlyOnceWith(CODE);
+    else expect(onCodeUnusable).not.toHaveBeenCalled();
   });
 
   it('goes straight to confirmation for a code handed over by an app link', async () => {

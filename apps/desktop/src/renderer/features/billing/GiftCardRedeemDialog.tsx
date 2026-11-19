@@ -40,7 +40,15 @@ interface GiftCardRedeemDialogProps {
    * 这张卡缓存的码（已兑换的码不能再被复制出去）。
    */
   onRedeemed: (code: string) => void;
+  /**
+   * 查询或领取时发现这个码已经不能用了（已是你的、被别人领走、作废或过期）时调用，带上码（规范写法）：
+   * 计费页据此清掉「我买的礼品卡」里缓存的这张卡的码并重读列表，不再复制出用不了的码。
+   */
+  onCodeUnusable?: (code: string) => void;
 }
+
+/** 这些结果说明码已经用不了了：缓存它的地方要清掉。 */
+const UNUSABLE_FAILURES = new Set<BillingGiftCardFailure | 'FAILED'>(['ALREADY_CLAIMED', 'EXPIRED', 'VOIDED']);
 
 function cardFailure(card: BillingGiftCard): BillingGiftCardFailure | null {
   if (card.status === 'CLAIMED') return 'ALREADY_CLAIMED';
@@ -58,6 +66,7 @@ export function GiftCardRedeemDialog({
   initialCode,
   onClose,
   onRedeemed,
+  onCodeUnusable,
 }: GiftCardRedeemDialogProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
@@ -69,6 +78,9 @@ export function GiftCardRedeemDialog({
   const holdOpenRef = useRef(false);
   // 关闭或重开后，先前请求的结果不再写回。
   const requestRef = useRef(0);
+  // 查询回调是稳定的（只在打开时调用），回调属性随渲染变化：经 ref 取最新的。
+  const onCodeUnusableRef = useRef(onCodeUnusable);
+  onCodeUnusableRef.current = onCodeUnusable;
   // 领取请求在途时不换卡：此时又点开另一张礼品卡链接，若照常重置，这次领取的结果会被
   // 丢掉，到账提示和余额刷新都不会发生。与手机端一致，新链接在这期间不接手弹窗。
   const redeemingRef = useRef<number | null>(null);
@@ -87,13 +99,16 @@ export function GiftCardRedeemDialog({
       if (request !== requestRef.current) return;
       if (!result.ok) {
         setFailure({ reason: result.reason, code });
+        if (UNUSABLE_FAILURES.has(result.reason)) onCodeUnusableRef.current?.(code);
         return;
       }
       if (result.card.status === 'CLAIMED_BY_YOU') {
         setStep({ kind: 'done', card: result.card, credit: null });
+        onCodeUnusableRef.current?.(code);
         return;
       }
       const unavailable = cardFailure(result.card);
+      if (unavailable) onCodeUnusableRef.current?.(code);
       if (unavailable) {
         setFailure({ reason: unavailable, code, purchased: result.card.destination === 'PURCHASED' });
       }
@@ -134,6 +149,7 @@ export function GiftCardRedeemDialog({
         // 确认期间卡片状态变了（被别人领走、作废或过期）：回到输入并说明原因。
         setStep({ kind: 'input' });
         setFailure({ reason: result.reason, code, purchased: card.destination === 'PURCHASED' });
+        if (UNUSABLE_FAILURES.has(result.reason)) onCodeUnusable?.(code);
         return;
       }
       setStep({ kind: 'done', card: result.card, credit: result.credit });
