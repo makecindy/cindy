@@ -12,6 +12,7 @@ import {
   registerNativePopupTab,
 } from '../../../lib/nativePopupTabs';
 import { browserWebviewPool } from '../../../lib/browserWebviewPool';
+import * as sidebarTabs from '../../../store';
 import { BrowserTabBody } from '../BrowserTabBody';
 import { useLocalHtmlAutoReload } from '../useLocalHtmlAutoReload';
 
@@ -218,6 +219,29 @@ describe('BrowserTabBody navigation', () => {
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  // #11392: two groups can each have an active tab. The inline HTML guest's
+  // forwarded close command must never also close the adjacent browser tab.
+  it('leaves the browser tab open when a different guest has keyboard focus', () => {
+    browserState = makeBrowserState();
+    const close = vi.spyOn(sidebarTabs, 'closeTab').mockResolvedValue(undefined);
+    const other = document.createElement('webview') as HTMLElement;
+    try {
+      render(renderBrowserTab('https://example.com/'));
+      const command = vi.mocked(window.electronAPI.onRsbBrowserCommand).mock.lastCall![0];
+      other.tabIndex = 0;
+      document.body.appendChild(other);
+      other.focus();
+      act(() => command({ command: 'close-tab' }));
+      expect(close).not.toHaveBeenCalled();
+      other.blur();
+      act(() => command({ command: 'close-tab' }));
+      expect(close).toHaveBeenCalledWith('session-a', 'tab-browser');
+    } finally {
+      other.remove();
+      close.mockRestore();
+    }
   });
 
   it('hides a native popup view while the renderer more-menu portal is open', () => {

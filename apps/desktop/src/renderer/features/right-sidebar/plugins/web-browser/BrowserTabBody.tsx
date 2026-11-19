@@ -377,6 +377,10 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
       } else if (command === 'go-forward') {
         if (canGoForwardRef.current) goForwardRef.current();
       } else if (command === 'close-tab') {
+        // Several visible tab groups can receive the same host command. The
+        // focused guest may belong to an inline file preview in another group.
+        const focused = document.activeElement;
+        if (focused?.tagName === 'WEBVIEW' && !rootRef.current?.contains(focused)) return;
         // guest 内 ⌘W / Ctrl+W:关掉本 tab,与焦点在 host 侧右侧栏内按 ⌘W 的
         // 行为对齐(store.closeTab 同路径；确认关闭后由 store 释放 pool entry)。
         void closeTab(sessionId, tabId).catch((err) => {

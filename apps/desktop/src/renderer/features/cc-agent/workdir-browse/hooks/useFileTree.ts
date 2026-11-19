@@ -919,12 +919,10 @@ function collapseAll(store: FileTreeStore): void {
   emit(store);
 }
 
-async function refresh(store: FileTreeStore): Promise<void> {
-  // 根目录必须恒在请求列表里：根请求失败会清空 entries（含 ROOT_KEY），
-  // 而只遍历现有键时根就永远不会被重试，连接恢复后点「重试 / 刷新」也没用。
-  // 展开目录同样恒在：根失败清 entries 会把刚取得的子目录一并清掉，只遍历
-  // 现有键会让它们永远不再被请求 —— 重试后目录「已展开但空」（评审 P1）。
-  const targets = new Set<string>([
+async function refresh(store: FileTreeStore, requested?: ReadonlySet<string>): Promise<void> {
+  // 手动刷新要重读根目录、正文和已展开的目录，即使上次读取失败、还没有缓存。
+  // 标签页恢复则只传缺失的目录，避免重新扫描其它页签。
+  const targets = requested ?? new Set<string>([
     ...displayedDirectoryPaths(store),
     ...store.snapshot.entries.keys(),
     ...store.snapshot.expanded,
@@ -1078,6 +1076,17 @@ export function useFileTree({
     () => store.snapshot,
     () => store.snapshot,
   );
+
+  // Restoring a tab's directory must also work with a collapsed tree. Share
+  // the bounded restore workers, and leave the user's expanded rows untouched.
+  useEffect(() => {
+    if (!displayedDirectory) return;
+    const missing = displayedDirectoryPaths(store);
+    for (const path of missing) {
+      if (store.snapshot.entries.has(path) || store.snapshot.loadingPaths.has(path)) missing.delete(path);
+    }
+    if (missing.size) void refresh(store, missing);
+  }, [store, displayedDirectory]);
 
   // 把 store-level actions wrap 成跟 store 绑死的稳定引用。
   const toggleFolderCb = useCallback((relPath: string) => toggleFolder(store, relPath), [store]);

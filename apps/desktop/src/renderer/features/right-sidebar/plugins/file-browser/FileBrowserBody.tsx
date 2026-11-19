@@ -108,18 +108,19 @@ const BODY_MIN_RESERVE = 280;
 interface FileBrowserBodyProps {
   state: FileBrowserState;
   ctx: TabKindHostContext;
-  /** 宿主 tab 是否激活（PluginBodyHost 传入）。只用于文件树滚动位置的恢复时机；
-   *  隐藏 tab 的行渲染由虚拟化的 0 视口自然跳过，不需要门控。 */
+  /** 宿主标签页激活时恢复树的滚动位置。可见的 HTML 预览同时接收刷新和快捷键。 */
   active?: boolean;
+  shellVisible?: boolean;
 }
 
-export function FileBrowserBody({ state, ctx, active }: FileBrowserBodyProps) {
+export function FileBrowserBody(props: FileBrowserBodyProps) {
+  const { ctx } = props;
   const { workdir } = ctx;
   if (!workdir) {
     return <NoWorkdirPlaceholder />;
   }
   return (
-    <FileBrowserBodyWithWorkdir key={JSON.stringify([ctx.sessionId, workdir, ctx.remoteHostId])} state={state} ctx={ctx} workdir={workdir} active={active} />
+    <FileBrowserBodyWithWorkdir key={JSON.stringify([ctx.sessionId, workdir, ctx.remoteHostId])} {...props} workdir={workdir} />
   );
 }
 
@@ -133,6 +134,7 @@ function FileBrowserBodyWithWorkdir({
   ctx,
   workdir,
   active,
+  shellVisible,
 }: FileBrowserBodyProps & { workdir: string }) {
   const { t } = useTranslation();
   // 会话归属三路:local / SSH(remoteHostId)/ device-link(deviceId)。
@@ -140,18 +142,20 @@ function FileBrowserBodyWithWorkdir({
   // 首渲染,见 useRemoteMediaUrl 同款处理);嵌套(device-link 会话自带
   // remoteHostId)时 deviceId 优先——SSH 二跳由被控端 device-op 处理,控制端
   // 不能把被控端的 hostId 发给自己的 main。
-  const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+  const registeredDeviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     ctx.sessionId ? getSessionDeviceId(ctx.sessionId) ?? null : null,
   );
+  const deviceId = ctx.deviceLinkDeviceId !== undefined ? ctx.deviceLinkDeviceId : registeredDeviceId ?? undefined;
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
   // 设置页「显示被忽略的目录」开关(默认关)。进 useFileTree 的 store key →
   // 切换开关会换一份 store,listDir 与 watcher 都用新 matcher 重建,
   // 目录列表立即重新拉取(不需要用户手动刷新)。
   const { showIgnoredDirs } = useFileBrowserPreference();
-  const [directory, setDirectory] = useState(() => dirname(state.selectedFilePath ?? ''));
+  const directory = state.currentDirectory ?? dirname(state.selectedFilePath ?? '');
   const tree = useFileTree({
-    workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs, displayedDirectory: directory,
+    workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs,
+    displayedDirectory: state.selectedFilePath ? undefined : directory,
   });
   const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
   const renderingHtml = !!htmlPreview && state.selectedFilePath === htmlPreview;
@@ -241,9 +245,9 @@ function FileBrowserBodyWithWorkdir({
       if (!ok) return;
       setHtmlPreview(isHtmlFilePath(relPath) ? relPath : null);
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath });
+      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory });
     },
-    [confirmSwitchAway, ctx, state.selectedFilePath],
+    [confirmSwitchAway, ctx, directory, state.selectedFilePath],
   );
 
   // 搜索结果点击 → 切回 tree 模式 + 选中该文件。
@@ -257,10 +261,10 @@ function FileBrowserBodyWithWorkdir({
       if (!ok) return;
       setHtmlPreview(null);
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath });
+      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory });
       setMode('tree');
     },
-    [confirmSwitchAway, ctx, state.selectedFilePath],
+    [confirmSwitchAway, ctx, directory, state.selectedFilePath],
   );
 
   // FileTreeView 的 imperative ref —— useRevealFileInTree 通过它调 scrollToPath。
@@ -285,8 +289,7 @@ function FileBrowserBodyWithWorkdir({
       setExternalFile(null);
       setDirectoryFilter('');
       setPreviousEntry(null);
-      setDirectory(revealDirPath);
-      ctx.patchState({ revealDirPath: null, selectedFilePath: null });
+      ctx.patchState({ revealDirPath: null, selectedFilePath: null, currentDirectory: revealDirPath });
     })();
     return () => {
       cancelled = true;
@@ -313,8 +316,7 @@ function FileBrowserBodyWithWorkdir({
       setFilterQuery('');
       setExternalFile(null);
       setHtmlPreview(null);
-      setDirectory(dirname(revealFilePath));
-      ctx.patchState({ selectedFilePath: revealFilePath });
+      ctx.patchState({ selectedFilePath: revealFilePath, currentDirectory: dirname(revealFilePath) });
       await revealFileInTree(revealFilePath);
       if (cancelled) return;
       ctx.patchState({ revealFilePath: null });
@@ -432,7 +434,7 @@ function FileBrowserBodyWithWorkdir({
         setExternalFile(null);
         setMode('tree');
         setFilterQuery('');
-        ctx.patchState({ selectedFilePath: localRelPath });
+        ctx.patchState({ selectedFilePath: localRelPath, currentDirectory: directory });
         void revealFileInTree(localRelPath);
         return;
       }
@@ -448,9 +450,9 @@ function FileBrowserBodyWithWorkdir({
       setMode('tree');
       setFilterQuery('');
       setExternalFile(external);
-      ctx.patchState({ selectedFilePath: null });
+      ctx.patchState({ selectedFilePath: null, currentDirectory: directory });
     },
-    [confirmSwitchAway, ctx, isRemote, revealFileInTree, state.selectedFilePath, t, workdir],
+    [confirmSwitchAway, ctx, directory, isRemote, revealFileInTree, state.selectedFilePath, t, workdir],
   );
 
   // 聊天文件 chip 的“在侧边栏文件浏览器中打开”可把 workdir 外本地文件写成
@@ -589,9 +591,8 @@ function FileBrowserBodyWithWorkdir({
     if (!(await confirmSwitchAway(state.selectedFilePath, null))) return;
     setPreviousEntry(activeRelPath ?? directory);
     if (directory !== path) setDirectoryFilter('');
-    setDirectory(path);
     setExternalFile(null);
-    if (state.selectedFilePath) ctx.patchState({ selectedFilePath: null });
+    if (state.selectedFilePath || directory !== path) ctx.patchState({ selectedFilePath: null, currentDirectory: path });
     void tree.expandToPath(path, 'directory', !!activeRelPath);
   }, [activeRelPath, confirmSwitchAway, ctx, directory, state.selectedFilePath, tree.expandToPath]);
 
@@ -663,7 +664,11 @@ function FileBrowserBodyWithWorkdir({
           </div>
         ) : (
           <div className="rsb-fbody-compact flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {renderingHtml && !externalFile ? <InlineHtmlPreview workdir={workdir} relPath={activeRelPath} deviceId={deviceId} remoteHostId={remoteHostId} /> : <FileBodyView
+            {renderingHtml && !externalFile ? <InlineHtmlPreview
+              workdir={workdir} relPath={activeRelPath} remoteHostId={remoteHostId}
+              deviceId={deviceId}
+              sessionId={ctx.sessionId} tabId={ctx.tabId} active={active !== false && shellVisible !== false}
+            /> : <FileBodyView
               key={externalFile?.absPath ?? 'project-file-browser'}
               workdir={activeWorkdir}
               remoteHostId={externalFile ? null : remoteHostId}
