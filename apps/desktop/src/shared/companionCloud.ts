@@ -29,6 +29,7 @@ export interface CompanionCloudActor {
   arrivalNotices?: CompanionArrivalNoticeKind[];
   /** This computer could not restore the source. No user content; absent on older hosts. */
   profileFailure?: BotProfileSourceFailure;
+  needsRecoveryModel?: boolean;
 }
 
 export interface CompanionCloudSnapshot {

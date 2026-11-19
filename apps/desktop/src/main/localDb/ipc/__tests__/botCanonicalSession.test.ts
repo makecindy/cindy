@@ -17,6 +17,8 @@ import { materializeCompanion } from '../../../companion-cloud/materialize';
 import { companionHomes, companionSnapshot } from '../../../companion-cloud/homes';
 import { startCompanionCloud } from '../../../companion-cloud/runtime';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
+import { ensureBotCanonicalSession } from '../../../maker-ipc/botCanonicalSessionEnsure.js';
+import { COMPANION_CAPABILITIES_KEY, COMPANION_PROFILE_KEY } from '../../../companion-cloud/uploader.js';
 import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1119,6 +1121,71 @@ describe('Bot canonical Session lifecycle', () => {
           { harness: 'pi', providerId: 'custom-gateway', model: 'custom-model', effort: '', fastMode: false }] });
         await expect(createMain()).resolves.toMatchObject({ created: true, session: { model: 'custom-model' } });
       } finally { await modelSettings.resetBotModelChainSettings(); }
+    });
+
+    it.each(['new', 'existing', 'legacy'] as const)('uses the explicit recovery model after restart for a %s companion', async kind => {
+      const model = { harness: 'pi', providerId: 'custom-gateway', model: 'custom-model', effort: '', fastMode: false } as const;
+      h.providers = [{
+        id: model.providerId, connected: true, source: 'user', agents: ['pi'], auth: { method: 'api-key' },
+        models: { pi: [{ id: model.model, efforts: [], defaultEffort: null, defaultEnabled: true }] },
+      }] as unknown as ProviderView[];
+      const actor = { id: 'recovery-actor', kind: 'bot', externalId: 'recovering-bot', name: 'Mia', avatar: null, homeDeviceId: 'self' };
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors' && method === 'GET') return [actor];
+        if (route === '/preferences' && method === 'GET') return [
+          { key: COMPANION_PROFILE_KEY, revision: 1, value: { name: actor.name, description: '', soul: '', user: '', systemPrompt: '' } },
+          ...(kind === 'legacy' ? [] : [{ key: COMPANION_CAPABILITIES_KEY, revision: 1, value: { memory: false } }]),
+        ];
+        if (route === '/conversations') return { id: '10000000-0000-4000-8000-000000000001' };
+        if (route.includes('/messages?')) return [];
+        return { revision: 1 };
+      });
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async botId => {
+          const ensured = await ensureBotCanonicalSession(botId);
+          if (!ensured.ok) throw new Error(ensured.errorCode);
+          return ensured.sessionId;
+        }, rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.installationId = undefined;
+      const start = (store: ReturnType<typeof memoryState>) => startCompanionCloud({ api, host: { ...host, openState: () => store.state },
+        endpoint: 'https://synthetic.invalid', humanActorId: 'human', selfDeviceId: 'self', current: () => true,
+        bots: () => [], actors: () => [actor], initialKick: false, log });
+      const store = memoryState();
+      const existing = kind === 'existing';
+      if (existing) {
+        await invoke('local-db:bots:create', { id: actor.externalId, name: actor.name, capabilities: {
+          modelChainOverride: [{ ...model, providerId: 'old-provider', model: 'old-model' }],
+        } });
+        store.state.update(actor.externalId, actor.id, entry => { entry.demoted = true; });
+      }
+      let runtime = start(store);
+      try {
+        await runtime.reconcile(existing ? [{ id: actor.externalId, status: 'active' }] : []);
+        await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith('Companion take-over will retry',
+          expect.objectContaining({ code: expect.stringContaining('请先连接模型供应商或选择伙伴模型') })));
+        expect(runtime.needsRecoveryModel(actor.externalId)).toBe(true);
+        const before = calls.length;
+        expect(await runtime.saveRecoveryModel(actor.externalId, 'previous-actor', model)).toEqual({ ok: false, code: 'FAILED' });
+        actor.homeDeviceId = 'old-home';
+        expect(await runtime.saveRecoveryModel(actor.externalId, actor.id, model)).toEqual({ ok: false, code: 'FAILED' });
+        actor.homeDeviceId = 'self';
+        expect(await runtime.saveRecoveryModel(actor.externalId, actor.id, model)).toEqual({ ok: true });
+        expect(calls).toHaveLength(before);
+        expect(store.state.isDemoted(actor.externalId)).toBe(true);
+        runtime.dispose();
+        const restarted = memoryState(store.files.get('state.json'));
+        runtime = start(restarted);
+        await runtime.reconcile([{ id: actor.externalId, status: 'active' }]);
+        await vi.waitFor(() => expect(restarted.state.isDemoted(actor.externalId)).toBe(false));
+        expect(runtime.needsRecoveryModel(actor.externalId)).toBe(false);
+        expect(restarted.state.bot(actor.externalId)?.modelRecovery).toBeUndefined();
+        const profile = await invoke('local-db:bots:get', actor.externalId);
+        expect(profile.capabilities.modelChainOverride).toEqual([model]);
+        if (kind !== 'legacy') expect(profile.capabilities.memory).toBe(false);
+        expect(h.sqlite!.prepare('SELECT model FROM sessions WHERE id = ?').get(profile.canonicalSessionId)).toEqual({ model: model.model });
+        expect(await modelSettings.readEffectiveBotModelChain({})).toEqual([]);
+      } finally { runtime.dispose(); companionHomes.reset(); }
     });
 
     it('keeps a finished meeting record', async () => {

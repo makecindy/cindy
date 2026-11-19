@@ -46,6 +46,7 @@ const bot = z.object({
   pendingRebuild: z.boolean().optional(),
   /** The never-synced local copy was backed up before a take-over; retries do not back it up again. */
   backedUp: z.boolean().optional(),
+  modelRecovery: z.object({ route: z.unknown().optional() }).optional(),
   /** Owner-approved correction for an unfinished restore; local/account scoped, never sent on the wire. */
   profileCorrection: z.object({
     homeDeviceId: z.string(), version: z.string(),
@@ -108,7 +109,7 @@ export function createCompanionCloudState(options: {
      * when the disk write fails (e.g. a full disk): a demotion must never wait on it. Every update
      * writes the whole file, so the next one retries the lost write.
      */
-    update(botId: string, actorId: string, mutate: (entry: CompanionBotState) => void): CompanionBotState {
+    update(botId: string, actorId: string, mutate: (entry: CompanionBotState) => void, requirePersisted = false): CompanionBotState {
       if (options.current && !options.current()) throw new Error('OWNER_CHANGED');
       const state = load();
       const previous = state.bots[botId];
@@ -117,12 +118,13 @@ export function createCompanionCloudState(options: {
         ? structuredClone(previous) : { actorId, prefs: {} };
       mutate(entry);
       const next = { ...state, bots: { ...state.bots, [botId]: bot.parse(entry) } };
-      data = next;
       try {
         io.write(options.filePath, JSON.stringify(next));
       } catch (error) {
+        if (requirePersisted) throw error;
         options.log?.warn('Companion sync state not saved; will retry', { code: (error as NodeJS.ErrnoException)?.code ?? 'UNKNOWN' });
       }
+      data = next;
       return next.bots[botId]!;
     },
   };

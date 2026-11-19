@@ -856,6 +856,7 @@ export const MAKER_INVOKE = {
   /** Make this computer the companion's home (cloud-companions.md §3.1). */
   COMPANION_CLOUD_TAKE_OVER: 'maker:companion-cloud:take-over',
   COMPANION_CLOUD_REPAIR_PROFILE: 'maker:companion-cloud:repair-profile',
+  COMPANION_CLOUD_RECOVERY_MODEL: 'maker:companion-cloud:recovery-model',
   /** Move the companion to another computer from any computer (hand over, ask its home, or take over). */
   COMPANION_CLOUD_SWITCH_HOME: 'maker:companion-cloud:switch-home',
   /** Read the companion's 1:1 room (works while its home is offline). */

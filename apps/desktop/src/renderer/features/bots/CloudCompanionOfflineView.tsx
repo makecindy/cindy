@@ -2,7 +2,7 @@
  * 主力电脑离线时的伙伴视图（docs/product-rules/cloud-companions.md §3.1）：保留伙伴头部，
  * 横幅说明哪台主力电脑离线并提供「在这台电脑继续」，下方只读显示云端保存的对话。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -17,6 +17,7 @@ import { toast } from '@/lib/toast';
 import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
 import type { BotProfileSourceFailure } from '../../../shared/botProfileSources';
+import type { BotModelRoute } from '../../../shared/botModelChain';
 import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
@@ -24,6 +25,55 @@ import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './Bot
 import { ensureBotProfilesLoaded } from './botStore';
 import { companionCloudApi, refreshCompanionCloud } from './companionCloudStore';
 import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
+
+const BotModelChainEditor = lazy(() => import('./BotModelChainEditor')
+  .then(module => ({ default: module.BotModelChainEditor })));
+
+function CompanionRecoveryModelPicker({ botId, actorId }: { botId: string; actorId: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [routes, setRoutes] = useState<BotModelRoute[]>([]);
+  const saving = useRef(false);
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+
+  const save = async () => {
+    const [route] = routes;
+    if (!route?.model || saving.current) return;
+    const owner = getDataOwnerGeneration();
+    saving.current = true;
+    setStatus('saving');
+    try {
+      const result = await companionCloudApi()?.saveCompanionRecoveryModel?.(botId, actorId, route);
+      if (isDataOwnerGenerationCurrent(owner)) {
+        setStatus(result?.ok ? 'saved' : 'failed');
+        if (result?.ok) setOpen(false);
+      }
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) setStatus('failed');
+    } finally {
+      saving.current = false;
+    }
+  };
+
+  return <>
+    <Button variant="secondary" size="md" type="button" aria-expanded={open} disabled={status === 'saving'}
+      onClick={() => { setOpen(value => !value); setStatus('idle'); }}>
+      {t('bots.settingsTabs.model')}
+    </Button>
+    {status === 'saved' && <p role="status" className="w-full text-12 text-[var(--text-secondary)]">{t('bots.autosave.saved')}</p>}
+    {open && <form className="flex w-full min-w-0 flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void save(); }}>
+      <Suspense fallback={<Spinner size={18} />}>
+        <BotModelChainEditor label={t('bots.settingsTabs.model')} value={routes} allowFallbacks={false} disabled={status === 'saving'}
+          onChange={setRoutes} onNavigateToProviders={() => navigate('/settings?tab=providers')} />
+      </Suspense>
+      <Button variant="primary" size="md" type="submit" disabled={!routes[0]?.model || status === 'saving'} loading={status === 'saving'}>
+        {t('bots.save')}
+      </Button>
+      {status === 'failed' && <p role="alert" className="w-full text-12 text-[var(--text-danger)]">{t('bots.memory.saveFailed')}</p>}
+    </form>}
+  </>;
+}
 
 export interface CloudCompanionOfflineViewProps {
   botId: string;
@@ -35,6 +85,8 @@ export interface CloudCompanionOfflineViewProps {
   deviceName: string;
   /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
   controlOff?: boolean;
+  recovery?: boolean;
+  recoveryModelActorId?: string;
   profileFailure?: BotProfileSourceFailure;
 }
 
@@ -52,7 +104,9 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
   if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
   return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
 }
-function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure }: CloudCompanionOfflineViewProps) {
+function CloudCompanionOfflineContent({
+  botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, recovery = false, recoveryModelActorId, profileFailure,
+}: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const conflict = useCompanionCindyConflictAction();
@@ -194,31 +248,37 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >
-        <div className={`flex min-w-0 flex-1 items-center gap-3${conflict.action ? ' basis-full' : ''}`}>
+        <div className={`flex min-w-0 flex-1 items-center gap-3${!recovery && conflict.action ? ' basis-full' : ''}`}>
           <BotAvatar bot={identity} size="sm" />
           <div className="min-w-0 flex-1">
             <p className="text-14 font-medium text-[var(--text-primary)]">
-              {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
+              {recovery ? t('bots.cloud.recoveryNotReady') : t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
             </p>
-            <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
+            {!recovery && <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
               {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
-                : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
-                  : state.kind === 'error' ? t(state.key, { name })
-                    : t('bots.cloud.takeOverHint', { name })}
-            </p>
+                  : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
+                    : state.kind === 'error' ? t(state.key, { name })
+                      : t('bots.cloud.takeOverHint', { name })}
+            </p>}
           </div>
         </div>
-        <CompanionCindyConflictAction action={conflict.action} />
-        <Button
-          variant="primary"
-          size="md"
-          type="button"
-          loading={state.kind === 'running'}
-          disabled={state.kind === 'running'}
-          onClick={() => void takeOver()}
-        >
-          {t('bots.cloud.continueHere')}
-        </Button>
+        {recovery ? (
+          recoveryModelActorId && typeof companionCloudApi()?.saveCompanionRecoveryModel === 'function'
+            ? <CompanionRecoveryModelPicker key={recoveryModelActorId} botId={botId} actorId={recoveryModelActorId} />
+            : null
+        ) : <>
+          <CompanionCindyConflictAction action={conflict.action} />
+          <Button
+            variant="primary"
+            size="md"
+            type="button"
+            loading={state.kind === 'running'}
+            disabled={state.kind === 'running'}
+            onClick={() => void takeOver()}
+          >
+            {t('bots.cloud.continueHere')}
+          </Button>
+        </>}
       </section>}
       <div
         ref={scroller}

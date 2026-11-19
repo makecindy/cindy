@@ -23,6 +23,10 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
 vi.mock('../BotSessionContentHeader', () => ({ BotSessionContentHeaderRegistration: () => null }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span /> }));
+const recoveryModel = { harness: 'pi', providerId: 'fixture-provider', model: 'fixture-model', effort: '', fastMode: false } as const;
+vi.mock('../BotModelChainEditor', () => ({ BotModelChainEditor: ({ onChange }: {
+  onChange: (routes: Array<typeof recoveryModel>) => void;
+}) => <button type="button" onClick={() => onChange([recoveryModel])}>Fixture model</button> }));
 vi.mock('../BotGroupMessageAttachments', () => ({
   BotGroupMessageAttachments: ({ attachments }: { attachments: Array<{ name: string; state?: string; url?: string | null }> }) =>
     <ul>{attachments.map((file) => <li key={file.name}>{`${file.name}:${file.state ?? file.url}`}</li>)}</ul>,
@@ -34,7 +38,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
 import { BotHomeComputerSetting, companionArrivedHere, useCompanionHomeSwitch } from '../BotHomeComputerSetting';
 import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
-import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
+import { cloudOnlyRemoteBots, cloudRemoteBots, recoveryCompanionRows, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 
 const maker = {
@@ -45,6 +49,7 @@ const maker = {
   getCompanionAttachment: vi.fn(),
   takeOverCompanion: vi.fn(),
   repairCompanionProfile: vi.fn(),
+  saveCompanionRecoveryModel: vi.fn(),
   getCompanionHomeChoices: vi.fn(),
   switchCompanionHome: vi.fn(),
 };
@@ -102,6 +107,16 @@ describe('presentation helpers', () => {
     expect(isCloudCompanionRemote(cloud, extra[0]!)).toBe(true);
     expect(isCloudCompanionRemote(cloud, { id: 'mia', deviceId: 'elsewhere' })).toBe(false);
     expect(isCloudCompanionRemote(snapshot('desk'), { id: 'mia', deviceId: 'desk' })).toBe(false);
+  });
+
+  it('adds only demoted local homes as recovery rows, deduplicated and disabled with the feature', () => {
+    const cloud = { ...snapshot('desk'), demotedBotIds: ['mia'] };
+    const rows = recoveryCompanionRows(cloud, []);
+    expect(rows).toMatchObject([{ id: 'mia', deviceId: 'desk' }]);
+    expect(recoveryCompanionRows(cloud, rows)).toEqual([]);
+    expect(recoveryCompanionRows({ ...cloud, enabled: false }, [])).toEqual([]);
+    expect(recoveryCompanionRows({ ...cloud, demotedBotIds: [] }, [])).toEqual([]);
+    expect(recoveryCompanionRows({ ...snapshot('laptop'), demotedBotIds: ['mia'] }, [])).toEqual([]);
   });
 
   it('hides a local copy as soon as its main computer is known to be elsewhere', () => {
@@ -209,6 +224,33 @@ describe('CloudCompanionOfflineView', () => {
     { id: 'm2', seq: '2', role: 'assistant', text: 'hi there', createdAt: 2 },
   ] };
   const renderView = () => render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
+
+  it('saves an explicit model for the recovering companion and keeps its history read-only', async () => {
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.saveCompanionRecoveryModel.mockResolvedValueOnce({ ok: false, code: 'BUSY' }).mockResolvedValueOnce({ ok: true });
+    const props = { botId: 'mia', deviceId: 'desk', name: 'Mia', deviceName: 'Desk', recovery: true };
+    const view = render(<CloudCompanionOfflineView {...props} />);
+    expect(screen.getByText('bots.cloud.recoveryNotReady')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.settingsTabs.model' })).toBeNull();
+    view.rerender(<CloudCompanionOfflineView {...props} recoveryModelActorId="actor-mia" />);
+    expect(await screen.findByText('hi there')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
+    expect(screen.queryByText('bots.retry')).toBeNull();
+    expect(screen.queryByText('bots.cloud.continueHere')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    const save = screen.getByRole('button', { name: 'bots.save' });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fixture model' }));
+    fireEvent.click(save);
+    await screen.findByText('bots.memory.saveFailed');
+    fireEvent.click(save);
+    await screen.findByText('bots.autosave.saved');
+    expect(maker.saveCompanionRecoveryModel).toHaveBeenCalledTimes(2);
+    expect(maker.saveCompanionRecoveryModel).toHaveBeenLastCalledWith('mia', 'actor-mia', recoveryModel);
+    expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+    expect(maker.takeOverCompanion).not.toHaveBeenCalled();
+  });
 
   it('shows the banner and the read-only cloud conversation, oldest first', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);

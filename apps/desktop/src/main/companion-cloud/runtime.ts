@@ -19,6 +19,7 @@ import type {
   CompanionTransferTarget,
 } from '../../shared/companionCloud.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
+import { normalizeBotModelRoute, type BotModelRoute } from '../../shared/botModelChain.js';
 import { BotProfileSourceTooLong, type BotProfileSourceFailure } from '../../shared/botProfileSources.js';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { CompanionHomeRegistry } from './homes.js';
@@ -58,6 +59,7 @@ export interface CompanionCloudHost {
   materializer?: Omit<CompanionMaterializeHost, 'latestRows'>;
   /** Current-home repair edits only the rejected sources, with a fresh local source/version check. */
   repairProfileSources?: (botId: string, fields: CompanionProfileRepairField[], values: ProfileCorrection['values'], fence: CompanionWriteFence) => Promise<void>;
+  validateRecoveryModel?: (route: BotModelRoute) => Promise<boolean>;
   /**
    * The companion now runs here (a take-over, a pull-down or an un-demotion completed): make it a
    * V2 teammate (a project) if it is not one yet. Idempotent; a failure is retried on the next arrival or start.
@@ -112,6 +114,8 @@ export interface CompanionCloudRuntime {
   reconcile: (localProfiles: Array<{ id: string; status: string }>) => Promise<void>;
   takeOver: (botId: string, correction?: ProfileCorrection & { actorId: string; home: string | null }) => Promise<CompanionCloudActionResult>;
   repairProfile: (botId: string, request: CompanionProfileRepairRequest) => Promise<CompanionProfileRepairResult>;
+  needsRecoveryModel: (botId: string) => boolean;
+  saveRecoveryModel: (botId: string, actorId: string, input: unknown) => Promise<CompanionCloudActionResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transferTargets: () => Promise<CompanionTransferTarget[]>;
   /** Where the companion can move, seen from this computer (any computer, not only its home). */
@@ -300,6 +304,13 @@ export function startCompanionCloud(input: {
   const pick = (only: Set<string> | null) => input.bots()
     .filter(bot => (!only || only.has(bot.botId)) && installOwner(bot.botId) === 'mine');
   const actorOf = (botId: string) => (input.actors?.() ?? []).find(a => a.kind === 'bot' && !a.disabled && (a.externalId === botId || a.id === botId));
+  const needsRecoveryModel = (botId: string) => {
+    const actor = actorOf(botId);
+    const entry = state.bot(botId);
+    return !!(live() && input.selfDeviceId && actor?.externalId === botId && actor.homeDeviceId === input.selfDeviceId
+      && entry?.actorId === actor.id && entry.demoted && entry.modelRecovery && installOwner(botId) === 'mine'
+      && input.host.validateRecoveryModel);
+  };
   let shadowKey = '';
   const publish = () => {
     if (!live()) return;
@@ -581,7 +592,10 @@ export function startCompanionCloud(input: {
         }
         return result;
       })
-      .finally(() => { materializing.delete(botId); });
+      .finally(() => {
+        materializing.delete(botId);
+        if (needsRecoveryModel(botId)) publish();
+      });
     materializing.set(botId, run);
     return run;
   }
@@ -932,6 +946,9 @@ export function startCompanionCloud(input: {
           continue;
         }
         if (actor.homeDeviceId === self && local && !profileFailures.has(botId)) checkInstall(actor);
+        if (actor.homeDeviceId !== self && entry?.modelRecovery) {
+          state.update(botId, actor.id, next => { delete next.modelRecovery; });
+        }
         if (actor.homeDeviceId && actor.homeDeviceId !== self) {
           identityConflicts.delete(botId);
           if (local && local.status !== 'deleting' && !entry?.demoted) {
@@ -945,6 +962,23 @@ export function startCompanionCloud(input: {
           if (installOwner(botId) !== 'other' && (entry?.demoted === true || (!local && !ranHere))) scheduleAuto(actor);
         }
       }
+    },
+
+    needsRecoveryModel,
+    async saveRecoveryModel(botId, actorId, selection) {
+      const route = normalizeBotModelRoute(selection);
+      const validate = input.host.validateRecoveryModel;
+      const current = () => needsRecoveryModel(botId) && actorOf(botId)?.id === actorId;
+      const busy = () => repairing.has(botId) || autoPending.has(botId) || materializing.has(botId);
+      if (!route || !validate || !current()) return { ok: false, code: 'FAILED' };
+      if (busy()) return { ok: false, code: 'BUSY' };
+      const previous = state.bot(botId)?.modelRecovery;
+      try {
+        if (!await validate(route) || !current()) return { ok: false, code: 'FAILED' };
+        if (busy() || state.bot(botId)?.modelRecovery !== previous) return { ok: false, code: 'BUSY' };
+        state.update(botId, actorId, entry => { entry.modelRecovery = { route }; }, true);
+        return { ok: true };
+      } catch (error) { return actionFailure(error); }
     },
 
     async repairProfile(botId, request) {
