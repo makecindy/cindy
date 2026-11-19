@@ -1120,10 +1120,13 @@ describe('gift card purchase projection', () => {
       maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
     };
     for (const malformed of [
-      { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
+      { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { maxOrderAmount: '1000.001' },
+      { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
     ]) {
       expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
     }
+    // 只是小数位写得更长的上限照常读出。
+    expect(projectGiftCardPurchasePolicy({ ...base, maxOrderAmount: '1000.000000000' })).toMatchObject({ maxOrderAmount: '1000.000000000' });
     // 冷却 0 秒是合法的「不冷却」，不能当成不支持发信，更不能让整份购买设置读取失败。
     expect(projectGiftCardPurchasePolicy({ ...base, emailCooldownSeconds: 0 })).toMatchObject({ emailCooldownSeconds: 0 });
     expect(projectGiftCardPurchasePolicy({ ...base, minFaceValue: null, maxFaceValue: null }))

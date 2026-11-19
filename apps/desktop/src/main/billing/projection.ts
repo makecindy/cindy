@@ -850,7 +850,8 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
   const windowHours = boundedCount(value.windowHours, 24 * 31);
   const remaining = boundedCount(value.remaining, MAX_ORDER_QUANTITY);
   const maxQuantityPerOrder = orderQuantity(value.maxQuantityPerOrder);
-  const maxOrderAmount = nullable(value.maxOrderAmount, decimal);
+  // 一单总额上限与单张面额同样按分：比分更细的上限界面无法按分比较，会把所有面额的可选张数算成 0。
+  const maxOrderAmount = nullable(value.maxOrderAmount, giftCardMoney);
   const maxSenderNameLength = boundedCount(value.maxSenderNameLength, MAX_GIFT_SENDER_LENGTH);
   const maxMessageLength = boundedCount(value.maxMessageLength, MAX_GIFT_MESSAGE_LENGTH);
   const faces = value.faces.filter(
