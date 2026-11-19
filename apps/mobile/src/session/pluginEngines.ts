@@ -38,6 +38,7 @@ export interface MobilePluginEngineModel {
 
 export interface MobilePluginEngine {
   key: string;
+  reportsUsage?: true;
   /** 任务的 providerId：`acp-plugin:<key>`。 */
   providerId: string;
   name: string;
@@ -151,6 +152,7 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
     const description = text(item.description, 200);
     engines.push({
       key: providerId.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length),
+      ...(item.reportsUsage === true ? { reportsUsage: true as const } : {}),
       providerId,
       name,
       ...(description ? { description } : {}),
@@ -390,7 +392,7 @@ export const pluginUsageReader = createPluginHarnessUsageReader();
 export function setCachedPluginEngines(deviceId: string, engines: MobilePluginEngine[], supported: boolean): void {
   const previous = cache.get(deviceId);
   if (previous && previous.supported === supported && sameEngines(previous.engines, engines)) return;
-  pluginUsageReader.invalidate(getMobileAuthOwner(), deviceId);
+  pluginUsageReader.retainReportingEngines(getMobileAuthOwner(), deviceId, supported ? engines : []);
   cache.set(deviceId, { engines: engines.length ? engines : EMPTY_ENGINES, supported });
   publish();
 }
@@ -413,7 +415,7 @@ export interface PluginEngineReader {
   refreshPluginEngines(): Promise<void>;
 }
 
-/** 读一次某台电脑的引擎列表(同一台并发只发一次)；任何失败都按「没有插件引擎」。 */
+/** 同一台电脑并发只读一次；临时断开时保留最后一次读到的引擎。 */
 export function loadPluginEngines(deviceId: string, reader: PluginEngineReader): Promise<void> {
   ensureOwnerSubscription();
   const owner = getMobileAuthOwner();
@@ -476,6 +478,16 @@ function subscribe(listener: () => void): () => void {
 
 function getVersion(): number {
   return version;
+}
+
+/** Until a computer's catalogue is known, its usage endpoint can still answer directly. */
+export function usePluginEngineUsageSupport(deviceId: string, providerId: string | null | undefined) {
+  const snapshot = () => {
+    const entry = cache.get(deviceId);
+    if (!providerId || !entry?.supported) return undefined;
+    return findPluginEngine(entry.engines, providerId)?.reportsUsage === true;
+  };
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 /**

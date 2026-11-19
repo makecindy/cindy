@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invalidatePluginEngineUsage } from './pluginEngineUsage';
+import { retainReportingPluginEngines } from './pluginEngineUsage';
 
 import {
   getDataOwnerGeneration,
@@ -56,6 +56,7 @@ let detachPush: (() => void) | null = null;
 let generation = 0;
 
 function setEngines(next: readonly PluginEngineView[]): void {
+  retainReportingPluginEngines(getDataOwnerGeneration(), null, next);
   engines = next.length === 0 ? NO_ENGINES : next;
   for (const listener of listeners) listener();
 }
@@ -74,7 +75,6 @@ function attach(): void {
   if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
   detachPush = api.onPluginEnginesChanged((list) => {
     generation += 1;
-    invalidatePluginEngineUsage(null);
     setEngines(sanitize(list));
   });
   const readGeneration = generation;
@@ -124,10 +124,6 @@ interface DeviceCatalogue {
   snapshot(): readonly PluginEngineView[] | null;
 }
 
-function usageEngineKeys(engines: readonly PluginEngineView[]): string {
-  return JSON.stringify(engines.filter(engine => engine.reportsUsage).map(engine => engine.key).sort());
-}
-
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
 
 function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue {
@@ -152,7 +148,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || !Array.isArray(reply)) return;
           const next = sanitize(reply);
-          if (current && usageEngineKeys(current) !== usageEngineKeys(next)) invalidatePluginEngineUsage(deviceId);
+          retainReportingPluginEngines(owner, deviceId, next);
           current = next;
           for (const subscriber of subscribers) subscriber();
         })

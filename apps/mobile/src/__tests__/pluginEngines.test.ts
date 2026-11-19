@@ -106,6 +106,32 @@ describe('reading the engines of the controlled computer', () => {
     }
   });
 
+  // Unit, #11563: model discovery previously discarded every menu's pending balance.
+  // Keep the reporting engine's reply while rejecting the other engine's old reply after regrant.
+  it('preserves a pending balance only for engines that keep reporting it', async () => {
+    const device = 'changing-catalogue';
+    const second = { ...desktopView, providerId: 'acp-plugin:second:engine' };
+    const catalogue = (reportsUsage: boolean) => normalizePluginEngines([
+      { ...desktopView, reportsUsage: true }, { ...second, reportsUsage },
+    ]);
+    const [first, other] = catalogue(true);
+    setCachedPluginEngines(device, catalogue(true), true);
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const invoke = vi.fn(() => pending) as unknown as RemoteInvoke;
+    const maker = createMobileMakerTransport({ deviceId: device, invoke });
+    const keep = maker.getPluginEngineUsage(first!.key);
+    const revoke = maker.getPluginEngineUsage(other!.key);
+    await Promise.resolve();
+    setCachedPluginEngines(device, catalogue(false), true);
+    setCachedPluginEngines(device, catalogue(true), true);
+    const balance = { updatedAt: 1234, balances: [{ currency: 'USD', amount: '0' }] };
+    finish(balance);
+    expect(await Promise.all([keep, revoke])).toEqual([balance, null]);
+    expect(await maker.getPluginEngineUsage(first!.key)).toEqual(balance);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('treats an older computer without the channel as having no engines', async () => {
     const invoke = vi.fn(async () => {
       throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] maker:list-plugin-engines'), { code: 'CHANNEL_NOT_ALLOWED' });
@@ -114,6 +140,25 @@ describe('reading the engines of the controlled computer', () => {
     await expect(maker.listPluginEngines()).resolves.toEqual([]);
     await expect(maker.refreshPluginEngines()).resolves.toBeUndefined();
     await expect(maker.getPluginEngineUsage("demo:engine")).resolves.toBeNull();
+  });
+
+  // Unit, #11563: a failed refresh used to look like a real empty catalogue,
+  // hiding a working engine's quota. An actual empty reply still withdraws it.
+  it('keeps the last known usage capability through a temporary connection failure', async () => {
+    setMobileAuthOwner('catalogue-owner');
+    const deviceId = 'interrupted-refresh';
+    try {
+      const invoke = vi.fn().mockResolvedValueOnce([{ ...desktopView, reportsUsage: true }])
+        .mockRejectedValueOnce(new Error('connection unavailable')).mockResolvedValueOnce([]);
+      const maker = createMobileMakerTransport({ deviceId, invoke });
+      await loadPluginEngines(deviceId, maker);
+      await loadPluginEngines(deviceId, maker);
+      expect(getCachedPluginEngines(deviceId)[0]?.reportsUsage).toBe(true);
+      await loadPluginEngines(deviceId, maker);
+      expect(getCachedPluginEngines(deviceId)).toEqual([]);
+    } finally {
+      setMobileAuthOwner(null);
+    }
   });
 
   // The catalogue may contain private model names and plugin metadata. An old account's

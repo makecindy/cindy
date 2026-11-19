@@ -1,5 +1,5 @@
 import { createPluginHarnessUsageReader } from '@cindy/plugin-protocol';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { PLUGIN_ENGINES_INVOKE } from '../../shared/pluginEngines';
 
 const reader = createPluginHarnessUsageReader();
@@ -13,6 +13,4 @@ export function readPluginEngineUsage(owner: DataOwnerGeneration, deviceId: stri
   });
 }
 
-export function invalidatePluginEngineUsage(deviceId: string | null): void {
-  reader.invalidate(getDataOwnerGeneration(), deviceId);
-}
+export const retainReportingPluginEngines = reader.retainReportingEngines;

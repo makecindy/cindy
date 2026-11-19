@@ -24,15 +24,15 @@ export function createPluginHarnessUsageReader() {
       targets.set(device, scope);
       const nextReadAt = Date.now() + PLUGIN_USAGE_READ_INTERVAL_MS;
       const fetchUsage = async () => {
-        if (targets.get(device) !== scope) return null;
+        if (scope.get(engine) !== read) return null;
         const raw = await request();
-        return targets.get(device) === scope ? parseGhostHarnessUsage(raw) ?? null : null;
+        return scope.get(engine) === read ? parseGhostHarnessUsage(raw) ?? null : null;
       };
       const read: UsageRead = {
         freshUntil: Infinity,
         result: Promise.resolve().then(fetchUsage).catch(() => null).finally(() => {
           read.freshUntil = nextReadAt;
-          if (targets.get(device) !== scope) return;
+          if (scope.get(engine) !== read) return;
           setTimeout(() => {
             if (scope.get(engine) === read) scope.delete(engine);
             if (!scope.size && targets.get(device) === scope) targets.delete(device);
@@ -42,8 +42,16 @@ export function createPluginHarnessUsageReader() {
       scope.set(engine, read);
       return read;
     },
-    invalidate(owner: object, device: string | null): void {
-      owners.get(owner)?.delete(device);
+    /** A catalogue is authoritative for which engines can report usage. Model changes leave their reads intact. */
+    retainReportingEngines(owner: object, device: string | null, engines: readonly { key: string; reportsUsage?: boolean }[]): void {
+      const targets = owners.get(owner);
+      const scope = targets?.get(device);
+      if (!targets || !scope) return;
+      const reporting = new Set(engines.filter(engine => engine.reportsUsage === true).map(engine => engine.key));
+      for (const key of scope.keys()) {
+        if (!reporting.has(key)) scope.delete(key);
+      }
+      if (!scope.size) targets.delete(device);
     },
   };
 }

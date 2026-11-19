@@ -10,7 +10,7 @@ import {
 import { withTransientRemoteRetry } from "./remoteRetry";
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { expandGhostCommand, parseGhostCommandWord, splitGhostDirective } from '@cindy/maker-shared/ghost-command';
-import { composerPluginListSchema, isComposerPluginCatalogUnsupportedError, type ComposerPlugin } from '@/session/remoteComposerPlugins';
+import { composerPluginListSchema, isComposerPluginCatalogUnsupportedError as isPluginCatalogUnsupportedError, type ComposerPlugin } from '@/session/remoteComposerPlugins';
 import type { OrcaWorkerAgentKind, OrcaWorkerPermissionMode } from "@cindy/maker-shared/orca-team";
 import { fetchAgentCapabilities } from "@/session/agentCapabilitiesCache";
 import {
@@ -503,8 +503,7 @@ export interface MobileMakerTransport {
    */
   listAvailableAgents(): Promise<MobileAgentKind[]>;
   /**
-   * 被控电脑上插件提供的执行引擎(只读)。旧电脑没有该 channel(CHANNEL_NOT_ALLOWED)或读失败时
-   * 返回空列表：手机按「没有插件引擎」隐藏入口。
+   * 被控电脑上插件提供的执行引擎。旧电脑没有该 channel 时返回空列表；临时读取失败交给目录保留上一份结果。
    */
   listPluginEngines(): Promise<MobilePluginEngine[]>;
   getPluginEngineUsage(key: string): Promise<GhostHarnessUsage | null>;
@@ -1074,7 +1073,7 @@ export function createMobileMakerTransport({
     try {
       return expandGhostCommand(text, await listComposerPlugins(workingDir));
     } catch (error) {
-      if (isComposerPluginCatalogUnsupportedError(error)) return text;
+      if (isPluginCatalogUnsupportedError(error)) return text;
       throw error;
     }
   };
@@ -1250,7 +1249,10 @@ export function createMobileMakerTransport({
     listPluginEngines: () =>
       call<unknown>("maker:list-plugin-engines", [])
         .then(normalizePluginEngines)
-        .catch(() => []),
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return [];
+          throw error;
+        }),
     getPluginEngineUsage: async key => {
       if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
       const read = pluginUsageReader.read(fileOwner, deviceId, key, () =>
