@@ -193,25 +193,35 @@ export function assertScheduledHarnessSupported(
   }
 }
 
+function scheduledModelProviderId(
+  selection: ScheduledModelSelection,
+  providers: ProviderView[],
+): string | null {
+  return selection.providerId ??
+    // If admission removed every implicit source, retain the existing source only
+    // for rejection classification; the selectable-model check below still applies.
+    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
+    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
+}
+
 /** Saved selections may outlive catalog effort/Fast support; resolve the actual route first. */
 export function resolveScheduledModelSelection(
   selection: ScheduledModelSelection,
   providers: ProviderView[],
 ): ScheduledModelSelection {
-  const providerId = selection.providerId ??
-    // If admission removed every implicit source, retain the existing source only
-    // for rejection classification; the selectable-model check below still applies.
-    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
-    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
-  const provider = connectedProvidersForAgent(providers, selection.agentKind)
-    .find((candidate) => candidate.id === providerId);
+  const providerId = scheduledModelProviderId(selection, providers);
+  const connected = connectedProvidersForAgent(providers, selection.agentKind);
+  const provider = connected.find((candidate) => candidate.id === providerId);
   const model = findCatalogModel(provider, selection.model, selection.agentKind, { exact: true });
   // Payment admission is not evidence that a saved model has been removed.
   // Preserve the local guard's error class so restoration cannot replace it.
   if (model?.availability === 'requires_payment') {
     throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
   }
-  if (!model && provider?.subscriptionReadUnavailable && !provider.removed) {
+  // A legacy implicit choice has no source to classify until a catalog contains it.
+  // Unknown eligible catalogs cannot prove removal; never guess a replacement source.
+  const candidates = provider ? [provider] : providerId === null ? connected : [];
+  if (!model && candidates.some(candidate => candidate.subscriptionReadUnavailable && !candidate.removed)) {
     throwIpcError('MODEL_CATALOG_UNCONFIRMED', 'The model list could not be confirmed. The saved model selection has been kept.');
   }
   if (!provider || !model ||
@@ -239,13 +249,17 @@ export async function resolveScheduledModelSelectionWithRefresh(
 ): Promise<ScheduledModelSelection> {
   let providers = await deps.readProviders();
   deps.assertCurrent();
-  const provider = providers.find(p => p.id === selection.providerId);
-  if (provider?.connected && !provider.suspended && !provider.removed &&
+  const providerId = scheduledModelProviderId(selection, providers);
+  const candidates = connectedProvidersForAgent(providers, selection.agentKind).filter(provider =>
+    (providerId === null || provider.id === providerId) && !provider.removed &&
     provider.subscriptionAccountPool === 'openai' &&
-    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true })) {
+    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true }));
+  if (candidates.length) {
     // The native discovery routine retains the last success and marks failed reads.
     // If recovery itself throws, re-read that state rather than treating it as removal.
-    try { await deps.refreshProvider(provider.id); } catch { deps.assertCurrent(); }
+    await Promise.all(candidates.map(async provider => {
+      try { await deps.refreshProvider(provider.id); } catch { deps.assertCurrent(); }
+    }));
     deps.assertCurrent();
     providers = await deps.readProviders();
     deps.assertCurrent();
