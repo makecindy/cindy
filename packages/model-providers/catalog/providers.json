@@ -940,7 +940,7 @@
             "pi": {
               "reasoning": true,
               "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
-              "reasoningDefaultEffort": "medium"
+              "reasoningDefaultEffort": "max"
             }
           }
         },
@@ -1022,7 +1022,7 @@
             "pi": {
               "reasoning": true,
               "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
-              "reasoningDefaultEffort": "medium"
+              "reasoningDefaultEffort": "max"
             }
           }
         },
