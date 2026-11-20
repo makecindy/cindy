@@ -21,7 +21,7 @@ import {
   activeCindyBuiltInAgentSkills,
   BUILT_IN_SKILLS_BUNDLE_VERSION,
   builtInSkillDescriptors,
-  isPiRuntimeSkillAvailable,
+  piRuntimeBuiltInCommandName,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
   refreshBuiltInClaudeSkillLinks,
@@ -1045,20 +1045,38 @@ describe('built-in Skills', () => {
     expect(activeCindyBuiltInAgentSkills([command], descriptors, () => false)).toEqual([]);
   });
 
-  it('requires Pi Learn to be present in the loaded runtime command table', () => {
-    const base = {
-      kind: 'agent-skill' as const,
-      name: 'learn',
-      source: 'skill' as const,
-      path: '/system-skills/learn/SKILL.md',
-      enabled: true,
-    };
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'unknown' }, 'learn')).toBe(false);
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded' }, 'learn')).toBe(false);
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'skill:learn' }, 'learn')).toBe(true);
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'cindy:learn' }, 'learn')).toBe(true);
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'failed', runtimeCommandName: 'skill:learn' }, 'learn')).toBe(false);
-    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'skill:release' }, 'learn')).toBe(false);
+  it('attests a managed built-in from the live command table by source path', () => {
+    const learnPath = '/system-skills/learn/SKILL.md';
+    const commands = (path: string, name = 'skill:learn') => [{
+      name,
+      source: 'skill',
+      sourceInfo: { scope: 'user', path },
+    }];
+    // The palette entry this session's managed store produces: user scope, no
+    // runtime status. The command table, not the entry, is what proves it loaded.
+    expect(piRuntimeBuiltInCommandName(commands(learnPath), learnPath, 'learn')).toBe('skill:learn');
+    expect(piRuntimeBuiltInCommandName(commands(learnPath, 'cindy:learn'), learnPath, 'learn'))
+      .toBe('cindy:learn');
+    // A directory-shaped provenance is the same file.
+    expect(piRuntimeBuiltInCommandName(
+      [{ name: 'skill:learn', source: 'skill', sourceInfo: { baseDir: '/system-skills/learn' } }],
+      learnPath,
+      'learn',
+    )).toBe('skill:learn');
+
+    // Nothing loaded: the session has no command for this file.
+    expect(piRuntimeBuiltInCommandName([], learnPath, 'learn')).toBeUndefined();
+    // A command that reads a different file is not an attestation for this one.
+    expect(piRuntimeBuiltInCommandName(commands('/other/learn/SKILL.md'), learnPath, 'learn'))
+      .toBeUndefined();
+    // Nor is another built-in's command name.
+    expect(piRuntimeBuiltInCommandName(commands(learnPath, 'skill:release'), learnPath, 'learn'))
+      .toBeUndefined();
+    expect(piRuntimeBuiltInCommandName(
+      [{ name: 'skill:learn', source: 'command', sourceInfo: { path: learnPath } }],
+      learnPath,
+      'learn',
+    )).toBeUndefined();
   });
 
   it('resolves source and packaged resource roots', () => {

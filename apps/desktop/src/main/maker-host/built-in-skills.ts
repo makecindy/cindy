@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AgentSkillCommand } from '@cindy/maker-core';
+import type { AgentSkillCommand, PiRuntimeCommand } from '@cindy/maker-core';
 import {
   CINDY_LEARN_NAME,
   CINDY_SKILL_CREATOR_NAME,
@@ -727,10 +727,36 @@ export function markCindyBuiltInAgentSkills(
   });
 }
 
-/** True only when Pi's live session snapshot says the exact command is loaded. */
-export function isPiRuntimeSkillAvailable(skill: AgentSkillCommand, name: string): boolean {
-  return skill.runtimeStatus === 'loaded'
-    && (skill.runtimeCommandName === `skill:${name}` || skill.runtimeCommandName === `cindy:${name}`);
+/**
+ * The live command name this Pi session uses for the built-in at `skillPath`.
+ *
+ * A managed built-in arrives from the palette with `scope: 'user'` and no
+ * runtime status: it is discovered from the managed store, which knows nothing
+ * about any particular session. Its loaded state can therefore only come from
+ * this session's own command table — its presence there *is* the proof that it
+ * loaded. Matching by source path is what makes that attribution safe; a
+ * command name on its own can be claimed by any file that happens to be called
+ * `learn`.
+ *
+ * Returns `undefined` when no command in the table reads `skillPath`, so the
+ * caller fails closed.
+ */
+export function piRuntimeBuiltInCommandName(
+  commands: readonly PiRuntimeCommand[],
+  skillPath: string,
+  name: string,
+): string | undefined {
+  const expected = realPathOrNormalized(skillPath);
+  const accepted = new Set([`skill:${name}`, `cindy:${name}`]);
+  const match = commands.find((command) => {
+    if (command.source !== 'skill' || !accepted.has(command.name)) return false;
+    const baseDir = command.sourceInfo.baseDir;
+    return [command.sourceInfo.path, typeof baseDir === 'string' ? path.join(baseDir, 'SKILL.md') : undefined]
+      .some((candidate) => typeof candidate === 'string'
+        && candidate.length > 0
+        && realPathOrNormalized(candidate) === expected);
+  });
+  return match?.name;
 }
 
 /** Mark trusted Cindy entries, then apply the live activation override to those entries only. */

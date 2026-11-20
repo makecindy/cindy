@@ -601,7 +601,7 @@ import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skil
 import {
   activeCindyBuiltInAgentSkills,
   builtInSkillDescriptors,
-  isPiRuntimeSkillAvailable,
+  piRuntimeBuiltInCommandName,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled } from '../skillhub/activationPreferences.js';
 import {
@@ -18178,7 +18178,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         descriptors,
         isCindySkillEnabled,
       ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-        && (session.agentKind !== 'pi' || isPiRuntimeSkillAvailable(skill, 'learn'))
         && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
           || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
       if (
@@ -18187,11 +18186,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) return null;
 
       const learnCandidate = learnCandidates[0]!;
+      // A managed built-in is discovered from the managed store, which knows
+      // nothing about this session: it arrives with `scope: 'user'` and no
+      // runtime status, so the palette alone can never attest that Pi loaded it.
+      // The live command table is the authority, matched by source path so an
+      // unrelated `learn` cannot answer for this file.
+      const runtimeCommandName = session.agentKind === 'pi'
+        ? piRuntimeBuiltInCommandName(
+          maker.getSessionRuntimeCapabilities(session.id)?.commands ?? [],
+          learnCandidate.path!,
+          'learn',
+        )
+        : learnCandidate.runtimeCommandName;
+      if (session.agentKind === 'pi' && !runtimeCommandName) return null;
+      if (maker.getSession(session.id) !== session) return null;
+
       const resolvedSkillPath = await fsp.realpath(learnCandidate.path!);
       if (maker.getSession(session.id) !== session) return null;
       if (
         session.agentKind === 'pi'
-        && !await botRuntimeAllowsLearn(resolvedSkillPath, learnCandidate.runtimeCommandName ?? '')
+        && !await botRuntimeAllowsLearn(resolvedSkillPath, runtimeCommandName ?? '')
       ) return null;
       if (maker.getSession(session.id) !== session) return null;
       return {
