@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/features/cc-agent/sidebar/ProjectIcon', () => ({ ProjectIcon: () => null }));
@@ -30,7 +31,7 @@ const manyProjects = [
 
 const SEARCH = 'newChat.folderPicker.searchProjects';
 
-function renderPicker(projectOptions: readonly FolderPickerOption[]) {
+function renderPicker(projectOptions: readonly FolderPickerOption[], allowRemove = true) {
   const onSelect = vi.fn();
   const onOpenChange = vi.fn();
   render(
@@ -39,6 +40,7 @@ function renderPicker(projectOptions: readonly FolderPickerOption[]) {
       onOpenChange={onOpenChange}
       onSelect={onSelect}
       projectOptions={projectOptions}
+      allowRemove={allowRemove}
     >
       <button type="button">trigger</button>
     </FolderPickerPopover>,
@@ -48,6 +50,7 @@ function renderPicker(projectOptions: readonly FolderPickerOption[]) {
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
 });
 
 describe('filterFolderPickerOptions', () => {
@@ -102,7 +105,7 @@ describe('FolderPickerPopover project search', () => {
     expect(document.activeElement).toBe(screen.getByPlaceholderText(SEARCH));
   });
 
-  it('filters projects, picks the first match on Enter, and shows an empty result', () => {
+  it('filters projects, picks the first match on Enter, and shows an empty result', async () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
     expect(document.activeElement).toBe(input);
@@ -115,7 +118,9 @@ describe('FolderPickerPopover project search', () => {
     expect(screen.getByText('newChat.folderPicker.noMatchingProjects')).toBeTruthy();
 
     fireEvent.change(input, { target: { value: 'slg' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
     expect(onSelect).toHaveBeenCalledWith(manyProjects[4].path, 'project', manyProjects[4]);
   });
 
@@ -159,7 +164,7 @@ describe('FolderPickerPopover project search', () => {
   // - 现有覆盖缺口：原有用例只覆盖「回车取第一个匹配」,没有多结果下的选择路径。
   // - 最小失败输入：搜索 'cindy' 命中三项后按 ArrowDown 再按 Enter,修复前仍选中第一项。
   // - tier：unit（jsdom + testing-library,进程内组件入口,无真实资源）。
-  it('moves the highlight with ArrowDown and picks it on Enter', () => {
+  it('moves the highlight with ArrowDown and picks it on Enter', async () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
     const rowOf = (name: string) =>
@@ -176,11 +181,13 @@ describe('FolderPickerPopover project search', () => {
     expect(isSelected('cindy-server')).toBe(true);
     expect(isSelected('cindy')).toBe(false);
 
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
     expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
   });
 
-  it('moves the highlight back up with ArrowUp', () => {
+  it('moves the highlight back up with ArrowUp', async () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
 
@@ -188,7 +195,9 @@ describe('FolderPickerPopover project search', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'ArrowUp' });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
 
     expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
   });
@@ -197,7 +206,7 @@ describe('FolderPickerPopover project search', () => {
     // 'cindy' 命中 3 项;越界按键不应把高亮推出可见范围。
     { name: 'stops above the first result', key: 'ArrowUp', presses: 1, expected: 0 },
     { name: 'stops at the last filtered result', key: 'ArrowDown', presses: 5, expected: 2 },
-  ])('$name', ({ key, presses, expected }) => {
+  ])('$name', async ({ key, presses, expected }) => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
 
@@ -205,27 +214,31 @@ describe('FolderPickerPopover project search', () => {
     for (let i = 0; i < presses; i += 1) {
       fireEvent.keyDown(input, { key });
     }
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
 
     const target = manyProjects[expected];
     expect(onSelect).toHaveBeenCalledWith(target.path, 'project', target);
   });
 
-  it('resets the highlight to the first result when the query changes', () => {
+  it('resets the highlight to the first result when the query changes', async () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
 
     fireEvent.change(input, { target: { value: 'cindy' } });
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.change(input, { target: { value: 'c' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
 
     // 换查询后高亮回到第一项,不应延续上一次的位置。
     expect(onSelect).toHaveBeenCalledWith(manyProjects[0].path, 'project', manyProjects[0]);
   });
 
   // 读屏用户看不到背景色:高亮必须同时通过 aria-activedescendant 暴露给辅助技术。
-  // 组合框结构对齐同目录的 WorktreeChipsRow。
+  // 每行包含独立操作,通过 grid 暴露选择与删除,不能放进会压平后代语义的 option。
   it('exposes the highlighted project through the combobox', () => {
     renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
@@ -234,19 +247,95 @@ describe('FolderPickerPopover project search', () => {
 
     fireEvent.change(input, { target: { value: 'cindy' } });
 
-    const listbox = screen.getByRole('listbox');
-    expect(input.getAttribute('aria-controls')).toBe(listbox.id);
+    const grid = screen.getByRole('grid', { name: 'newChat.folderPicker.projects' });
+    expect(input.getAttribute('aria-controls')).toBe(grid.id);
+    expect(input.getAttribute('aria-haspopup')).toBe('grid');
     expect(input.getAttribute('role')).toBe('combobox');
-    expect(rowOf('cindy').getAttribute('role')).toBe('option');
+    expect(rowOf('cindy').getAttribute('role')).toBe('row');
 
     // 默认指向首项。
-    expect(input.getAttribute('aria-activedescendant')).toBe(rowOf('cindy').id);
+    expect(input.getAttribute('aria-activedescendant')).toBe(
+      within(rowOf('cindy')).getAllByRole('gridcell')[0].id,
+    );
     expect(rowOf('cindy').getAttribute('aria-selected')).toBe('true');
 
     fireEvent.keyDown(input, { key: 'ArrowDown' });
-    expect(input.getAttribute('aria-activedescendant')).toBe(rowOf('cindy-server').id);
+    expect(input.getAttribute('aria-activedescendant')).toBe(
+      within(rowOf('cindy-server')).getAllByRole('gridcell')[0].id,
+    );
     expect(rowOf('cindy-server').getAttribute('aria-selected')).toBe('true');
     expect(rowOf('cindy').getAttribute('aria-selected')).toBe('false');
+  });
+
+  // 测试价值：PR #11675 review r4639609510 指出 option 会压平行内按钮语义。
+  // 旧测试只检查选中属性,未覆盖独立删除操作；最小输入为一行项目及默认允许的删除按钮。
+  // unit：渲染真实组件,检查对外 ARIA 契约与删除效果,无真实持久化。
+  it('exposes selection and removal as independent actions in grid cells', () => {
+    const { onSelect, onOpenChange } = renderPicker(manyProjects);
+    const row = screen.getByText('cindy').closest('[data-folder-picker-index]') as HTMLElement;
+    const cells = within(row).getAllByRole('gridcell');
+    expect(cells).toHaveLength(2);
+    expect(within(cells[0]).getByRole('button', { name: /cindy/ })).toBeTruthy();
+    const remove = within(cells[1]).getByRole('button', {
+      name: 'newChat.folderPicker.removeFromList',
+    });
+    expect(remove.closest('[role="option"]')).toBeNull();
+
+    fireEvent.click(remove);
+    expect(recentWorkdirsStore.remove).toHaveBeenCalledWith(manyProjects[0].path);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('navigates row actions with arrows and returns to search with Escape', () => {
+    renderPicker(manyProjects);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    const rows = screen.getAllByRole('row');
+    const firstSelect = within(rows[0]).getByRole('button', { name: /cindy/ });
+    const secondSelect = within(rows[1]).getByRole('button', { name: /cindy-server/ });
+    const firstRemove = within(rows[0]).getByRole('button', {
+      name: 'newChat.folderPicker.removeFromList',
+    });
+    const secondRemove = within(rows[1]).getByRole('button', {
+      name: 'newChat.folderPicker.removeFromList',
+    });
+    act(() => firstSelect.focus());
+    fireEvent.keyDown(firstSelect, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(firstRemove);
+    expect(firstRemove.tabIndex).toBe(0);
+    expect(firstSelect.tabIndex).toBe(-1);
+    fireEvent.keyDown(firstRemove, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(secondRemove);
+    fireEvent.keyDown(secondRemove, { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(secondSelect);
+    expect(rows[1].getAttribute('aria-selected')).toBe('true');
+    expect(rows[0].getAttribute('aria-selected')).toBe('false');
+    fireEvent.keyDown(secondSelect, { key: 'Escape' });
+    expect(document.activeElement).toBe(input);
+    expect((input as HTMLInputElement).value).toBe('cindy');
+  });
+
+  it('keeps navigation within available cells when removal is disabled', () => {
+    renderPicker(manyProjects, false);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    const rows = screen.getAllByRole('row');
+    expect(within(rows[0]).getAllByRole('gridcell')).toHaveLength(1);
+    const buttons = rows.map((row) => within(row).getByRole('button'));
+    act(() => buttons[0].focus());
+    fireEvent.keyDown(buttons[0], { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(buttons[0]);
+    fireEvent.keyDown(buttons[0], { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(buttons[0]);
+    fireEvent.keyDown(buttons[0], { key: 'End', ctrlKey: true });
+    expect(document.activeElement).toBe(buttons[2]);
+    fireEvent.keyDown(buttons[2], { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(buttons[2]);
+    fireEvent.keyDown(buttons[2], { key: 'Home', ctrlKey: true });
+    expect(document.activeElement).toBe(buttons[0]);
+    fireEvent.keyDown(buttons[0], { key: 'ArrowDown', isComposing: true });
+    expect(document.activeElement).toBe(buttons[0]);
   });
 });
 

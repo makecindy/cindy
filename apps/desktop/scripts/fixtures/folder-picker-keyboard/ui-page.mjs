@@ -14,7 +14,7 @@ export default {
     default: { about: '30 个项目的选择器:方向键高亮越过可视边缘后仍可见' },
   },
 
-  async check(page) {
+  async check(page, ui) {
     // 搜索框的 aria-label 是翻译后的文案,跨语言不稳定,按浮层结构定位。
     const input = page.locator('[role="dialog"] input[type="text"]').first();
     await input.waitFor();
@@ -48,6 +48,39 @@ export default {
     const firstClass = (await firstRow.getAttribute('class')) ?? '';
     if (firstClass.split(/\s+/).includes('bg-[var(--folder-item-hover)]')) {
       throw new Error('高亮仍停在第一项,方向键没有移动高亮');
+    }
+
+    // Grid 只有当前项目的选择按钮进入 Tab 顺序;行内左右键能独立到达删除按钮。
+    await page.keyboard.press('Tab');
+    if (
+      !(await highlighted
+        .getByRole('button')
+        .first()
+        .evaluate((el) => el === document.activeElement))
+    ) {
+      throw new Error('Tab 没有进入当前高亮项目');
+    }
+    await page.keyboard.press('ArrowRight');
+    if (
+      !(await highlighted
+        .getByRole('button')
+        .last()
+        .evaluate((el) => el === document.activeElement))
+    ) {
+      throw new Error('方向键无法独立聚焦删除按钮');
+    }
+    await ui.capture('remove-focused');
+    await page.keyboard.press('Shift+Tab');
+    if (!(await input.evaluate((el) => el === document.activeElement))) {
+      throw new Error('Shift+Tab 没有直接离开 Grid 返回搜索框');
+    }
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Escape');
+    if (
+      !(await input.evaluate((el) => el === document.activeElement)) ||
+      (await input.inputValue()) !== 'project'
+    ) {
+      throw new Error('Esc 没有返回搜索框并保留查询');
     }
   },
 };
