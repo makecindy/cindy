@@ -6,6 +6,7 @@ import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
+  ControlWorkerEngine,
   LiziMcpSessionContext,
 } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
@@ -48,7 +49,8 @@ export type SendToSessionCallback = (params: {
       targetDeviceId?: string;
       responsibilityRecorded?: false;
       targetSessionId: string;
-      agentKind: ControlWorkerAgent;
+      /** 'acp' only for collaboration-internal deliveries to a plugin-engine Worker. */
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -129,14 +131,18 @@ export interface SendToSessionDeps {
 
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
-const DESCRIPTION = [
-  "【已有任务】发消息必须传 target_session_id；不知道 id 先用 history/list_sessions 查找。只有明确新建任务时才省略 target_session_id。新建时省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。",
+export const sessionDeliveryScope = (supportsRemote: boolean): string => supportsRemote ? '本机或已授权电脑' : '仅本机';
+
+const describeSendToSession = (supportsRemote: boolean) => [
+  `【已有任务】发消息必须传 target_session_id（${sessionDeliveryScope(supportsRemote)}）；不知道 id 先用 history/list_sessions 查找。只有明确新建任务时才省略 target_session_id。新建时省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。`,
   "",
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
-  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;新建远程任务则省略 target_session_id 并传 device。",
+  ...(supportsRemote ? [
+    "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制。",
+  ] : []),
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
@@ -214,7 +220,7 @@ export function registerSendToSessionTool(
   registry.register({
     name: "send_to_session",
     category: "handoff",
-    description: DESCRIPTION,
+    description: describeSendToSession(!!deps.sendToRemoteSession),
     inputShape: {
       device: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：任务、目录和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；省略或 local 为当前宿主。远程项目/目录按目标电脑解析；未选项目不继承本机路径，未选模型用目标默认。已有任务使用 target_session_id，不同时传 device。',
@@ -230,7 +236,7 @@ export function registerSendToSessionTool(
           `目标 ${BRAND_NAME} session 的 business id(新建 desktop session 是 UUID,` +
             "历史 session 可能是 cuid 或 IM 确定性 id,一律按不透明字符串处理、不校验格式)。" +
             "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
-            "另一台电脑上的任务用 deviceId::sessionId。" +
+            (deps.sendToRemoteSession ? "另一台电脑上的任务用 deviceId::sessionId。" : "仅支持发给本机已有任务。") +
             "省略 → create:新建任务并立刻跑一轮；项目归属由 project_path 指定或继承。",
         ),
       message: z

@@ -249,8 +249,9 @@ export function formatAgentSwitchLocationLabel(
     : translate(location.kind === 'thisComputer'
       ? 'message.systemCard.agentSwitchLocationThisComputer'
       : 'message.systemCard.agentSwitchLocationOtherComputer');
-  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
-  const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
+  const fallback = translate('models.pluginEngines.genericName');
+  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind, data?.fromEngineName, fallback);
+  const to = mobileAgentLabelFromUnknown(data?.toAgentKind, data?.toEngineName, fallback);
   const label = from === to ? place : `${place} · ${to}`;
   return data?.switchReason === 'quota-rebalance'
     ? `${label} · ${translate('message.systemCard.agentSwitchLocationQuotaRebalance')}`
@@ -264,8 +265,9 @@ export function formatAgentSwitchLocationLabel(
  * 这里仅保留为 formatMobileSystemCard 在该 union 分支上的类型完备兜底。
  */
 function formatAgentSwitchCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
-  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
-  const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
+  const fallback = i18n.t('models.pluginEngines.genericName');
+  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind, data?.fromEngineName, fallback);
+  const to = mobileAgentLabelFromUnknown(data?.toAgentKind, data?.toEngineName, fallback);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   const coverageKey = handoffCoverageKey(data);

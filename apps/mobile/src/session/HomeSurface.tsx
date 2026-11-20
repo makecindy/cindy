@@ -156,6 +156,8 @@ import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { isPluginEngineSessionKind, prefetchPluginEngineIcons } from './pluginEngines';
 import {
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryKey,
@@ -2305,6 +2307,29 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
   // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
   const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
+  const pluginIconDevices = useMemo(() => {
+    const ids = new Set<string>();
+    for (const session of homeSessions) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (deviceId && session.status === 'active' && isPluginEngineSessionKind(session.agentKind)
+        && homeSyncDeviceIdSet.has(deviceId)) {
+        ids.add(deviceId);
+      }
+    }
+    return [...ids].sort();
+  }, [homeSessions, homeSyncDeviceIdSet]);
+  const stablePluginIconDevices = useStableValue(pluginIconDevices,
+    (before, after) => before.length === after.length && before.every((id, index) => id === after[index]));
+  useEffect(() => {
+    if (!screenFocused || !active || !homeAppActive || status !== 'online') return;
+    const owner = getMobileAuthOwner();
+    let cancelled = false;
+    void runHomeDeviceSyncBatch(stablePluginIconDevices, async (deviceId) => {
+      if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
+      await prefetchPluginEngineIcons(deviceId, createMobileMakerTransport({ deviceId, invoke }));
+    });
+    return () => { cancelled = true; };
+  }, [stablePluginIconDevices, screenFocused, active, homeAppActive, status, invoke, accountGeneration, connectionEpoch]);
   const home = useMemo(
     () => buildMobileHomePresentation({
       projectAliases,

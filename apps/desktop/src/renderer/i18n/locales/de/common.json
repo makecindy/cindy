@@ -1425,6 +1425,7 @@
     "UPSTREAM_ERROR": "Fehler beim vorgelagerten Server (5xx). Versuch es später erneut",
     "UPSTREAM_UNREACHABLE": "Endpunkt nicht erreichbar. Prüfe dein Netzwerk und die Basis-URL",
     "TIMEOUT": "Zeitüberschreitung der Verbindung. Prüfe dein Netzwerk und die Basis-URL",
+    "CERT_ERROR": "Die Zertifikatsprüfung ist fehlgeschlagen. Prüfe, ob der Hostname der Basis-URL zum Zertifikat passt, sowie die Zertifikatskette und die CA-Vertrauenseinstellungen deiner Organisation.",
     "UNKNOWN": "Unbekannter Fehler. Weitere Informationen findest du in den Protokollen",
     "upstreamToast": "Anfrage an Anbieter „{{provider}}“ fehlgeschlagen: {{message}}"
   },
@@ -1436,6 +1437,10 @@
     "details": "Fehlerdetails"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Lokale Datenbank beschädigt",
+      "description": "Eine Beschädigung der Datenbank wurde erkannt. Der Zugriff wurde zum Schutz deiner Daten gestoppt. Du kannst versuchen, die lokalen Daten erneut zu öffnen. Falls das fehlschlägt, kopiere die technischen Details und kontaktiere den Support. Überschreibe oder lösche keine Datenbankdateien."
+    },
     "schemaLease": {
       "title": "Lokale Daten können noch nicht geöffnet werden",
       "retry": "Lokale Daten erneut öffnen",
@@ -3717,6 +3722,8 @@
           "edit": "Bearbeiten",
           "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
           "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "useSavedCredential": "Gespeicherte Zugangsdaten verwenden",
+          "confirmDestination": "Gespeicherte Claude Code-Zugangsdaten für diese Adresse verwenden?",
           "name": "Anzeigename",
           "baseUrl": "Basis-URL",
           "protocol": "API-Protokoll",
@@ -4119,6 +4126,25 @@
         "refreshFailed": "Modellliste konnte nicht aktualisiert werden – versuche es später erneut",
         "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
+        "withdrawn": {
+          "refreshFound": "Nicht mehr angebotene Modelle: {{count}}",
+          "refreshAdded": "Neue Modelle: {{added}}. Nicht mehr angeboten: {{count}}",
+          "refreshSuspicious": "Diesmal nicht zurückgegebene Modelle: {{count}}. Die Liste ist möglicherweise unvollständig",
+          "refreshAddedSuspicious": "Neue Modelle: {{added}}. Diesmal nicht zurückgegeben: {{count}}. Die Liste ist möglicherweise unvollständig",
+          "review": "Modelle prüfen",
+          "heading": "Nicht mehr angebotene Modelle",
+          "intro": "Beim Aktualisieren von {{provider}} hat der Dienst diese Modelle nicht mehr zurückgegeben. Wähle die Modelle aus, die entfernt werden sollen. Engines, die sie weiterhin anbieten, sind nicht betroffen.",
+          "suspicious": "Es fehlen ungewöhnlich viele Modelle. Möglicherweise hat der Dienst eine unvollständige Liste geliefert. Aktualisiere später erneut, um das zu bestätigen, oder wähle nur Modelle aus, die sicher eingestellt wurden.",
+          "selectAll": "Alle auswählen",
+          "selected": "{{count}} von {{total}} ausgewählt",
+          "consequence": "Entfernte Modelle erscheinen nicht mehr in der Modellauswahl und werden dort, wo sie verwendet werden, als nicht verfügbar angezeigt. Bietet der Dienst sie wieder an, füge sie durch Aktualisieren erneut hinzu.",
+          "confirm": "Modelle entfernen ({{count}})",
+          "cancel": "Modelle behalten",
+          "removed": "Modelle entfernt: {{count}}",
+          "cleanupIncomplete": "Modelle entfernt: {{count}}. Einige Anzeige- oder Deaktivierungseinstellungen konnten nicht gelöscht werden",
+          "stale": "Die Verbindung hat sich geändert, es gibt nichts zu entfernen. Aktualisiere erneut, um zu prüfen",
+          "removeFailed": "Modelle konnten nicht entfernt werden"
+        },
         "disableModel": "Dieses Modell deaktivieren",
         "paymentRequired": "Kostenpflichtig",
         "paymentUnlock": "Kostenpflichtig freischalten",
@@ -4408,6 +4434,7 @@
         "authorizedToast": "Bei {{name}} angemeldet",
         "authorizeFailed": "Anmeldung bei {{name}} fehlgeschlagen. Erneut versuchen.",
         "nameLabel": "Anzeigename",
+        "geminiImageKeyNote": "Nach dem Speichern wird dieser Schlüssel für Chats über diese Verbindung und künftig für die Bilderzeugung mit Gemini verwendet. Wenn Sie nur Bilder erzeugen möchten, wählen Sie alle Chatmodelle ab.",
         "onlyAgentNote": "Dieser Anbieter unterstützt nur {{agent}}",
         "endpointLabel": "{{agent}}-Basis-URL",
         "noAuthNote": "Dieser Proxy benötigt keinen Client-Schlüssel; Cindy entfernt die Anmeldeinformationen für das CLI-Abonnement vor der Weiterleitung.",
@@ -7951,6 +7978,7 @@
           "accessDenied": "Diese Plugin-Aktion ist nicht zulässig oder wurde abgebrochen.",
           "notConfigured": "Der Plugin-Marktplatz ist in dieser Umgebung nicht verfügbar.",
           "invalidPackage": "Dieses Plugin-Paket ist ungültig und kann nicht installiert werden. Kontaktiere den Herausgeber.",
+          "downloadAuthorizationExpired": "Die Downloadberechtigung für das Plugin ist abgelaufen. Prüfe Datum und Uhrzeit des Systems, bevor du die Installation erneut startest.",
           "downloadTimeout": "Zeitüberschreitung beim Plugin-Download. Versuche es später erneut.",
           "downloadFailed": "Der Plugin-Download ist fehlgeschlagen. Prüfe deine Verbindung und versuche es erneut.",
           "brokerRedirectPortRequired": "Dieses Plugin deklariert einen Autorisierungsbroker, aber in derselben OAuth-Konfiguration fehlt redirectPort. Daher kann es nicht aus dem Plugin-Marktplatz installiert werden. Bitte den Herausgeber, das Feld hinzuzufügen und ein neues Release zu veröffentlichen.",
@@ -8267,6 +8295,8 @@
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentModelPreferences": "Deine Modellfavoriten lesen und bearbeiten sowie zuletzt verwendete Modelle lesen",
         "agentModelPreferencesDetail": "Kann die Modellfavoriten und zuletzt verwendeten Modelle auf diesem Computer lesen, einschließlich Denkintensität und Fast, und Favoriten hinzufügen, ändern oder entfernen. Änderungen erscheinen auch in der Modellauswahl von Cindy. Im Plugin gewählte Modelle werden nicht unter „Zuletzt verwendet“ erfasst. Modelle auf deinen anderen Computern oder mit dir geteilte Modelle sind nicht enthalten, und es werden keine Zugangsdaten weitergegeben.",
+        "harnesses": "Stellt Ausführungs-Engines bereit: {{names}}",
+        "harnessesDetail": "Kann in deinen Aufgaben das Arbeitsverzeichnis lesen und schreiben, Befehle ausführen und dieselben Cindy-Werkzeuge wie das integrierte Pi nutzen.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
         "agentErrandDetail": "Erstellte Aufgaben erscheinen in der Aufgabenliste von Cindy. Dort kannst du den Fortschritt ansehen und das Gespräch fortsetzen.",
         "agentSchedule": "Kann dich bitten, eine Automatisierung zu erstellen",
@@ -14204,6 +14234,32 @@
             "label": "Vollzugriff",
             "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Jedes Mal bestätigen",
+            "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
+          },
+          "default": {
+            "label": "Standard",
+            "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
+          },
+          "acceptEdits": {
+            "label": "Änderungen akzeptieren",
+            "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
+          },
+          "auto": {
+            "label": "Automatisch",
+            "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
+          },
+          "plan": {
+            "label": "Nur planen",
+            "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
+          },
+          "bypassPermissions": {
+            "label": "Alles erlauben",
+            "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."
+          }
         }
       }
     },
@@ -14671,6 +14727,16 @@
       "nowDefault": "Jetzt Standard",
       "switchToSteer": "Standardmäßig steuern",
       "switchToQueue": "Standardmäßig einreihen"
+    },
+    "pluginEngines": {
+      "group": "Plugin-Engines",
+      "genericName": "Plugin-Engine",
+      "defaultModel": "Standardmodell",
+      "defaultModelHint": "Verwendet die Standardeinstellung der Engine",
+      "unavailable": "Nicht verfügbar",
+      "engineMissing": "Das Plugin, das diese Engine bereitstellt, ist deaktiviert oder deinstalliert.",
+      "worktreeUnsupported": "Plugin-Engines können noch keine Aufgaben in einem Worktree starten. Schalte Worktree aus, um zu senden.",
+      "modelChangeFailed": "Modell konnte nicht gewechselt werden"
     }
   },
   "onboarding": {
@@ -15109,6 +15175,11 @@
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
+      "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_timeout": "Die Verbindung zu GitHub auf {{device}} ist abgelaufen. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_auth": "Melde dich auf {{device}} erneut bei GitHub an. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_rate-limit": "GitHub begrenzt die Anfragen von {{device}}. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_unknown": "Die PR-Prüfung auf {{device}} ist fehlgeschlagen. Details stehen im Laufprotokoll. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
       "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
@@ -15819,6 +15890,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Dieser Agent ist auf dem anderen Computer nicht verfügbar. Installiere ihn dort oder melde dich dort an, oder wähle einen anderen Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Dieser Computer kann den bisherigen Zustand der Sitzung nicht wiederherstellen. Wähle ein Modell von einem anderen Computer oder Anbieter, um den Kontext zu übergeben und fortzufahren. Bestehende Nachrichten bleiben erhalten.",
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Die Plugin-Engine konnte das vorherige Gespräch nicht wiederherstellen. Deine Nachrichten bleiben erhalten. Wähle eine andere Engine oder starte eine neue Aufgabe.",
       "REMOTE_AGENT_RESUME_REJECTED": "Der Computer, auf dem das Modell läuft, kann diese Sitzung nicht fortsetzen. Erstelle über die Sitzungsliste eine neue Sitzung und kopiere die benötigten Inhalte dorthin. Die ursprüngliche Sitzung und die Nachrichten in der Warteschlange bleiben erhalten.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort beim Anbieter „Remote-Nutzung erlauben“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
@@ -16992,6 +17064,12 @@
       "unspecifiedDir": "Kein Verzeichnis angegeben"
     },
     "workdirBrowse": {
+      "previewFile": "Vorschau",
+      "filterDirectory": "Diesen Ordner filtern…",
+      "projectTree": "Projektbaum",
+      "systemPreview": "Systemvorschau",
+      "listView": "Liste",
+      "gridView": "Miniaturansichten",
       "backToProjects": "Zurück zu Projekten",
       "switchProject": "Projekt wechseln",
       "activeSessionCount_one": "{{count}} aktive Sitzung",
@@ -17358,6 +17436,7 @@
       "promote": {
         "menu": "In Projektautomatisierung umwandeln",
         "noWorkingDir": "Zeitplan kann ohne Arbeitsverzeichnis nicht zur Projektautomatisierung gemacht werden",
+        "pluginEngine": "Plugin-Engines laufen nur auf diesem Computer und können nicht zur Projektautomatisierung gemacht werden",
         "success": "Zur Projektautomatisierung gemacht"
       },
       "editProject": {
@@ -17634,6 +17713,7 @@
         "selectThread": "Wähle eine Zielsitzung",
         "selectProject": "Wähle ein Projektverzeichnis",
         "modelUnavailable": "Modell {{model}} ist nicht mehr verfügbar. Wähle ein anderes Modell.",
+        "pluginEngineUnavailable": "Die ausgewählte Plugin-Engine ist gerade nicht verfügbar. Wähle ein anderes Modell.",
         "reasoningInvalid": "Denkintensität muss einer der Werte {{values}} sein",
         "preRunHookCommandRequired": "Gib den Befehl für die Vorabprüfung ein",
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
@@ -19355,6 +19435,7 @@
       "permissionLabel": "Berechtigungsmodus",
       "noAvailableModels": "Kein {{agent}}-Modell verfügbar. Prüfe die Anbieterverbindung und die Zugangsdaten in den Einstellungen.",
       "savedModelUnavailable": "Das gespeicherte Modell oder seine Quelle ist nicht verfügbar.",
+      "pluginEngineNoWorktree": "Worker mit Plugin-Engine können keinen Worktree verwenden. Deaktiviere die Worktree-Option, um diesen Worker zu erstellen.",
       "reselectModel": "Modell auswählen",
       "effortLabel": "Denkintensität",
       "initialTaskLabel": "Erste Aufgabe",

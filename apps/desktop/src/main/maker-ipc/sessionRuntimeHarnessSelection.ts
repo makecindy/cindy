@@ -11,7 +11,8 @@ export function pendingHarnessRuntimeMutation(
   generation: number,
   currentAgentDeviceId?: string | null,
 ): PendingSessionRuntimeMutation | null {
-  if (intent?.runtimeSource !== 'agent') return null;
+  // Agents stage built-in selections only; a switch onto a plugin engine is the user's own choice.
+  if (intent?.runtimeSource !== 'agent' || intent.targetAgentKind === 'acp') return null;
   return {
     generation,
     source: 'agent',
@@ -36,7 +37,8 @@ export function stagedSelectionProfile(
   intent: PendingAgentSwitchIntent | undefined,
   currentAgentDeviceId?: string | null,
 ): SessionRuntimeProfile | null {
-  if (!intent || intent.resumeFallbackRecovery) return null;
+  // Runtime controls cover the built-in engines; a pending plugin-engine switch is not projected.
+  if (!intent || intent.resumeFallbackRecovery || intent.targetAgentKind === 'acp') return null;
   const agentDeviceId = intent.targetAgentDeviceId === undefined ? currentAgentDeviceId : intent.targetAgentDeviceId;
   return {
     ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),

@@ -186,8 +186,8 @@ it('opens measured zero history and restores fallback across reliability and tur
   expect(trigger()).not.toBeNull();
 });
 
-it('paused token speed hides the current rate but keeps average and peak', () => {
-  const speed = { rate: 100, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
+it('shows the last measurement in the panel during tool execution and request warm-up', () => {
+  const speed = { rate: 85, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
   const props = {
     visible: true,
     status: 'Running bash…',
@@ -204,21 +204,21 @@ it('paused token speed hides the current rate but keeps average and peak', () =>
   expect(screen.getByRole('dialog')).toBeTruthy();
   const currentRate = () => screen.getByText('chat.runningStatus.currentRate').nextElementSibling;
   const value = (label: string) => screen.getByText(label).nextElementSibling;
-  expect(currentRate()?.textContent).toContain('100');
-
-  // A tool call pauses generation: the cached live rate (fresh for 60s) must not
-  // be shown as a current speed, while average and peak still describe the turn.
+  expect(currentRate()?.textContent).toContain('85');
   rerender(
     <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average, totalOutputTokens: 5_300 }} />,
   );
   expect(trigger()?.textContent).not.toContain('tokenRate');
-  expect(currentRate()?.textContent).toContain('—');
+  expect(currentRate()?.textContent).toContain('85');
   expect(value('chat.runningStatus.averageRate')?.textContent).toContain('100');
   expect(value('chat.runningStatus.outputTotal')?.textContent).toContain('5.3k');
   expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
 
-  // Streaming resumes: the live reading is back.
-  rerender(<RunningStatusBar {...props} />);
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, rate: 0 }} />);
+  expect(trigger()?.textContent).not.toContain('tokenRate');
+  expect(currentRate()?.textContent).toContain('85');
+
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, rate: 100 }} />);
   expect(currentRate()?.textContent).toContain('100');
 });
 

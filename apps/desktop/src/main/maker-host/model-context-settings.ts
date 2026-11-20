@@ -55,11 +55,14 @@ export function resolveConfiguredContextWindow(
   return desktopContextBudget.resolveConfiguredContextWindow(catalog, agent, providerId, modelId, sessionBudget, verification);
 }
 
-/** Replay trusts only capacity verified for the execution route. */
+/**
+ * Replay trusts only capacity verified for the execution route. A plugin engine has no catalog
+ * window, so its replay is unbounded here, like a task running on another host.
+ */
 export async function resolveDesktopHandoffWindow(
   sessionId: string,
   route: {
-    agentKind: AgentKind;
+    agentKind: AgentKind | 'acp';
     model: string | null | undefined;
     providerId: string | null;
     agentDeviceId?: string | null;
@@ -68,7 +71,7 @@ export async function resolveDesktopHandoffWindow(
   },
 ): Promise<number | null> {
   const { agentKind, model, providerId, agentDeviceId, remoteHostId, workingBudget } = route;
-  if (!model || remoteHostId) return null;
+  if (!model || remoteHostId || agentKind === 'acp') return null;
   if (!agentDeviceId) {
     return desktopContextBudget.resolveConfiguredContextWindow(
       getActiveCatalog(), agentKind, providerId, model, workingBudget ?? readSessionContextWindowBudget(sessionId), 'required',

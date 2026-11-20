@@ -94,7 +94,7 @@ function codexProfileEnv(directory: string): Record<string, string> {
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; codexCanDispatch?: () => boolean | Promise<boolean> },
 ): Promise<AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string }> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
@@ -111,7 +111,7 @@ export async function readNativeAccount(
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
-  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
+  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch)) as {
     account?: { type?: string; email?: string; planType?: string } | null;
     requiresOpenaiAuth?: boolean;
   };

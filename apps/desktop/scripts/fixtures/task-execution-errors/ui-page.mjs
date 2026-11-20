@@ -7,6 +7,7 @@ export default {
   real: 'Live ErrorBanner, failed automation banner, historical error card, subagent error notice, ErrorNotice, localized details and redaction',
   notCovered: 'Live scheduler execution, host transport and new-task navigation; covered separately by targeted tests',
   cases: {
+    'pr-dns': { about: 'Remote PR check DNS failure and actual probe time', viewport: { width: 320, height: 300 } },
     default: { about: 'Historical automatic execution failure' },
     narrow: { about: 'Automatic execution failure at 320 px', viewport: { width: 320, height: 540 } },
     history: { about: 'Historical task execution error' },
@@ -21,6 +22,13 @@ export default {
     'resume-history-narrow': { about: '#10187: persisted refusal at 320 px', viewport: { width: 320, height: 540 } },
   },
   async check(page, ui) {
+    if (ui.case === 'pr-dns') {
+      const notice = page.getByTestId('unread-failed-schedule-banner');
+      assert.ok(await notice.isVisible());
+      assert.match(await notice.innerText(), /Build Mac/);
+      assert.match(await notice.innerText(), /api\.github\.com/);
+      return;
+    }
     if (ui.case.startsWith('review-')) {
       assert.ok(await page.getByText(await ui.t('chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'), { exact: true }).isVisible());
       const expected = ui.case === 'review-remote-narrow' ? 0 : 1;
