@@ -3709,7 +3709,7 @@ async function runAuthRefreshWithReplacementRetry(
   }
 
   // Candidate errors do not describe the admitted active owner. Recover only
-  // its own uncertain generation that actually received INVALID in this run.
+  // its own uncertain generation that actually received INVALID in this flow.
   const uncertain = uncertainResourceRefreshTokens.get(opts.realm);
   const uncertainRefreshToken = pendingRecovery?.refreshToken ?? (
     uncertain && readAuthAccountVault().activeAccountKey === uncertain.accountKey
@@ -3717,7 +3717,10 @@ async function runAuthRefreshWithReplacementRetry(
   );
   if (
     run.failureAction?.kind === 'definitive-failure' &&
-    uncertainRefreshToken && invalidRefreshTokens.has(uncertainRefreshToken)
+    uncertainRefreshToken &&
+    (invalidRefreshTokens.has(uncertainRefreshToken) ||
+      (!run.rejectedTokens.includes(uncertainRefreshToken) &&
+        opts.rejectedRefreshTokens?.has(uncertainRefreshToken)))
   ) {
     try {
       const pair = await recoverActiveResourceSession(
