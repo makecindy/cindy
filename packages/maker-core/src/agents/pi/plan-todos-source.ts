@@ -34,7 +34,18 @@ function selectPlanText(content) {
   const native = content.map(block => block.type === 'text' ? block.text
     : block.type === 'thinking' ? block.thinking ?? '' : '').join('\n');
   const header = planLines(native).findLast(line => isPlanHeader(line.text));
-  return header ? native.slice(header.start) : visible;
+  if (header) return native.slice(header.start);
+  // Some native providers emit a numbered plan in thinking without a
+  // heading. Keep the last top-level numbered run instead of falling back to
+  // the (often empty) visible text, while still dropping unrelated preamble.
+  const lines = planLines(native);
+  const numbered = lines.filter(line => /^\s*\d+[.)、．）]\s*\S/.test(line.text));
+  if (numbered.length && extractTodoItems(native).length) {
+    let start = lines.indexOf(numbered[numbered.length - 1]);
+    while (start > 0 && /^\s*\d+[.)、．）]\s*\S/.test(lines[start - 1].text)) start--;
+    return native.slice(lines[start].start);
+  }
+  return visible;
 }
 function extractTodoItems(plan) {
   const visible = planLines(plan).map(line => line.text);

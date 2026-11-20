@@ -21,6 +21,11 @@ describe('Pi plan title extraction', () => {
       .toBe('Details first.\nPlan:\n9. 发布');
   });
 
+  it('retains a headerless numbered plan emitted only in thinking', () => {
+    expect(selectPlan([{ type: 'thinking', thinking: 'Unrelated reasoning.\n1. 验证\n2. 交付' }]))
+      .toBe('1. 验证\n2. 交付');
+  });
+
   it.each([
     ['Plan:\n1. **验证**\n2. **交付**', [1, 2], ['验证', '交付']],
     ['## **计划：**\n2）实现\n5) Verify\n9、`deploy`', [2, 5, 9], ['实现', 'Verify', 'deploy']],
