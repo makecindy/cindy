@@ -520,3 +520,55 @@ it('keeps presence on the session with a new peer and still sends the frame to a
     expect(channels.get('b-new')!.send).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); socket.close(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket 的中转重连与 networkChanged（手机换网事件、Desktop 网络监听经 worker 都走这里）。
+ *   中转断着、正在等退避时网络变了，马上重连，不等退避；连上后再通知一次传输层，断网期间发出的包立刻重发。
+ *   正在进行的连接尝试不被打断；中转好好的时候换网只通知传输层，不重连。
+ * - 规则依据：和 Device Link 客户端收到网络变化时的做法一致（绕过退避、不打断进行中的连接）。2026-11-20 真机换网
+ *   22 次中转重连都在 0.2–3.6 秒内按原退避连上，没有遇到连续失败；连续失败时退避会翻倍到 15 秒，新网络通了也要等。
+ * - 现有覆盖缺口：之前没有测试覆盖中转重连和网络变化的交互。
+ * - 最小失败输入：中转断开、重连失败三次（下一次在 4 秒后），这时来一次网络变化。tier：unit，真实路由与证书，内存中转，假计时器。
+ */
+it('reconnects the relay at once when the network changes during its backoff', async () => {
+  const local = generateIdentity('local'), remote = generateIdentity('remote');
+  const { root, bootstrap } = createPrivateNetwork('Relay after network change', local);
+  const device: DeviceView = { name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [],
+    certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' }) };
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink();
+  let pending: ((uplink: ReturnType<typeof makeUplink>) => void) | null = null;
+  const connect = vi.fn().mockResolvedValueOnce(first)
+    .mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'))
+    .mockImplementation(() => new Promise((resolve) => { pending = resolve; }));
+  const networkChanged = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, networkChanged, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    // The relay is up: a network change moves the transport only.
+    socket.networkChanged();
+    expect(networkChanged).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    // Lost, then three failed attempts (0.5 s, 1 s, 2 s): the next one would wait 4 s.
+    first.emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000);
+    expect(connect).toHaveBeenCalledTimes(4);
+    socket.networkChanged();
+    expect(connect).toHaveBeenCalledTimes(5);
+    // A second change while that attempt is in flight keeps it.
+    socket.networkChanged();
+    expect(connect).toHaveBeenCalledTimes(5);
+    expect(networkChanged).toHaveBeenCalledTimes(3);
+    pending!(second);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(networkChanged).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(connect).toHaveBeenCalledTimes(5);
+  } finally { vi.useRealTimers(); socket.close(); }
+});

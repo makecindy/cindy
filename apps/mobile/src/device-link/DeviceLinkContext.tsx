@@ -1501,7 +1501,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // Only this phone's established connection used the lost route. Keep
       // handshakes and congestion backoff on their existing recovery path.
       if (replaceOldPath && client.getStatus() === 'online') {
-        client.restartConnections('network-path-changed');
+        // An Agent-Net primary moves to the new address by itself (notified above). Rebuilding it closed every session and
+        // connected from scratch: 2026-11-20 on a phone, about 12 s after Wi-Fi/5G switches against 1.8 s on Device Link.
+        client.restartConnections('network-path-changed', { keepPrimary: primaryEncrypted });
       } else {
         client.notifyNetworkChanged({ urgent });
       }

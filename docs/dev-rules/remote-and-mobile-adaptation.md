@@ -1246,6 +1246,22 @@ Mobile 明确观察到断网后恢复，或已连接网络类型切换（如蜂�
 不由单 peer 超时触发，也不重启被控端与其它控制端的共享连接。
 实现与回归见 Mobile `DeviceLinkContext.tsx`、`historyViewProvider.test.tsx`。
 
+主连接是 Agent-Net 时不替换它（`restartConnections(…, { keepPrimary })`），只通知它换了网络：加密连接从新地址
+继续发、在途的包重发；它的中转连接断着且正在等重连间隔时立即重连一次（和 Device Link 收到网络提示时一样，
+不打断进行中的连接尝试），中转回来后再让在途的包重发一次（`portableSocket.ts` 的 `networkChanged`）。
+其余经 Device Link 中转的连接（跨账号、兼容、分享）照旧替换。2026-11-20 真机：替换主连接会关掉所有会话
+从头连，Wi-Fi ↔ 5G 一次约 12 秒；Device Link 约 1.8 秒。
+
+故障半径：① 证据是手机自己的物理网络变了（同上），不由任何对端超时触发；② 不重建 Agent-Net 主连接、不重放，
+只让本机这一个 socket 的中转连接按网络提示提前重连一次，对端通道不动；③ `historyViewProvider.test.tsx`
+「keeps an Agent-Net main connection on a physical route change」、`routedClient.test.ts`「restarts the
+compatibility connection after a network change and the main one only without keepPrimary」、
+`portableSocket.test.ts`「reconnects the relay at once when the network changes during its backoff」。
+同日查到的另两处卡顿在 JS 线程上，不属于恢复动作：每收到一次设备目录都用纯 JS 把全部证书重新验签（换网时约 180 次，
+占满 JS 线程约 8 秒），改为记住验证通过的签名（`relayAuthCrypto.ts`）；传输层轮询每次两两比对全部设备密钥，
+改为按密钥建索引（`portableSocket.ts` 的 `keys`），空闲时放慢轮询（`nativeTransport.ts`）。三处一起后真机换网
+1.5–1.9 秒恢复。
+
 无响应设备的列表、PR 状态和模型目录后台读取应让位给连接层探测。目录失效在暂不可读时
 保留待刷新意图，复用已有调度退避，只检查可读性、不发送请求；取消和销毁仍清除待办。
 前台、重连和单设备恢复通过同一入口唤醒尚未完成的目录读取，不等待旧退避到期，
