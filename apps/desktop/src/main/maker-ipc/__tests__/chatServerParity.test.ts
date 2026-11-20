@@ -329,7 +329,10 @@ describe('server group feature parity', () => {
     const base = fixture.handle.getMockImplementation()!;
     fixture.handle.mockImplementation((route, method, data) => {
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: state }] };
-      if (route.endsWith('/control')) { state = 'stopping'; return { body: {} }; }
+      if (method === 'POST' && route === `/conversations/${roomId}/executions/${execution.id}/control?runEpoch=${execution.epoch}` && data.action === 'stop') {
+        state = 'stopping';
+        return { body: {} };
+      }
       if (route.endsWith(`/executions/${execution.id}`)) {
         if (data.action === 'heartbeat' && state === 'stopping') return { status: 409, body: { error: { code: 'STOP_REQUESTED' } } };
         if (data.action === 'cancel') {

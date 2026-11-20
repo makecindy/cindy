@@ -6792,6 +6792,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "このコンピューターの通信量",
+          "range": "集計期間",
+          "last5m": "直近5分",
+          "lastHour": "直近1時間",
+          "lastDay": "直近24時間",
+          "sent": "送信",
+          "received": "受信",
+          "total": "合計",
+          "scope": "直接接続とリレー接続の通信量の概算です。ファイルの直接転送を含みます。デバイス検出用のブロードキャストと、別経路の音声・映像・HTTP 通信は対象外です。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8264,7 +8275,7 @@
         "agentErrand": "タスクを作成し、作業を実行して結果を取得できます",
         "agentErrandDetail": "作成したタスクは Cindy のタスク一覧に表示され、進行状況を確認して会話を続けられます。",
         "agentSchedule": "自動化の新規作成をあなたに依頼できます",
-        "agentScheduleDetail": "できるのは内容が入力済みの新規自動化パネルを開くことだけで、作成するかどうかはあなたがモデルを選んで自分で保存して決めます。作成後は Cindy があなたの設定した時間に実行します。モデル料金が発生する場合があります。",
+        "agentScheduleDetail": "できるのは内容が入力済みの新規自動化パネルを開くことだけで、作成するかどうかはあなたがモデルを選んで自分で保存して決めます。作成後は Cindy があなたの設定した時間に実行します。モデル料金が発生する場合があります。デバイス同期に対応したプラグインでは、自動化を実行するコンピュータも確認できます。",
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
@@ -8576,6 +8587,8 @@
         "browserUse": "このブラウザー拡張機能を使用",
         "browserActivated": "ブラウザー拡張機能を選択しました",
         "browserActivationFailed": "選択できませんでした。プラグインを有効にし、接続の切り替えを確認してください。",
+        "automationHostSelect": "このコンピュータで「{{name}}」の自動タスクを実行しますか？",
+        "automationHostClear": "「{{name}}」の自動タスク用コンピュータの指定を解除しますか？",
         "browserSwitchTitle": "ブラウザー拡張機能の接続を切り替えますか？",
         "browserSwitchMessage": "この接続で「{{name}}」を使用しますか？",
         "browserSwitchDetail": "インスタンス: {{instance}}\n登録名: {{host}}\n現在の登録を置き換え、拡張機能をこのプラグインに接続します。",
@@ -13040,6 +13053,7 @@
           "overloadRetryingNoCount": "モデルサービスが混雑しています。自動で再試行しています…",
           "overloadFailed": "⚠️ モデルサービスが混雑しています。上流に空き容量がありません。ここでこのメッセージを再送して再試行するか、Cindy で別のモデルに切り替えてください。（デスクトップ版で「再試行」を押してもタスクは続行できますが、結果はこのメッセージには戻りません。）"
         },
+        "audioInputUnavailable": "現在のモデル接続では音声を直接読み取れません。先に音声を文字に起こしてから続けるよう Cindy に依頼してください。",
         "toolLoop": {
           "generic": "モデルがツールを繰り返し呼び出した回数が多すぎるため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
           "consecutive": "モデルが同じツールを {{n}} 回繰り返し呼び出したため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
@@ -14078,6 +14092,8 @@
         "fastBadge": "高速"
       },
       "source": {
+        "lastConfirmed": "最終更新：{{time}}",
+        "unconfirmed": "モデル一覧を更新できません",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",
@@ -15005,6 +15021,8 @@
     },
     "runningStatus": {
       "currentRate": "直近の速度",
+      "lastRequestRate": "直近のリクエストの平均",
+      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",

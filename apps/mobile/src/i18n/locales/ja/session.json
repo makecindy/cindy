@@ -305,6 +305,8 @@
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "直近の速度",
+    "lastRequestRate": "直近のリクエストの平均",
+    "recentTokenRate": "直近 {{rate}} tok/s",
     "averageRate": "このターンの平均",
     "rateHistory": "生成速度の推移",
     "outputTotal": "累計出力",

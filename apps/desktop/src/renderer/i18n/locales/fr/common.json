@@ -6902,6 +6902,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Trafic sur cet ordinateur",
+          "range": "Période",
+          "last5m": "5 dernières min",
+          "lastHour": "Dernière heure",
+          "lastDay": "Dernières 24 h",
+          "sent": "Envoyé",
+          "received": "Reçu",
+          "total": "Total",
+          "scope": "Estimation du trafic des connexions directes et relayées, transferts directs de fichiers compris. Les annonces de découverte des appareils, les flux audio et vidéo séparés et les transferts HTTP indépendants sont exclus."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8379,7 +8390,7 @@
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
-        "agentScheduleDetail": "Il peut seulement ouvrir le panneau de nouvelle automatisation avec les champs préremplis ; c'est vous qui décidez de la créer : choisissez un modèle et enregistrez-la vous-même. Une fois créée, Cindy l'exécute selon la planification que vous avez définie. Des frais de modèle peuvent s'appliquer.",
+        "agentScheduleDetail": "Il peut seulement ouvrir le panneau de nouvelle automatisation avec les champs préremplis ; c'est vous qui décidez de la créer : choisissez un modèle et enregistrez-la vous-même. Une fois créée, Cindy l'exécute selon la planification que vous avez définie. Des frais de modèle peuvent s'appliquer. Pour les extensions compatibles avec la synchronisation, vous pouvez aussi confirmer quel ordinateur exécutera l’automatisation.",
         "nodeRuntime": "Peut exécuter un programme Node fourni sur cet ordinateur",
         "nodeMcp": "Peut exécuter un MCP stdio fourni sur cet ordinateur",
         "nodeRuntimeDetail": "Risque élevé : il dispose des mêmes accès locaux que votre compte utilisateur, y compris les fichiers, le réseau et le lancement d'autres programmes. Cindy ne peut pas le confiner dans le bac à sable du navigateur.",
@@ -8691,6 +8702,8 @@
         "browserUse": "Utiliser cette extension de navigateur",
         "browserActivated": "Extension de navigateur sélectionnée",
         "browserActivationFailed": "Impossible de sélectionner l'extension. Vérifiez qu'elle est activée et approuvez le changement de connexion, le cas échéant.",
+        "automationHostSelect": "Utiliser cet ordinateur pour les tâches automatiques de {{name}} ?",
+        "automationHostClear": "Retirer cet ordinateur comme hôte des tâches automatiques de {{name}} ?",
         "browserSwitchTitle": "Changer la connexion de l’extension ?",
         "browserSwitchMessage": "Utiliser « {{name}} » pour cette connexion ?",
         "browserSwitchDetail": "Instance : {{instance}}\nEnregistrement : {{host}}\nRemplace l’enregistrement actuel. L’extension se connectera à ce plugin.",
@@ -13200,6 +13213,7 @@
           "overloadRetryingNoCount": "Le service du modèle est occupé. Nouvelle tentative automatique en cours…",
           "overloadFailed": "⚠️ Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Renvoyez ce message ici pour réessayer, ou passez à un autre modèle dans Cindy. (Cliquer sur « Réessayer » dans l'application de bureau poursuit aussi la tâche, mais le résultat ne reviendra pas dans ce message.)"
         },
+        "audioInputUnavailable": "Cette connexion au modèle ne permet pas de traiter directement l’audio. Demandez à Cindy de le transcrire avant de poursuivre.",
         "toolLoop": {
           "generic": "Le modèle a appelé des outils de façon répétée trop de fois : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
           "consecutive": "Le modèle a appelé le même outil {{n}} fois d'affilée : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -14247,6 +14261,8 @@
         "fastBadge": "Rapide"
       },
       "source": {
+        "lastConfirmed": "Dernière actualisation : {{time}}",
+        "unconfirmed": "Liste des modèles non actualisée",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -15164,6 +15180,8 @@
     },
     "runningStatus": {
       "currentRate": "Vitesse récente",
+      "lastRequestRate": "Moyenne de la dernière requête",
+      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",

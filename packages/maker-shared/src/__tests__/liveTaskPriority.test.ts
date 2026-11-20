@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection } from '../liveTaskPriority';
+import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection, teammateInboxSection } from '../liveTaskPriority';
 
 describe('liveTaskPriorityRank', () => {
   it('puts waiting (including error) ahead of unread, then running, then rest', () => {
@@ -73,4 +73,21 @@ it('lists a teammate task only while it needs the user or runs', () => {
   expect(taskInboxSection({}, { ...teammate, waiting: true }, now)).toBe('inbox');
   expect(taskInboxSection({ snoozedUntil: new Date(now + 1000).toISOString() }, teammate, now)).toBe('snoozed');
   expect(taskInboxSection({ status: 'archived' }, teammate, now)).toBe('archived');
+});
+
+// 2026-11-20 user decision: a teammate's main conversation is one inbox row. Idle and read it is
+// left out (the teammate section still lists it); a snooze must not swallow a later request.
+it('lists a teammate conversation by whose turn it is and wakes its snooze on new input', () => {
+  const now = Date.parse('2026-11-20T08:00:00Z');
+  expect(teammateInboxSection('awaiting', null, now)).toBe('inbox');
+  expect(teammateInboxSection('error', null, now)).toBe('inbox');
+  expect(teammateInboxSection('done', null, now)).toBe('inbox');
+  expect(teammateInboxSection('unread', null, now)).toBe('inbox');
+  expect(teammateInboxSection('running', null, now)).toBe('working');
+  expect(teammateInboxSection('idle', null, now)).toBeNull();
+  const snooze = { snoozedAt: new Date(now).toISOString(), snoozedUntil: INDEFINITE_SNOOZE_UNTIL };
+  expect(teammateInboxSection('awaiting', snooze, now + 1)).toBe('snoozed');
+  expect(teammateInboxSection('idle', snooze, now + 1)).toBe('snoozed');
+  expect(teammateInboxSection('awaiting', { ...snooze, userSendAt: new Date(now + 1).toISOString() }, now + 2)).toBe('inbox');
+  expect(teammateInboxSection('idle', { ...snooze, snoozedUntil: new Date(now + 1000).toISOString() }, now + 1000)).toBeNull();
 });

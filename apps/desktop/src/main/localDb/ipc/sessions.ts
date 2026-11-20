@@ -487,6 +487,13 @@ export function setSessionStatusPatchedListener(next: ((sessionId: string) => vo
   sessionStatusPatchedListener = next;
 }
 
+let sessionSnoozePatchedListener: ((sessionId: string) => void) | null = null;
+
+/** Inbox observer: snooze edits and durable turn endings change the teammate's snooze projection. */
+export function setSessionSnoozePatchedListener(next: ((sessionId: string) => void) | null): void {
+  sessionSnoozePatchedListener = next;
+}
+
 export function broadcastSessionPatched(
   sessionId: string,
   patch: Record<string, unknown>,
@@ -531,6 +538,13 @@ export function broadcastSessionPatched(
   if (patch.status !== undefined && !isProvisionalSession(sessionId)) {
     try {
       sessionStatusPatchedListener?.(sessionId);
+    } catch {
+      // Teammate roster refresh never blocks the task patch itself.
+    }
+  }
+  if (('snoozedUntil' in patch || 'lastTurnEndedAt' in patch) && !isProvisionalSession(sessionId)) {
+    try {
+      sessionSnoozePatchedListener?.(sessionId);
     } catch {
       // Teammate roster refresh never blocks the task patch itself.
     }

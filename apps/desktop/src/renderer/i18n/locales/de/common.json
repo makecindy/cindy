@@ -6835,6 +6835,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Datenverkehr dieses Computers",
+          "range": "Zeitraum",
+          "last5m": "Letzte 5 Min.",
+          "lastHour": "Letzte Stunde",
+          "lastDay": "Letzte 24 Std.",
+          "sent": "Gesendet",
+          "received": "Empfangen",
+          "total": "Gesamt",
+          "scope": "Geschätzter Datenverkehr über Direkt- und Relay-Verbindungen einschließlich direkter Dateiübertragungen. Ausgenommen sind Broadcasts zur Geräteerkennung sowie separate Audio-, Video- und HTTP-Übertragungen."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8052,7 +8063,7 @@
             "manifestTitle": "Manifest-Format",
             "manifestBody": "name ist die eindeutige Kennung des Marktplatzes (nach dem Hinzufügen verwaltest du ihn unter diesem Namen). Jeder source-Eintrag im plugins-Array verweist als relativer Pfad auf ein Plugin-Verzeichnis innerhalb des Repositorys. Die Objektform {\"source\": \"local\", \"path\": \"…\"} wird ebenfalls unterstützt.",
             "sourceTitle": "Quellformate",
-            "sourceBody": "Zulässige Quellen: GitHub-Kurzform owner/repo, vollständige Git-URLs (https / ssh / git@) und lokale Ordnerpfade (~ wird unterstützt). Als Git-Referenz ist ein Branch, Tag oder Commit möglich. Lass das Feld für den Standardbranch leer. Sparse-Pfade (einer pro Zeile) checken nur die aufgeführten Unterverzeichnisse aus – hilfreich bei großen Repositorys.",
+            "sourceBody": "Zulässige Quellen: GitHub-Kurzform owner/repo, vollständige Git-URLs (https / ssh / git@) und lokale Verzeichnispfade (~ wird unterstützt). Als Git-Referenz ist ein Branch, Tag oder Commit möglich. Lass das Feld für den Standardbranch leer. Sparse-Pfade (einer pro Zeile) checken nur die aufgeführten Unterverzeichnisse aus – hilfreich bei großen Repositorys.",
             "authTitle": "Private Repositorys",
             "authBody": "Die Authentifizierung erfolgt vollständig über deine Git-Systemkonfiguration — Cindy speichert niemals Git-Zugangsdaten. SSH: Auf diesem Computer muss ein funktionierender Schlüssel eingerichtet sein. Falls die Organisation SAML SSO erzwingt, autorisiere den Schlüssel für diese Organisation über Configure SSO in deinen GitHub-SSH-Schlüsseleinstellungen. HTTPS: Verwende ein Personal Access Token, das vom Anmeldeinformationsmanager des Systems gespeichert wird.",
             "rulesTitle": "Installationsregeln",
@@ -8307,7 +8318,7 @@
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
         "agentErrandDetail": "Erstellte Aufgaben erscheinen in der Aufgabenliste von Cindy. Dort kannst du den Fortschritt ansehen und das Gespräch fortsetzen.",
         "agentSchedule": "Kann dich bitten, eine Automatisierung zu erstellen",
-        "agentScheduleDetail": "Es kann nur das Fenster für eine neue Automatisierung mit vorausgefüllten Feldern öffnen; ob sie erstellt wird, entscheidest du – wähle selbst ein Modell und speichere sie. Nach der Erstellung führt Cindy sie nach deinem festgelegten Zeitplan aus. Es können Modellkosten anfallen.",
+        "agentScheduleDetail": "Es kann nur das Fenster für eine neue Automatisierung mit vorausgefüllten Feldern öffnen; ob sie erstellt wird, entscheidest du – wähle selbst ein Modell und speichere sie. Nach der Erstellung führt Cindy sie nach deinem festgelegten Zeitplan aus. Es können Modellkosten anfallen. Bei Plugins mit Gerätesynchronisierung kannst du auch bestätigen, auf welchem Computer die Automatisierung läuft.",
         "nodeRuntime": "Kann ein mitgeliefertes Node-Programm auf diesem Computer ausführen",
         "nodeMcp": "Kann einen mitgelieferten stdio MCP auf diesem Computer ausführen",
         "nodeRuntimeDetail": "Hohes Risiko: Es hat dieselben lokalen Zugriffsrechte wie dein Benutzerkonto, einschließlich Dateien, Netzwerk und dem Starten anderer Programme. Cindy kann es nicht in der Browser-Sandbox einschränken.",
@@ -8619,6 +8630,8 @@
         "browserUse": "Diese Browsererweiterung verwenden",
         "browserActivated": "Browsererweiterung ausgewählt",
         "browserActivationFailed": "Die Erweiterung konnte nicht ausgewählt werden. Prüfe, ob sie aktiviert ist, und bestätige gegebenenfalls den Verbindungswechsel.",
+        "automationHostSelect": "Diesen Computer für die automatischen Aufgaben von {{name}} verwenden?",
+        "automationHostClear": "Die Zuordnung dieses Computers für die automatischen Aufgaben von {{name}} aufheben?",
         "browserSwitchTitle": "Verbindung der Browsererweiterung wechseln?",
         "browserSwitchMessage": "„{{name}}“ für diese Verbindung verwenden?",
         "browserSwitchDetail": "Instanz: {{instance}}\nRegistrierung: {{host}}\nDies ersetzt die aktuelle Registrierung. Die Erweiterung verbindet sich mit diesem Plugin.",
@@ -13093,6 +13106,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
           "consecutive": "Das Modell hat dasselbe Tool {{n}}-mal hintereinander aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
@@ -14132,6 +14146,8 @@
         "fastBadge": "Schnell"
       },
       "source": {
+        "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
+        "unconfirmed": "Modellliste nicht aktuell",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",
@@ -15032,6 +15048,8 @@
     },
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
+      "lastRequestRate": "Durchschnitt der letzten Anfrage",
+      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
@@ -15348,7 +15366,7 @@
       "folderPacking": "Wird gepackt… {{size}}",
       "folderFailed": "Ordnervorbereitung fehlgeschlagen. Prüfe die Verbindung und den Speicherplatz und ziehe den Ordner dann erneut hinein",
       "folderUnsupported": "Diese Verbindung kann noch keine Ordner übertragen. Aktualisiere Cindy auf dem Remote-Computer und versuch es erneut",
-      "folderConnectionUnsupported": "Diese Verbindung kann noch keine Ordner übertragen. Kopiere den Ordner zuerst auf den Zielcomputer und verweise dann auf sein Verzeichnis",
+      "folderConnectionUnsupported": "Diese Verbindung kann noch keine Ordner übertragen. Kopiere den Ordner zuerst auf den Zielcomputer und verweise dann auf diesen Ordner",
       "downloadProgress": "Wird heruntergeladen… {{percent}}% · {{speed}}",
       "downloadProgressUnknown": "Wird heruntergeladen… {{received}} · {{speed}}",
       "uploadProgress": "Remote-Computer lädt hoch… {{percent}}% · {{speed}}",
@@ -15882,7 +15900,7 @@
       "REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE": "Eine Remote-Pi-Aufgabe kann dieses Kontextprofil nicht nutzen. Wechsle zu Cindy AI oder wähle ein Modell, das der Remote-Computer erreichen kann.",
       "REMOTE_PROVIDER_UNSUPPORTED": "Remote-Aufgaben können diesen Modellanbieter noch nicht nutzen. Wähle einen anderen Anbieter oder nutze ihn in einer lokalen Aufgabe.",
       "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
-      "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
+      "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob das Verzeichnis auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
       "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
       "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
@@ -19597,7 +19615,7 @@
     "searchRecent": "Verzeichnisse suchen",
     "noRecent": "Noch keine zuletzt verwendeten Verzeichnisse",
     "noMatchingRecent": "Keine passenden Verzeichnisse",
-    "addFailed": "Dieses Verzeichnis konnte nicht hinzugefügt werden. Versuche es erneut oder wähle einen anderen Ordner.",
+    "addFailed": "Dieser Ordner konnte nicht hinzugefügt werden. Versuche es erneut oder wähle einen anderen Ordner.",
     "atLimit": "Limit erreicht ({{max}})",
     "remove": "{{name}} entfernen",
     "writableParentConfirmTitle": "Lese- und Schreibzugriff auf ein übergeordnetes Verzeichnis erlauben?",

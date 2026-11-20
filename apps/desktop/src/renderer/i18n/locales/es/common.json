@@ -6902,6 +6902,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Tráfico de este equipo",
+          "range": "Intervalo de tiempo",
+          "last5m": "Últimos 5 min",
+          "lastHour": "Última hora",
+          "lastDay": "Últimas 24 h",
+          "sent": "Enviado",
+          "received": "Recibido",
+          "total": "Total",
+          "scope": "Tráfico estimado de las conexiones directas y por relé, incluida la transferencia directa de archivos. Se excluyen los anuncios de detección de dispositivos y las transmisiones independientes de audio, vídeo y HTTP."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8379,7 +8390,7 @@
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
-        "agentScheduleDetail": "Solo puede abrir el panel de nueva automatización con los campos completados; tú decides si se crea: elige un modelo y guárdala tú mismo. Una vez creada, Cindy la ejecuta según la programación que establezcas. Pueden aplicarse cargos por uso del modelo.",
+        "agentScheduleDetail": "Solo puede abrir el panel de nueva automatización con los campos completados; tú decides si se crea: elige un modelo y guárdala tú mismo. Una vez creada, Cindy la ejecuta según la programación que establezcas. Pueden aplicarse cargos por uso del modelo. En los complementos con sincronización también puedes confirmar qué ordenador ejecuta la automatización.",
         "nodeRuntime": "Puede ejecutar un programa Node incluido en esta computadora",
         "nodeMcp": "Puede ejecutar un stdio MCP incluido en esta computadora",
         "nodeRuntimeDetail": "Alto riesgo: tiene el mismo acceso local que tu cuenta de usuario, incluidos archivos, red e inicio de otros programas. Cindy no puede contenerlo en el entorno aislado del navegador.",
@@ -8691,6 +8702,8 @@
         "browserUse": "Usar esta extensión del navegador",
         "browserActivated": "Extensión del navegador seleccionada",
         "browserActivationFailed": "No se pudo seleccionar la extensión. Comprueba que esté activada y confirma cualquier cambio de conexión.",
+        "automationHostSelect": "¿Usar este equipo para las tareas automáticas de {{name}}?",
+        "automationHostClear": "¿Quitar este equipo como principal para las tareas automáticas de {{name}}?",
         "browserSwitchTitle": "¿Cambiar la conexión de la extensión?",
         "browserSwitchMessage": "¿Usar «{{name}}» para esta conexión?",
         "browserSwitchDetail": "Instancia: {{instance}}\nRegistro: {{host}}\nEsto sustituye el registro actual. La extensión se conectará a este complemento.",
@@ -13200,6 +13213,7 @@
           "overloadRetryingNoCount": "El servicio del modelo está ocupado. Reintentando automáticamente…",
           "overloadFailed": "⚠️ El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Vuelve a enviar este mensaje aquí para reintentarlo o cambia a otro modelo en Cindy. (Pulsar «Reintentar» en la app de escritorio también continúa la tarea, pero el resultado no volverá a este mensaje)."
         },
+        "audioInputUnavailable": "Esta conexión al modelo no admite audio directamente. Pide a Cindy que transcriba el audio antes de continuar.",
         "toolLoop": {
           "generic": "El modelo llamó a herramientas repetidamente demasiadas veces, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
           "consecutive": "El modelo llamó a la misma herramienta {{n}} veces seguidas, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
@@ -14247,6 +14261,8 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última actualización: {{time}}",
+        "unconfirmed": "Lista de modelos sin actualizar",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -15164,6 +15180,8 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidad",
+      "lastRequestRate": "Media de la última solicitud",
+      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",

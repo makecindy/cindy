@@ -24,6 +24,7 @@ export type CompanionRowTrailing = { kind: 'time'; text: string } | { kind: 'wor
 export function CompanionListRow({
   avatar, title, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
   unread = false, unreadCount, mentioned = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
+  accessibilityActions, onAccessibilityAction,
 }: {
   /** Content of the 44pt avatar box (the caller draws the shared status dot). */
   avatar: ReactNode;
@@ -46,9 +47,14 @@ export function CompanionListRow({
   accessibilityLabel: string;
   onPress(): void;
   testID?: string;
+  /** Actions a swipe offers on this row, for VoiceOver / TalkBack users who cannot swipe it. */
+  accessibilityActions?: readonly { name: string; label: string }[];
+  onAccessibilityAction?(name: string): void;
 }) {
   const styles = useThemedStyles(makeStyles);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }}
+    accessibilityActions={accessibilityActions}
+    onAccessibilityAction={onAccessibilityAction ? event => onAccessibilityAction(event.nativeEvent.actionName) : undefined}
     disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && !disabled && styles.pressed]} testID={testID}>
     <View style={styles.avatar}>{avatar}</View>
     <View style={[styles.body, !last && styles.divider]}>

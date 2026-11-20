@@ -16,6 +16,9 @@ vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }
   entries: { session: Session }[]; onAction: (id: string, action: 'complete') => unknown;
 }) => <div data-testid="row" data-device={entries[0].session.deviceLinkDeviceId}>{entries[0].session.id}<button data-inbox-complete aria-label={`complete:${entries[0].session.id}`}
   onClick={() => { void onAction(entries[0].session.id, 'complete'); }} /></div> }));
+vi.mock('@/features/bots/TeammateInboxRow', () => ({ TeammateInboxRow: ({ entry }: { entry: { key: string } }) =>
+  <div data-testid="row">{entry.key}<button data-inbox-complete aria-label={`complete:${entry.key}`} /></div> }));
+import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 beforeEach(() => following.clear());
@@ -201,3 +204,34 @@ it('keeps the new viewed task settled when an older completion returns late', as
   await act(async () => { finishA('marked-read'); await aResult; });
   expect(pendingRows()).toHaveLength(0);
 });
+
+// 2026-11-20 user decision (task-inbox.md「伙伴主对话」): a teammate's main conversation is one
+// row placed by whose turn it is. No earlier test rendered a teammate in the inbox. Unit: real
+// placement, counts and Done-hover freeze with a stub row; minimal input is one teammate per state.
+it('places teammate conversations with the tasks and removes a read one even while Done is hovered', () => {
+  const teammate = (key: string, status: TeammateInboxEntry['status'], snoozedUntil: string | null = null) => ({
+    key, status, snooze: { snoozedUntil, snoozedAt: snoozedUntil && new Date().toISOString(), userSendAt: null },
+  }) as TeammateInboxEntry;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [{ id: 'task', title: 'Task', status: 'active' } as Session],
+    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const later = new Date(Date.now() + 3_600_000).toISOString();
+  const view = render(<TaskInbox {...props} teammates={[
+    teammate('unread', 'unread'), teammate('running', 'running'), teammate('idle', 'idle'), teammate('later', 'awaiting', later),
+  ]} />);
+  const rows = () => Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent));
+  expect(rows()).toEqual([['unread', 'task'], ['running'], ['later'], []]);
+  expect(Array.from(view.container.querySelectorAll('section > button'), button => button.lastElementChild?.textContent))
+    .toEqual(['2', '1', '1', '0']);
+  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:task' }));
+  view.rerender(<TaskInbox {...props} teammates={[teammate('unread', 'idle'), teammate('running', 'unread')]} />);
+  // Read leaves at once; a reply that arrived meanwhile waits for the pointer like any other move.
+  expect(rows()).toEqual([['task'], ['running'], [], []]);
+  fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:task' }));
+  expect(rows()).toEqual([['running', 'task'], [], [], []]);
+});
+

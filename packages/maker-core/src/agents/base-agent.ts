@@ -2669,7 +2669,10 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * Native continuation count: wake claims and bounded completion-to-start
+   * retention for provider-triggered background Bash follow-up. This probe
+   * does not itself claim a product turn or change send/Stop semantics.
+   * 「任务已终态、wake turn 尚未启动或仍在跑」
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
    * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
    * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层

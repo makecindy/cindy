@@ -172,7 +172,9 @@ it('reopens the selected HTML after its renderer is terminated', async () => {
   Object.assign(guest, { loadURL });
   await waitFor(() => expect(guest.getAttribute('src')).toContain('index.html'));
   fireEvent(guest, Object.assign(new Event('render-process-gone'), { details: { reason: 'killed' } }));
-  const retry = await view.findByRole('button', { name: 'rightSidebar.browser.crash.reload' });
+  // The recovery controls load on demand after the first crash.
+  await act(() => vi.dynamicImportSettled());
+  const retry = view.getByRole('button', { name: 'rightSidebar.browser.crash.reload' });
   fireEvent.click(retry);
   expect(loadURL).toHaveBeenCalledExactlyOnceWith(guest.getAttribute('src'));
 });

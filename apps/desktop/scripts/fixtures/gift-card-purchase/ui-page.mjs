@@ -15,6 +15,7 @@ export default {
     pay: { about: 'Existing checkout dialog with the gift card subtitle while waiting for Stripe' },
     done: { about: 'Cards-ready dialog after payment, per-card copy link and more menu' },
     redeem: { about: 'Redeeming a bought card for yourself: top-up balance, never expires' },
+    'server-face': { about: 'A card face the server added after this build: offered first in the purchase dialog and drawn in My Gift Cards from the server image' },
   },
   async check(page, ui) {
     const buy = page.getByRole('button', { name: await ui.t('billing.giftCardPurchase.action'), exact: true });
@@ -47,9 +48,22 @@ export default {
       await ui.capture('redeem-confirm');
       return;
     }
+    if (ui.case === 'server-face') {
+      // 「我买的礼品卡」第一行是服务端新卡面；底图到了才截图。
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-gift-card-face="snow"]')].length > 0);
+      await ui.capture('server-face-list');
+    }
     await buy.click();
     const dialog = page.getByRole('dialog');
     await dialog.getByText(await ui.t('billing.giftCardPurchase.previewLabel'), { exact: true }).waitFor();
+    if (ui.case === 'server-face') {
+      const choices = dialog.getByRole('group', { name: await ui.t('billing.giftCardPurchase.fields.face'), exact: true });
+      assert.equal(await choices.getByRole('button').count(), 5);
+      assert.equal(await choices.getByRole('button').first().getAttribute('aria-pressed'), 'true');
+      await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] [data-gift-card-face="snow"]').length >= 2);
+      await ui.capture('server-face');
+      return;
+    }
     if (ui.case === 'limit') {
       assert.equal(await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.pay'), exact: true }).isDisabled(), true);
       await ui.capture('limit');

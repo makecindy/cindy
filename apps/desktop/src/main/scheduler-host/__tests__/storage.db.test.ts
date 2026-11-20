@@ -162,6 +162,7 @@ const SCHEDULER_DDL = [
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
       pre_run_plugin_id TEXT,
+      primary_host_key TEXT,
       pre_run_plugin_on_failure TEXT,
       skip_log_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       notify_desktop INTEGER NOT NULL DEFAULT 1,
@@ -413,6 +414,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      primaryHostKey: 'public/cindy-contacts',
       // DB tier: a PR checkout retains the creator project across insert/get/update.
       inheritedProjectDir: '/projects/app',
       workingDir: '/checkouts/pr',
@@ -441,6 +443,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       expect(updated?.inheritedProjectDir).toBe('/projects/app');
       expect(updated?.workingDir).toBe('/checkouts/pr');
+      expect(updated?.primaryHostKey).toBe(schedule.primaryHostKey);
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);

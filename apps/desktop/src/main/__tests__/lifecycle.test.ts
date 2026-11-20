@@ -777,6 +777,72 @@ describe('installQuitHandler', () => {
     }
   });
 
+  // #11354: ws reports a timed-out HTTP upgrade as a plain Error without a `code`.
+  // A flaky proxy drops the Discord gateway handshake while that channel already owns
+  // its retry loop, so this error must not take the whole app down with it.
+  it('keeps running when a channel reports a ws handshake timeout without an error code', async () => {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT',
+      'SIGTERM',
+      'exit',
+      'uncaughtException',
+      'unhandledRejection',
+    ]);
+    try {
+      const { installQuitHandler } = await freshLifecycle();
+      installQuitHandler();
+      const [handleUncaughtException] = snapshot.added('uncaughtException');
+      expect(handleUncaughtException).toBeTypeOf('function');
+
+      const err = new Error('Opening handshake has timed out');
+      expect((err as NodeJS.ErrnoException).code).toBeUndefined();
+      handleUncaughtException(err, 'uncaughtException');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(mocks.logger.error).toHaveBeenCalledWith(
+        'ignored transient network error (no shutdown)',
+        err,
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalledWith(
+        'uncaughtException — shutting down',
+        err,
+      );
+      const { app } = await import('electron');
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      snapshot.restore();
+    }
+  });
+
+  // Guard the match above: any other uncoded Error still shuts down, so a typo or a
+  // different ws failure cannot silently turn a real crash into a background log line.
+  it('still shuts down for an uncoded WebSocket error that is not a handshake timeout', async () => {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT',
+      'SIGTERM',
+      'exit',
+      'uncaughtException',
+      'unhandledRejection',
+    ]);
+    try {
+      const { installQuitHandler } = await freshLifecycle();
+      installQuitHandler(50);
+      const [handleUncaughtException] = snapshot.added('uncaughtException');
+      const err = new Error('Opening handshake failed: Invalid Sec-WebSocket-Accept header');
+      handleUncaughtException(err, 'uncaughtException');
+      const { app } = await import('electron');
+      await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(1));
+      expect(mocks.logger.error).toHaveBeenCalledWith(
+        'uncaughtException — shutting down',
+        err,
+      );
+    } finally {
+      snapshot.restore();
+    }
+  });
+
   // Issue #9600: Electron terminates the process right after 'session-end' returns, so the
   // handler's own marker write is the only exit record the next start will see.
   it('win32 session-end records the exit reason so the next start does not see a crash', async () => {

@@ -516,3 +516,18 @@ it('says what is at the picked moment, and mentions reasoning only where there w
   } finally { rect.mockRestore(); }
 });
 
+
+// Unit regression: a summary-only request leaves exactly one settled point.
+// The live chart then has a zero-width time range; its only point still has a rate and a time.
+it('reads the single settled point in a running speed popover', () => {
+  const { container } = render(<RunningTokenRatePopover elapsedText="42s" rate="41.4"
+    rateText="41.4 tok/s" averageRate="41.4" outputTokens={1740}
+    history={{ ...emptyRateHistory(1), samples: [{ durationMs: 42_000, rate: 41.4, kind: 'request' }] }} />);
+  fireEvent.click(container.querySelector('button')!);
+  const chart = screen.getByRole('img').parentElement!;
+  const rect = vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 120, 48));
+  try {
+    fireEvent.pointerDown(chart, { clientX: 110, clientY: 12 });
+    expect(screen.getByTestId('trace-readout').textContent).toContain('41.4 tok/s0:42');
+  } finally { rect.mockRestore(); }
+});

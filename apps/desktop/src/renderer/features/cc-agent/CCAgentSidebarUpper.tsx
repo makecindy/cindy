@@ -1644,7 +1644,8 @@ function ExpandedView({
     (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
     [taskCreatorIndex],
   );
-  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, false,
+  // Pins are shortcuts. Classify the task through its own project or dialogue in the inbox.
+  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
 
   const activityFilteredPersistentLocalProjects = useMemo(
@@ -2017,6 +2018,7 @@ function ExpandedView({
   // Group actions include pinned and content-filtered members;
   // allProjectGroups still respects device scope and task status.
   const dialogueActionSessions = allProjectGroups.dialogues;
+  const dialogueFilterCount = taskListMode === 'inbox' ? dialogueActionSessions.length : allGroups.dialogues.length;
 
   // 对话段排序状态提升到此处:DialogueSection(展开态)受控消费,rail 对话
   // 面板按同一排序渲染——否则折叠后面板的前 N 条/折叠溢出与展开态刚排好的
@@ -2161,20 +2163,19 @@ function ExpandedView({
   ]);
 
   const inboxSessions = useMemo(() => {
-    const pinnedRowIds = new Set(visiblePinnedProjects.flatMap(({ displaySessions }) =>
-      displaySessions.map(session => session.id)));
     const projects = visibleSidebarProjects(
       withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
       hiddenProjectKeys, localPlatform,
     ).filter(project =>
       (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
         || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
-    return [
+    const scoped = [
       ...projects.flatMap(project => project.sessions),
       ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
       ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
-    ].filter(session => !pinnedRowIds.has(session.id) && (!vendorPredicate || vendorPredicate(session)));
-  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, visiblePinnedProjects,
+    ];
+    return vendorPredicate ? scoped.filter(vendorPredicate) : scoped;
+  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
     filter.projectsAsSet, filter.projects, vendorPredicate]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -3725,7 +3726,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -3740,7 +3741,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
@@ -3750,7 +3751,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <RemoteSidebarLoadNotice
@@ -3767,7 +3768,7 @@ function ExpandedView({
                 <MainListScopeHeader
                   filter={filter}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   hasRemoteDevices={deviceGroupingAvailable}
                 />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
@@ -3864,7 +3865,7 @@ function ExpandedView({
                   dialogues={visibleDialogues}
                   dialogueActionSessions={dialogueActionSessions}
                   allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={allGroups.dialogues.length}
+                  dialogueCount={dialogueFilterCount}
                   allProjectKeysForOrder={gcProjectKeys}
                   filter={filter}
                   collapsed={collapse.collapsed}
@@ -3913,7 +3914,7 @@ function ExpandedView({
       <SidebarFilterPopover
         filter={filter}
         allKnownProjects={visibleProjectUniverse}
-        dialogueCount={allGroups.dialogues.length}
+        dialogueCount={dialogueFilterCount}
         // 与段头实例同一门控(详见 ProjectsSection.deviceGroupingAvailable)。
         hasRemoteDevices={deviceGroupingAvailable}
         contextMenuPos={organizeMenuPos}

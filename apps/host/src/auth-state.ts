@@ -1,4 +1,5 @@
 import type { User as AccountUser } from '../../desktop/src/shared/authUser.js';
+import type { HostStartFailureReason } from '../../desktop/src/shared/hostStartFailure.js';
 
 /**
  * The auth state the Host projects to windows and the web client.
@@ -14,6 +15,8 @@ export function projectHostAuthState(input: {
   owner: string | null;
   generation: number;
   deviceId: string | null;
+  /** Why the last start failed or was refused (start-failure.ts); null for an ordinary signed-out start. */
+  unavailable?: HostStartFailureReason | null;
 }) {
   const { account, accountUser, owner } = input;
   const authenticated = Boolean(account.authenticated && accountUser && accountUser.id === owner);
@@ -24,5 +27,7 @@ export function projectHostAuthState(input: {
     ownerGeneration: input.generation, isCanary: false, deviceId: input.deviceId,
     hasAccountDeletionReceipt: false, accountDeletionRestored: false,
     credentialStoreUnavailable: Boolean(account.error),
+    // Only the code (shared/hostStartFailure.ts): the window shows why and does not sign in on its own.
+    ...(!authenticated && input.unavailable ? { hostUnavailable: { reason: input.unavailable } } : {}),
   };
 }

@@ -1597,7 +1597,8 @@ export class Session {
   }
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+   * Pending native follow-ups, including bounded background Bash completion
+   * retention. This read-only probe does not claim or extend a product turn.
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
   countPendingWakeContinuations(): number {

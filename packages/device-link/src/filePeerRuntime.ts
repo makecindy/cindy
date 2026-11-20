@@ -3,6 +3,8 @@
 export type FilePeerCloseReason = "failed" | "closed" | "disconnect-timeout";
 
 export interface FilePeerRuntimeBridge {
+  /** A local observer returns a disposer that takes the final reading and closes the peer connection. */
+  observePeerConnection?(pc: RTCPeerConnection): () => void;
   /** Local lifecycle event, never a wire message. */
   closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
@@ -53,6 +55,7 @@ interface SendProgress {
 }
 interface PeerState {
   pc: RTCPeerConnection;
+  closePeer: () => void;
   dc: RTCDataChannel | null;
   busy: boolean;
   recv?: ReceiveProgress;
@@ -273,15 +276,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     });
   }
   function close(id: string, reason?: FilePeerCloseReason) {
+    const p = peers.get(id);
     const rpc = rpcPeers.get(id);
     rpcPeers.delete(id);
     rpc?.close();
-    const p = peers.get(id);
     peers.delete(id);
     clearTimeout(p?.disconnectTimer);
     p?.dc?.close();
-    p?.pc.close();
     if (p) {
+      p.pc.ondatachannel = null;
+      p.closePeer();
       if (reason) bridge.closed?.(id, reason);
       else bridge.closed?.(id);
     }
@@ -289,7 +293,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
     const pc = new RTCPeerConnection({ iceServers: servers });
-    const p: PeerState = { pc, dc: null, busy: false };
+    const p: PeerState = { pc, dc: null, busy: false, closePeer: bridge.observePeerConnection?.(pc) ?? (() => pc.close()) };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
       if (peers.get(id) !== p) return;

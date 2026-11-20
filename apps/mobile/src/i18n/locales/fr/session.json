@@ -305,6 +305,8 @@
     "tokenCountFull": "{{tokens}} jetons",
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "Vitesse récente",
+    "lastRequestRate": "Moyenne de la dernière requête",
+    "recentTokenRate": "Dernière mesure {{rate}} tok/s",
     "averageRate": "Moyenne du tour",
     "rateHistory": "Historique de la vitesse de génération",
     "outputTotal": "Sortie",

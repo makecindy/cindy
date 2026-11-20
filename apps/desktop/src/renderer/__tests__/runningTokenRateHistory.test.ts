@@ -7,7 +7,7 @@ import {
   recordTokenSpeed,
   saveCachedRateHistory,
 } from '@/features/cc-agent/lib/runningTokenRateHistory';
-import { binThinkingMarks, formatThinkingShare, readTokenSpeedSnapshot, thinkingStrokeLength, traceHasChart } from '@cindy/maker-shared/usage-format';
+import { binThinkingMarks, formatThinkingShare, readTokenSpeedSnapshot, receiveTokenSpeedSnapshot, thinkingStrokeLength, traceHasChart } from '@cindy/maker-shared/usage-format';
 
 const input = { startedAt: 1, outputTokens: 0, generationDurationMs: 0, generationReliable: true };
 const begin = () => recordRunningTokenRate(emptyRateHistory(null), input);
@@ -556,4 +556,34 @@ it('restores missed requests and the whole-turn reasoning share from a host trac
   const repeated = recordTokenSpeed(restored, { startedAt: 1, speed });
   expect(repeated.marks).toEqual(restored.marks);
   expect(readTokenSpeedSnapshot(speed)?.trace).toEqual(trace);
+});
+
+// Unit: a late or reconnecting viewer receives only a paused wire snapshot.
+// Its chart and original expiry must match a viewer that saw the request finish.
+it('restores measured rates from a paused host without renewing their freshness', () => {
+  const speed = readTokenSpeedSnapshot({
+    rate: 9, average: 9, tokens: 500, elapsedMs: 10_000, streaming: false,
+    measurement: { latest: { kind: 'request', rate: 42, atMs: 9_000, measuredAt: 12_000 }, average: 40 },
+    trace: { durationMs: 9_000, requests: 1, speed: [[4_000, 38], [9_000, 42]],
+      requestRateTimes: [9_000], marks: [[9_000, 80, 1]], reportedOutputTokens: 500 },
+  })!;
+  const opened = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed, now: 55_000 });
+  expect(opened).toMatchObject({ latestRate: 42, latestSampleAt: 12_000, peak: 42, samples: [
+    { rate: 38, kind: 'stream' }, { rate: 42, kind: 'request' },
+  ] });
+  const repeated = recordTokenSpeed(opened, { startedAt: 1, speed, now: 78_000 });
+  expect(repeated.latestSampleAt).toBe(opened.latestSampleAt);
+  expect(repeated.samples).toEqual(opened.samples);
+  const summary = { ...speed, streaming: true, measurement: { latest: null, average: null } };
+  expect(recordTokenSpeed(repeated, { startedAt: 2, speed: summary }).latestRate).toBeNull();
+});
+
+// Unit: converting age at receipt covers skew, delayed rendering, and duplicate host frames.
+it.each([1_000, 3_000_000])('preserves expiry across local rendering and replay with host timestamp %i', (measuredAt) => {
+  const raw = { rate: 42, average: 40, tokens: 500, elapsedMs: 10_000, streaming: false,
+    measurement: { latest: { kind: 'request', rate: 42, atMs: 9_000, measuredAt }, average: 40, sampleAgeMs: 20_000 } };
+  const received = receiveTokenSpeedSnapshot(raw, undefined, 100_000)!;
+  const duplicate = receiveTokenSpeedSnapshot(raw, received, 200_000)!;
+  const opened = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: duplicate, now: 210_000 });
+  expect(opened.latestSampleAt).toBe(80_000);
 });

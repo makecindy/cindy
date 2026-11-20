@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8a5f4997-0912-4646-a6ae-a31dc3a2e585",
+  "id": "d917d993-dd4d-4547-84ba-a4636a221f7d",
   "prevId": "ab9fabbf-f67a-45ae-827f-ce3325d7a349",
   "tables": {
     "account_usage_snapshots": {
@@ -4635,51 +4635,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "project_task_companions": {
-      "name": "project_task_companions",
-      "columns": {
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "bot_id": {
-          "name": "bot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "project_task_companions_session_id_sessions_id_fk": {
-          "name": "project_task_companions_session_id_sessions_id_fk",
-          "tableFrom": "project_task_companions",
-          "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "recent_workdirs": {
       "name": "recent_workdirs",
       "columns": {
@@ -5376,6 +5331,13 @@
         },
         "pre_run_plugin_id": {
           "name": "pre_run_plugin_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "primary_host_key": {
+          "name": "primary_host_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

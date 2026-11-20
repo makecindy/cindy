@@ -1032,6 +1032,7 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 export function ModelEffortChip({
   onSelect,
   onFollowSession,
+  hostOnly,
   agentKind,
   agentDeviceId,
   modelValue,
@@ -1049,6 +1050,7 @@ export function ModelEffortChip({
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
+  hostOnly?: boolean;
   agentKind: AgentKind;
   agentDeviceId?: string;
   modelValue: string;
@@ -1214,6 +1216,7 @@ export function ModelEffortChip({
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
         <ModelRouteSelectorContent
+          hostOnly={hostOnly}
           agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
           unifiedAgents={pickerAgents}

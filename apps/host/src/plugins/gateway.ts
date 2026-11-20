@@ -114,9 +114,10 @@ export function createHostPluginGateway(options: GatewayOptions) {
     },
   };
   registry.setPluginPageToolRunner(async (grant, args, signal) => {
-    const assertCurrent = async () => {
-      signal.throwIfAborted(); runtime.assertCurrent(); await grant.assertCurrent();
-      runtime.assertCurrent(); signal.throwIfAborted();
+    const assertCurrent = async (interrupted = false) => {
+      const checkHost = interrupted ? runtime.assertCurrent : runtime.assertPluginAvailable;
+      signal.throwIfAborted(); checkHost(); await grant.assertCurrent();
+      checkHost(); signal.throwIfAborted();
     };
     await assertCurrent();
     const session = grant.sessionId === null ? undefined : await options.restoreSession(grant.sessionId, assertCurrent);
@@ -125,7 +126,7 @@ export function createHostPluginGateway(options: GatewayOptions) {
     const deps = gateway.getCindyGhostsMcpDeps(session ? { sessionId: session.id, sessionInstanceId: session.instanceId,
       agentKind: session.agentKind, workingDir: session.workDir } : undefined, hostDeps, grant);
     const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
-    await assertCurrent();
+    await assertCurrent(!result.ok && result.errorCode === 'PLUGIN_DELIVERY_UNKNOWN');
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
   });
@@ -137,7 +138,11 @@ export function createHostPluginGateway(options: GatewayOptions) {
     isEnabled: runtime.current,
     toClaudeSdkConfig: context => {
       runtime.assertCurrent();
-      return { type: 'sdk', name: 'cindy', instance: createCindyGhostsMcpServer(gateway.getCindyGhostsMcpDeps(context, hostDeps)) };
+      const deps = gateway.getCindyGhostsMcpDeps(context, hostDeps);
+      return { type: 'sdk', name: 'cindy', instance: createCindyGhostsMcpServer({
+        ...deps,
+        callGhostTool: async input => runtime.pluginPauseFailure() ?? deps.callGhostTool(input),
+      }) };
     },
   };
   return {
