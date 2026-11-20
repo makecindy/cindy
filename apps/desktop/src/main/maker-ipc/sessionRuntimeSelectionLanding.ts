@@ -18,6 +18,7 @@ import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readProvidersForSessionModelRecovery } from '../maker-host/provider-service.js';
 import { getSessionEffort, getSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import type { Logger } from '../logger.js';
@@ -157,26 +158,9 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row || row.status !== 'active' || !row.providerId ||
         row.remoteHostId || row.agentDeviceId) return;
-    const service = getDesktopProviderService();
-    let providers = await service.listProviders({
-      allowSideEffects: false,
-      // Rename recovery needs the current catalog, not a native account/quota refresh
-      // or account presentation. Keep those reads off every ordinary send's lock.
-      snapshotOnly: true,
-      catalog: getActiveCatalog(),
-    });
-    const provider = providers.find(candidate => candidate.id === row.providerId);
-    if (provider?.subscriptionAccountPool && provider.suspended !== true &&
-        (!provider.models[dbToMakerAgentKind(row.agentKind)]?.length || provider.subscriptionReadUnavailable)) {
-      // Empty or failed pool reads cannot rule out a rename, even with retained
-      // models. Let normal discovery own its failure TTL; healthy sends stay on
-      // the snapshot, with no new retry loop or forced refresh here.
-      providers = await service.listProviders({
-        allowSideEffects: false,
-        includeAccountPresentation: false,
-        getCatalog: getActiveCatalog,
-      });
-    }
+    const providers = await readProvidersForSessionModelRecovery(
+      getDesktopProviderService(), getActiveCatalog, row.providerId, dbToMakerAgentKind(row.agentKind),
+    );
     const profiles = await readSessionRuntimeProfiles(sessionId);
     await recoverRenamedSessionModelBeforeSend({
       route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },

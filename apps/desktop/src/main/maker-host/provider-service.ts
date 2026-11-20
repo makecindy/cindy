@@ -153,6 +153,25 @@ export interface ProviderService {
   listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]>;
 }
 
+/** Existing-route reads share readiness rules regardless of provider/pool presentation. */
+export async function readProvidersForSessionModelRecovery(
+  service: ProviderService,
+  getCatalog: () => Catalog,
+  providerId: string,
+  agent: AgentKind,
+): Promise<ProviderView[]> {
+  const providers = await service.listProviders({ allowSideEffects: false, snapshotOnly: true, getCatalog });
+  const provider = providers.find(candidate => candidate.id === providerId);
+  if (provider?.suspended === true || (provider?.models[agent]?.length && !provider.subscriptionReadUnavailable))
+    return providers;
+  // Missing/empty/failed views cannot rule out a rename. Native readers own their
+  // TTL and in-flight work; wait for discovery before materializing the new view.
+  // Do not infer readiness from pool-management or merged-alias display metadata.
+  return service.listProviders({
+    allowSideEffects: false, includeAccountPresentation: false, waitForDiscovery: true, getCatalog,
+  });
+}
+
 /**
  * 创建供应商服务。目录每次从 `getCatalog()` 现读（active-catalog 已持有进程级单例，零额外 IO）；
  * 连接状态每次实时读（凭证变化要立即反映）。

@@ -92,6 +92,8 @@ describe('send-time renamed-model recovery', () => {
   // provider projection with the retired ID still present after discovery failed;
   // the previous empty-only fallback missed it. Native discovery owns retries:
   // a failed refresh is read once, and a suspended provider is never revived.
+  // Alias metadata is presentation, not evidence of readiness. Claude's async
+  // probe must settle before reading the recovery view (review on ef4d63fd533).
   it.each([
     { providerId: 'openai', unavailable: false, suspended: false, retainedFailure: false },
     { providerId: 'openai-sub-cold', unavailable: false, suspended: false, retainedFailure: false },
@@ -99,11 +101,19 @@ describe('send-time renamed-model recovery', () => {
     { providerId: 'openai-sub-cold', unavailable: true, suspended: false, retainedFailure: false },
     { providerId: 'openai', unavailable: true, suspended: true, retainedFailure: false },
     { providerId: 'openai', unavailable: true, suspended: false, retainedFailure: true },
+    { providerId: 'codex-legacy', unavailable: false, suspended: false, retainedFailure: false },
+    { providerId: 'codex-legacy', unavailable: true, suspended: false, retainedFailure: false },
+    { providerId: 'anthropic', unavailable: false, suspended: false, retainedFailure: false },
+    { providerId: 'anthropic', unavailable: true, suspended: false, retainedFailure: false },
+    { providerId: 'unpublished', unavailable: false, suspended: false, retainedFailure: false },
   ])('recovers $providerId (unavailable=$unavailable, suspended=$suspended, retainedFailure=$retainedFailure)', async ({ providerId, unavailable, suspended, retainedFailure }) => {
     vi.useFakeTimers();
-    const saved = { ...route, providerId };
-    const renamed = 'chatgpt/gpt-6-luna';
-    const base = BUNDLED_CATALOG.providers.find(candidate => candidate.id === 'openai')!;
+    const claude = providerId === 'anthropic';
+    const alias = providerId === 'codex-legacy';
+    const agentKind = claude ? 'claude-code' as const : 'codex' as const;
+    const saved = { ...route, providerId, agentKind, model: claude ? 'claude-old' : route.model };
+    const renamed = claude ? 'claude-new' : `chatgpt/${saved.model}`;
+    const base = BUNDLED_CATALOG.providers.find(candidate => candidate.id === (claude ? 'anthropic' : 'openai'))!;
     landing.row = saved;
     landing.catalog = { ...BUNDLED_CATALOG, providers: [{ ...base, id: providerId }] };
     let loaded = false;
@@ -113,17 +123,31 @@ describe('send-time renamed-model recovery', () => {
     const readAccount = vi.fn(() => new Promise<{ source: 'unknown' }>(() => {}));
     const service = createProviderService({
       getCatalog: () => landing.catalog!,
-      projectCatalog: catalog => ({ ...catalog, providers: catalog.providers.map(candidate => ({
-        ...candidate, models: { codex: (loaded || unavailable)
+      projectCatalog: catalog => ({ ...catalog, providers: catalog.providers
+        .filter(() => providerId !== 'unpublished' || loaded).map(candidate => ({
+        ...candidate, models: { [agentKind]: (loaded || unavailable)
           ? [{ id: loaded && !retainedFailure ? renamed : saved.model,
             name: renamed, contextWindow: 200_000, efforts: ['high'], defaultEffort: 'high' }]
           : [] },
       })) }),
-      projectProvider: candidate => ({ ...candidate, subscriptionAccountPool: 'openai', suspended }),
+      projectProvider: candidate => ({ ...candidate, suspended,
+        ...(alias ? { subscriptionPoolAlias: true as const, subscriptionPoolTarget: 'openai' }
+          : { subscriptionAccountPool: claude ? 'anthropic' as const : 'openai' as const }),
+      }),
       subscriptionReadUnavailable: () => unavailable && (!loaded || retainedFailure),
-      connection: { xd: () => false, anthropic: () => false,
-        openai: options => options.snapshotOnly ? loaded : discover(), xai: () => false },
+      connection: { xd: () => false,
+        anthropic: options => {
+          if (!claude) return false;
+          if (options.snapshotOnly) return loaded || unavailable;
+          const probing = discover();
+          // Match the production reader: ordinary lists start Claude discovery
+          // in the background; routing must explicitly wait for its result.
+          return options.waitForDiscovery ? probing : true;
+        },
+        openai: options => claude ? false : options.snapshotOnly ? loaded || unavailable : discover(),
+        xai: () => false },
       openAiAccountInfo: readAccount,
+      subscriptionAccountInfo: readAccount,
     });
     type Ports = Parameters<typeof createRecoverRenamedSessionModelOnSend>[0];
     const apply = vi.fn<Ports['handleSetModel']>(async () => ({ deferred: false, superseded: false }));
@@ -134,13 +158,17 @@ describe('send-time renamed-model recovery', () => {
         control: getSessionRuntimeControlSnapshot('cold-send'), pendingMutation: null }),
       handleSetModel: apply,
     });
-    const sending = recover('cold-send');
+    let completed = false;
+    const sending = recover('cold-send').then(() => { completed = true; });
     try {
       await vi.advanceTimersByTimeAsync(0);
       expect(apply).not.toHaveBeenCalled();
+      expect(completed).toBe(suspended);
       releaseDiscovery();
       await vi.advanceTimersByTimeAsync(0);
-      if (suspended || retainedFailure) expect(apply).not.toHaveBeenCalled();
+      // Native Claude ids are not bridge-prefix renames. Its observable contract
+      // is waiting for discovery, without inventing an unsupported replacement.
+      if (claude || suspended || retainedFailure) expect(apply).not.toHaveBeenCalled();
       else expect(apply.mock.calls[0]?.slice(0, 3)).toEqual(['cold-send', renamed, providerId]);
       expect(readAccount).not.toHaveBeenCalled();
       await sending;
