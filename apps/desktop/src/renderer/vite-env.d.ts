@@ -492,6 +492,8 @@ interface AuthUser {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 
@@ -2390,7 +2392,6 @@ interface ElectronAPI {
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
-  setProductTokensEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;

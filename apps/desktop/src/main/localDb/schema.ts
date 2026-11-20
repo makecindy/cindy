@@ -2020,6 +2020,26 @@ export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
   cacheCreateTokens: integer('cache_create_tokens').notNull(),
 }, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
 
+// Only the first, partial UTC day needs an exact enrollment timestamp. All later days
+// reuse dailyTokenAttribution. A fresh generation isolates same-day opt-out/re-enrollment.
+export const tokenReportingWindow = sqliteTable('token_reporting_window', {
+  id: integer('id').primaryKey(),
+  generation: text('generation').notNull(),
+  day: text('day').notNull(),
+  startsAt: integer('starts_at').notNull(),
+});
+
+export const tokenReportingFirstDay = sqliteTable('token_reporting_first_day', {
+  provider: text('provider').notNull(),
+  billing: text('billing').notNull(),
+  model: text('model').notNull(),
+  generation: text('generation').notNull(),
+  input: integer('input').notNull(),
+  output: integer('output').notNull(),
+  cacheRead: integer('cache_read').notNull(),
+  cacheWrite: integer('cache_write').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model] }) }));
+
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
  * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
