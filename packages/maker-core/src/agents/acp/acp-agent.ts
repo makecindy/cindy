@@ -160,9 +160,10 @@ export class AcpAgent extends BaseAgent {
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
           ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
-          // The external agent's own sub-agents may call tools; Cindy cannot attest who called.
-          mcpCallerKind: 'unknown',
-          mcpCallerAttested: false,
+          // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
+          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
+          mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
+          mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
         });
       } catch (error) {
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
@@ -190,6 +191,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(opts.pluginEngineBriefing ? { briefing: opts.pluginEngineBriefing } : {}),
           logger,
           onEnded: disposeBridge,
         });

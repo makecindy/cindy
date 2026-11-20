@@ -11,6 +11,7 @@ describe('Pi request usage transaction', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(readFileSync(new URL('../../../../drizzle/0154_daily_token_attribution.sql', import.meta.url), 'utf8'));
+    db.exec(readFileSync(new URL('../../../../drizzle/0155_account_usage_first_day.sql', import.meta.url), 'utf8'));
     db.exec(`
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
         recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));

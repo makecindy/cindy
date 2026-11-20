@@ -29,6 +29,11 @@ export function useBotUnreadSync(): void {
       maker?.onBotLifecycleChanged?.((_payload, stamp) => { if (isDataOwnerPushCurrent(stamp)) refresh(); }),
       subscribeBotReadState(refresh),
       startBotGroupSync(),
+      // The inbox places a teammate by the snooze of its main conversation, wherever it was set.
+      window.electronAPI?.localDb?.sessionsPush?.onPatched?.((payload, stamp) => {
+        if (!isDataOwnerPushCurrent(stamp) || !('snoozedUntil' in payload.patch || 'lastTurnEndedAt' in payload.patch)) return;
+        if (getBotProfiles().some(bot => bot.sessions.some(session => session.id === payload.sessionId))) refresh();
+      }),
       window.electronAPI?.localDb?.messages?.onCreated?.((payload, stamp) => {
         if (!isDataOwnerPushCurrent(stamp) || !isDataOwnerGenerationCurrent(owner)) return;
         // During a live turn only sealed replies enter the preview. Its state

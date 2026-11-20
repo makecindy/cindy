@@ -51,6 +51,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.source.unconfirmed': '模型列表暂未更新',
         'newChat.modelSelector.source.unavailable': '模型不可用',
         'newChat.modelSelector.source.reconnect': '重新连接',
         'newChat.modelSelector.source.manage': '管理来源',
@@ -1443,6 +1444,28 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(recovery);
       expect(navigate).toHaveBeenCalledOnce();
     } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
+  });
+
+  // Unit: the saved route is unchanged while its first account model read times out.
+  // A complete empty list and a failed read previously rendered the same red error.
+  it('keeps Astra identifiable and retries an unconfirmed subscription catalog', async () => {
+    const source = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} } };
+    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, models: { codex: [] } }];
+    const props = { remoteAgent: undefined, modelId: 'gpt-6.2-astra', effort: 'high' as Effort,
+      onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const, currentProviderId: 'openai',
+      actualRoute: true, sourceDisconnected: true, unifiedPanel: true, onReconnectSource: vi.fn() };
+    const refresh = vi.fn(async () => ({ ok: true }));
+    Object.assign(window.electronAPI.maker, { refreshBuiltinProviderModels: refresh });
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*astra/i });
+    fireEvent.click(trigger);
+    const retry = await screen.findByRole('button', { name: '重新读取模型' });
+    await act(async () => { fireEvent.click(retry); });
+    expect(refresh).toHaveBeenCalledWith('openai');
+    expect(props.onReconnectSource).not.toHaveBeenCalled();
+    providersRef.providers = [{ ...source, models: { codex: [{ id: props.modelId, name: 'GPT-6.2 Astra', efforts: ['high'] }] } }];
+    view.rerender(React.createElement(ModelSelector, { ...props, sourceDisconnected: false }));
+    expect(screen.getByRole('button', { name: /Select model.*GPT-6.2 Astra/ })).toBeTruthy();
   });
 
   it('keeps the disconnected status in the compact trigger title', () => {

@@ -772,6 +772,9 @@ import {
 import { getCindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { normalizeImageParameters } from '../cindy-media/imageParameters.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
+import { getCustomProvider } from '../maker-host/custom-provider-store.js';
+import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
+import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
@@ -5374,11 +5377,30 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registry.register(
       'gemini',
       createGeminiImageChannel({
-        getApiKey: () => getProviderSecretStore().get('gemini'),
+        credentialScope: () => {
+          const id = geminiImageConnectionId();
+          return JSON.stringify([activeOwnerScopeKey(), id, id && getProviderRouteCredentialRevision(id)]);
+        },
+        getApiKey: () => resolveGeminiImageKey(
+          geminiImageConnectionId(),
+          id => isProviderRouteMutationInProgress(id) || isProviderDisabled(readModelDisableOverrides(), id) ? undefined
+            : getActiveCatalog().providers.find(provider => provider.id === id),
+          readCustomProviderKey,
+          () => getProviderSecretStore().get('gemini'),
+        ),
         // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
         // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+        beforeDispatch: model => {
+          assertMediaModelStillEnabled('image', model);
+          const id = geminiImageConnectionId();
+          if (!id) return;
+          const agent = geminiImageAgent(getActiveCatalog().providers.find(provider => provider.id === id));
+          return getCustomProvider(id).then(config => {
+            if (!savedGeminiRouteMatches(config, agent)) throw new Error('Gemini API 连接已变更，请重新选择连接');
+            assertMediaModelStillEnabled('image', model);
+          });
+        },
       }),
     );
     // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
@@ -9460,6 +9482,13 @@ export function registerGhostIpc(): void {
     uiLocale: () => currentGhostAppContext().context.uiLocale,
     spawn: (ghostId, harnessId) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
+    readUsage: async (ghostId, harnessId) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+      });
+      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+    },
     log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识

@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Error del servidor ascendente (5xx). Vuelve a intentarlo más tarde",
     "UPSTREAM_UNREACHABLE": "No se puede conectar con el punto final. Comprueba tu red y la URL base",
     "TIMEOUT": "Se agotó el tiempo de conexión. Comprueba tu red y la URL base",
+    "CERT_ERROR": "No se pudo verificar el certificado. Comprueba que el nombre de host de la URL base coincida con el certificado, así como la cadena de certificados y la configuración de confianza de la CA de tu organización.",
     "UNKNOWN": "Error desconocido. Consulta los registros para obtener más detalles.",
     "upstreamToast": "Error en la solicitud del proveedor \"{{provider}}\": {{message}}"
   },
@@ -1454,6 +1455,10 @@
     "details": "Detalles del error"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de datos local dañada",
+      "description": "Se detectaron daños en la base de datos. Se ha detenido el acceso para proteger tus datos. Puedes intentar volver a abrir los datos locales. Si falla, copia los detalles técnicos y contacta con soporte. No sobrescribas ni elimines los archivos de la base de datos."
+    },
     "schemaLease": {
       "title": "Los datos locales aún no se pueden abrir",
       "retry": "Reabrir datos locales",
@@ -2839,9 +2844,7 @@
       "autoUpdateDisabledToast": "Instalación de actualizaciones en inactividad deshabilitada",
       "autoUpdateSaveFailed": "No se pudo guardar la configuración de actualización automática",
       "analyticsLabel": "Estadísticas de uso",
-      "analyticsDescription": "Nos ayuda a comprender con qué frecuencia se inicia y se mantiene en uso Cindy. Envía información sobre el dispositivo y el entorno de uso, como el modelo de tu dispositivo, la versión del sistema operativo, la versión de la aplicación y un identificador del dispositivo, además de tu ID de cuenta una vez que hayas iniciado sesión; nunca conversaciones, archivos ni indicaciones. Al desactivarlo, el envío se detiene de inmediato.",
-      "productTokenUsage": "Compartir uso de modelos",
-      "productTokenUsageHint": "Tu región agrupa los nuevos tokens de esta cuenta en este dispositivo por origen y modelo antes de enviarlos a TapDB.",
+      "analyticsDescription": "Si activas esta opción, usaremos alias en lugar de los identificadores de tu cuenta y tu dispositivo. Las visitas recurrentes y los totales de uso por modelo nos ayudan a mejorar el producto. Estas estadísticas no incluyen tus conversaciones, archivos ni instrucciones.",
       "analyticsEnabledToast": "Estadísticas de uso habilitadas",
       "analyticsDisabledToast": "Estadísticas de uso deshabilitadas",
       "analyticsSaveFailed": "No se pudo guardar la configuración de estadísticas de uso",
@@ -3766,6 +3769,8 @@
           "edit": "Editar",
           "editFailed": "Revisa la URL, el protocolo y la clave, e inténtalo de nuevo.",
           "editNote": "Deja la clave vacía para conservar la credencial leída. Cambiar la URL o el protocolo requiere una clave nueva.",
+          "useSavedCredential": "Usar las credenciales guardadas",
+          "confirmDestination": "¿Usar las credenciales guardadas de Claude Code en esta dirección?",
           "name": "Nombre visible",
           "baseUrl": "URL base",
           "protocol": "Protocolo de API",
@@ -4483,6 +4488,7 @@
         "authorizedToast": "Sesión iniciada en {{name}}",
         "authorizeFailed": "No se pudo iniciar sesión en {{name}}. Inténtalo de nuevo.",
         "nameLabel": "Nombre para mostrar",
+        "geminiImageKeyNote": "Al guardar, esta clave se usará para los chats de esta conexión y las próximas imágenes de Gemini. Para generar solo imágenes, desmarca todos los modelos de chat.",
         "onlyAgentNote": "Este proveedor solo admite {{agent}}",
         "endpointLabel": "URL base de {{agent}}",
         "noAuthNote": "Este proxy no necesita clave de cliente; Cindy elimina las credenciales de suscripción de CLI antes de reenviarlas.",
@@ -13185,6 +13191,7 @@
           "overloadRetryingNoCount": "El servicio del modelo está ocupado. Reintentando automáticamente…",
           "overloadFailed": "⚠️ El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Vuelve a enviar este mensaje aquí para reintentarlo o cambia a otro modelo en Cindy. (Pulsar «Reintentar» en la app de escritorio también continúa la tarea, pero el resultado no volverá a este mensaje)."
         },
+        "audioInputUnavailable": "Esta conexión al modelo no admite audio directamente. Pide a Cindy que transcriba el audio antes de continuar.",
         "toolLoop": {
           "generic": "El modelo llamó a herramientas repetidamente demasiadas veces, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
           "consecutive": "El modelo llamó a la misma herramienta {{n}} veces seguidas, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
@@ -14232,6 +14239,8 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última actualización: {{time}}",
+        "unconfirmed": "Lista de modelos sin actualizar",
         "unavailable": "Modelo no disponible",
         "reconnect": "Reconectar",
         "manage": "Administrar fuente",
@@ -15149,6 +15158,8 @@
     },
     "runningStatus": {
       "currentRate": "Última velocidad",
+      "lastRequestRate": "Media de la última solicitud",
+      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",
@@ -15305,6 +15316,11 @@
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
       "text": "Error en la ejecución automática.",
+      "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_timeout": "La conexión a GitHub agotó el tiempo de espera en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_auth": "Vuelve a iniciar sesión en GitHub en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
       "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo.",
@@ -17215,6 +17231,12 @@
       "unspecifiedDir": "Directorio no especificado"
     },
     "workdirBrowse": {
+      "previewFile": "Vista previa",
+      "filterDirectory": "Filtrar esta carpeta…",
+      "projectTree": "Árbol del proyecto",
+      "systemPreview": "Vista previa del sistema",
+      "listView": "Lista",
+      "gridView": "Miniaturas",
       "backToProjects": "Volver a Proyectos",
       "switchProject": "Cambiar de proyecto",
       "activeSessionCount_one": "{{count}} sesión activa",
@@ -19600,6 +19622,7 @@
       "permissionLabel": "Modo de permisos",
       "noAvailableModels": "No hay ningún modelo de {{agent}} disponible. Revisa la conexión del proveedor y las credenciales en Configuración.",
       "savedModelUnavailable": "El modelo guardado o su fuente no están disponibles.",
+      "pluginEngineNoWorktree": "Los Workers con motor de complemento no pueden usar un worktree. Desactiva la opción de worktree para crear este Worker.",
       "reselectModel": "Elegir un modelo",
       "effortLabel": "Intensidad de razonamiento",
       "initialTaskLabel": "Tarea inicial",

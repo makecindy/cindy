@@ -93,6 +93,12 @@ export interface OpenAcpSessionOptions {
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
   cancelGraceMs?: number;
   readFile?: (path: string) => Promise<Uint8Array>;
+  /**
+   * Host text sent ahead of the first message of a newly created agent session (for example
+   * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
+   * loaded session already has it in its own history, so it is not repeated.
+   */
+  briefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
 }
@@ -296,6 +302,8 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: AcpContentBlock[][] = [];
+  /** Sent once, ahead of the first prompt of a new session. */
+  private pendingBriefing: string | null;
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -325,6 +333,7 @@ export class AcpSession {
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -391,6 +400,10 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
+      if (this.pendingBriefing) {
+        prompt.unshift({ type: 'text', text: this.pendingBriefing });
+        this.pendingBriefing = null;
+      }
       this.pendingPrompts.push(prompt);
       this.pump();
     });

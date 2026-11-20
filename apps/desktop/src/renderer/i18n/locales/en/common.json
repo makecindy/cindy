@@ -1425,6 +1425,7 @@
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
+    "CERT_ERROR": "Certificate verification failed. Check that the base URL hostname matches the certificate, as well as the certificate chain and your organization’s CA trust configuration.",
     "UNKNOWN": "Unknown error. Check the logs for details",
     "upstreamToast": "Provider “{{provider}}” request failed: {{message}}"
   },
@@ -1436,6 +1437,10 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Local database damaged",
+      "description": "Database corruption was detected. Access has stopped to protect your data. You can try reopening local data. If that fails, copy the technical details and contact support. Do not overwrite or delete database files."
+    },
     "schemaLease": {
       "title": "Local data cannot be opened yet",
       "retry": "Reopen Local Data",
@@ -2801,9 +2806,7 @@
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
       "analyticsLabel": "Usage statistics",
-      "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
-      "productTokenUsage": "Share model token totals",
-      "productTokenUsageHint": "Share new token counts for this account on this device. Your region combines counts by source and model before sending them to TapDB.",
+      "analyticsDescription": "When this is on, we use aliases in place of your account and device IDs. Return visits and usage totals by model help us improve the product. These statistics don’t include your chats, files or prompts.",
       "analyticsEnabledToast": "Usage statistics enabled",
       "analyticsDisabledToast": "Usage statistics disabled",
       "analyticsSaveFailed": "Failed to save usage statistics settings",
@@ -3717,6 +3720,8 @@
           "edit": "Edit",
           "editFailed": "Check the URL, protocol and key, then retry.",
           "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "useSavedCredential": "Use saved credential",
+          "confirmDestination": "Use the saved Claude Code credential at this address?",
           "name": "Display name",
           "baseUrl": "Base URL",
           "protocol": "API protocol",
@@ -4427,6 +4432,7 @@
         "authorizedToast": "Signed in to {{name}}",
         "authorizeFailed": "Could not sign in to {{name}}. Try again.",
         "nameLabel": "Display name",
+        "geminiImageKeyNote": "Saving uses this key for chats on this connection and for future Gemini image generation. For images only, leave all chat models unchecked.",
         "onlyAgentNote": "This provider only supports {{agent}}",
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
@@ -13078,6 +13084,7 @@
           "overloadRetryingNoCount": "The model service is busy. Retrying automatically…",
           "overloadFailed": "⚠️ The model service is busy — the upstream has no capacity right now. Resend this message here to try again, or switch to another model in Cindy. (Clicking “Retry” in the desktop app also continues the task, but the result won’t come back to this message.)"
         },
+        "audioInputUnavailable": "This model connection can’t read audio directly. Ask Cindy to transcribe the audio first, then continue.",
         "toolLoop": {
           "generic": "The model called tools repeatedly too many times, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
           "consecutive": "The model called the same tool {{n}} times in a row, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
@@ -14117,6 +14124,8 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "lastConfirmed": "Last refreshed: {{time}}",
+        "unconfirmed": "Model list not up to date",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",
@@ -15054,6 +15063,8 @@
     },
     "runningStatus": {
       "currentRate": "Latest speed",
+      "lastRequestRate": "Last request average",
+      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",
@@ -15204,6 +15215,11 @@
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
+      "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_timeout": "The connection to GitHub timed out on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_auth": "Sign in to GitHub again on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_rate-limit": "GitHub rate-limited requests from {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_unknown": "The PR check failed on {{device}}. See the run details. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
       "precheck": "Automatic checks are temporarily blocked.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
       "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed.",
@@ -17052,6 +17068,12 @@
       "unspecifiedDir": "Unspecified directory"
     },
     "workdirBrowse": {
+      "previewFile": "Preview",
+      "filterDirectory": "Filter this folder…",
+      "projectTree": "Project tree",
+      "systemPreview": "System preview",
+      "listView": "List",
+      "gridView": "Thumbnails",
       "backToProjects": "Back to Projects",
       "switchProject": "Switch project",
       "activeSessionCount_one": "{{count}} active session",
@@ -19417,6 +19439,7 @@
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "savedModelUnavailable": "The saved model or its source is unavailable.",
+      "pluginEngineNoWorktree": "Plugin engine Workers can't use a worktree. Turn off the worktree option to create this Worker.",
       "reselectModel": "Choose a model",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",

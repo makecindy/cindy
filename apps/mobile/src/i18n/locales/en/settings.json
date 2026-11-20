@@ -263,7 +263,7 @@
     "openUserAgreement": "Open the user agreement",
     "appFilingNumber": "App Filing Number",
     "analytics": "Usage statistics",
-    "analyticsHint": "Helps us understand launches and retention. Reports device info such as model, OS and app version, and a device identifier, plus your account ID once signed in; never conversations, files, or prompts.",
+    "analyticsHint": "When this is on, we use an alias in place of your account ID and a device identifier to understand app launches and return visits. This helps us improve the product. Payments use a separate alias. These statistics don’t include your chats, files or prompts.\nOlder records contain original account IDs. Someone with access to them may be able to link a new alias to an account using the same device identifier.",
     "analyticsSaveFailed": "Couldn't save this setting; it may revert after a restart.",
     "analyticsReset": "Reset to default",
     "analyticsResetAction": "Reset"

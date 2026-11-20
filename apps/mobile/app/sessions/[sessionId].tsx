@@ -448,6 +448,7 @@ import {
   pluginEngineSessionCapabilities,
   resolvePluginEngineEffort,
   usePluginEngines,
+  usePluginEngineUsageSupport,
   PLUGIN_ENGINE_DEFAULT_MODEL,
   type MobilePluginEngineSelection,
 } from '@/session/pluginEngines';
@@ -1911,7 +1912,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const pluginEngineSwitchIntent = currentSession?.pluginEngineSwitchIntent ?? null;
   // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && !sessionAgentRunsOnOtherComputer(currentSession)
+    // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
+    && !currentSession.remoteHostId
     && !currentSession.orcaRole && !currentSession.orcaRemoteLead
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';
@@ -2955,12 +2957,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sharedTaskGuest: isSharedTaskPeer(deviceId),
     remoteHostId: currentSession?.remoteHostId,
   });
-  const agentAccountMaker = useMobileMakerTransport(
-    usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId,
-  );
-  const menuAccountReader = usageAccount.kind === 'host'
-    ? maker
-    : usageAccount.kind === 'device' ? agentAccountMaker : null;
+  const usageDeviceId = usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId;
+  const agentAccountMaker = useMobileMakerTransport(usageDeviceId);
+  const pluginReportsUsage = usePluginEngineUsageSupport(usageDeviceId, pluginEngineTask ? currentSession?.providerId : null);
+  const menuAccountReader = usageAccount.kind === 'unreadable' || pluginReportsUsage === false
+    ? null : usageAccount.kind === 'device' ? agentAccountMaker : maker;
   /** 菜单上的来源与登录身份:Agent 在另一台电脑时按那台的目录,不借被控电脑的同名来源。 */
   const menuAccountProvider = usageAccount.kind !== 'host'
     ? currentAgentCatalog.loading
@@ -13873,7 +13874,7 @@ function ComposerActivityStatus({
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
   const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt) || Boolean(slowSendPhase);
-  const showLiveRate = !showElapsedOnly && (!tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
+  const showLiveRate = !showElapsedOnly && (tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
   const rateValue = formatComposerActivityRateValue(showLiveRate ? rateHistory.latestRate : null);
   const canShowRateDetails = !showElapsedOnly
     && generationReliable
@@ -13881,9 +13882,11 @@ function ComposerActivityStatus({
     && Number.isFinite(outputTokens)
     && Number.isFinite(generationDurationMs)
     && generationDurationMs > 0;
-  const rateText = rateValue
-    ? t('session.screen.tokenRate', { rate: rateValue })
-    : null;
+  const rateText = !rateValue
+    ? null
+    : tokenSpeed?.measurement
+      ? t('session.screen.recentTokenRate', { rate: rateValue })
+      : t('session.screen.tokenRate', { rate: rateValue });
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
   const usageMeta = (
     <View style={[pillStyles.composerActivityPill, styles.composerActivityMeta]}>
@@ -13950,6 +13953,7 @@ function ComposerActivityStatus({
         history={rateHistory}
         outputTokens={outputTokens}
         totalOutputTokens={tokenSpeed?.totalOutputTokens}
+        measuredAverage={tokenSpeed?.measurement?.average}
         generationDurationMs={generationDurationMs}
         generationReliable={generationReliable && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}

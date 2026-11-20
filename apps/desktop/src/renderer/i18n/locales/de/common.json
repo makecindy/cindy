@@ -1425,6 +1425,7 @@
     "UPSTREAM_ERROR": "Fehler beim vorgelagerten Server (5xx). Versuch es später erneut",
     "UPSTREAM_UNREACHABLE": "Endpunkt nicht erreichbar. Prüfe dein Netzwerk und die Basis-URL",
     "TIMEOUT": "Zeitüberschreitung der Verbindung. Prüfe dein Netzwerk und die Basis-URL",
+    "CERT_ERROR": "Die Zertifikatsprüfung ist fehlgeschlagen. Prüfe, ob der Hostname der Basis-URL zum Zertifikat passt, sowie die Zertifikatskette und die CA-Vertrauenseinstellungen deiner Organisation.",
     "UNKNOWN": "Unbekannter Fehler. Weitere Informationen findest du in den Protokollen",
     "upstreamToast": "Anfrage an Anbieter „{{provider}}“ fehlgeschlagen: {{message}}"
   },
@@ -1436,6 +1437,10 @@
     "details": "Fehlerdetails"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Lokale Datenbank beschädigt",
+      "description": "Eine Beschädigung der Datenbank wurde erkannt. Der Zugriff wurde zum Schutz deiner Daten gestoppt. Du kannst versuchen, die lokalen Daten erneut zu öffnen. Falls das fehlschlägt, kopiere die technischen Details und kontaktiere den Support. Überschreibe oder lösche keine Datenbankdateien."
+    },
     "schemaLease": {
       "title": "Lokale Daten können noch nicht geöffnet werden",
       "retry": "Lokale Daten erneut öffnen",
@@ -2801,9 +2806,7 @@
       "autoUpdateDisabledToast": "Updateinstallation im Leerlauf deaktiviert",
       "autoUpdateSaveFailed": "Einstellungen für automatische Updates konnten nicht gespeichert werden",
       "analyticsLabel": "Nutzungsstatistiken",
-      "analyticsDescription": "Hilft uns zu verstehen, wie oft Cindy gestartet und weiter genutzt wird. Übermittelt Informationen zum Gerät und zur Nutzungsumgebung — etwa Gerätemodell, Betriebssystemversion, App-Version und Gerätekennung — sowie nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts. Wenn du dies deaktivierst, wird die Übermittlung sofort beendet.",
-      "productTokenUsage": "Modellnutzung teilen",
-      "productTokenUsageHint": "Neue Token dieses Kontos auf diesem Gerät werden regional nach Quelle und Modell zusammengefasst und an TapDB gesendet.",
+      "analyticsDescription": "Wenn du diese Option aktivierst, verwenden wir Pseudonyme für deine Konto- und Geräte-ID. Wiederkehrende Besuche und die Gesamtnutzung je Modell helfen uns, das Produkt zu verbessern. Deine Chats, Dateien und Prompts sind in diesen Statistiken nicht enthalten.",
       "analyticsEnabledToast": "Nutzungsstatistiken aktiviert",
       "analyticsDisabledToast": "Nutzungsstatistiken deaktiviert",
       "analyticsSaveFailed": "Einstellungen für Nutzungsstatistiken konnten nicht gespeichert werden",
@@ -3717,6 +3720,8 @@
           "edit": "Bearbeiten",
           "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
           "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "useSavedCredential": "Gespeicherte Zugangsdaten verwenden",
+          "confirmDestination": "Gespeicherte Claude Code-Zugangsdaten für diese Adresse verwenden?",
           "name": "Anzeigename",
           "baseUrl": "Basis-URL",
           "protocol": "API-Protokoll",
@@ -4427,6 +4432,7 @@
         "authorizedToast": "Bei {{name}} angemeldet",
         "authorizeFailed": "Anmeldung bei {{name}} fehlgeschlagen. Erneut versuchen.",
         "nameLabel": "Anzeigename",
+        "geminiImageKeyNote": "Nach dem Speichern wird dieser Schlüssel für Chats über diese Verbindung und künftig für die Bilderzeugung mit Gemini verwendet. Wenn Sie nur Bilder erzeugen möchten, wählen Sie alle Chatmodelle ab.",
         "onlyAgentNote": "Dieser Anbieter unterstützt nur {{agent}}",
         "endpointLabel": "{{agent}}-Basis-URL",
         "noAuthNote": "Dieser Proxy benötigt keinen Client-Schlüssel; Cindy entfernt die Anmeldeinformationen für das CLI-Abonnement vor der Weiterleitung.",
@@ -13078,6 +13084,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
           "consecutive": "Das Modell hat dasselbe Tool {{n}}-mal hintereinander aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
@@ -14117,6 +14124,8 @@
         "fastBadge": "Schnell"
       },
       "source": {
+        "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
+        "unconfirmed": "Modellliste nicht aktuell",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",
@@ -15017,6 +15026,8 @@
     },
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
+      "lastRequestRate": "Durchschnitt der letzten Anfrage",
+      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
@@ -15167,6 +15178,11 @@
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
+      "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_timeout": "Die Verbindung zu GitHub auf {{device}} ist abgelaufen. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_auth": "Melde dich auf {{device}} erneut bei GitHub an. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_rate-limit": "GitHub begrenzt die Anfragen von {{device}}. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
+      "prCheck_unknown": "Die PR-Prüfung auf {{device}} ist fehlgeschlagen. Details stehen im Laufprotokoll. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
       "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
@@ -17052,6 +17068,12 @@
       "unspecifiedDir": "Kein Verzeichnis angegeben"
     },
     "workdirBrowse": {
+      "previewFile": "Vorschau",
+      "filterDirectory": "Diesen Ordner filtern…",
+      "projectTree": "Projektbaum",
+      "systemPreview": "Systemvorschau",
+      "listView": "Liste",
+      "gridView": "Miniaturansichten",
       "backToProjects": "Zurück zu Projekten",
       "switchProject": "Projekt wechseln",
       "activeSessionCount_one": "{{count}} aktive Sitzung",
@@ -19417,6 +19439,7 @@
       "permissionLabel": "Berechtigungsmodus",
       "noAvailableModels": "Kein {{agent}}-Modell verfügbar. Prüfe die Anbieterverbindung und die Zugangsdaten in den Einstellungen.",
       "savedModelUnavailable": "Das gespeicherte Modell oder seine Quelle ist nicht verfügbar.",
+      "pluginEngineNoWorktree": "Worker mit Plugin-Engine können keinen Worktree verwenden. Deaktiviere die Worktree-Option, um diesen Worker zu erstellen.",
       "reselectModel": "Modell auswählen",
       "effortLabel": "Denkintensität",
       "initialTaskLabel": "Erste Aufgabe",

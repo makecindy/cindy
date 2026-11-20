@@ -1488,7 +1488,7 @@ export function ChatInput({
     (!sessionId || !!catalogHostDeviceId ||
       controlledTaskAgentLocationReadable({
         agentDeviceId: _agentDeviceId,
-        pendingAgentDeviceId: builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))?.agentDeviceId,
+        pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
         selfDeviceId,
         readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),
       }));
@@ -1502,7 +1502,8 @@ export function ChatInput({
    */
   const intentAgentDeviceId =
     sessionId && agentLocationAware && !remoteHostId
-      ? builtinAgentSwitchIntent(makerChatStore.getAgentSwitchIntent(sessionId))?.agentDeviceId
+      // 切到插件引擎时 Agent 回到任务所在电脑，意图带 null，同样按它显示。
+      ? makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId
       : undefined;
   /** 下一条消息时 Agent 所在的电脑(null = 任务所在电脑)。 */
   const effectiveAgentDeviceId =

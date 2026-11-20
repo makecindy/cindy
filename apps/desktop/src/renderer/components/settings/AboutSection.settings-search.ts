@@ -39,15 +39,6 @@ export const aboutSettings = defineSettings({
     titleKey: 'settings.about.analyticsLabel',
     sectionKey: 'settings.tabs.about',
     descriptionKey: 'settings.about.analyticsDescription',
-  },
-  productTokenUsage: {
-    id: 'settings.about.productTokenUsage',
-    fallbackTargetId: 'settings-panel-about',
-    tab: 'about',
-    targetId: 'settings-search-settings-about-productTokenUsage',
-    titleKey: 'settings.about.productTokenUsage',
-    descriptionKey: 'settings.about.productTokenUsageHint',
-    sectionKey: 'settings.tabs.about',
     aliases: ['token', '模型用量', 'model usage'],
   },
   debugLogLabel: {

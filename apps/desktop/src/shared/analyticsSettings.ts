@@ -19,7 +19,6 @@ export interface AnalyticsSettingsPayload {
    * 构建闸的理由见 main/analytics-settings-store.ts。
    */
   allowed: boolean;
-  productTokensEnabled?: boolean;
 }
 
 export const ANALYTICS_SETTINGS_CHANGE_CHANNEL = 'analytics:settings-change';

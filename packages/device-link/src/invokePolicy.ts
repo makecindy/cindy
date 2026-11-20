@@ -21,6 +21,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // 同一批模型选择器预读：插件引擎列表与刷新请求。
   'maker:list-plugin-engines',
   'maker:refresh-plugin-engines',
+  'maker:get-plugin-engine-usage',
   'maker:list-available-agents',
   'maker:agent:status',
   'git-context:pr-refs:list',

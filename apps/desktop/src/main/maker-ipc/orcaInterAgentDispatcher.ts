@@ -5,7 +5,7 @@ import {
 } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
   AgentInputCreateOpts,
@@ -41,8 +41,8 @@ export type DispatchOrcaInterAgentMessageResult =
   | {
       ok: true;
       mode: OrcaInterAgentDispatchMode;
-      /** Runtime that accepted the message; queued messages have not switched yet. */
-      agentKind?: AgentKind;
+      /** Runtime that accepted the message; queued messages have not switched yet. 'acp' = plugin-engine Worker. */
+      agentKind?: EngineKind;
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
@@ -89,7 +89,7 @@ export interface DispatchOrcaInterAgentMessageParams {
 /** Orca dispatcher 只依赖 maker-core session 的最小发送接口，避免绑定完整 Maker 实例。 */
 interface PersistedUserMessageSession {
   id: string;
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   isTurnRunning?: () => boolean;
   getTurnGeneration?: () => number;
   capabilities?: { sameTurnSteer: { supported: boolean } };
@@ -114,7 +114,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
   | {
       ok: true;
       targetSessionId: string;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
