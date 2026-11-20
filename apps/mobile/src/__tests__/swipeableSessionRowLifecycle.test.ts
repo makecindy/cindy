@@ -71,7 +71,7 @@ vi.mock('@/platform/gestureHandler', async () => {
   }) };
 });
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Check', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'SquarePen'].map((name) => [name, () => null]),
+  ['Check', 'CircleDashed', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'SquarePen'].map((name) => [name, () => null]),
 ));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 // Registry ownership is real; locale startup is outside this native-boundary fixture.
@@ -81,11 +81,16 @@ vi.mock('@/session/swipeRowRegistry', async (importOriginal) => ({
   ...(await importOriginal<typeof SwipeRegistryModule>()),
   pinToggleAction: () => ({ label: 'pin' }), statusToggleAction: () => ({ label: 'archive', action: 'archive' }),
 }));
+vi.mock('@/components/AppText', async () => {
+  const { createElement: el } = await import('react');
+  return { Text: ({ children }: { children?: ReactNode }) => el('span', null, children) };
+});
 vi.mock('@/theme', () => ({
   iconSize: { swipeAction: 24 }, iconStroke: { regular: 2 },
+  fontWeight: { medium: '500' }, textStyles: { body: { fontSize: 16, lineHeight: 22 } },
   useTheme: () => ({ colors: {} }), useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
-vi.mock('@/theme/tokens', () => ({ radius: { pill: 9999 }, spacing: { md: 12, xl: 24 } }));
+vi.mock('@/theme/tokens', () => ({ radius: { pill: 9999 }, spacing: { sm: 8, md: 12, lg: 16, xl: 24 } }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
