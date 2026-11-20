@@ -95,7 +95,7 @@ import type { OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.d
 import { createPinnedSocketProxyStore } from './pinnedSocketProxy';
 import { classifyPeerTransportRoute } from './peerTransportRoute';
 import { currentLinkTraffic, flushLinkTraffic } from './linkTraffic.desktop';
-import { openLinkWebSocket } from './linkWebSocket.desktop';
+import { openLinkWebSocket, type LinkWebSocketOptions } from './linkWebSocket.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -1133,8 +1133,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         // 判定与 agent 同源:openLinkWebSocket 内部用 createOutboundHttpAgentWithDecision
         // 建连,这里只在 socket 上钉住结果(#9959)。挂载时机见 pinnedSocketProxy.ts ——
         // 真的 open 才算这条线路被采用,过期建连结果不会写进诊断。
+        // 断言必须落到 LinkWebSocketOptions:断成 ClientOptions 会抹掉回调的
+        // 上下文类型,decision/ws 变成 implicit any(TS7006,CI 四红之源)。
         onOutboundDecision: (decision, ws) => pinnedSocketProxy.track(url, decision, ws),
-      } as WebSocket.ClientOptions),
+      } as LinkWebSocketOptions),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
