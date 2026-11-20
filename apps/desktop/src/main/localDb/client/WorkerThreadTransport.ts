@@ -6,6 +6,7 @@ import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { writeModelUsage } from '../worker/opHandlers/modelUsageTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
@@ -27,9 +28,13 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const isSqliteCorruption = ${isSqliteCorruption.toString()};
+const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
+let corruptionError = null;
 const viewStateCardSql = ${viewStateCardSql.toString()};
 const assertViewStateCard = ${assertViewStateCard.toString()};
 const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
@@ -47,6 +52,7 @@ const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const writeModelUsage = ${writeModelUsage.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -416,15 +422,21 @@ function readLocalWorktreeReferences() {
     const file = path.join(root, name);
     if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
     const isCurrent = file === currentPath;
-    const nextDb = isCurrent ? db : new Database(file, {
-      readonly: true, fileMustExist: true,
-      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
-    });
+    let nextDb;
     try {
+      nextDb = isCurrent ? db : new Database(file, {
+        readonly: true, fileMustExist: true,
+        ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+      });
       const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
       rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } catch (error) {
+      if (!isCurrent && isSqliteCorruption(error)) {
+        throw Object.assign(new Error('Task reference source is corrupt'), { code: 'DB_REFERENCE_SOURCE_CORRUPT', cause: error });
+      }
+      throw error;
     } finally {
-      if (!isCurrent) nextDb.close();
+      if (!isCurrent && nextDb) nextDb.close();
     }
   }
   const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
@@ -447,8 +459,10 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordModelUsage':
+      return readyDb.transaction(() => writeModelUsage(readyDb, request.args))();
     case 'usage.recordPiUsage':
-      return recordPiUsage(readyDb, request.args);
+      return recordPiUsage(readyDb, request.args, writeModelUsage);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
@@ -2538,9 +2552,11 @@ parentPort.on('message', async (req) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
+    if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
+    if (isSqliteCorruption(err)) corruptionError = err;
     parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
@@ -2625,6 +2641,8 @@ export interface WorkerThreadTransportOptions {
   maxBackgroundInFlightRpcs?: number;
   /** 后台读排队上限；超出只拒后台读，不挡写入。 */
   maxBackgroundQueuedRpcs?: number;
+  /** Synchronous notification after admission is closed; never requests a restart. */
+  onCorruption?: (error: Error) => void;
 }
 
 export class WorkerThreadTransport implements DbTransport {
@@ -2639,6 +2657,7 @@ export class WorkerThreadTransport implements DbTransport {
   private nextId = 1;
   private closed = false;
   private closing = false;
+  private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly queued: QueuedRpc[] = [];
@@ -2656,6 +2675,9 @@ export class WorkerThreadTransport implements DbTransport {
       return Promise.reject(
         createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
       );
+    }
+    if (this.corruptionError && op !== 'closeDb') {
+      return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
@@ -2884,7 +2906,7 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private drainQueue(): void {
-    while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
+    while (!this.closed && !this.corruptionError && this.pending.size < this.maxInFlightRpcs) {
       const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
@@ -2919,14 +2941,15 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private createWorker(): Worker {
+    const { onCorruption: _onCorruption, ...workerData } = this.opts;
     // 显式 workerScriptPath 用于真实文件 worker 校验，不能被临时 inline fallback 覆盖。
     if (this.opts.workerScriptPath) {
-      return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+      return new Worker(this.resolveWorkerScriptPath(), { workerData });
     }
     if (this.shouldUseInlineWorker()) {
-      return new Worker(WORKER_CODE, { eval: true, workerData: this.opts });
+      return new Worker(WORKER_CODE, { eval: true, workerData });
     }
-    return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+    return new Worker(this.resolveWorkerScriptPath(), { workerData });
   }
 
   private shouldUseInlineWorker(): boolean {
@@ -2947,6 +2970,18 @@ export class WorkerThreadTransport implements DbTransport {
 
   private handleMessage(msg: WorkerMessage): void {
     if ('id' in msg) {
+      // A timed-out response still reports the health of this connection. Close
+      // admission before resolving/rejecting promises or draining queued work.
+      if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
+        this.corruptionError = Object.assign(new Error(msg.error.message), { code: msg.error.code });
+        for (const queued of this.queued.splice(0)) {
+          if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
+          queued.reject(createCorruptDbUnavailableError(this.corruptionError));
+        }
+        // Keep already-posted requests pending: some may have committed. The
+        // worker rejects unstarted work and returns actual completed outcomes.
+        try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
+      }
       const pending = this.pending.get(msg.id);
       if (!pending) return;
       this.pending.delete(msg.id);

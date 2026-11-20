@@ -944,7 +944,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
         }),
   };
   const bot: BotProfile = {
-    id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `bot_${now}_${crypto.randomUUID()}`,
     templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),

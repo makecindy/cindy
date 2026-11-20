@@ -45,6 +45,11 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
   自定义标记，**不把完整默认配置复制进用户配置**。
 - 未自定义的用户随版本获得新默认值，已自定义的用户保留自己的选择。
 
+桌面显示语言按本机资料目录保存（`display-language.json`）。首次打开时沿用当前窗口已有的
+有效 `localStorage.language`，并在之后启动时把已保存的选择同步回该键，供旧版和迁移助理
+读取。保存异步等待落盘确认，显式选择「跟随系统」也会记住。迁移助理在写锁内确认本机
+尚未设置语言才导入。辅助窗口收到实际显示语言时只更新本窗。
+
 ### 完整主题与外观设置
 
 Desktop 的 `main/appearance/service.ts` 是唯一外观覆盖所有者；

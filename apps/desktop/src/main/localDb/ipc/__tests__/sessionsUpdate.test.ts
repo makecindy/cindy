@@ -79,7 +79,7 @@ const h = vi.hoisted(() => ({
     task(),
   ),
   setPinnedSectionCardMode: vi.fn(),
-  upsertRecentWorkdir: vi.fn(
+  touchRecentWorkdir: vi.fn(
     async (
       _path: string | null | undefined,
       _atMs?: number,
@@ -146,7 +146,7 @@ vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   rollbackPreparedSharedTaskClosure: h.rollbackSharedTaskClosure,
   finalizePreparedSharedTaskClosure: h.finalizeSharedTaskClosure,
 }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
+vi.mock('../recentWorkdirs', () => ({ touchRecentWorkdir: h.touchRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() =>
     h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
@@ -392,7 +392,7 @@ beforeEach(() => {
   h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
   h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
-  h.upsertRecentWorkdir.mockImplementation(async () => true);
+  h.touchRecentWorkdir.mockImplementation(async () => true);
   h.captureOwnerScope = false;
   h.ownerCurrent = true;
   h.requestRecycle.mockResolvedValue(undefined);
@@ -1056,6 +1056,15 @@ describe('local-db:sessions:update handler wiring', () => {
     await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
       /contextWindowBudget must be null or an integer/,
     );
+    // A string, and nothing written or broadcast for any refused value (the check runs before both;
+    // the Node Host's /sessions/update runs the same check, assertSessionContextWindowBudgetPatch).
+    const rowBefore = JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('cc-local'));
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: '300000' })).rejects.toThrow(
+      /^\[INVALID_PARAMS\] contextWindowBudget must be null or an integer within \[/,
+    );
+    expect(JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('cc-local'))).toBe(rowBefore);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 
   it('persists null and an in-range task context window budget', async () => {
@@ -1280,7 +1289,10 @@ describe('local-db:sessions:update handler wiring', () => {
     h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project', project_dir = '/product', working_dir = '/tmp/checkout' WHERE id = ?")
       .run('codex-local');
     const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
-    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) => real.upsertRecentWorkdir(dir, atMs, platform));
+    h.touchRecentWorkdir.mockImplementation(async (dir, atMs, platform) => real.touchRecentWorkdir(dir, atMs, platform));
+    await touchUserSendInDb('codex-local', 50);
+    expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([]);
+    h.sqlite!.prepare('INSERT INTO recent_workdirs VALUES (?, ?)').run('/product', 1);
     await touchUserSendInDb('codex-local', 100);
     await touchUserSendInDb('codex-local', 200);
     expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([{ path: '/product' }]);
@@ -1335,17 +1347,18 @@ describe('local-db:sessions:update handler wiring', () => {
     ).run('codex-local');
     // Exercise the real upsert against this test's isolated SQLite database.
     const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
-    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
-      real.upsertRecentWorkdir(dir, atMs, platform),
+    h.touchRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
+      real.touchRecentWorkdir(dir, atMs, platform),
     );
+    h.sqlite!.prepare('INSERT INTO recent_workdirs VALUES (?, ?)').run('/old/dir', 1);
     const sentAt = 1_786_500_050_000;
     await touchUserSendInDb('codex-local', sentAt);
-    h.upsertRecentWorkdir.mockClear();
+    h.touchRecentWorkdir.mockClear();
 
     if (writer === 'generic') await invokeUpdate('codex-local', { status });
     else await invokePatchMeta('codex-local', { status });
 
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
     expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
       { path: '/old/dir', last_used_at: sentAt },
     ]);
@@ -1365,7 +1378,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
       await invokeUpdate('codex-local', { status });
 
-      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
     },
   );
 
@@ -1374,7 +1387,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { workingDir: '/worker/dir', workspaceKind: 'project' });
 
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
   });
 
   it('suppresses the recent-project refresh after an owner switch', async () => {
@@ -1391,7 +1404,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { workspaceKind: 'project' });
 
-    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+    expect(h.touchRecentWorkdir).toHaveBeenCalledWith(
       '/old/dir',
       expect.any(Number),
       process.platform,
@@ -1652,10 +1665,10 @@ describe('local-db:sessions:update handler wiring', () => {
   // 竞态收敛(review on #3225 第二轮):读行与广播之间还有 await(摘要清理 /
   // recent-workdir / 转录迁移),期间另一窗口可删除并先广播 deleted;本 handler
   // 恢复后若用旧快照广播 archived,该广播是最后一条,镜像不会自愈——已删任务
-  // 持久复活。upsertRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
+  // 持久复活。touchRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
   // 断言广播前重读了状态。
   it('re-reads status before broadcasting when an await intervenes after the row read', async () => {
-    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+    h.touchRecentWorkdir.mockImplementationOnce(async () => {
       h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('cc-local');
       return true;
     });
@@ -1887,7 +1900,7 @@ describe('local-db:sessions:update handler wiring', () => {
       ).rejects.toThrow('account changed');
       expect(h.relocate).toHaveBeenCalledOnce();
       expect(readCwd()).toBe(phase === 'after commit' ? '/new/dir' : '/old/dir');
-      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
       expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     },
   );
@@ -2343,6 +2356,80 @@ describe('terminal intent during session creation', () => {
 
 });
 
+/**
+ * The two writers of a task's context window budget (checkpoint 3b-2): the desktop's own budget chip
+ * saves through local-db:sessions:update (updateSessionInDb), a remote set-* mirror through
+ * persistSessionFields (persistSessionFieldsWith, which the Node Host's /sessions/update uses for a
+ * budget). A budget-only change ends the same on both: task row, budget preference, the runtime hook's
+ * previous / next, broadcasts in order, and whether it throws. The two known differences are pinned as
+ * they are (release table docs/host/personal-migration-release-table.md, section 2, "任务窗口预算的两条写入路径").
+ * Whoever changes one writer and not the other turns a case here red.
+ * - Tier: unit, through the registered IPC handler and the exported writer over a full sessions table.
+ */
+describe('a budget-only change through updateSessionInDb and through persistSessionFields', () => {
+  const run = async (writer: 'update' | 'persist', setup: { stored: number | null; failWrite?: boolean; id?: string }, next: number | null) => {
+    const id = setup.id ?? 'cc-local';
+    writeSessionContextWindowBudget(id, setup.stored);
+    const log: unknown[] = [];
+    h.tapWindowBroadcast.mockImplementation((channel: string, payload: unknown) => { log.push(['broadcast', channel, payload]); });
+    h.handlers.clear();
+    registerSessionIpc(undefined, {
+      closeIdleSessionForMove: h.closeIdleSessionForMove,
+      applyContextWindowBudget: async (sessionId, change) => { log.push(['apply', sessionId, change]); },
+    });
+    if (setup.failWrite) {
+      vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+        throw new Error('session context budget settings file is unreadable');
+      });
+    }
+    const rowBefore = JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get(id));
+    let error: string | null = null;
+    try {
+      if (writer === 'update') await invokeUpdate(id, { contextWindowBudget: next });
+      else await persistSessionFields(id, { contextWindowBudget: next });
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+    return {
+      error,
+      rowUnchanged: JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get(id)) === rowBefore,
+      budget: readSessionContextWindowBudget(id),
+      customized: isSessionContextWindowBudgetCustomized(id),
+      log,
+    };
+  };
+  const patched = (sessionId: string, contextWindowBudget: number | null) =>
+    ['broadcast', 'local-db:sessions:patched', { sessionId, patch: { contextWindowBudget } }];
+
+  it.each([
+    ['set from none', { stored: null }, 300_000],
+    ['clear', { stored: 300_000 }, null],
+    ['the same value again', { stored: 300_000 }, 300_000],
+  ] as const)('%s ends the same', async (_name, setup, next) => {
+    const viaUpdate = await run('update', setup, next);
+    expect(viaUpdate.error).toBeNull();
+    expect(viaUpdate.budget).toBe(next);
+    expect(viaUpdate.log).toEqual([patched('cc-local', next), ['apply', 'cc-local', { previous: setup.stored, next }]]);
+    expect(await run('persist', setup, next)).toEqual(viaUpdate);
+  });
+
+  it('known difference: when the preference file refuses the write, only updateSessionInDb has broadcast the unsaved value', async () => {
+    const unsaved = { error: 'session context budget settings file is unreadable', rowUnchanged: true, budget: null, customized: false };
+    expect(await run('update', { stored: null, failWrite: true }, 300_000))
+      .toEqual({ ...unsaved, log: [patched('cc-local', 300_000)] });
+    expect(await run('persist', { stored: null, failWrite: true }, 300_000)).toEqual({ ...unsaved, log: [] });
+  });
+
+  it('known difference: for a task that does not exist, updateSessionInDb answers NOT_FOUND and persistSessionFields writes the preference', async () => {
+    expect(await run('update', { stored: null, id: 'missing-task' }, 300_000))
+      .toEqual({ error: '[NOT_FOUND] Session 不存在', rowUnchanged: true, budget: null, customized: false, log: [] });
+    expect(await run('persist', { stored: null, id: 'missing-task' }, 300_000)).toEqual({
+      error: null, rowUnchanged: true, budget: 300_000, customized: true,
+      log: [patched('missing-task', 300_000), ['apply', 'missing-task', { previous: null, next: 300_000 }]],
+    });
+  });
+});
+
 // DB tier: exercise both production write channels and their authoritative persisted/broadcast pair.
 describe('task snooze persistence', () => {
   it.each([invokeUpdate, invokePatchMeta])('saves deferral without activity or lifecycle effects', async (invoke) => {
@@ -2356,7 +2443,9 @@ describe('task snooze persistence', () => {
     }));
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
     await expect(invoke('codex-local', { snoozedUntil: null })).resolves.toMatchObject({ snoozedUntil: null, snoozedAt: null });
-    await invoke('codex-local', { snoozedUntil });
+    await expect(invoke('codex-local', { snoozedUntil: '9999-12-31T23:59:59.999Z' })).resolves.toMatchObject({
+      snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: expect.any(String),
+    });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
   });

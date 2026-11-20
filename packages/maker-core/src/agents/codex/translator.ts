@@ -768,6 +768,53 @@ export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
 
+export const CODEX_ACCOUNT_ACCESS_DENIED_REASON = 'account_access_denied';
+
+/** Only traverse provider error envelopes, never arbitrary metadata or quoted prose. */
+function accountAccessDenial(value: unknown, depth = 0): { message: string } | null {
+  if (depth > 8) return null;
+  if (typeof value === 'string') {
+    if (value.length > 8192) return null;
+    const start = value.indexOf('{');
+    const end = value.lastIndexOf('}');
+    if (start < 0 || end < start) return null;
+    try { return accountAccessDenial(JSON.parse(value.slice(start, end + 1)), depth + 1); }
+    catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.code === 'ACCOUNT_SHARING_ACCESS_DENIED') {
+    // Promote only the bounded, redacted explanation. Transport details, sibling
+    // fields and credentials must not enter persisted events or logs.
+    const message = typeof body.message === 'string' && body.message.length <= 1500
+      ? redactSensitiveText(body.message) : 'The upstream account does not have access to this model.';
+    return { message };
+  }
+  return accountAccessDenial(body.error, depth + 1) ?? accountAccessDenial(body.message, depth + 1);
+}
+
+function codexAccountAccessDenial(error: CodexErrorInput | null | undefined): { message: string } | null {
+  const tag = codexErrorInfoTag(error?.codexErrorInfo);
+  if (tag && !['other', 'httpConnectionFailed', 'responseStreamConnectionFailed',
+    'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(tag)) return null;
+  const info = error?.codexErrorInfo;
+  const status = info && typeof info === 'object'
+    ? (Object.values(info)[0] as { httpStatusCode?: number | null })?.httpStatusCode : undefined;
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
+  const match = textStatus.exec(message.slice(0, 8192)) ?? textStatus.exec(details.slice(0, 8192));
+  const effectiveStatus = status ?? (match ? Number(match[1]) : undefined);
+  if (effectiveStatus !== undefined && ![400, 403, 407].includes(effectiveStatus)) return null;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return null;
+  return accountAccessDenial(message) ?? accountAccessDenial(details);
+}
+
+/** Both denials reuse the current-turn interrupt and exclude automatic replay. */
+export function isCodexAccessRejectedError(error: CodexErrorInput | null | undefined): boolean {
+  return codexAccountAccessDenial(error) !== null || isCodexModelUnavailableError(error);
+}
+
 function hasModelRejection(text: string, status: number | undefined): boolean {
   // Native reconnect notifications flatten gateway JSON into this exact phrase.
   // It is a model denial only with 403, never evidence for a generic auth failure.
@@ -817,6 +864,16 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  */
 export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
+  const accountDenial = codexAccountAccessDenial(error);
+  if (accountDenial) {
+    // Keep the existing provider-explanation renderer and its actionable links.
+    const message = JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: accountDenial.message } });
+    return {
+      message, usageLimit: false, isCapacityError: false,
+      reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON,
+      data: { message, reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON, willRetry: false },
+    };
+  }
   if (isCodexModelUnavailableError(error)) {
     return {
       message: CODEX_MODEL_UNAVAILABLE_MESSAGE,

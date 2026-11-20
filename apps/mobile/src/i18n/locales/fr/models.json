@@ -112,5 +112,12 @@
     "quotaResetIn": "Réinitialisation dans {{duration}}",
     "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
     "quotaResetHint": "Au rythme actuel, il pourrait rester du quota au moment de la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
+  },
+  "pluginEngines": {
+    "genericName": "Moteur de plugin",
+    "defaultModel": "Modèle par défaut",
+    "unavailable": "{{engine}} est indisponible",
+    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}",
+    "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer."
   }
 }

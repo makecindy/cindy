@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f0ab99a7-ca9f-4634-ab12-d0a09e95cdd7",
+  "id": "343d673c-0459-40bd-85cc-d1ba9687b434",
   "prevId": "8abc7fde-7114-45f2-9900-fc3f9eece661",
   "tables": {
     "account_usage_snapshots": {
@@ -2101,13 +2101,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'{}'"
-        },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "sort_order": {
           "name": "sort_order",
@@ -5145,6 +5138,13 @@
         },
         "model_agent_device_id": {
           "name": "model_agent_device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "inherited_project_dir": {
+          "name": "inherited_project_dir",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

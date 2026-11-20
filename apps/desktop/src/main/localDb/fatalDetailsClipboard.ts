@@ -1,3 +1,4 @@
+import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { localDbFatalDetailsText } from '../../shared/localDbFatalDetails.js';
 
@@ -9,4 +10,12 @@ import { localDbFatalDetailsText } from '../../shared/localDbFatalDetails.js';
  */
 export function issueLocalDbFatalDetails(result: { ready: boolean; error?: { code?: string; message?: string } }): void {
   if (!result.ready) rememberIssuedClipboardText(localDbFatalDetailsText(result.error));
+}
+
+/** Runtime notification and its copyable details must be issued together. */
+export function notifyRuntimeDbCorruption(stamp: DataOwnerPushStamp, notify: (stamp: DataOwnerPushStamp) => void): void {
+  // The runtime push renders code-only details; register exactly that text
+  // before any renderer can handle the notification and request a copy.
+  issueLocalDbFatalDetails({ ready: false, error: { code: 'DB_RUNTIME_CORRUPT' } });
+  notify(stamp);
 }

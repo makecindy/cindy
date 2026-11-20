@@ -263,9 +263,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const own = this.client.delegation && this.delegations.find(d => delegationVisibleTo(d, this.client.identity, this.client.delegation));
     if (this.client.delegation) return own && verifyDelegation(this.client.rootPublicKey, own) ? delegatedPeerTarget(own, peer, 'guest') : null;
     for (const delegation of this.delegations) {
-      const target = verifyDelegation(this.client.rootPublicKey, delegation) && delegationVisibleTo(delegation, this.client.identity)
-        && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      // Each task sweep looks up one guest. Check the peer before revalidating
+      // certificate lifetimes and signatures in the authenticated snapshot.
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && delegationVisibleTo(delegation, this.client.identity)
+        && verifyDelegation(this.client.rootPublicKey, delegation)) return target;
     }
     return null;
   }

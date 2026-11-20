@@ -9,9 +9,12 @@ export interface SharedTaskCaller {
   planMode: boolean;
 }
 
-interface Deps {
+export interface SharedTaskCallerAccess {
   caller(context: LiziMcpSessionContext): SharedTaskCaller;
   captureGroupAccess(context: LiziMcpSessionContext): Promise<{ assertCurrent(): void; refresh(): Promise<void> } | null>;
+}
+
+interface Deps extends SharedTaskCallerAccess {
   assertActionCurrent(): Promise<void>;
   captureCommand(sessionId: string, assertCurrent: () => void): (command: SharedTaskHostCommand) => Promise<unknown>;
 }

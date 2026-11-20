@@ -517,6 +517,22 @@ describe('outboundFetch', () => {
     );
   });
 
+  // #9208 unit: benchmark-only approval must retain exact URL and HTTPS checks.
+  // Existing private-network approval coverage cannot detect broad fake-IP grants.
+  it('binds the benchmark-only exception to one HTTPS target', async () => {
+    const url = 'https://198.18.0.73/data';
+    const approval = { targetUrl: url, allowBenchmarkFakeIp: true };
+    const before = vi.fn(() => { throw new Error('dispatch reached'); });
+    await expect(guardedOutboundFetch(url, {}, before, approval)).rejects.toThrow('dispatch reached');
+    expect(before).toHaveBeenCalledOnce();
+    before.mockClear();
+    await expect(guardedOutboundFetch(url + '?changed=1', {}, before, approval)).rejects.toThrow('approval target mismatch');
+    const cleartext = url.replace('https:', 'http:');
+    await expect(guardedOutboundFetch(cleartext, {}, before, { ...approval, targetUrl: cleartext })).rejects.toThrow(/HTTPS/i);
+    expect(before).not.toHaveBeenCalled();
+    expect(undiciState.fetch).not.toHaveBeenCalled();
+  });
+
   it('allows only the explicitly approved network target and keeps manual redirects', async () => {
     const requests: Array<{ path?: string; method?: string; authorization?: string }> = [];
     // Use a server owned by this test. With pnpm hoisting, the shared runtime can

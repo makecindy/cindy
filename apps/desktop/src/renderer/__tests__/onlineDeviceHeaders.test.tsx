@@ -78,6 +78,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     allProjectKeysForOrder: [],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
+      hideAutomations: false, setHideAutomations: vi.fn(),
       groupBy: 'project',
       groupDialogue: true,
       groupAutomation: false,

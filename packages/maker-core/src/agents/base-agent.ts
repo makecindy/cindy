@@ -30,7 +30,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -1229,6 +1229,13 @@ export interface AgentDeps {
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
+   * Probe the selected BYOM endpoint from the SSH execution host, without credentials.
+   * Success permits direct use of the configured URL; it does not authorize a host forward.
+   * Hosts without this capability keep loopback BYOM fail-closed.
+   */
+  probeRemotePiProviderEndpoint?: (remoteHostId: string, baseUrl: string) => Promise<boolean>;
+
+  /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
    *
    * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
@@ -1280,6 +1287,9 @@ export interface AgentDeps {
    * 代理经 SSH remote-forward 隧道)。host 装配;缺省 null = 远端不走本地代理。
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
+
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
 
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
@@ -2062,7 +2072,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2074,6 +2084,18 @@ export interface StartSessionOptions {
    * 用户改 prompt 后，下一次新 session 立即生效，老 session 维持启动时快照。
    */
   userPrompt?: string;
+  /**
+   * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
+   * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
+   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   */
+  pluginEngineBriefing?: string;
+  /**
+   * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
+   * true = the host trusts the engine as a whole, so its tool calls count as the task's own
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   */
+  pluginEngineTrustedCaller?: boolean;
   /**
    * Bot Profile runtime context, resolved by the main/DB authority at session
    * start. It is a startup system-prompt segment, not a per-turn user prefix.
@@ -2549,7 +2571,13 @@ export interface AgentSessionHandle {
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
@@ -2868,7 +2896,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**
