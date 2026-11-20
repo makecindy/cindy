@@ -16924,6 +16924,11 @@
         "inbox": "收件匣",
         "enterInbox": "轉至收件匣之式",
         "leaveInbox": "轉至任務列之式"
+      },
+      "mainTabs": {
+        "label": "側欄分門",
+        "options": "側欄諸項",
+        "computers": "機"
       }
     },
     "rename": {

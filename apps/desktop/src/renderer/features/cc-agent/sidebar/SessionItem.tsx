@@ -1,9 +1,10 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionSnoozeAction, useSessionSnooze } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
-import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
+import { TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
  * SessionItem — 单条 CCS 会话行
@@ -34,7 +35,7 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { Archive, Check, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
+import { Archive, Check, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
@@ -68,20 +69,16 @@ import {
   getSessionDisplayTitle,
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
-import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import {
   findLatestSidebarIndexRunForSession,
   loadScheduleSidebarIndexRuns,
   type ScheduleSidebarIndexRun,
 } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
-import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
-import { RemoteProjectIcon } from './RemoteProjectIcon';
-import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
@@ -96,7 +93,6 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
-import { AutomationSessionButton } from './AutomationSessionButton';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
   finishSessionDrag,
@@ -257,7 +253,10 @@ export interface SessionItemProps {
   inboxMode?: boolean;
   /** Shared guests retain navigation and the leave-sharing menu, without owner actions or selection. */
   navigationOnly?: boolean;
-  /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
+  /**
+   * Shared-group identity mark. List/card variants (SessionCard) show a crown for owners;
+   * compact text rows deliberately show none (2026-11-19 minimal sidebar).
+   */
   sharedTaskRole?: 'owned' | 'joined';
   session: Session;
   isActive: boolean;
@@ -345,13 +344,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   sourceLabel,
   insideAutomationGroup = false,
   navigationOnly = false,
-  sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const followers = useSessionFollowers(session);
   const cindyMakeActivity = useCindyMakeActivity(session);
-  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
@@ -441,17 +438,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       orcaWorkerAttentionKind !== undefined ||
       remoteSchedule?.hasUnreadRun === true,
   });
-  const leftIconRunning = sessionActivity.currentTurnActive === true;
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
-  const showRightStatus = rightStatusKind !== 'time';
-  const remoteIconKind = session.deviceLinkDeviceId
-    ? 'device-link'
-    : session.remoteHostId
-      ? 'ssh'
-      : null;
-  const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? (session.deviceLinkConnectionStatus ?? 'connected')
-    : null;
+  // 状态优先级不变(error > awaiting > running > done > time),只是表达换了:
+  // running 是行尾灰色转圈;error / awaiting / done 不画色点,改为标题加粗。
+  const needsAttention =
+    rightStatusKind === 'error' || rightStatusKind === 'awaiting' || rightStatusKind === 'done';
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const tagMenu = (
     <TaskTagMenuSection
@@ -464,12 +455,6 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   );
   const remoteWritesBlocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
-  // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
-  // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
-  const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
-  // The inbox drops the automation mark and the project name: the row's project icon already
-  // says where it belongs (2026-11-18 user decision).
-  const hasAutomationMeta = !inboxMode && (boundSchedules.length > 0 || isAutomationGenerated);
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
   //   1. 门控 Run 按钮的可见性 —— schedule 已被删除但会话保留(disposition
@@ -1005,16 +990,19 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         // 基础几何：高 32 / 圆角 8。普通会话的 Agent → 标题保持 10px;
         // 自动任务行 Agent → Timer 延续原 Clock 的 6px,Timer → 标题也为 6px。
         // rounded-full:hover/active 底与顶部导航行、项目行同款药丸形。
-        'group relative flex h-8 w-full items-center rounded-full',
-        !isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5',
+        'group relative flex h-8 w-full items-center gap-2.5 rounded-full',
         'select-none',
+        // 文字行一律左 12px,不按层级缩进(2026-11-19「嵌套内收太复杂」)。
         // 右侧信息槽按内容收缩；hover 时 archive 快捷按钮覆盖同一槽位。
         'pl-3 pr-2',
         // 注意:不加 transition-colors —— 行 bg 的 hover/active 变化要瞬时,
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
-        'text-left text-sm font-medium',
+        // 需要用户看的任务(完成未读 / 等你回复 / 出错)只靠标题加粗提示,不画彩色状态点
+        // (2026-11-19 用户裁决:侧栏只保留一个灰色运行转圈)。
+        'text-left text-sm',
+        needsAttention ? 'font-semibold' : 'font-normal',
         !isEditing && 'cursor-pointer',
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
@@ -1040,7 +1028,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
       <span className={cn("flex shrink-0 items-center justify-center empty:hidden", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
-          hasSeparateStatusIndicator={showRightStatus}
+          // 运行状态只由行尾灰色转圈表达(2026-11-19 极简侧栏),左侧不再另画运行提示。
+          hasSeparateStatusIndicator
           hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
           identityIcon={showProject && inboxProject ? (
             <ResolvedProjectIcon directory={inboxProject}
@@ -1048,26 +1037,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
               name={sourceLabel} size={18} />
           ) : undefined}
           session={session}
-          isRunning={leftIconRunning}
+          isRunning={sessionActivity.currentTurnActive === true}
           isAttached={isAttached}
           hasAttentionNotification={hasAttentionNotification}
           isActive={isActive}
           showAttentionDot={false}
         />
       </span>
-      {sharedTaskRole === 'owned' ? (
-        <span
-          className="flex w-3 shrink-0 items-center justify-center"
-          data-testid={`shared-task-role-slot-owned-${session.id}`}
-        >
-          <Crown
-            size={12}
-            strokeWidth={1.8}
-            className="text-[var(--warning-fg)]"
-            aria-label={t('sharedTask.roleHost')}
-          />
-        </span>
-      ) : null}
 
       {isEditing ? (
         <SessionRenameInput
@@ -1095,41 +1071,18 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
           data-no-drag={splitDragHandleActive ? 'true' : undefined}
           draggable={splitDragHandleActive}
-          className="min-w-0 flex flex-1 items-center gap-1.5"
+          className="min-w-0 flex flex-1 items-center"
         >
-          {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
-              主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
-          {!hasAutomationMeta ? null : boundSchedules.length > 0 ? (
-            <ScheduleBindingBadge
-              schedules={boundSchedules}
-              deviceLinkDeviceId={session.deviceLinkDeviceId}
-              activeForeground={isActive}
-            />
-          ) : isAutomationGenerated ? (
-            <AutomationSessionButton sessionId={session.id} size={10} activeForeground={isActive} />
-          ) : null}
+          {/* 标题后不再挂自动任务计时器、标签色点、伙伴头像、远程电脑图标和项目名;
+              这些信息留在悬停浮层与右键菜单里(2026-11-19 用户裁决)。 */}
           <SidebarTitleMarquee
             title={displayTitle}
             className={isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground'}
           >
             {titleContent}
           </SidebarTitleMarquee>
-          {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
-          <TaskTagDots tags={session.tags} />
-          {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
+          {/* 标签色点与远程电脑图标不再常显(2026-11-19 极简侧栏);伙伴与项目按「任务信息」勾选显示。 */}
           {showTeammate && <BotFollowMark followers={followers} />}
-          {remoteIconKind && (
-            <RemoteProjectIcon
-              kind={remoteIconKind}
-              size={12}
-              strokeWidth={1.8}
-              connectionStatus={remoteIconConnectionStatus}
-              className={cn(
-                isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-              )}
-            />
-          )}
-          {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
           {showProject && sourceLabel && !inboxMode ? (
             <span
               title={sourceLabel}
@@ -1182,19 +1135,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
               )}
             >
-              {cindyMakePreparing && rightStatusKind === 'running' ? (
-                <span
-                  className={cn(
-                    'max-w-[9rem] truncate text-xs font-normal',
-                    isActive
-                      ? 'text-sidebar-item-active-foreground/80'
-                      : 'text-[var(--cmd-palette-item-meta)]',
-                  )}
-                >
-                  {t('cindyMake.code.phases.' + cindyMakePreparing)}
-                </span>
-              ) : showRightStatus ? (
-                <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
+              {rightStatusKind === 'running' ? (
+                <SidebarRightStatusIndicator kind="running" isActive={isActive} />
               ) : (
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅
                 // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。

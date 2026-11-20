@@ -332,6 +332,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       tone: collapsedAttention.tone,
     });
     const showRightStatus = groupRightStatusKind !== 'time';
+    // 紧凑文字模式(2026-11-19 用户裁决):组头不再画 Agent 图标、计时器和彩色状态点;
+    // 运行中是行尾灰色转圈，出错 / 等你回复 / 完成未读改为标题加粗。列表 / 卡片模式不变。
+    const minimalText = sessionVariant !== 'list';
+    const groupNeedsAttention = showRightStatus && groupRightStatusKind !== 'running';
     const actionButtonToneClassName = hasActiveHidden
       ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
       : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground';
@@ -529,10 +533,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               );
             }}
             className={cn(
-              // 组头和运行记录沿用当前模式的会话行边距。
+              // 组头和运行记录沿用当前模式的会话行边距;text 模式不缩进(2026-11-19)。
               'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
               sessionVariant === 'list' ? 'px-2.5' : 'pl-3 pr-2',
-              'text-left text-sm font-medium',
+              'text-left text-sm',
+              !minimalText ? 'font-medium' : groupNeedsAttention ? 'font-semibold' : 'font-normal',
               hasActiveHidden
                 ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
                 : 'text-foreground hover:bg-sidebar-item-hover',
@@ -561,6 +566,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   />
                 </span>
               )}
+              {minimalText ? null : (<>
               {/* text 延续 vendor → Timer → 标题；list 把 Timer 排到标题右侧，避免它
                 被误读成一层缩进，同时保留自动任务身份和点击入口。Timer 与标题是
                 同级按钮，避免 role=button 嵌进 title button 后无法进入 Tab 顺序。
@@ -609,6 +615,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 </button>
               </Tip>
               )}
+              </>)}
               <button
                 type="button"
                 onClick={(event) => {
@@ -683,7 +690,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     menuOpen && 'opacity-0',
                   )}
                 >
-                  {showRightStatus ? (
+                  {showRightStatus && minimalText && groupRightStatusKind !== 'running' ? (
+                    <span className="min-w-0 truncate text-right">{meta}</span>
+                  ) : showRightStatus ? (
                     groupRightStatusKind === 'error' ? (
                       <span
                         role="img"

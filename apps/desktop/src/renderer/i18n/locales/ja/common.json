@@ -16924,6 +16924,11 @@
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
         "leaveInbox": "タスク一覧モードに切り替え"
+      },
+      "mainTabs": {
+        "label": "サイドバーの分類",
+        "options": "サイドバーのオプション",
+        "computers": "コンピューター"
       }
     },
     "rename": {

@@ -47,7 +47,6 @@ import {
   CircleAlert,
   CirclePlus,
   Folder,
-  Hammer,
   Loader2,
   Settings,
   SquarePen,
@@ -83,7 +82,10 @@ import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
-import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
+import { MachineTabStrip } from './sidebar/MachineSwitcherMenu';
+import { SidebarMainTabs } from './sidebar/SidebarMainTabs';
+import { useSidebarMainTab, type SidebarMainTab } from './sidebar/sidebarMainTab';
+import { getAutomationSidebarGroupInfo } from './lib/automationSidebarGrouping';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
@@ -1644,6 +1646,20 @@ function ExpandedView({
   const activityFilteredSessions = useMemo(
     () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
   );
+  // 电脑行只列在当前标签下真有内容的电脑(2026-11-20):与列表同一口径，但不按当前电脑过滤。
+  const allMachineSidebarSessions = useMemo(
+    () =>
+      filterTaskSessions(
+        sidebarSessionsWithHiddenProjectsAsDialogues(
+          selectVisibleSessions(sessions, remoteProjectSessions, MACHINE_ALL)
+            .filter((session) => !session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId))
+            .filter(passesOrcaAndStatus),
+          hiddenProjectKeys,
+          localPlatform,
+        ),
+      ),
+    [sessions, remoteProjectSessions, passesOrcaAndStatus, hiddenProjectKeys, localPlatform, filterTaskSessions],
+  );
   const statusIndependentSidebarSessions = useMemo(() => {
     const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
       .filter(session => !isOrcaWorkerSession(session)
@@ -2343,6 +2359,44 @@ function ExpandedView({
   }, []);
   const [topFade, setTopFade] = useState(false);
   const searchActive = Boolean(search.trimmed);
+  // 侧栏顶部标签(2026-11-19):每次只显示一类;别的标签里有需要你看的就把标签字加粗。
+  const [mainTab, setMainTab] = useSidebarMainTab();
+  const [buddiesAttention, setBuddiesAttention] = useState(false);
+  const mainTabAttention = useMemo<Record<SidebarMainTab, boolean>>(() => {
+    const result = { tasks: false, buddies: buddiesAttention, chats: false, automations: false };
+    if (sidebarNotifications.size === 0) return result;
+    const dialogueIds = new Set(visibleDialogues.map((session) => session.id));
+    const consider = (session: Session) => {
+      if (!sidebarNotifications.has(session.id)) return;
+      if (getAutomationSidebarGroupInfo(session, automationGroupingIndex)) result.automations = true;
+      else if (dialogueIds.has(session.id)) result.chats = true;
+      else result.tasks = true;
+    };
+    for (const project of visibleProjectsWithVendor) project.sessions.forEach(consider);
+    visibleDialogues.forEach(consider);
+    visibleUnclassified.forEach(consider);
+    return result;
+  }, [
+    buddiesAttention,
+    sidebarNotifications,
+    visibleDialogues,
+    visibleProjectsWithVendor,
+    visibleUnclassified,
+    automationGroupingIndex,
+  ]);
+  const machinesWithContent = useMemo(() => {
+    const machines = new Set<string>();
+    if (mainTab === 'buddies') return machines;
+    for (const session of allMachineSidebarSessions) {
+      const tab: SidebarMainTab = getAutomationSidebarGroupInfo(session, automationGroupingIndex)
+        ? 'automations'
+        : session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir
+          ? 'chats'
+          : 'tasks';
+      if (tab === mainTab) machines.add(session.deviceLinkDeviceId ?? MACHINE_LOCAL);
+    }
+    return machines;
+  }, [mainTab, allMachineSidebarSessions, automationGroupingIndex]);
   const searchActiveRef = useRef(searchActive);
   searchActiveRef.current = searchActive;
   // 搜索激活前持续记下列表 scrollTop:layout effect 跑时原列表已经 hidden,
@@ -3762,8 +3816,34 @@ function ExpandedView({
           ) : null}
           {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
           <div hidden={searchActive} className="flex flex-col gap-2">
-            {/* 伙伴段:侧栏第一层,固定在置顶上方(2026-10-13 定稿),/bots 与 /cc-agent 共用。 */}
-            <TeammatesSection />
+            {/* 标签行与电脑行紧贴成一组，再与下方列表隔开。 */}
+            <div className="flex flex-col">
+            <SidebarMainTabs
+              tab={mainTab}
+              onTabChange={setMainTab}
+              attention={mainTabAttention}
+              showFilterReminder={
+                taskListMode === 'inbox'
+                  ? sidebarContentFilterCount(filter) > 0
+                  : filter.status === 'archived'
+              }
+              onOpenOrganize={setOrganizeMenuPos}
+            />
+            {mainTab !== 'buddies' ? (
+              <MachineTabStrip
+                machinesWithContent={machinesWithContent}
+                onCreateProject={handleCreateProject}
+              />
+            ) : null}
+            </div>
+            {/* 伙伴标签:不在当前标签时只隐藏不卸载，好让「伙伴」标签随未读加粗。 */}
+            <div hidden={mainTab !== 'buddies'}>
+              <TeammatesSection onAttentionChange={setBuddiesAttention} />
+            </div>
+            {/* 用 class 而不是 hidden 属性:flex 类会盖过 [hidden] 的 display:none。 */}
+            <div className={mainTab === 'buddies' ? 'hidden' : 'flex flex-col gap-2'}>
+            {/* contents:空的分段不再占一份 gap,标签下不会多出一截空白。 */}
+            <div className={mainTab === 'tasks' ? 'contents' : 'hidden'}>
             <SharedTasksSection activeSessionId={activeSessionId} localSessions={sessions}
               runningSessionIds={displayRunningSessionIds} attachedSessionIds={attachedSessionIds} notifications={sidebarNotifications}
               onAction={handleActionClick} onRename={handleRename} onTogglePin={handleTogglePin}
@@ -3771,14 +3851,9 @@ function ExpandedView({
               clearNotification(id);
               navigate('/cc-agent/' + encodeURIComponent(id));
             }} />
+            </div>
             {remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
               <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={dialogueFilterCount}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
                 <RemoteSidebarLoadNotice
                   kind="tasks"
                   status="error"
@@ -3788,22 +3863,10 @@ function ExpandedView({
               </>
             ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
               <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={dialogueFilterCount}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
                 <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
               </>
             ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
               <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={dialogueFilterCount}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
                 <RemoteSidebarLoadNotice
                   kind="tasks"
                   status="loading"
@@ -3815,12 +3878,6 @@ function ExpandedView({
               // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
               // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
               <>
-                <MainListScopeHeader
-                  filter={filter}
-                  allKnownProjects={visibleProjectUniverse}
-                  dialogueCount={dialogueFilterCount}
-                  hasRemoteDevices={deviceGroupingAvailable}
-                />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
                   <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
                     {t('ccAgent.sidebar.machineSwitcher.connecting')}
@@ -3843,6 +3900,7 @@ function ExpandedView({
                  * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。设备目录失败
                  * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
+                <div className={mainTab === 'tasks' ? 'contents' : 'hidden'}>
                 <PinnedSection
                   sortBy={filter.pinnedSortBy}
                   onSortByChange={filter.setPinnedSortBy}
@@ -3905,6 +3963,7 @@ function ExpandedView({
                   projectOptions={projectPickerOptions}
                   onReorder={handlePinnedReorder}
                 />
+                </div>
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
@@ -3954,9 +4013,11 @@ function ExpandedView({
                   remoteDeviceIndex={remoteDeviceIndex}
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
+                  mainTab={mainTab === 'buddies' ? 'tasks' : mainTab}
                 />
               </>
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -4750,7 +4811,6 @@ function RailPanels({
                   sessions={cindyMakeSessions}
                   {...entryListShared}
                   groupTitle={t('settings.cindyMake.title')}
-                  groupIcon={<Hammer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />}
                   collapsed={cindyMakeCollapsed}
                   onToggle={() => setCindyMakeCollapsed((value) => !value)}
                   isCreateDisabled={false}

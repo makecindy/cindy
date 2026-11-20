@@ -16998,6 +16998,11 @@
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
         "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+      },
+      "mainTabs": {
+        "label": "Seitenleisten-Bereiche",
+        "options": "Seitenleisten-Optionen",
+        "computers": "Computer"
       }
     },
     "rename": {

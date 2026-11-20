@@ -17161,6 +17161,11 @@
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
         "leaveInbox": "Cambiar al modo lista de tareas"
+      },
+      "mainTabs": {
+        "label": "Secciones de la barra lateral",
+        "options": "Opciones de la barra lateral",
+        "computers": "Ordenadores"
       }
     },
     "rename": {

@@ -17161,6 +17161,11 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "mainTabs": {
+        "label": "Seções da barra lateral",
+        "options": "Opções da barra lateral",
+        "computers": "Computadores"
       }
     },
     "rename": {
