@@ -52,6 +52,7 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
 const worktreeDeclarations: string[] = [];
+const pluginEngineDeclarations: string[] = [];
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
@@ -64,6 +65,10 @@ function visit(node: ts.Node) {
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    pluginEngineDeclarations.push(`const ${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
     if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
@@ -74,6 +79,9 @@ function visit(node: ts.Node) {
 }
 visit(source);
 const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const pluginEngineSelectionCode = ts.transpileModule(pluginEngineDeclarations.join('\n') + '\nrememberedPluginEngineDeviceId;', {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -318,7 +326,13 @@ async function submit(options: {
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
     activePluginEngine: null,
-    rememberedPluginEngineDeviceId: options.rememberedPluginEngineDeviceId,
+    rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      isDeviceLinkDraft: !!options.deviceId,
+      effectiveRemoteHostId: options.remoteHostId,
+      draft: { vendor: agentKind, pluginEngine: options.rememberedPluginEngineDeviceId
+        ? { deviceId: options.rememberedPluginEngineDeviceId }
+        : null },
+    }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
@@ -470,6 +484,12 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.clearDraft).not.toHaveBeenCalled();
     if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
     else expect(result.errors[0]).toMatchObject({ message: 'newChat.pluginEngines.unavailable' });
+  });
+  // After moving the draft to another task computer, plugin engines are outside
+  // that composer's scope. A formerly selected one must not block its route.
+  it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
+    const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
   });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.

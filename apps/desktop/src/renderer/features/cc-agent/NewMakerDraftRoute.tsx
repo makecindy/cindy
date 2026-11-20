@@ -1229,7 +1229,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 本机没有引擎、也没有别的电脑时不传，模型选择器与今天逐像素一致。
   const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
-  const rememberedPluginEngineDeviceId = draft.pluginEngine?.deviceId;
+  const rememberedPluginEngineDeviceId = pluginEnginesAllowed ? draft.pluginEngine?.deviceId : undefined;
   // 设备列表随在线状态刷新会换新数组：按「哪几台、叫什么」取一个键，内容没变就沿用同一份，
   // 不让模型选择器跟着每次在线状态刷新重算。
   const pluginEngineDevicesKey = pluginEnginesAllowed
