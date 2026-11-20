@@ -8910,7 +8910,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await applyPersistedReviewMode(o);
     assertAccess?.();
-    const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
+    const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
     // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). A collaboration
     // Worker cannot work without its role instructions, so they travel ahead of its first message,
     // and the engine is trusted as a whole to report to its Lead (user decision 2026-11-19).

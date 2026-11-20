@@ -1288,7 +1288,7 @@ export function getMaker(): Maker {
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       forwardRemoteWorkerTool: (ctx, tool, args) => remoteWorkerBridge?.forwardTool(ctx, tool, args) ?? Promise.resolve(null),
-      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
+      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor, order }) => {
         const page = await getMessagesForHistory({
           sessionIds: [leadSessionId],
           workdir: null,
@@ -1299,7 +1299,7 @@ export function getMaker(): Maker {
           includeRewound: false,
           limit,
           cursor,
-          order: 'asc',
+          order,
         });
         return {
           items: page.items.map((item) => ({
