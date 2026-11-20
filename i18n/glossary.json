@@ -4149,7 +4149,12 @@
         "desktop:logic.toasts.feishuBotConflict",
         "desktop:settings.agentIsland.skins.boli.description",
         "desktop:settings.agentIsland.skins.muffin.description",
-        "desktop:issueTracker."
+        "desktop:issueTracker.",
+        "desktop:sharedTask.",
+        "mobile/sharedTask:invitationCopied",
+        "mobile/sharedTask:inviteBoxHint",
+        "mobile/sharedTask:joinedEmptyHint",
+        "mobile/sharedTask:startIntro"
       ]
     },
     {
