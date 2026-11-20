@@ -1085,7 +1085,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
 // the system's Touch ID check stays armed so the owner can rest a finger on the sensor
 // instead of pressing a key, which locks (docs/product-rules/privacy-screen.md).
 // Main takes the prompt down with `stop` on stdin; a closed stdin means Main is gone.
-// Fixed words on stdout: ready, verified, denied, unavailable, locked, stopped.
+// Fixed words on stdout: `ready owner-prompt`, verified, denied, unavailable, locked, stopped.
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt" {
   guard inputCaller.code() != nil, ownedConsoleSession() != nil else { print("unavailable"); exit(2) }
   if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false {
@@ -1106,7 +1106,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     answered = true
     print(success ? "verified" : "denied"); fflush(stdout); exit(0)
   }
-  print("ready"); fflush(stdout)
+  // Versioned greeting: an older helper that predates this mode falls through to the
+  // generic input loop and would also print a bare `ready`, so Main must not read that as
+  // "the system sheet is up". Only this exact token arms the prompt.
+  print("ready owner-prompt"); fflush(stdout)
   DispatchQueue.global().async {
     while let command = readLine() {
       guard command.utf8.count <= 16 else { exit(2) }

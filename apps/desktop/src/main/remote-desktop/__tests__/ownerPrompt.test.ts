@@ -56,8 +56,8 @@ it('tells the caller the prompt is gone instead of verified when the helper ends
   const f = fixture();
   const starting = f.start();
   await Promise.resolve();
-  f.line('rea');
-  f.line('dy\n');
+  f.line('ready owner-');
+  f.line('prompt\n');
   const prompt = await starting;
   expect(f.answers).toEqual([]);
   f.child.emit('close');
@@ -72,7 +72,7 @@ it.each(['unavailable', 'locked', 'something-else'])(
     const f = fixture();
     const starting = f.start();
     await Promise.resolve();
-    f.line('ready\n');
+    f.line('ready owner-prompt\n');
     const prompt = await starting;
     f.line(`${word}\n`);
     expect(f.answers).toEqual(['unavailable']);
@@ -88,7 +88,7 @@ it('takes the prompt down through the helper and waits for the process to end', 
   const f = fixture();
   const starting = f.start();
   await Promise.resolve();
-  f.line('ready\n');
+  f.line('ready owner-prompt\n');
   const prompt = await starting;
   let closed = false;
   const stopping = prompt.stop().then(() => {
@@ -145,4 +145,17 @@ it('never spawns the helper when the cover is released while the binary is still
   await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
   // Nothing was started, so there is no system sheet to take down afterwards either.
   expect(spawn).not.toHaveBeenCalled();
+});
+
+it('refuses a bare ready from a helper that predates this mode', async () => {
+  // An older shipped helper ignores the unknown switch and falls through to its generic
+  // input loop, which also greets with `ready`. Arming on that word would promise a system
+  // sheet that is not on screen.
+  const f = fixture();
+  const starting = f.start();
+  await Promise.resolve();
+  f.line('ready\n');
+  await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  // The cover stays in charge: no answer is reported and no prompt is considered armed.
+  expect(f.answers).toEqual([]);
 });

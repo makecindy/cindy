@@ -181,8 +181,11 @@ desktop clicks could hit it (`openComputerUseSessions` / `onComputerUseSessionsC
 and while a remote viewer holds a lease: that viewer receives this same screen and its
 clicks are desktop coordinates (`RemoteDesktopController.hasActiveLease`). Taking the
 sheet down goes through the helper's `stop` command, including a start that is still
-waiting for `ready`: killing the helper instead leaves the system prompt on screen for
-about ten seconds.
+waiting for `ready owner-prompt`: killing the helper instead leaves the system prompt on
+screen for about ten seconds. The greeting is versioned on purpose — an older shipped
+helper ignores the unknown switch, falls through to its generic input loop and would also
+print a bare `ready`; Main treats anything but `ready owner-prompt` as "this build cannot
+show the sheet", so touch-to-return is never promised by a helper that cannot keep it.
 The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the

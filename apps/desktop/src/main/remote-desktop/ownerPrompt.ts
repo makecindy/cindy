@@ -95,7 +95,10 @@ export async function watchOwnerPrompt(
       const line = buffer.slice(0, index).trim();
       buffer = buffer.slice(index + 1);
       // Anything else is a helper this build cannot use; the cover stays locked down.
-      if (line === 'ready') {
+      // The greeting is versioned: a helper that predates this mode falls through to its
+      // generic input loop and prints a bare `ready`, which must not arm a prompt that is
+      // not on screen (touch-to-return would silently never work).
+      if (line === 'ready owner-prompt') {
         started = true;
         clearTimeout(timer);
         settle?.();
