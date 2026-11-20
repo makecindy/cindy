@@ -884,8 +884,9 @@ describe('built-in Skills', () => {
       builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir),
     ]);
     fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
+    const afterPublication = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
     await expect(pending).resolves.toEqual([[], []]);
-    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
+    await expect(afterPublication).resolves.toHaveLength(4);
   });
 
   // Unit, PR #8493: changes to an already-hashed Skill must be rejected even

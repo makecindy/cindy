@@ -155,11 +155,16 @@ export async function builtInSkillDescriptorsAsync(
   userDataDir: string,
   appDataDir?: string,
 ): Promise<BuiltInSkillDescriptor[]> {
-  // Profile projections are part of the result even when the bundle is shared.
-  const key = JSON.stringify([userDataDir, appDataDir ?? null]);
+  const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+  if (!snapshot) return [];
+  // A read after publication must not join verification of the previous bundle.
+  const key = JSON.stringify([
+    userDataDir, appDataDir ?? null, snapshot.raw, snapshot.target, snapshot.realTarget,
+    snapshot.targetStat.dev, snapshot.targetStat.ino,
+  ]);
   let pending = pendingBuiltInSkillVerifications.get(key);
   if (!pending) {
-    pending = verifyBuiltInSkillDescriptors(userDataDir, appDataDir).finally(() => {
+    pending = verifyBuiltInSkillDescriptors(snapshot, userDataDir, appDataDir).finally(() => {
       if (pendingBuiltInSkillVerifications.get(key) === pending) {
         pendingBuiltInSkillVerifications.delete(key);
       }
@@ -170,12 +175,11 @@ export async function builtInSkillDescriptorsAsync(
 }
 
 async function verifyBuiltInSkillDescriptors(
+  snapshot: NonNullable<ReturnType<typeof readBuiltInSkillSnapshot>>,
   userDataDir: string,
   appDataDir?: string,
 ): Promise<BuiltInSkillDescriptor[]> {
   try {
-    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
-    if (!snapshot) return [];
     const entries = new Map<string, fs.BigIntStats>();
     // Independent Skills can yield together; keep file hashing within each
     // directory ordered and cap I/O at four lanes. No verified result is cached.
