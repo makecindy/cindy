@@ -21,6 +21,7 @@ const sessionRenameInputSource = readFileSync(
   'utf8',
 );
 const sessionStatusIconSource = readFileSync(resolve(sidebarDir, 'SessionStatusIcon.tsx'), 'utf8');
+const sidebarRightStatusSource = readFileSync(resolve(sidebarDir, 'sidebarRightStatus.ts'), 'utf8');
 const automationGroupSource = readFileSync(
   resolve(sidebarDir, 'AutomationSessionGroupItem.tsx'),
   'utf8',
@@ -141,13 +142,20 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
-    expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
+    expect(sessionItemSource).toContain(
+      'resolveSessionRowRightStatus(sessionActivity, hasQueuedInput)',
+    );
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
       'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
-    expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
+    expect(sessionCardSource).toContain(
+      'resolveSessionRowRightStatus(sessionActivity, hasQueuedInput)',
+    );
+    // 排队那一档只是桌面端本地的第五档,共享的五档判定仍由共享模型给出 ——
+    // 入口不许自己另算一套(error / awaiting / running / done 的优先级)。
+    expect(sidebarRightStatusSource).toContain('resolveSessionRightStatus(activity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');

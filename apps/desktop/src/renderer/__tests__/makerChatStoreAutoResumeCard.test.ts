@@ -379,6 +379,21 @@ describe('applyInputProjection 自愈进行中提示', () => {
     expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
   });
 
+  // #11299:气泡上标了「排队中」,会话级状态不能同时按空闲渲染 —— 两边矛盾时
+  // 用户无法判断这条排队消息还会不会执行。修复前侧栏与状态栏只读「回合在不在跑」,
+  // 队列里还有没派发的消息时两边都显示成空闲。
+  it('reports an undispatched queue as pending input instead of an idle session', () => {
+    inputProjectionCb!(projection());
+    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
+
+    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }] }));
+    expect(makerChatStore.hasQueuedInput(SID)).toBe(true);
+
+    // 用户 Stop 暂停的队列是有意搁置,不算「还在等」。
+    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }], queuePaused: true }));
+    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
+  });
+
   it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {
     inputProjectionCb!(projection({ autoResumePending: { ...PENDING_INFO, attempt: 1 } }));
     const first = makerChatStore

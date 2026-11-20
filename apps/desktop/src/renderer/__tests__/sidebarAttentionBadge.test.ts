@@ -17,8 +17,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   projectSidebarSessionActivity,
+  resolveSessionRowRightStatus,
   resolveSidebarRightStatus,
 } from '../features/cc-agent/sidebar/sidebarRightStatus';
+import { SidebarRightStatusIndicator } from '../features/cc-agent/sidebar/SidebarRightStatusIndicator';
 import { SessionStatusIcon } from '../features/cc-agent/sidebar/SessionStatusIcon';
 
 const sidebarState = vi.hoisted(() => ({
@@ -201,8 +203,56 @@ describe('sidebar right status priority', () => {
   });
 });
 
-describe('sidebar attention badge', () => {
-  it('renders attention badge while the session is running', () => {
+// #11299:气泡上标了「排队中」,会话行不能同时按空闲渲染(只显示闲置时间戳),
+// 否则两边矛盾,用户无法判断这条排队消息还会不会执行。
+describe('sidebar queued status', () => {
+  it('shows a queued session as waiting instead of idle, without overriding live states', () => {
+    const idle = projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      attentionKind: undefined,
+      isUrgentFromContext: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(resolveSidebarRightStatus(idle)).toBe('time');
+    expect(resolveSessionRowRightStatus(idle, true)).toBe('queued');
+    expect(resolveSessionRowRightStatus(idle, false)).toBe('time');
+
+    // 出错 / 待处理 / 运行中 各自已有的信号压过排队提示。
+    expect(resolveSessionRowRightStatus(projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      attentionKind: 'error',
+      isUrgentFromContext: false,
+      isRunning: false,
+      hasAttentionNotification: true,
+    }), true)).toBe('error');
+    expect(resolveSessionRowRightStatus(projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      attentionKind: 'awaiting',
+      isUrgentFromContext: false,
+      isRunning: false,
+      hasAttentionNotification: true,
+    }), true)).toBe('awaiting');
+    expect(resolveSessionRowRightStatus(projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      attentionKind: undefined,
+      isUrgentFromContext: false,
+      isRunning: true,
+      hasAttentionNotification: false,
+    }), true)).toBe('running');
+  });
+
+  it('labels the queued indicator with the same word the queued bubble uses', () => {
+    const { getByRole } = render(
+      createElement(SidebarRightStatusIndicator, { kind: 'queued', isActive: false }),
+    );
+    // 气泡上的标签是 newChat.pendingQueue.queued,两处用同一个词,用户不用在
+    // 「排队中」和别的说法之间对号(#11299)。
+    expect(getByRole('img').getAttribute('aria-label')).toBe('newChat.pendingQueue.queued');
+  });
+});
+
+describe('sidebar attention badge', () => {  it('renders attention badge while the session is running', () => {
     const { container } = render(
       createElement(SessionStatusIcon, {
         session,

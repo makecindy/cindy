@@ -57,7 +57,8 @@ const deps = {
   Check: Icon,
   Activity: Icon,
   Layers: Icon,
-  Sparkles: Icon,
+  CircleDashed: () => React.createElement('span', { 'data-testid': 'status-queued-icon' }),
+  Sparkles: () => React.createElement('span', { 'data-testid': 'status-working-icon' }),
   Spinner: Icon,
   Square: Icon,
   ArrowDown: Icon,
@@ -77,6 +78,7 @@ const RunningStatusBar = new Function(
   visible: boolean;
   suppressContent?: boolean;
   preparing?: boolean;
+  queuedWaiting?: boolean;
   backgroundTasksRunning?: boolean;
   onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
@@ -91,6 +93,20 @@ const RunningStatusBar = new Function(
 }>;
 
 afterEach(cleanup);
+
+// #11299:队列里还有没派发的消息时,底部状态栏要说明在等什么,并且不能把上一轮
+// 的计时 / token 当成当前这轮的指标显示出来;图标也要与「正在处理」区分开。
+it('shows the queued reason and hides the previous turn metrics while the queue waits', () => {
+  const props = {
+    visible: true, preparing: true, queuedWaiting: true, status: '排队中',
+    startedAt: 1, tokenUsage: 1234, outputTokens: 1234, generationDurationMs: 1000,
+  };
+  const { container } = render(<RunningStatusBar {...props} />);
+  expect(screen.getByText('排队中')).toBeTruthy();
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  expect(screen.getByTestId('status-queued-icon')).toBeTruthy();
+  expect(screen.queryByTestId('status-working-icon')).toBeNull();
+});
 
 it('keeps background stop available during remote preparation without displaying old metrics', () => {
   const stop = vi.fn();

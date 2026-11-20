@@ -103,6 +103,7 @@ import {
   ArrowLeft,
   Brain,
   Check,
+  CircleDashed,
   CornerUpLeft,
   Layers,
   Monitor,
@@ -423,6 +424,7 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from './lib/localizeAgentStatus';
+import { isWaitingForQueuedInput, shouldShowComposerRuntimeStatus } from './lib/queuedInputStatus';
 import { getStartingInputClientId, hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -2751,11 +2753,22 @@ function CCAgentSessionContent({
   const startingSessions = useStartingSessionIds(settledStartingSessions);
   const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
     && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
+  // 队列里还有没派发的输入 → 会话不是空闲(#11299)。气泡已经标了「排队中」,
+  // 底部状态栏不能按空闲收起,否则「气泡说排队、会话说空闲」两边矛盾。
+  // 用户 Stop 暂停的队列是有意搁置,不算等待;已经在跑 / 在准备 / 有后台任务 /
+  // 有 workflow 时各有各的状态文案,排队提示让位。
+  const queuedWaiting = isWaitingForQueuedInput({
+    queuedCount: pendingQueue.length,
+    queuePaused,
+    isRunning: agentStatus.isRunning,
+  }) && !waitingRemoteStart && !backgroundTasksActive && runningWorkflow === null;
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
+    : waitingRemoteStart ? 'Waiting for remote response'
+    : queuedWaiting ? t('newChat.pendingQueue.queued')
+    : remoteResponsePendingStatus(
         agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
         messages,
       );
@@ -6178,9 +6191,14 @@ function CCAgentSessionContent({
     <SessionQuickSendProvider value={readOnly || cindyMakeInputLocked ? null : quickSend}>{messageStreamEl}</SessionQuickSendProvider>
   );
 
-  const composerRuntimeVisible =
-    !pendingPlanReview &&
-    (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+  const composerRuntimeVisible = shouldShowComposerRuntimeStatus({
+    pendingPlanReview: pendingPlanReview !== null,
+    isRunning: agentStatus.isRunning,
+    waitingRemoteStart,
+    backgroundTasksActive,
+    hasRunningWorkflow: runningWorkflow !== null,
+    waitingForQueuedInput: queuedWaiting,
+  });
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6458,7 +6476,8 @@ function CCAgentSessionContent({
                   endedAt={session?.id === sessionId ? session?.lastTurnEndedAt ?? null : null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  preparing={waitingRemoteStart}
+                  preparing={waitingRemoteStart || queuedWaiting}
+                  queuedWaiting={queuedWaiting}
                   tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
                   outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
                   generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
@@ -7302,6 +7321,7 @@ const CONTROLLED_BANNER_MAX_WIDTH = 420;
 export function RunningStatusBar({
   status,
   preparing = false,
+  queuedWaiting = false,
   reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
@@ -7329,8 +7349,13 @@ export function RunningStatusBar({
   className,
 }: {
   status: string;
-  /** No current runtime metrics exist while a remote send is still being prepared. */
+  /**
+   * 本轮还没有可归属的运行时指标:远端发送仍在准备,或会话正在等队列里的消息被派发。
+   * 这两种情况下 elapsed / token 都是上一轮的残留,必须一起收起。
+   */
   preparing?: boolean;
+  /** 队列里还有没派发的消息:状态栏说明在等什么,并换用「等待」图标(不是运行中的转圈)。 */
+  queuedWaiting?: boolean;
   /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
   reconnectStatus?: string | null;
   tokenUsage: number;
@@ -7617,6 +7642,10 @@ export function RunningStatusBar({
           <Spinner size={14} />
         ) : isDone ? (
           <Check size={14} className="shrink-0" strokeWidth={2.5} />
+        ) : // 队列里还有没派发的消息:静止虚线环,与「正在处理」的转圈区分开 ——
+        // 一个在等,一个在干活(#11299)。
+        queuedWaiting ? (
+          <CircleDashed size={14} className="shrink-0 -translate-y-px" strokeWidth={1.75} />
         ) : // 后台子任务模式换 Activity 图标(与 Compacting 换 Layers 同一设计逻辑:
         // 图标回答"现在在干嘛")。优先于 isCompacting —— 后者按残留 status 文本
         // 判断,turn 在 compact 阶段结束时会错配出 Layers + 后台文案。
