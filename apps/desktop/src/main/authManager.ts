@@ -3923,8 +3923,8 @@ function clearAuth(
     // when no refresh guard ran between that action and a sibling window timeout.
     coldStartTimeoutFallbacks.clear();
     coldStartRetryWait?.(true);
+    uncertainResourceRefreshTokens.clear();
   }
-  uncertainResourceRefreshTokens.clear();
   refreshBackoff.clear();
   loginFlowEpoch += 1;
   // Explicit logout clears health. Failed startup keeps its recovery reason

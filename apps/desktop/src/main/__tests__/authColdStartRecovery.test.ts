@@ -48,6 +48,7 @@ const source = ts.createSourceFile(
 );
 const names = new Set([
   'apiFetch',
+  'clearAuth',
   'recoverActiveResourceSession',
   'commitDesktopRefreshCredentials',
   'initialize',
@@ -78,6 +79,8 @@ const compiled = ts.transpileModule(
   `
 let authStateEpoch = 0, loginFlowEpoch = 0, accessToken = null, currentUser = null;
 let activeAuthRealm = 'global', pendingAuthRealm = null, loginFlowState = null;
+let pendingAccountToken = null, pendingAccountRefreshToken = null, pendingAccountMemberships = [];
+let accountDeletionRestoredNoticePending = false, confirmedAccountDeletionCredential = null;
 let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null;
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
@@ -86,7 +89,8 @@ let refreshPromise = null, sessionInvalidationPromise = null;
 let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const uncertainResourceRefreshTokens = new Map();
-const passiveLocalSignOut = false, settledLoginCommitCount = 0;
+let passiveLocalSignOut = false;
+const settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
 const AUTH_REGION = 'global';
 const COLD_START_AUTH_GATE_TIMEOUT_MS = 20000;
@@ -95,7 +99,7 @@ const LEGACY_REFRESH_TOKEN_KEY = 'legacy', LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'l
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250];
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000];
-const credentialStoreHealth = { unavailable: false, noteRecovered() {} };
+const credentialStoreHealth = { unavailable: false, noteRecovered() {}, reset() {}, noteStartupFailure() {} };
 const coldStartTimeoutFallbacks = new ColdStartAuthFallbackRegistry();
 const snapshotAuthState = () => ({ isAuthenticated: !!accessToken, user: currentUser });
 const snapshotLoggedOutAuthState = snapshotAuthState;
@@ -104,10 +108,12 @@ const readStoredRefreshTokenCandidates = () => [saved.session?.refreshToken];
 const hasPotentiallyPersistedAuthCredentials = () => !!saved.session;
 const assertLoginFlowCurrent = (epoch) => { if (epoch !== loginFlowEpoch) throw new Error('superseded'); };
 const finishColdStartSignedOut = async () => snapshotAuthState();
-const recoverAccountFreeOwnerAtStartup = async () => {
+const recoverAccountFreeOwnerAtStartup = async (mode, reason, unavailable, options = {}) => {
   onStartupFallback();
-  coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1);
-  authStateEpoch++; loginFlowEpoch++;
+  // Exercise the real cleanup reached by the production owner transition. Its
+  // timeout flag must preserve uncertainty while the minute-long retry waits.
+  clearAuth({ notify: false, nextMode: mode, preservePersistedRefreshToken: true,
+    coldStartTimeoutRecovery: options.coldStartTimeoutRecovery });
 };
 const reconcileDesktopActiveAuthSession = async () => saved.session;
 ${source.statements
@@ -206,6 +212,10 @@ function setup(random = 0) {
     resolveColdStartTimeoutRecovery,
     readReloginFlag: () => null,
     removeSafe: vi.fn(),
+    resetLoginFlowState: vi.fn(),
+    canaryFlagStore: { clear: vi.fn() },
+    clearPerAccountIntegrationsInBackground: vi.fn(),
+    commitActiveAppSession: vi.fn(),
     isOwnerChangeShellPending: () => false,
     ownerChangeShellGate: { isPending: () => false },
     sealedLoginFlowCommitDepths: new Set(),
@@ -1054,19 +1064,20 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     expect(h.saved.session?.refreshToken).toBe('test-refresh');
   });
 
-  it('recovers the saved active account during cold-start retries too', async () => {
+  it('recovers an already-rejected Resource after real 20s timeout cleanup and a transport failure', async () => {
     const { h } = recoverySetup();
     const fresh = setup();
     fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
     fresh.vault.passports = h.vault.passports;
     void fresh.start();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fresh.deps.onStartupFallback).toHaveBeenCalledTimes(1);
     fresh.request.mockResolvedValue({
       ok: false,
       status: 401,
       data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
     });
-    await vi.advanceTimersByTimeAsync(61_250);
+    await vi.advanceTimersByTimeAsync(41_250);
     expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
     expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
     expect(fresh.clear).not.toHaveBeenCalled();
