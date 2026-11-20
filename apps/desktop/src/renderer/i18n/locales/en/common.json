@@ -16825,7 +16825,7 @@
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link",
-        "deliveryReceipt": "This delivery"
+        "deliveryReceipt": "This result"
       },
       "sessionBranches": {
         "title": "Session branches",
@@ -22528,12 +22528,12 @@
     }
   },
   "deliveryReceipt": {
-    "title": "This delivery",
-    "loading": "Reading this delivery…",
-    "loadFailed": "Couldn't read this delivery",
-    "copied": "Receipt link copied",
-    "copyFailed": "Couldn't copy the receipt link",
-    "copyLink": "Copy receipt link",
+    "title": "This result",
+    "loading": "Reading this result…",
+    "loadFailed": "Couldn't read this result",
+    "copied": "Link copied",
+    "copyFailed": "Couldn't copy the link",
+    "copyLink": "Copy link",
     "close": "Close",
     "status": "Status",
     "workingDir": "Working directory",

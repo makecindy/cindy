@@ -16751,7 +16751,7 @@
         "compactNothing": "圧縮できる内容がまだありません",
         "sessionBranches": "セッション分岐",
         "copySessionLink": "セッションリンクをコピー",
-        "deliveryReceipt": "この成果"
+        "deliveryReceipt": "今回の結果"
       },
       "sessionBranches": {
         "title": "セッション分岐",
@@ -22439,12 +22439,12 @@
     }
   },
   "deliveryReceipt": {
-    "title": "この成果",
-    "loading": "この成果を読み込んでいます…",
-    "loadFailed": "この成果を読めませんでした",
-    "copied": "レシートのリンクをコピーしました",
-    "copyFailed": "レシートのリンクをコピーできませんでした",
-    "copyLink": "レシートのリンクをコピー",
+    "title": "今回の結果",
+    "loading": "今回の結果を読み込んでいます…",
+    "loadFailed": "今回の結果を読めませんでした",
+    "copied": "リンクをコピーしました",
+    "copyFailed": "リンクをコピーできませんでした",
+    "copyLink": "リンクをコピー",
     "close": "閉じる",
     "status": "状態",
     "workingDir": "作業ディレクトリ",

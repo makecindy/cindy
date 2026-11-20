@@ -16987,7 +16987,7 @@
         "compactNothing": "Ainda não há nada para compactar",
         "sessionBranches": "Branches da sessão",
         "copySessionLink": "Copiar ligação da sessão",
-        "deliveryReceipt": "Esta entrega"
+        "deliveryReceipt": "Este resultado"
       },
       "sessionBranches": {
         "title": "Branches da sessão",
@@ -22741,12 +22741,12 @@
     }
   },
   "deliveryReceipt": {
-    "title": "Esta entrega",
-    "loading": "A ler esta entrega…",
-    "loadFailed": "Não foi possível ler esta entrega",
-    "copied": "Ligação do recibo copiada",
-    "copyFailed": "Não foi possível copiar a ligação do recibo",
-    "copyLink": "Copiar ligação do recibo",
+    "title": "Este resultado",
+    "loading": "A ler este resultado…",
+    "loadFailed": "Não foi possível ler este resultado",
+    "copied": "Ligação copiada",
+    "copyFailed": "Não foi possível copiar a ligação",
+    "copyLink": "Copiar ligação",
     "close": "Fechar",
     "status": "Estado",
     "workingDir": "Diretório de trabalho",

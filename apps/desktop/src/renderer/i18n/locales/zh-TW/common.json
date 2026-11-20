@@ -16751,7 +16751,7 @@
         "compactNothing": "暫無可壓縮內容",
         "sessionBranches": "任務分支",
         "copySessionLink": "複製任務連結",
-        "deliveryReceipt": "這份交付"
+        "deliveryReceipt": "本次結果"
       },
       "sessionBranches": {
         "title": "任務分支",
@@ -22439,12 +22439,12 @@
     }
   },
   "deliveryReceipt": {
-    "title": "這份交付",
-    "loading": "正在讀取這次交付…",
-    "loadFailed": "讀不到這次交付",
-    "copied": "已複製收據連結",
-    "copyFailed": "複製收據連結失敗",
-    "copyLink": "複製收據連結",
+    "title": "本次結果",
+    "loading": "正在讀取本次結果…",
+    "loadFailed": "讀不到本次結果",
+    "copied": "已複製連結",
+    "copyFailed": "複製連結失敗",
+    "copyLink": "複製連結",
     "close": "關閉",
     "status": "狀態",
     "workingDir": "工作目錄",
