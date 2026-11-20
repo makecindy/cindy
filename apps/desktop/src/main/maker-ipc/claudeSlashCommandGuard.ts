@@ -11,8 +11,9 @@
  *    的 `name` 也收进来：两者不一致时，真实命令名是哪个都能命中。
  *  - `disable-model-invocation: true` 的 Skill 照样算：它只禁模型调用，不禁用户手输。
  *
- * 目录口径：全局目录不只 `~/.claude` —— 绑定了独立 Claude 订阅账号时，账号自己的配置目录
- * （`~/.claude-<账号>`）才是引擎实际读的那份，只扫默认目录会漏掉装在那儿的命令。
+ * 目录口径：全局目录必须与当前会话一致。默认是 `~/.claude`（或显式
+ * `CLAUDE_CONFIG_DIR`）；绑定独立 Claude 订阅账号时，只读启动时登记的账号配置目录。
+ * 不把默认目录或其它账号目录合并进来，否则别处的同名命令会把「未安装」误判成「已安装」。
  *
  * 不做的事：不把所有 `/` 开头的文本都放行。宽匹配会把 `/compactness`、`/Users/x` 这类
  * 普通输入误判成命令（#7907 已经在这条路上翻过车）。判定必须落在"确实存在这个名字的
@@ -27,6 +28,7 @@ import { promises as fsp, type Dirent } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import { singleTextContent } from './mobileClientPromptNote';
 
 /** 命令名提取：只认消息**最开头**的 `/<name>`。 */
@@ -151,23 +153,11 @@ async function addCommandNames(commandsRoot: string, out: Set<string>): Promise<
   }
 }
 
-/** 全局配置目录：默认目录 + 环境变量重定向 + 独立订阅账号各自的目录。 */
-async function resolveGlobalConfigDirs(): Promise<string[]> {
-  const home = os.homedir();
-  const dirs = new Set<string>();
-  const fromEnv = process.env.CLAUDE_CONFIG_DIR?.trim();
-  if (fromEnv) dirs.add(fromEnv);
-  dirs.add(path.join(home, '.claude'));
-  // 独立 Claude 订阅账号的目录形如 ~/.claude-<账号>（见 subscription-accounts/store.ts）。
-  try {
-    for (const entry of await fsp.readdir(home, { withFileTypes: true })) {
-      if (!entry.name.startsWith('.claude-')) continue;
-      dirs.add(path.join(home, entry.name));
-    }
-  } catch {
-    // 读不到家目录就按默认目录算，不猜。
-  }
-  return [...dirs];
+/** 未登记独立账号时，与 CLI 一样：显式环境目录替代默认目录，而不是与其合并。 */
+function resolveGlobalConfigDir(configDir?: string): string {
+  return path.resolve(
+    configDir?.trim() || process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'),
+  );
 }
 
 /** 项目目录：引擎自己的发现会一路走到 git 根，这里同样向上找。 */
@@ -184,12 +174,10 @@ async function resolveProjectDirs(workingDir: string): Promise<string[]> {
   return dirs;
 }
 
-async function scanCommandNames(workingDir: string): Promise<Set<string>> {
+async function scanCommandNames(workingDir: string, configDir: string): Promise<Set<string>> {
   const names = new Set<string>();
-  for (const configDir of await resolveGlobalConfigDirs()) {
-    await addSkillNames(path.join(configDir, 'skills'), 1, names);
-    await addCommandNames(path.join(configDir, 'commands'), names);
-  }
+  await addSkillNames(path.join(configDir, 'skills'), 1, names);
+  await addCommandNames(path.join(configDir, 'commands'), names);
   for (const projectDir of await resolveProjectDirs(workingDir)) {
     const claudeDir = path.join(projectDir, '.claude');
     await addSkillNames(path.join(claudeDir, 'skills'), 1, names);
@@ -208,17 +196,21 @@ async function scanCommandNames(workingDir: string): Promise<Set<string>> {
 export async function resolveClaudeUserInvocableCommandNames(
   workingDir: string | undefined,
   messageText: string | null,
+  configDir?: string,
 ): Promise<ReadonlySet<string>> {
   if (!workingDir || !path.isAbsolute(workingDir)) return EMPTY_NAMES;
   if (!messageText || !extractSlashCommandName(messageText)) return EMPTY_NAMES;
 
-  const key = path.resolve(workingDir);
+  const resolvedWorkingDir = path.resolve(workingDir);
+  const resolvedConfigDir = resolveGlobalConfigDir(configDir);
+  // §8.4：同一项目在不同 Claude 账号下是不同命令集合，配置目录必须进入缓存键。
+  const key = `${resolvedWorkingDir}\0${resolvedConfigDir}`;
   const cached = readCache(key);
   if (cached) return cached.names;
 
   let names: Set<string>;
   try {
-    names = await scanCommandNames(key);
+    names = await scanCommandNames(resolvedWorkingDir, resolvedConfigDir);
   } catch {
     // 目录不存在或读不动：按"没有可调用命令"处理，保持旧行为。
     names = new Set<string>();
@@ -241,13 +233,14 @@ export function resetClaudeUserInvocableCommandCache(): void {
  */
 export async function isUserInvocableClaudeCommand(
   message: unknown,
-  session: { agentKind?: string | null; workDir?: string | null; remoteHostId?: string | null },
+  session: { id?: string | null; agentKind?: string | null; workDir?: string | null; remoteHostId?: string | null },
 ): Promise<boolean> {
   if (session.agentKind !== 'claude-code') return false;
   if (session.remoteHostId) return false;
   const text = singleTextContent(message);
   if (!text) return false;
-  const names = await resolveClaudeUserInvocableCommandNames(session.workDir ?? undefined, text);
+  const configDir = getSessionSubscriptionAccount(session.id)?.configDir;
+  const names = await resolveClaudeUserInvocableCommandNames(session.workDir ?? undefined, text, configDir);
   if (names.size === 0) return false;
   const name = extractSlashCommandName(text);
   return name !== null && names.has(name);

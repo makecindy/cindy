@@ -24,7 +24,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserTex
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionOrigin, stampTelegramQuestionAnswer, telegramQuestionAnswerOrigin } from '../telegramQuestionReply';
@@ -51,6 +51,7 @@ import { createPreflightHarness, filesystemError } from './helpers/workingDirect
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
+import { resetClaudeUserInvocableCommandCache } from '../claudeSlashCommandGuard';
 import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
 import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
@@ -3656,6 +3657,28 @@ describe('maker SEND transaction', () => {
 });
 
 describe('mobile client prompt note', () => {
+  // Unit / #11777 review: these production-entry send tests must not read the developer's
+  // real Agent home. An empty, explicit CLAUDE_CONFIG_DIR keeps the negative command case
+  // deterministic even when another machine profile has the same Skill installed.
+  const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  let isolatedClaudeHome = '';
+
+  beforeEach(() => {
+    isolatedClaudeHome = mkdtempSync(path.join(os.tmpdir(), 'cindy-mobile-claude-home-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(isolatedClaudeHome);
+    process.env.CLAUDE_CONFIG_DIR = path.join(isolatedClaudeHome, 'config');
+    mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
+    resetClaudeUserInvocableCommandCache();
+  });
+
+  afterEach(() => {
+    resetClaudeUserInvocableCommandCache();
+    vi.restoreAllMocks();
+    if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+    rmSync(isolatedClaudeHome, { recursive: true, force: true });
+  });
+
   it('keeps ordinary mobile messages annotated on the wire but persists the original text', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const { deps } = createDeps({

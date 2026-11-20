@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   extractSlashCommandName,
@@ -17,11 +17,17 @@ import {
   resetClaudeUserInvocableCommandCache,
   resolveClaudeUserInvocableCommandNames,
 } from '../maker-ipc/claudeSlashCommandGuard';
+import { registerSessionSubscriptionAccount } from '../subscription-accounts/session';
 
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+let fixtureRoot = '';
 let workDir = '';
+let homeDir = '';
+let envConfigDir = '';
+let unregisterAccount: (() => void) | undefined;
 
-function writeSkill(name: string, frontmatter: string): void {
-  const dir = path.join(workDir, '.claude', 'skills', name);
+function writeSkill(name: string, frontmatter: string, configDir = path.join(workDir, '.claude')): void {
+  const dir = path.join(configDir, 'skills', name);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'SKILL.md'),
@@ -37,14 +43,37 @@ function writeCommand(name: string): void {
 }
 
 beforeEach(() => {
-  workDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-slash-guard-')));
+  fixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-slash-guard-')));
+  workDir = path.join(fixtureRoot, 'project');
+  homeDir = path.join(fixtureRoot, 'home');
+  envConfigDir = path.join(fixtureRoot, 'env-config');
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(envConfigDir, { recursive: true });
+  vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+  process.env.CLAUDE_CONFIG_DIR = envConfigDir;
   resetClaudeUserInvocableCommandCache();
 });
 
 afterEach(() => {
+  unregisterAccount?.();
+  unregisterAccount = undefined;
   resetClaudeUserInvocableCommandCache();
-  fs.rmSync(workDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
+
+function useSessionAccount(id: string, configDir: string): void {
+  unregisterAccount?.();
+  unregisterAccount = registerSessionSubscriptionAccount('session-1', {
+    id,
+    configDir,
+    assertCurrent() {},
+    readState: async () => ({ authenticated: true }),
+  });
+}
 
 describe('extractSlashCommandName', () => {
   it('只认消息最开头的 /<name>', () => {
@@ -82,9 +111,37 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
 
     expect(names.size).toBe(0);
   });
+
+  // Unit / #11777 review: an explicit CLI config root is a replacement, not another
+  // source to union with ~/.claude. Otherwise another profile can authorize a bare command.
+  it('CLAUDE_CONFIG_DIR 是独立配置根,不合并默认 ~/.claude', async () => {
+    writeSkill('env-command', '', envConfigDir);
+    writeSkill('default-command', '', path.join(homeDir, '.claude'));
+
+    const names = await resolveClaudeUserInvocableCommandNames(workDir, '/env-command');
+
+    expect(names.has('env-command')).toBe(true);
+    expect(names.has('default-command')).toBe(false);
+  });
 });
 
 describe('isUserInvocableClaudeCommand', () => {
+  // Unit / §8.4: the live session's registered account is the config-dir source of truth.
+  // Switching that account must neither union profiles nor reuse the old profile's cache entry.
+  it('只认当前会话账号的命令,切换账号不复用旧缓存', async () => {
+    const currentConfigDir = path.join(homeDir, '.claude-cindy-current');
+    const otherConfigDir = path.join(homeDir, '.claude-cindy-other');
+    writeSkill('current-command', '', currentConfigDir);
+    writeSkill('other-command', '', otherConfigDir);
+    const local = { id: 'session-1', agentKind: 'claude-code', workDir, remoteHostId: null };
+    useSessionAccount('current', currentConfigDir);
+    expect(await isUserInvocableClaudeCommand('/current-command', local)).toBe(true);
+
+    useSessionAccount('other', otherConfigDir);
+    expect(await isUserInvocableClaudeCommand('/current-command', local)).toBe(false);
+    expect(await isUserInvocableClaudeCommand('/other-command', local)).toBe(true);
+  });
+
   it('装着的 skill 认,没装的、别的引擎、远端会话都不认', async () => {
     writeSkill('subtask-fork', 'disable-model-invocation: true\n');
 
