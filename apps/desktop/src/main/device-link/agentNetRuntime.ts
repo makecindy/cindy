@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
-import WebSocket from 'ws';
+import { currentLinkTraffic } from './linkTraffic.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
 import { isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
@@ -439,7 +440,7 @@ export function outgoingAgentNetClientForRelay(relayId: string, baseUrl: string)
     || stored.certificate.networkId !== 'private:' + relayId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   return new AgentNetClient(baseUrl, decodeIdentity(secrets), stored.certificate, stored.rootPublicKey, undefined, {
     ownerPinnedHttp: true, fetch: outboundFetch,
-    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 export function currentAgentNetClient(): AgentNetClient | null {
@@ -492,6 +493,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -566,6 +568,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const notifyCovered = new Set<string>();
   let socket: AgentNetWorkerSocket;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },

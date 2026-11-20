@@ -176,6 +176,7 @@ interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 interface DeviceLinkPeerLinksSnapshot {
+  traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';

@@ -6783,6 +6783,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本機連線流量",
+          "range": "計量時段",
+          "last5m": "近 5 分鐘",
+          "lastHour": "近 1 小時",
+          "lastDay": "近 24 小時",
+          "sent": "所發",
+          "received": "所收",
+          "total": "共計",
+          "scope": "直連、中繼之收發量皆為估值，檔案直傳亦計。尋機廣播、另循他途之音像及 HTTP 傳輸不計。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"

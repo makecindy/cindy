@@ -6783,6 +6783,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本机连接流量",
+          "range": "统计时间范围",
+          "last5m": "近 5 分钟",
+          "lastHour": "近 1 小时",
+          "lastDay": "近 24 小时",
+          "sent": "发送",
+          "received": "接收",
+          "total": "合计",
+          "scope": "估算直连和中转的收发量，含文件直传。设备发现广播、独立音视频流和 HTTP 传输除外。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"

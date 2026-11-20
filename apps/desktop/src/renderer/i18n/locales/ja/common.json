@@ -6783,6 +6783,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "このコンピューターの通信量",
+          "range": "集計期間",
+          "last5m": "直近5分",
+          "lastHour": "直近1時間",
+          "lastDay": "直近24時間",
+          "sent": "送信",
+          "received": "受信",
+          "total": "合計",
+          "scope": "直接接続とリレー接続の通信量の概算です。ファイルの直接転送を含みます。デバイス検出用のブロードキャストと、別経路の音声・映像・HTTP 通信は対象外です。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"

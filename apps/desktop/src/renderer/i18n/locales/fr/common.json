@@ -6893,6 +6893,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Trafic sur cet ordinateur",
+          "range": "Période",
+          "last5m": "5 dernières min",
+          "lastHour": "Dernière heure",
+          "lastDay": "Dernières 24 h",
+          "sent": "Envoyé",
+          "received": "Reçu",
+          "total": "Total",
+          "scope": "Estimation du trafic des connexions directes et relayées, transferts directs de fichiers compris. Les annonces de découverte des appareils, les flux audio et vidéo séparés et les transferts HTTP indépendants sont exclus."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
