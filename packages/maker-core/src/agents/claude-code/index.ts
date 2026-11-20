@@ -5709,7 +5709,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           pushForwardedEvent(pendingTerminalStatusEvent);
           pendingTerminalStatusEvent = undefined;
         }
-        if (e.type === 'done' && bashContinuationInFlight) {
+        if (
+          bashContinuationInFlight &&
+          ((e.type === 'done') || (e.type === 'error' && isTerminalAgentErrorEvent(e)))
+        ) {
+          // Some terminal provider responses (notably empty-response) surface
+          // only an error event and never emit done. Keep the same producer to
+          // consumer boundary protection, then release it when Host consumes
+          // that terminal event.
           bashContinuationInFlight = false;
           bashContinuationBoundaries.add(e);
         }

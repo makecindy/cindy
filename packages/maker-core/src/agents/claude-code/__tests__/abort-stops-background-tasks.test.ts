@@ -3653,4 +3653,26 @@ describe('completed Bash runtime retention', () => {
     } finally { stream.end(); await handle.close(); await collected; }
   });
 
+
+  it('releases active Bash retention when the native follow-up ends with empty-response error', async () => {
+    const { handle, stream, events, collected } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'background work' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some(e => e.type === 'done'), 'foreground done');
+      stream.emit(taskNotification('bash', 'completed'));
+      stream.emit(assistantText('native follow-up'));
+      await waitFor(() => handle.isTurnRunning?.() === true, 'native follow-up started');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      stream.emit({
+        type: 'result', subtype: 'error', is_error: true, result: '',
+        total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 },
+      });
+      await waitFor(() => events.some(e => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true), 'empty-response error');
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally { stream.end(); await handle.close(); await collected; }
+  });
+
 });
