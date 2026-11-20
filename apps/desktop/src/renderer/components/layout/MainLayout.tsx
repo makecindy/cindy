@@ -151,6 +151,7 @@ import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNe
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { createPassiveRevealMarker } from '@/layout/passiveRevealMarker';
 import { createUserRevealMarker } from '@/layout/userRevealMarker';
 import { rightSidebarExpansionReady } from '@/layout/rightSidebarReadiness';
 import { rewritesRevealSource } from '@/layout/sidebarPresentation';
@@ -368,6 +369,9 @@ export function MainLayout() {
   rsbDetachedRef.current = rsbDetached;
   // 跨任务的用户开栏手势：导航到目标任务后，那一次记忆恢复仍算用户触发。
   const userReveal = useMemo(() => createUserRevealMarker(), []);
+  // 跨任务的程序开栏：自动化在后台任务上把右栏放出来，第一次落地到那个任务时按被动
+  // 展示处理，不把窗口拉宽（原因同 userReveal，只是方向相反）。
+  const programReveal = useMemo(() => createPassiveRevealMarker(), []);
   const navigateToSessionRef = useRef<(sessionId: string) => void>(() => undefined);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
@@ -387,7 +391,11 @@ export function MainLayout() {
       // 等父级 effect 再改来源时它已经按上一个任务的来源动过窗口了。consume 只认落地
       // 到目标任务，同任务的普通重声明（如 subagentsAvailable 解析完）不会吃掉手势。
       setRightTabsUserToggle(userReveal.consume(sessionId));
-      setRightTabsPassiveReveal(hasInitialCollapsed && nextCollapsed === false);
+      // 标记永远消费掉：这次落地拿它定来源，之后就按普通的记忆恢复走。
+      const programOpened = programReveal.consume(sessionId);
+      setRightTabsPassiveReveal(
+        nextCollapsed === false && (programOpened || hasInitialCollapsed),
+      );
       setIsRightSidebarCollapsed(nextCollapsed);
       setRightTabsRestored(true);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
@@ -1155,8 +1163,16 @@ export function MainLayout() {
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open' && opts.userInitiated !== false) {
+          // 用户手势：落地后照常占窗口宽度。
+          programReveal.drop(targetSessionId);
           userReveal.mark(targetSessionId);
           navigateToSessionRef.current?.(targetSessionId);
+        } else if (visibility === 'open') {
+          // 程序动作：只在落档里把面板打开，落地时按被动展示，不占窗口宽度。
+          programReveal.mark(targetSessionId);
+        } else {
+          // 同一个任务被程序收起：这次后台开栏不再成立。
+          programReveal.drop(targetSessionId);
         }
       }
     });
