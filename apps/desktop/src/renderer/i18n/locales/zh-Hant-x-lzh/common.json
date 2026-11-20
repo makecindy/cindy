@@ -8496,6 +8496,13 @@
         "openInSidebar": "於側欄啟之",
         "panelPageHosted": "自法器頁啟之 · 離法器頁即自闔",
         "panelNone": "此法器無面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：許遠端呼叫",
+          "description": "啟之，則君之他機可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。",
+          "unsupported": "此法器尚未許他機用其引擎。",
+          "remoteControlOff": "此機尚未許同名籍之裝置遠端控制，他機不可用此引擎。",
+          "ariaLabel": "許君之他機用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "目前版本 {{version}}",
@@ -15868,6 +15875,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此機不能復差事舊態。請選他機或供方之模型，交接上下文以續行；舊訊皆存。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能復前話。訊息猶存。可擇他引擎續之，或新建任務。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "此法器引擎不能用差事所在之機之工具，暫不可自他機行此差事。請易他引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "此法器引擎唯行本機之差事，尚不可為他機所用。",
       "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。若為君之他機，於彼機為此供方開「許遠端呼叫」；若為他人所分享，請令機主於「遠端與分享」中調其開放之範圍。亦可易一模型。",

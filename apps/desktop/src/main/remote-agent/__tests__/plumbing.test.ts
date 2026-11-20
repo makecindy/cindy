@@ -681,6 +681,24 @@ describe('exec-server relay gate', () => {
     }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
   });
+
+  // 插件引擎(第三期)：ACP Agent 的确认卡工具名是它自己起的标题，按名字对不上 Cindy 的文件与命令工具。
+  // 对不上时用户点了同意，本机闸门仍认不出这是刚批准的操作，高危命令和区外写会一直被拒。
+  // 最小失败输入：标题是任意文字、参数里带 command / file_path 的 ACP 确认请求(metadata.acpOptions)。
+  it('matches a plugin engine confirmation by what it will run, not by the title the agent gave it', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const acp = { acpToolKind: 'other', acpOptions: [{ name: 'Allow', kind: 'allow_once' }] };
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' }, metadata: acp,
+    }, workspace)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Write file', input: { file_path: '.env', content: 'A=1' }, metadata: acp,
+    }, workspace)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
+    // A built-in engine's request with an unknown tool name still records nothing.
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' },
+    }, workspace)).toEqual([]);
+  });
 });
 
 describe('wire payloads', () => {

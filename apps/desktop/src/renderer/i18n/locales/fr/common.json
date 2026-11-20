@@ -8625,6 +8625,13 @@
         "openInSidebar": "Ouvrir dans la barre latérale",
         "panelPageHosted": "S'ouvre depuis la page Plugins · se ferme lorsque vous la quittez",
         "panelNone": "Ce plugin n'a pas de panneau",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}} : autoriser l’utilisation à distance",
+          "description": "Lorsque cette option est activée, vos autres ordinateurs peuvent exécuter des tâches avec ce moteur. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
+          "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
+          "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
+          "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}"
+        },
         "githubRelease": {
           "title": "Mises à jour du plugin",
           "installed": "Version installée {{version}}",
@@ -16046,6 +16053,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Cet ordinateur ne peut pas restaurer l’état précédent de la session. Choisissez un modèle d’un autre ordinateur ou fournisseur pour continuer avec un transfert de contexte. Les messages existants sont conservés.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Le moteur du plugin n’a pas pu restaurer la conversation précédente. Vos messages sont conservés. Choisissez un autre moteur ou démarrez une nouvelle tâche.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Ce moteur de plugin ne peut pas utiliser les outils de l’ordinateur où se trouve la tâche : il ne peut donc pas encore l’exécuter depuis un autre ordinateur. Choisissez un autre moteur ou un autre modèle.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Ce moteur de plugin ne peut exécuter que les tâches de cet ordinateur. Les autres ordinateurs ne peuvent pas encore l’utiliser.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",

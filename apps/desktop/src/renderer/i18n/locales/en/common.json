@@ -8553,6 +8553,13 @@
         "openInSidebar": "Open in the sidebar",
         "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: Allow remote use",
+          "description": "When on, your other computers can run tasks with this engine. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
+          "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
+          "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
+          "ariaLabel": "Allow your other computers to use {{engine}}"
+        },
         "githubRelease": {
           "title": "Plugin updates",
           "installed": "Installed {{version}}",
@@ -15942,6 +15949,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "The plugin engine could not restore the previous conversation. Your messages are kept. Choose another engine or start a new task.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "This plugin engine can’t use the tools of the computer the task is on, so it can’t run this task from another computer yet. Choose another engine or model.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "This plugin engine can only run tasks on this computer. Other computers can’t use it yet.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",

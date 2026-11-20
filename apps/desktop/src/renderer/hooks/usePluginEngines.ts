@@ -10,7 +10,7 @@
  * Device Link has a separate catalogue for each computer in the current account. Task pickers
  * read it on demand, and task rows reuse the result without making their own requests.
  */
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
@@ -190,6 +190,65 @@ export function useRemotePluginEngines(deviceId?: string, readOnEntry = false): 
     unreadSnapshot,
   );
   return { engines: remoteEngines, read };
+}
+
+/**
+ * A picker that lists other computers' engines asks each of them when it opens. Opening it again
+ * right away reuses the answer instead of asking every computer once more.
+ */
+export const DEVICE_PLUGIN_ENGINES_REREAD_MS = 15_000;
+const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
+
+/**
+ * The engine lists of several other computers of this account, for a picker that offers their
+ * engines next to this computer's (new-task draft). Nothing is read until `read()` is called — the
+ * picker calls it when it opens: one read-only request per computer, at most once per
+ * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
+ * `null` = that computer has not answered yet (or could not be reached).
+ */
+export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+  catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
+  read: () => void;
+} {
+  const owner = getDataOwnerGeneration();
+  const key = deviceIds.join('\n');
+  const sources = useMemo(
+    () => (key ? key.split('\n') : []).map((deviceId) => ({ deviceId, catalogue: deviceCatalogue(owner, deviceId) })),
+    [owner, key],
+  );
+  const read = useCallback(() => {
+    const now = Date.now();
+    for (const source of sources) {
+      const last = pickerReadAt.get(source.catalogue);
+      if (last !== undefined && now - last < DEVICE_PLUGIN_ENGINES_REREAD_MS) continue;
+      pickerReadAt.set(source.catalogue, now);
+      void source.catalogue.read();
+    }
+  }, [sources]);
+  const subscribe = useCallback((listener: () => void) => {
+    const offs = sources.map((source) => source.catalogue.subscribe(listener));
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [sources]);
+  // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
+  const cache = useRef<{
+    sources: typeof sources;
+    parts: Array<readonly PluginEngineView[] | null>;
+    map: ReadonlyMap<string, readonly PluginEngineView[] | null>;
+  } | null>(null);
+  const snapshot = useCallback(() => {
+    const parts = sources.map((source) => source.catalogue.snapshot());
+    const previous = cache.current;
+    if (previous && previous.sources === sources && previous.parts.every((part, index) => part === parts[index])) {
+      return previous.map;
+    }
+    const map = new Map(sources.map((source, index) => [source.deviceId, parts[index]] as const));
+    cache.current = { sources, parts, map };
+    return map;
+  }, [sources]);
+  const catalogues = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return { catalogues, read };
 }
 
 /** Engine behind a task's `providerId` (`acp-plugin:<ghostId>:<harnessId>`), or null when it is gone. */

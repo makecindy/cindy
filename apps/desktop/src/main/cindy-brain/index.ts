@@ -9480,7 +9480,7 @@ export function registerGhostIpc(): void {
     isAvailable: isGhostAvailableForActiveSession,
     readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
     uiLocale: () => currentGhostAppContext().context.uiLocale,
-    spawn: (ghostId, harnessId) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId),
+    spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
     readUsage: async (ghostId, harnessId) => {
       const owner = captureDataOwnerBroadcastScope();

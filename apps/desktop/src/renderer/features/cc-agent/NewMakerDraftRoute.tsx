@@ -3,12 +3,14 @@ import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { requestPluginEnginesRefresh, useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
 import {
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
+  remotePluginEngineChoices,
   resolveActivePluginEngine,
   type ActivePluginEngine,
+  type PluginEngineChoice,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, commitModelGroupDecision, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
@@ -1221,32 +1223,69 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [pluginModelsAllowed, pluginModels, activePluginModel],
   );
   // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机开的新任务提供：远程控制别的电脑、SSH、协同
-  // 不提供(引擎进程只在本机启动)。范围同模型组：草稿此刻选着在另一台电脑运行的模型也照样列出，
-  // 选中引擎时把 Agent 一并收回本机。记住的引擎被停用、卸载或报告不可用时按没选处理，用底下的
-  // 内置模型。没有任何引擎时不传，模型选择器与今天逐像素一致。
+  // 不提供。列出本机的引擎，以及自己其他电脑上开了「允许被远程调用」的引擎(Agent 在那台运行，文件
+  // 与命令仍在本机；别人分享的来源不提供插件引擎)。范围同模型组：草稿此刻选着在另一台电脑运行的
+  // 内置模型也照样列出。记住的引擎被停用、卸载、报告不可用或那台关掉了开关时按没选处理，用底下的
+  // 内置模型。本机没有引擎、也没有别的电脑时不传，模型选择器与今天逐像素一致。
   const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
+  const rememberedPluginEngineDeviceId = draft.pluginEngine?.deviceId;
+  // 设备列表随在线状态刷新会换新数组：按「哪几台、叫什么」取一个键，内容没变就沿用同一份，
+  // 不让模型选择器跟着每次在线状态刷新重算。
+  const pluginEngineDevicesKey = pluginEnginesAllowed
+    ? JSON.stringify(selectableDevices
+      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId)
+        && (device.online || device.deviceId === rememberedPluginEngineDeviceId))
+      .map(({ deviceId, name }) => [deviceId, name ?? null]))
+    : '[]';
+  const pluginEngineDevices = useMemo(
+    () => (JSON.parse(pluginEngineDevicesKey) as Array<[string, string | null]>).map(([deviceId, name]) => ({ deviceId, name })),
+    [pluginEngineDevicesKey],
+  );
+  const pluginEngineDeviceIds = useMemo(() => pluginEngineDevices.map((device) => device.deviceId), [pluginEngineDevices]);
+  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(pluginEngineDeviceIds);
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    const remote = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName);
+    return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
+  }, [pluginEngineList, pluginEngineDevices, devicePluginEngines]);
+  // 记住的是另一台电脑上的引擎：进入草稿时读一次那几台的列表，否则要等打开模型选择器才认得出它。
+  // 只在记住的那台变了、或它进出设备列表时读，不随在线状态刷新反复读。
+  const rememberedPluginEngineDeviceListed = !!rememberedPluginEngineDeviceId
+    && pluginEngineDeviceIds.includes(rememberedPluginEngineDeviceId);
+  useEffect(() => {
+    if (rememberedPluginEngineDeviceListed) readDevicePluginEngines();
+  }, [rememberedPluginEngineDeviceListed, rememberedPluginEngineDeviceId, readDevicePluginEngines]);
+  // 打开模型选择器：本机的引擎请插件重报模型(与今天相同，冷却在主进程)，其他电脑各读一次列表。
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readDevicePluginEngines();
+  }, [readDevicePluginEngines]);
   const activePluginEngine = useMemo(
-    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, draft.pluginEngine) : null),
-    [pluginEnginesAllowed, pluginEngineList, draft.pluginEngine],
+    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineChoices, draft.pluginEngine) : null),
+    [pluginEnginesAllowed, pluginEngineChoices, draft.pluginEngine],
   );
   const pluginEnginesProps = useMemo(
-    () => pluginEnginesAllowed && pluginEngineList.length
+    () => pluginEnginesAllowed && (pluginEngineList.length || pluginEngineDevices.length)
       ? {
-          engines: pluginEngineList,
+          engines: pluginEngineChoices,
           active: activePluginEngine
             ? {
                 providerId: activePluginEngine.engine.providerId,
+                ...(activePluginEngine.engine.deviceId ? { deviceId: activePluginEngine.engine.deviceId } : {}),
                 modelId: activePluginEngine.modelId,
                 ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
               }
             : null,
+          readCatalogue: readPluginEngineCatalogues,
           // 换引擎或换模型都保留用户为插件引擎选过的权限档与思考深度(不碰内置 Harness 的记忆)；
           // 新模型不提供那一档时按它自己的默认档(resolvePluginEngineEffort)。
           onSelect: (selection: PluginEngineSelection) => {
             const leavesAgentDevice = !!getDraft().agentDeviceId;
             if (leavesAgentDevice) {
-              // 插件引擎只在本机运行：与模型面板里「回到本机」同一套清理，丢掉那台电脑的目录选择。
+              // 草稿的「Agent 在另一台电脑」只描述内置模型的目录选择：选中插件引擎就与模型面板里「回到本机」
+              // 同一套清理，丢掉那台电脑的目录选择。引擎自己在哪台电脑由 pluginEngine.deviceId 记着。
               setDlSel(null);
               dlSeedKeyRef.current = null;
               dlSeedCapabilitiesRef.current = null;
@@ -1258,6 +1297,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             patchDraft({
               pluginEngine: {
                 providerId: selection.providerId,
+                ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
                 modelId: selection.modelId,
                 ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
                 ...(effort ? { effort } : {}),
@@ -1269,7 +1309,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           },
         }
       : undefined,
-    [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
+    [pluginEnginesAllowed, pluginEngineList, pluginEngineDevices, pluginEngineChoices, activePluginEngine, readPluginEngineCatalogues],
   );
   // 模型组只在本机开的新任务提供(远程控制别的电脑、SSH、协同不提供)。草稿此刻选着在另一台电脑运行的模型也照样提供：
   // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。

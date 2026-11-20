@@ -16,6 +16,8 @@ import {
   type PluginHarness,
 } from '../cindy-brain/pluginHarnesses.js';
 import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
+import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
+import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   PLUGIN_ENGINES_INVOKE,
@@ -99,6 +101,7 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(harness.reportsUsage ? { reportsUsage: true } : {}),
     models: engineModels(harness),
     ...enginePermissionModes(harness),
+    remoteUse: pluginEngineRemoteUse(harness),
   };
 }
 
@@ -186,6 +189,18 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (!remote()) opts.assertTrusted(event);
     return typeof key === 'string' ? readPluginHarnessUsage(key) : null;
   });
+  // Opening this computer to the owner's other computers is decided at this computer only.
+  opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {
+    if (remote()) throw new Error('Remote use of a plugin engine can only be changed on the computer that has the plugin');
+    opts.assertTrusted(event);
+    const value = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    if (typeof value.key !== 'string' || !value.key || value.key.length > 200 || typeof value.enabled !== 'boolean') {
+      throw new Error('Invalid plugin engine remote use request');
+    }
+    const remoteUse = await setPluginEngineRemoteUse(value.key, value.enabled);
+    publish();
+    return remoteUse;
+  });
   let lastPayload = '';
   const publish = (): void => {
     const engines = listPluginEngineViews();
@@ -196,8 +211,10 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   };
   const offRegistry = getPluginHarnessRegistry().onChange(publish);
   const offModels = onPluginHarnessModelsChanged(publish);
+  const offRemoteUse = onRemoteProviderAccessChanged(publish);
   return () => {
     offRegistry();
     offModels();
+    offRemoteUse();
   };
 }
