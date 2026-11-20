@@ -82,14 +82,14 @@ function verifiedPresets(provider: Provider) {
       const declared = runtime?.models.find(m => m.id === model.id);
       const actualUrl = model.route?.baseUrl ?? routing.upstream;
       const actualWire = model.route?.wireProtocol ?? providerWireProtocolForApi(model.api ?? model.piApi) ?? routing.wireProtocol ?? defaultWire;
-      const actualPath = model.route?.requestPath ?? routing.requestPath ?? '';
+      const actualPath = model.route ? model.route.requestPath : routing.requestPath;
       const expected = model.selectedInterface?.providerId === presetId ? model.selectedInterface.route : declared?.route;
       const matches = runtime && !model.interfaceUnavailable && matchesTariffEndpoint(
         { baseUrl: actualUrl, wireProtocol: actualWire, requestPath: actualPath },
         {
           baseUrl: expected?.baseUrl ?? runtime.baseUrl,
           wireProtocol: expected?.wireProtocol ?? providerWireProtocolForApi(declared?.api ?? declared?.piApi) ?? runtime.wireProtocol ?? defaultWire,
-          requestPath: expected?.requestPath ?? runtime.requestPath,
+          requestPath: expected ? expected.requestPath : runtime.requestPath,
         },
       );
       const id = matches ? presetId : null;

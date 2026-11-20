@@ -104,15 +104,15 @@ function historicalAccountPrices(
     const runtime = preset.runtimes[agent];
     if (!runtime || routing.disabled) return [];
     const defaultWire = agent === 'pi' ? 'openai-chat' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
-    const matches = (url: string, wire = runtime.wireProtocol, path = runtime.requestPath) =>
+    const matches = (url: string, wire: typeof runtime.wireProtocol, path: string | undefined) =>
       matchesTariffEndpoint(
         { baseUrl: routing.upstream, wireProtocol: routing.wireProtocol ?? defaultWire, requestPath: routing.requestPath },
         { baseUrl: url, wireProtocol: wire ?? defaultWire, requestPath: path },
       );
-    const defaultRoute = matches(runtime.baseUrl);
+    const defaultRoute = matches(runtime.baseUrl, runtime.wireProtocol, runtime.requestPath);
     // A preset can also declare a separate native endpoint for individual models (e.g. Gemini).
     const nativeModels = defaultRoute ? undefined : new Set(runtime.models
-      .filter(model => model.route && matches(model.route.baseUrl, model.route.wireProtocol, model.route.requestPath))
+      .filter(model => model.route && matches(model.route.baseUrl, model.route.wireProtocol ?? runtime.wireProtocol, model.route.requestPath))
       .map(model => model.id));
     if (nativeModels?.size === 0) return [];
     return [{ agent, nativeModels, current: new Set(provider.models[agent]?.map(model => model.id)) }];

@@ -377,6 +377,44 @@ describe('API-key preset reference prices and static cost precedence', () => {
       }
     }
   });
+  it('uses the model endpoint without the runtime relay path when estimating a DeepSeek turn', () => {
+    const provider = buildUserProvider({ id: 'deepseek', name: 'DeepSeek', runtimes: { pi: {
+      baseUrl: 'https://relay.example/v1', requestPath: '/relay', catalogPresetId: 'deepseek',
+      models: [{ id: 'deepseek-v4-pro', name: 'Pro', route: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } }],
+    } } });
+    const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [provider] });
+    for (const sdkCostDelta of [1.32, undefined]) {
+      expect(resolveTurnCost({
+        agent: 'pi', rawModel: 'deepseek-v4-pro', sdkCostDelta, pricing,
+        tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000, cacheCreateTokens: 0 },
+        context: { providerId: provider.id, billingRoute: 'provider-api', region: 'global' },
+      })).toMatchObject({ source: 'reference', money: { amount: 0.044, currency: 'USD', kind: 'value-estimate' } });
+    }
+  });
+
+  it('merges a removed model’s output override onto the historical day’s verified input price', async () => {
+    const realStore = await vi.importActual<typeof import('../modelPriceOverrideStore.js')>('../modelPriceOverrideStore.js');
+    vi.mocked(applyModelPriceOverrides).mockImplementationOnce(realStore.applyModelPriceOverrides);
+    const provider = buildUserProvider({ id: 'deepseek', name: 'DeepSeek', runtimes: { pi: {
+      baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', catalogPresetId: 'deepseek',
+      models: [{ id: 'deepseek-flash', name: 'Flash' }],
+    } } });
+    accountCatalog.providers.push(provider);
+    try {
+      const record = { providerId: provider.id, modelId: 'deepseek-v4-pro', agent: 'pi' as const,
+        updatedAt: '2026-08-10', values: { outputPerMtok: 2 }, baseReference: {
+          currency: 'USD' as const, inputPerMtok: 0.435, outputPerMtok: 0.87,
+          cacheReadPerMtok: 0.003625, cacheCreatePerMtok: null,
+        } };
+      const pricing = getReferenceModelPricing({ at: '2026-11-20', overrides: { [realStore.__testing.overrideKey(record)]: record } });
+      expect(getModelPriceQuote(pricing, provider.id, record.modelId, 'pi')).toMatchObject({
+        inputPerMtok: 1.32, outputPerMtok: 2, cacheReadPerMtok: 0.044, source: 'user-override',
+      });
+    } finally {
+      accountCatalog.providers.pop();
+    }
+  });
+
   it('prices removed DeepSeek models only on an official historical route', () => {
     const runtime = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,
       catalogPresetId: 'deepseek', models: [{ id: 'deepseek-flash', name: 'Flash' }] };
