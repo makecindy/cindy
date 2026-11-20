@@ -14,7 +14,7 @@ function snapshotPath(slot: string): string {
 
 export async function saveCodexModelSnapshot(
   slot: string, accountKey: string, models: CatalogModel[], confirmedAt: number, isCurrent: () => boolean,
-): Promise<void> {
+): Promise<boolean> {
   const file = snapshotPath(slot);
   // Persist only normalized display/selection fields, never the opaque CLI response.
   const entries = models.map(model => ({
@@ -35,7 +35,9 @@ export async function saveCodexModelSnapshot(
   const staging = `${file}.${randomUUID()}.tmp`;
   try {
     await writeFile(staging, JSON.stringify({ accountKey, confirmedAt, entries }), { mode: 0o600, flag: 'wx' });
-    if (isCurrent()) await replaceFile(staging, file);
+    if (!isCurrent()) return false;
+    await replaceFile(staging, file);
+    return true;
   } finally {
     await rm(staging, { force: true }).catch(() => {});
   }

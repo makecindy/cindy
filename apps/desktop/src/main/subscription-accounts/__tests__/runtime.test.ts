@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   modelCacheRead: vi.fn(),
   savedModelFiles: new Map<string, string>(),
   onSnapshotStage: undefined as (() => void) | undefined,
+  rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -171,6 +172,7 @@ vi.mock('node:fs/promises', () => ({
     h.onSnapshotStage?.();
   },
   rename: async (source: string, destination: string) => {
+    if (h.rejectSnapshotRename) throw Object.assign(new Error('locked snapshot'), { code: 'EACCES' });
     const staged = h.savedModelFiles.get(source);
     if (staged === undefined) throw new Error('missing staged snapshot');
     h.savedModelFiles.set(destination, staged);
@@ -310,6 +312,7 @@ beforeEach(() => {
   h.usage.mockReset().mockResolvedValue({});
   h.savedModelFiles.clear();
   h.onSnapshotStage = undefined;
+  h.rejectSnapshotRename = false;
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
@@ -884,6 +887,33 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit: a confirmed empty list can fail to replace an older snapshot. The next
+  // identical refresh must repair disk so cold recovery cannot revive the removed model.
+  it('repairs an older disk snapshot on the next unchanged successful refresh', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+
+    h.rejectSnapshotRename = true;
+    h.rpc.mockResolvedValue({ data: [] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+
+    h.rejectSnapshotRename = false;
+    await refreshSubscriptionPoolCodexModels(true);
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
   });
 
   it('does not carry quota across same-email workspace changes', async () => {

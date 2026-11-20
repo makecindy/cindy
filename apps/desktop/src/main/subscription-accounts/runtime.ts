@@ -164,6 +164,7 @@ interface CodexModelSnapshot {
   confirmedAt?: number;
   pendingMembership?: string;
   failedAt?: number;
+  needsSave?: true;
 }
 interface CodexModelFlight {
   promise: Promise<void>;
@@ -1322,10 +1323,14 @@ export async function refreshSubscriptionPoolCodexModels(
             return;
           }
         }
-        state.codexModels.set(id, { auth, accountKey: info.accountKey, models: mapped, confirmedAt });
+        const snapshot: CodexModelSnapshot = { auth, accountKey: info.accountKey, models: mapped, confirmedAt };
+        state.codexModels.set(id, snapshot);
         if (info.accountKey && (!sameAccount || !isDeepStrictEqual(previous?.models, mapped)
-          || previous?.confirmedAt === undefined || previous.failedAt !== undefined)) {
+          || previous?.confirmedAt === undefined || previous.failedAt !== undefined || previous.needsSave)) {
+          // A live success and a durable save have separate outcomes. Retry only on an existing refresh.
+          snapshot.needsSave = true;
           flight.saving = saveCodexModelSnapshot(id, info.accountKey, mapped, confirmedAt, isCurrent)
+            .then(saved => { if (saved) delete snapshot.needsSave; })
             .catch(() => { log.warn('could not save Codex model snapshot', { refreshId }); });
           await flight.saving;
         }
