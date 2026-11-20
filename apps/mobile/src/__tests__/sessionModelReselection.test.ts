@@ -1,62 +1,64 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
-import { modelNeedsReselection } from '@/session/modelReselection';
+import { afterEach, describe, expect, it } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { clearAllDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh, retainedProviderModelKey } from '@/device-link/deviceProvidersCache';
+import { clearAllProviderShareCatalogs, refreshProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
+import { hiddenSessionModelAtSend } from '@/session/modelReselection';
 
-// Execute the screen's actual send selection and condition without mounting unrelated native UI.
-const source = ts.createSourceFile('session.tsx', readFileSync(
-  resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8',
-), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const declarations = new Map<string, string>();
-let condition = '';
-function visit(node: ts.Node) {
-  if (ts.isIfStatement(node) && node.expression.getText(source).includes('modelNeedsReselection(')) {
-    condition = node.expression.getText(source);
-    if (!ts.isBlock(node.parent)) throw new Error('Expected send guard block');
-    for (const statement of node.parent.statements) {
-      if (!ts.isVariableStatement(statement)) continue;
-      for (const declaration of statement.declarationList.declarations) {
-        if (declaration.initializer
-          && ['sessionAtSend', 'intentAtSend', 'selectionAtSend'].includes(declaration.name.getText(source))) {
-          declarations.set(declaration.name.getText(source), declaration.initializer.getText(source));
-        }
-      }
-    }
-  }
-  ts.forEachChild(node, visit);
-}
-visit(source);
-if (declarations.size !== 3 || !condition) throw new Error('Missing send selection guard');
-const runGuard = new Function('modelNeedsReselection', 'bindings', `
-  const { readSessionRowNow, currentSession, resolveSessionAgentKind, getCachedDeviceProviders,
-    deviceId, earlyLocalCommand, earlyDesktopCommand } = bindings;
-  ${[...declarations].map(([name, value]) => `const ${name} = ${value};`).join('\n')}
-  return { blocked: ${condition}, model: selectionAtSend.model };
-`);
+const session = { agentKind: 'codex' as const, model: 'old', providerId: 'source' };
+const target = { targetAgentKind: 'pi' as const, model: 'next', providerId: 'source' };
+const modelKey = 'codex:source:old';
+const nextKey = 'pi:source:next';
+const read = (device: string, overrides: Record<string, boolean>) =>
+  fetchDeviceProviders(device, async () => ({ providers: [], modelVisibilityOverrides: overrides }));
 
+afterEach(() => {
+  clearAllDeviceProviders();
+  clearAllProviderShareCatalogs();
+});
+
+// #11693: exercise the screen's send decision with live device caches. The old guard
+// read only the controlled computer even after a retained lookup or a pending move.
 describe('existing task hidden-model send guard', () => {
-  const currentSession = { agentKind: 'codex', model: 'old', providerId: 'old-source' };
-  const target = { targetAgentKind: 'pi', model: 'next', providerId: 'new-source' };
-  const visibility = { 'codex:old-source:old': false, 'pi:new-source:next': true };
-  function check(intent: typeof target | null, overrides = visibility, localCommand = false) {
-    return runGuard(modelNeedsReselection, {
-      // Store is newer than the rendered row: intent is written while the current agent stays unchanged.
-      readSessionRowNow: () => ({ ...currentSession, agentSwitchIntent: intent }), currentSession,
-      resolveSessionAgentKind: (row: typeof currentSession) => row.agentKind,
-      getCachedDeviceProviders: () => ({ modelVisibilityOverrides: overrides }), deviceId: 'device',
-      earlyLocalCommand: localCommand, earlyDesktopCommand: false,
-    });
-  }
-  it('allows an enabled cross-agent target despite the old hidden model', () => {
-    expect(check(target)).toEqual({ blocked: false, model: 'next' });
+  it('uses the pending cross-agent selection, including its execution computer', async () => {
+    await read('host', { [modelKey]: false, [nextKey]: true });
+    await read('executor', { [nextKey]: false });
+    expect(hiddenSessionModelAtSend(session, 'host')).toEqual({ agent: 'codex', modelId: 'old', providerId: 'source' });
+    expect(hiddenSessionModelAtSend({ ...session, agentSwitchIntent: target }, 'host')).toBeUndefined();
+    expect(hiddenSessionModelAtSend({ ...session, agentSwitchIntent: { ...target, agentDeviceId: 'executor' } }, 'host'))
+      .toEqual({ agent: 'pi', modelId: 'next', providerId: 'source' });
+    expect(hiddenSessionModelAtSend({ ...session, agentDeviceId: 'executor', agentSwitchIntent: { ...target, agentDeviceId: null } }, 'host'))
+      .toBeUndefined();
   });
-  it('rejects a hidden target and explains that target even when the old model is enabled', () => {
-    expect(check(target, { 'codex:old-source:old': true, 'pi:new-source:next': false }))
-      .toEqual({ blocked: true, model: 'next' });
+
+  it('uses a retained visibility only for the same device, base snapshot and exact route', async () => {
+    const base = await read('executor', {});
+    await read('host', {});
+    const remote = { ...session, agentDeviceId: 'executor' };
+    const retained = { base, key: retainedProviderModelKey({ agent: 'codex', providerId: 'source', modelId: 'old' }),
+      payload: { providers: [], modelVisibilityOverrides: { [modelKey]: false } } };
+    expect(hiddenSessionModelAtSend(remote, 'host', retained)?.modelId).toBe('old');
+    expect(hiddenSessionModelAtSend(session, 'host', retained)).toBeUndefined();
+    expect(hiddenSessionModelAtSend({ ...remote, providerId: null }, 'host', retained)).toBeUndefined();
+    await fetchDeviceProvidersFresh('executor', async () => ({ providers: [], modelVisibilityOverrides: { [modelKey]: true } }));
+    expect(hiddenSessionModelAtSend(remote, 'host', retained)).toBeUndefined();
   });
-  it('keeps the original guard without an intent and preserves the local-command exception', () => {
-    expect(check(null)).toEqual({ blocked: true, model: 'old' });
-    expect(check(null, visibility, true).blocked).toBe(false);
+
+  it('reads a shared supplier from the controlled computer’s received-share catalog', async () => {
+    const shared = { ...session, agentDeviceId: 'share:abc' };
+    await read('host', { [modelKey]: false });
+    expect(hiddenSessionModelAtSend(shared, 'host')).toBeUndefined();
+    await refreshProviderShareCatalogs('host', async () => ({ shares: [{
+      agentDeviceId: 'share:abc', shareId: 'abc', providerId: 'source', providerLabel: 'Source',
+      deviceName: 'Computer', owner: { displayName: 'Owner' }, status: 'active', hostOnline: true,
+      catalog: { providers: [], modelVisibilityOverrides: { [modelKey]: false } },
+    }] }));
+    expect(hiddenSessionModelAtSend(shared, 'host')?.modelId).toBe('old');
+  });
+
+  it('uses the guest-scoped catalog for a shared task that names a separate execution computer', async () => {
+    const guestHost = sharedTaskHostPeer('task', 'host');
+    await read(guestHost, { [modelKey]: false });
+    await read('executor', { [modelKey]: true });
+    expect(hiddenSessionModelAtSend({ ...session, agentDeviceId: 'executor' }, guestHost)?.modelId).toBe('old');
   });
 });

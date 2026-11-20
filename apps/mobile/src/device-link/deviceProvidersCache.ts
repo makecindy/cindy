@@ -9,7 +9,7 @@
  */
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
-import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetadataContinuity } from '@cindy/device-link';
+import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetadataContinuity, type ProviderPickerModel } from '@cindy/device-link';
 
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
 export interface DeviceProvidersPayload {
@@ -25,6 +25,17 @@ export interface DeviceProvidersPayload {
 
 /** 被控端供应商目录的取数器(通常 = `() => transport.listProviders()`)。 */
 export type DeviceProvidersFetcher = () => Promise<DeviceProvidersPayload>;
+
+/** This projection belongs to the task that requested it. Only the ordinary base is cached by device. */
+export interface RetainedProviderCatalog {
+  base: DeviceProvidersPayload;
+  key: string;
+  payload: DeviceProvidersPayload;
+}
+
+export function retainedProviderModelKey(route: ProviderPickerModel): string {
+  return JSON.stringify([route.agent, route.providerId, route.modelId]);
+}
 
 /** Recognize both transport codes and the host's serialized IPC error prefix. */
 function providerErrorCode(error: unknown): string | undefined {

@@ -27,6 +27,7 @@ import {
   subscribeDeviceProvidersError,
   subscribeDeviceProvidersGen,
   type DeviceProvidersPayload,
+  type RetainedProviderCatalog,
 } from '@/device-link/deviceProvidersCache';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { useRetainedProviderModel } from '@/device-link/useDeviceProviders';
@@ -80,6 +81,7 @@ export interface RemoteAgentCatalogsInput {
 export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput): {
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
+  retainedCatalog?: RetainedProviderCatalog;
 } {
   const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion,
     getPresenceAvailability, rosterVersion = 0, providerShareCatalogVersions = {} } =
@@ -272,7 +274,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     const deviceCatalogs = devices.map((device): RemoteAgentCatalog => {
       const state = catalogs.get(device.deviceId);
       const retainedHere = device.deviceId === retainedDevice ? retained : undefined;
-      const payload = retainedHere?.payload ?? state?.payload;
+      const payload = retainedHere?.catalog?.payload ?? state?.payload;
       // 设备清单是打开时的快照;面板开着期间上下线以实时 presence 为准(未知时沿用清单)。
       const presence = getPresenceAvailability(device.deviceId);
       const offline = presence === false || (presence !== true && !device.canOpen);
@@ -288,8 +290,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       };
     });
     return shareCatalogs.length === 0 ? deviceCatalogs : [...deviceCatalogs, ...shareCatalogs];
-  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability, retainedDevice, retained.payload, retained.loading, retained.error]);
+  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability, retainedDevice, retained.catalog, retained.loading, retained.error]);
   const settled = input.enabled && devicesLoaded
     && (!readShares || shareState.controlledDeviceId !== input.controlledDeviceId || shareState.loaded);
-  return { catalogs: result, settled };
+  return { catalogs: result, settled, retainedCatalog: retained.catalog };
 }

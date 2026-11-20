@@ -23,8 +23,7 @@ import { incomingShareDestination } from '@/session/incomingShare';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
-import { modelNeedsReselection } from '@/session/modelReselection';
-import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
+import { hiddenSessionModelAtSend } from '@/session/modelReselection';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
@@ -454,7 +453,7 @@ import {
 } from '@/session/pluginEngines';
 import { PluginEngineMark } from '@/session/PluginEngineMark';
 import { formatProviderAccountLabel, resolveSessionUsageAccount } from '@/session/sessionUsageAccount';
-import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
+import { useRemoteAgentCatalogs, useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
 import { isProviderShareAgentDeviceId } from '@/session/providerShareAgentDevice';
 import { useSessionProviderGroup } from '@/session/useSessionProviderGroup';
 import {
@@ -2874,7 +2873,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => [...new Set([currentAgentDeviceId, nextAgentDeviceId].filter((id): id is string => !!id))],
     [currentAgentDeviceId, nextAgentDeviceId],
   );
-  const remoteAgentCatalogs = useRemoteAgentCatalogs({
+  const { catalogs: remoteAgentCatalogs, retainedCatalog: remoteRetainedCatalog } = useRemoteAgentCatalogsWithStatus({
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
     // 共享任务访客读到的是自己账号的设备,与任务无关,不读。
     enabled: !!deviceId && !isSharedTaskPeer(deviceId) && (
@@ -6842,19 +6841,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     // A known hidden model requires an explicit choice before consuming the draft or enqueueing.
     const sessionAtSend = readSessionRowNow() ?? currentSession;
-    const intentAtSend = sessionAtSend.agentSwitchIntent;
-    // Cross-agent picks take effect on the next message; validate that chosen target.
-    const selectionAtSend = intentAtSend
-      ? { agentKind: intentAtSend.targetAgentKind, model: intentAtSend.model, providerId: intentAtSend.providerId }
-      : { agentKind: resolveSessionAgentKind(sessionAtSend), model: sessionAtSend.model, providerId: sessionAtSend.providerId };
-    if (!earlyLocalCommand && !earlyDesktopCommand && modelNeedsReselection(
-      getCachedDeviceProviders(deviceId)?.modelVisibilityOverrides,
-      selectionAtSend.agentKind, selectionAtSend.model, selectionAtSend.providerId,
-    )) {
-      setError(t('session.common.modelHiddenReselect', { model: selectionAtSend.model }));
+    const hiddenModel = !earlyLocalCommand && !earlyDesktopCommand
+      && hiddenSessionModelAtSend(sessionAtSend, deviceId, currentAgentDeviceId ? remoteRetainedCatalog : composerDeviceProviders.retainedCatalog);
+    if (hiddenModel) {
+      setError(t('session.common.modelHiddenReselect', { model: hiddenModel.modelId }));
       // 与手动打开入口一致：面板按「待切换目标 / 当前任务引擎」浏览，才能把已关闭的
       // 原选模型认作当前选择并显示重选提示（#5580）。
-      setModelSheetAgentKind(selectionAtSend.agentKind);
+      setModelSheetAgentKind(hiddenModel.agent);
       setModelSheetOpen(true);
       sendInFlightRef.current = false;
       setSending(false);

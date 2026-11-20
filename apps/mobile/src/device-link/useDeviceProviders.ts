@@ -20,6 +20,7 @@ import {
   fetchDeviceProviders,
   orderDeviceProviders,
   readRetainedProviderModel,
+  retainedProviderModelKey,
   fetchDeviceProvidersFresh,
   getCachedDeviceProviders,
   getDeviceFetchEpoch,
@@ -31,6 +32,7 @@ import {
   subscribeDeviceProvidersGen,
   subscribeDeviceProvidersError,
   type DeviceProvidersPayload,
+  type RetainedProviderCatalog,
 } from './deviceProvidersCache';
 import type { MobileMakerTransport } from './mobileMakerTransport';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
@@ -39,6 +41,7 @@ export { evictDeviceProviders } from './deviceProvidersCache';
 
 export interface UseDeviceProvidersResult {
   providers: ProviderView[];
+  retainedCatalog?: RetainedProviderCatalog;
   /** 被控端「模型显示/隐藏」override 快照;undefined = 旧被控端(列表不过滤)。 */
   modelVisibilityOverrides?: Record<string, boolean>;
   loading: boolean;
@@ -282,8 +285,9 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false, retain
   const ready = deviceId !== undefined && readyFor === deviceId && readyGen === getDeviceProvidersGen(deviceId);
   const retained = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, retainedModel, pickerOpen);
   return {
-    providers: retained.payload?.providers ?? payload.providers,
-    modelVisibilityOverrides: retained.payload?.modelVisibilityOverrides ?? payload.modelVisibilityOverrides,
+    providers: retained.catalog?.payload.providers ?? payload.providers,
+    modelVisibilityOverrides: retained.catalog?.payload.modelVisibilityOverrides ?? payload.modelVisibilityOverrides,
+    retainedCatalog: retained.catalog,
     loading: loading || retained.loading,
     error: (errorDeviceId === deviceId ? error : null) ?? retained.error,
     unsupported: errorDeviceId === deviceId && isDeviceProvidersUnsupportedError(error),
@@ -303,14 +307,15 @@ export function useRetainedProviderModel(
   const modelId = route?.modelId;
   const providerId = route?.providerId;
   const needed = !!modelId && !!base?.deferredProviderIds?.some(id => providerId === null || id === providerId);
-  const [result, setResult] = useState<{
-    base: DeviceProvidersPayload; key: string; payload?: DeviceProvidersPayload; error?: string; failedPickerOpen?: boolean;
+  const [result, setResult] = useState<RetainedProviderCatalog | {
+    base: DeviceProvidersPayload; key: string; error: string; failedPickerOpen: boolean;
   }>();
-  const key = JSON.stringify([agent, providerId, modelId]);
+  const key = route ? retainedProviderModelKey(route) : '';
   const current = needed && result?.base === base && result?.key === key ? result : undefined;
+  const catalog = current && 'payload' in current ? current : undefined;
+  const failure = current && 'error' in current ? current : undefined;
   // A peer recovering can rearm exhausted transient reads. Permanent errors wait for a new user attempt.
-  const settled = !!current?.payload
-    || (!!current?.error && current.failedPickerOpen === pickerOpen && !canRecoverProviderRead(current.error));
+  const settled = !!catalog || (failure?.failedPickerOpen === pickerOpen && !canRecoverProviderRead(failure.error));
   useEffect(() => {
     if (!needed || !base || !agent || !modelId || providerId === undefined || !peerReady || settled) return;
     let cancelled = false;
@@ -364,5 +369,5 @@ export function useRetainedProviderModel(
       subscription.remove();
     };
   }, [agent, base, key, maker, modelId, needed, peerReady, pickerOpen, providerId, settled]);
-  return { payload: current?.payload, loading: needed && !current, error: current?.error ?? null };
+  return { catalog, loading: needed && !current, error: failure?.error ?? null };
 }

@@ -9,6 +9,7 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
 import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
+import { hiddenSessionModelAtSend } from '@/session/modelReselection';
 
 const state = vi.hoisted(() => ({
   context: { connectionEpoch: 1, status: 'online', recoveringDeviceIds: new Set<string>() },
@@ -99,6 +100,18 @@ describe('model catalog failure recovery', () => {
 
   // PR #11693: a successful ordinary catalog leaves only the existing task's model read to
   // recover. Exercise the picker hook with transport failures and virtual time (unit).
+  it('blocks sending a hidden retained model even when the host omits its model row', async () => {
+    const read = state.makers.get('a')!.listProviders;
+    read.mockResolvedValueOnce(active).mockResolvedValueOnce({
+      providers: [], modelVisibilityOverrides: { 'codex:off:current': false },
+    });
+    await show(route);
+    const session = { agentKind: route.agent, model: route.modelId, providerId: route.providerId };
+    expect(hiddenSessionModelAtSend(session, 'a', values.a.retainedCatalog)).toEqual(route);
+    expect(hiddenSessionModelAtSend(session, 'a')).toBeUndefined();
+    expect(read.mock.calls).toEqual([[], [route]]);
+  });
+
   it('recovers the bound model after a timeout without reopening or refreshing the catalog', async () => {
     const read = state.makers.get('a')!.listProviders;
     read.mockResolvedValueOnce(active).mockRejectedValueOnce(timeout()).mockResolvedValue(reply);
