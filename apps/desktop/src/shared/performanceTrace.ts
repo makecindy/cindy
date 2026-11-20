@@ -8,6 +8,7 @@ export const TRACE_MAX_EVENTS = 3000;
 export const TRACE_UI_OPERATIONS = [
   'model-list-open', 'model-list-open-commit', 'model-list-close', 'model-list-close-commit',
   'worker-switch', 'worker-selection-commit', 'worker-history-commit', 'worker-switch-failed',
+  'worker-history-fresh-commit', 'worker-input-ready', 'worker-switch-cancelled', 'worker-history-failed',
 ] as const;
 export type TraceUiOperation = (typeof TRACE_UI_OPERATIONS)[number];
 

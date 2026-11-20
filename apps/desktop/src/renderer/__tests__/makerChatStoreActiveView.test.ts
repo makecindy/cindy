@@ -492,6 +492,25 @@ describe('makerChatStore active view tracking', () => {
       .toBe(contextTokens > 0 ? 272_000 : 1_000_000);
   });
 
+  it('uses the in-flight task metadata when the Worker view joins the same opening history read', async () => {
+    const sessionId = sid('worker-opening');
+    const resolveMetadata = Promise.resolve({
+      id: sessionId, agentKind: 'cc', contextTokens: 500, contextWindow: 200_000,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+
+    makerChatStore.ensureInitialMessages(sessionId, resolveMetadata);
+    enter(sessionId);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    expect(vi.mocked(sessionService.get).mock.calls).not.toContainEqual([sessionId]);
+    expect(vi.mocked(messageService.list).mock.calls.filter(([id]) => id === sessionId)).toHaveLength(1);
+    expect(makerChatStore.getSnapshot(sessionId)).toMatchObject({
+      historyLoaded: true,
+      agentStatus: { contextWindow: 200_000 },
+    });
+  });
+
   it('initial history load backfills to the latest plan boundary', async () => {
     const sessionId = sid('initial-plan-backfill');
     const latestPage = Array.from({ length: 49 }, (_, i) =>

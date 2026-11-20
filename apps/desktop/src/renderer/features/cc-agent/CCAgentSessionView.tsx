@@ -2,7 +2,7 @@ import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
-import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
+import { getLiveErrorMessageClientId, getRemoteHistoryView, type ChatMessage } from '@/lib/makerChatStore';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
@@ -548,6 +548,33 @@ function parseOrcaWorkersRevealState(state: unknown): OrcaWorkersRevealState | n
   };
 }
 
+export type WorkerViewCommit = 'history' | 'fresh-history' | 'input' | 'history-failed';
+
+function WorkerHistoryCommitProbe({
+  sessionId, historyShown, historyLoaded, onCommit,
+}: {
+  sessionId: string;
+  historyShown: boolean;
+  historyLoaded: boolean;
+  onCommit: (stage: WorkerViewCommit) => void;
+}) {
+  const view = getRemoteHistoryView(sessionId);
+  const fresh = useSyncExternalStore(
+    view?.subscribe ?? (() => () => undefined),
+    () => view ? view.getSnapshot().ready && !view.getSnapshot().stale : historyLoaded,
+  );
+  useLayoutEffect(() => {
+    if (historyShown) onCommit('history');
+    if (historyLoaded && fresh) onCommit('fresh-history');
+  }, [fresh, historyLoaded, historyShown, onCommit]);
+  return null;
+}
+
+function WorkerInputCommitProbe({ onCommit }: { onCommit: (stage: WorkerViewCommit) => void }) {
+  useLayoutEffect(() => onCommit('input'), [onCommit]);
+  return null;
+}
+
 interface CCAgentSessionViewProps {
   /** Topic root and reply divider, inside the existing message scroller. */
   messageStreamHeader?: ReactNode;
@@ -590,7 +617,7 @@ interface CCAgentSessionViewProps {
    * 仍 keep-alive，但这里传 false 避免每批 text delta 触发 Markdown/MessageStream。
    */
   chatRealtime?: boolean;
-  onHistoryCommit?: () => void;
+  onHistoryCommit?: (stage: WorkerViewCommit) => void;
   /** RSB 协同 tab 注入的消息定位意图；detached 子窗不能依赖主窗 location.state。 */
   searchJumpProp?: ConversationSearchJump | null;
   onSearchJumpConsumed?: () => void;
@@ -2011,9 +2038,6 @@ function CCAgentSessionContent({
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
   const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
   const visibleHistorySessionId = viewVisible && session?.id === sessionId && historyLoaded ? sessionId : null;
-  useLayoutEffect(() => {
-    if (visibleHistorySessionId) onHistoryCommit?.();
-  }, [visibleHistorySessionId, onHistoryCommit]);
   useBotIslandVisibleSession(
     visibleHistorySessionId ?? null,
     ownsWindowRoute && !isCompactRail && !isOrcaMode,
@@ -5948,9 +5972,19 @@ function CCAgentSessionContent({
 
   </>;
   const pendingMcpSetup = useMcpSetupRequest(sessionId ?? null, !remoteDeviceId && !readOnly);
+  const workerViewCommit = viewVisible && chatRealtime && sessionId === session?.id ? onHistoryCommit : undefined;
+  const composerDisabled = readOnly || remoteHandoffPreparing || session?.source === 'review';
   const messageStreamEl = (
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
+    {workerViewCommit && sessionId && (
+      <WorkerHistoryCommitProbe
+        sessionId={sessionId}
+        historyShown={chatDisplaySnapshot.historyLoaded || chatDisplaySnapshot.messages.some((message) => message.cacheHydrated)}
+        historyLoaded={chatDisplaySnapshot.historyLoaded}
+        onCommit={workerViewCommit}
+      />
+    )}
     <MessageStream
       pendingMessages={pendingMessages}
       renderPendingMessage={renderPendingMessage}
@@ -6629,6 +6663,9 @@ function CCAgentSessionContent({
                   <SessionProjectSettingsDialog key={session.id} session={session}
                     onClose={() => setProjectSettingsOpen(false)} />
                 )}
+                {workerViewCommit && !composerDisabled && !cindyMakeInputLocked && !(voiceModeOpen && voiceSurfaceAvailable) && (
+                  <WorkerInputCommitProbe onCommit={workerViewCommit} />
+                )}
                 <ChatInput
                   onOpenProjectSettings={(projectInfo?.settingsVersion ?? 0) >= 6 && session?.workspaceKind === 'project' &&
                     !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
@@ -6696,7 +6733,7 @@ function CCAgentSessionContent({
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
                   sendBlocked={!!creationPreview}
-                  disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
+                  disabled={composerDisabled}
                   settingsLocked={
                     readOnly || !!creationPreview || session?.source === 'review' || Boolean(activeQueueComposerEdit)
                   }

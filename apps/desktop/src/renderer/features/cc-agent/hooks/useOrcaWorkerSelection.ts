@@ -19,7 +19,7 @@ import {
   workerAgentDeviceErrorMessage,
 } from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
-import { useWorkers } from './useWorkers';
+import { useWorkers, type WorkerInfo } from './useWorkers';
 import { clearWorkerAttention } from '../lib/workerAttentionStore';
 
 const log = createLogger('OrcaWorkerSelection');
@@ -105,8 +105,13 @@ export function useOrcaWorkerSelection({
   const browseScope = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, leadSessionId]);
   const visibleScope = useRef<string | null>(null);
   const visibleRef = useRef(viewVisible);
+  const currentHintRevision = useRef(normalizedFocusWorkerHintRevision);
   const latestBrowseIntent = useRef<BrowseIntent | null>(null);
-  const [browse, setBrowse] = useState<{ intent: BrowseIntent; confirmed: boolean } | null>(null);
+  const [browse, setBrowse] = useState<{
+    intent: BrowseIntent;
+    confirmed: boolean;
+    awaitingProjection?: WorkerInfo[];
+  } | null>(null);
   useLayoutEffect(() => {
     visibleScope.current = browseScope;
     setBrowse((current) => current?.intent.scope === browseScope ? current : null);
@@ -115,10 +120,18 @@ export function useOrcaWorkerSelection({
       visibleScope.current = null;
     };
   }, [browseScope]);
-  useLayoutEffect(() => { visibleRef.current = viewVisible; }, [viewVisible]);
+  useLayoutEffect(() => {
+    visibleRef.current = viewVisible;
+    currentHintRevision.current = normalizedFocusWorkerHintRevision;
+  }, [viewVisible, normalizedFocusWorkerHintRevision]);
   const activeBrowse = browse?.intent.scope === browseScope &&
     browse.intent.hintRevision === normalizedFocusWorkerHintRevision ? browse : null;
   const browseWorker = activeBrowse && workers.find((worker) => worker.workerId === activeBrowse.intent.workerId);
+  useLayoutEffect(() => {
+    if (activeBrowse?.awaitingProjection && activeBrowse.awaitingProjection !== workers) {
+      setBrowse((current) => current === activeBrowse ? null : current);
+    }
+  }, [activeBrowse, workers]);
 
   useEffect(() => {
     selectionIntentGenerationRef.current += 1;
@@ -407,7 +420,7 @@ export function useOrcaWorkerSelection({
       queue.latest = intent;
       const isLatest = (): boolean => queue.latest === intent && isDataOwnerGenerationCurrent(owner);
       const isVisibleIntent = () => isLatest() && visibleScope.current === browseScope &&
-        latestBrowseIntent.current === intent;
+        latestBrowseIntent.current === intent && currentHintRevision.current === intent.hintRevision;
       const settle = () => setBrowse((current) => current?.intent === intent ? null : current);
       const applyFocus = async () => {
         if (!isLatest()) return false;
@@ -420,6 +433,7 @@ export function useOrcaWorkerSelection({
       focusWrites.set(browseScope, queue);
       void (async () => {
         let focusApplied = false;
+        let waitingForProjection = false;
         try {
           if (!(await write) || !isVisibleIntent()) return;
           focusApplied = true;
@@ -434,16 +448,22 @@ export function useOrcaWorkerSelection({
           } else if (status !== 'done') {
             clearWorkerAttention(workerId);
           }
-          if (isVisibleIntent()) await refresh();
+          if (isVisibleIntent()) waitingForProjection = (await refresh('authoritative'))?.status !== 'applied';
         } catch (err: unknown) {
           if (isVisibleIntent()) {
-            if (!focusApplied) onFailure?.();
+            if (focusApplied) waitingForProjection = true;
+            else onFailure?.();
             toast.error(err instanceof Error ? err.message : String(err));
           }
         } finally {
           if (focusWrites.get(browseScope)?.tail === write) focusWrites.delete(browseScope);
           if (visibleScope.current === browseScope && latestBrowseIntent.current === intent &&
-              isDataOwnerGenerationCurrent(owner)) settle();
+              isDataOwnerGenerationCurrent(owner)) {
+            if (waitingForProjection) {
+              const awaitingProjection = workersRef.current;
+              setBrowse((current) => current?.intent === intent ? { ...current, awaitingProjection } : current);
+            } else settle();
+          }
         }
       })();
     },

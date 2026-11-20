@@ -29,9 +29,9 @@ export function useWorkers(leadSessionId: string | undefined) {
   useWorkerProjectionOwner(leadSessionId);
   const snapshot = useWorkerProjection(leadSessionId);
 
-  const refresh = useCallback(async (): Promise<WorkersRefreshResult | null> => {
+  const refresh = useCallback(async (mode?: 'authoritative'): Promise<WorkersRefreshResult | null> => {
     if (!leadSessionId) return null;
-    return revalidateWorkersProjection(leadSessionId);
+    return revalidateWorkersProjection(leadSessionId, { mode });
   }, [leadSessionId]);
 
   const refreshCreationState = useCallback(async (): Promise<WorkerCreationRefreshResult> => {

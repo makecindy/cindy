@@ -294,20 +294,52 @@ describe('OrcaWorkerPanel worker on another computer', () => {
       select('latest');
       showWorker('superseded');
       panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
-      (mocks.remotePaneProps!.onHistoryCommit as () => void)();
+      expect(mocks.remotePaneProps!.onHistoryCommit).toBeUndefined();
       showWorker('latest');
       panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
-      const ready = mocks.remotePaneProps!.onHistoryCommit as () => void;
-      ready();
-      ready();
+      const ready = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      ready('history');
+      ready('history');
+      ready('input');
+      ready('fresh-history');
     } finally {
       stop();
     }
     const ops = events.filter(e => e.kind === 'operation');
     expect(ops.map(e => e.label)).toEqual([
-      'worker-switch', 'worker-switch', 'worker-selection-commit', 'worker-history-commit',
+      'worker-switch', 'worker-switch-cancelled', 'worker-switch', 'worker-selection-commit',
+      'worker-history-commit', 'worker-input-ready', 'worker-history-fresh-commit',
     ]);
-    expect(ops.slice(2).map(e => e.at)).toEqual([ops[1].at, ops[1].at]);
+    expect(ops.slice(3).map(e => e.at)).toEqual(Array(4).fill(ops[2].at));
+  });
+
+  it('rejects a history callback captured before returning to the same Worker', () => {
+    const events: PerformanceTraceEvent[] = [];
+    const stop = installPerformanceTraceProbe((batch) => events.push(...batch));
+    const show = (workerId: string) => {
+      const row = { ...remoteWorker, workerId, sessionId: workerId };
+      mocks.selection = { workers: [row], selectedWorkerRecord: row, selectedWorkerId: workerId, workerSessionId: workerId };
+      return <OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />;
+    };
+    try {
+      const panel = render(show('start'));
+      const select = (id: string) => (mocks.toolbarProps.onSwitchFocus as (target: string) => void)(id);
+      select('a');
+      panel.rerender(show('a'));
+      const obsolete = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      select('b');
+      panel.rerender(show('b'));
+      select('a');
+      panel.rerender(show('a'));
+      obsolete('history');
+      const current = mocks.remotePaneProps!.onHistoryCommit as (stage: string) => void;
+      current('input');
+      current('history');
+    } finally {
+      stop();
+    }
+    expect(events.filter(({ label }) => label === 'worker-history-commit' || label === 'worker-input-ready')
+      .map(({ label }) => label)).toEqual(['worker-input-ready', 'worker-history-commit']);
   });
 
   it('shows the task on the execution device instead of the local proxy task', () => {

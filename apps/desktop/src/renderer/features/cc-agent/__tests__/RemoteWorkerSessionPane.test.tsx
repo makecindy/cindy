@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { RemoteWorkerSessionPane } from '../RemoteWorkerSessionPane';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  ensureInitialMessages: vi.fn(),
+  releaseHistory: vi.fn(),
   localDeviceId: 'this-mac' as string | null,
   sessionViewProps: null as Record<string, unknown> | null,
   store: {
+    subscribe: vi.fn(() => () => undefined),
     getSessionDeviceId: vi.fn<(id: string) => string | undefined>(() => undefined),
     pinSessionOrigin: vi.fn(),
     captureSessionRead: vi.fn(() =>
@@ -17,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     ),
     getDeviceSessions: vi.fn<() => Array<{ id: string }>>(() => []),
     getDeviceName: vi.fn(() => 'Mac mini'),
+    getDeviceLifecycleEpoch: vi.fn(() => 0),
     mergeDeviceSessions: vi.fn(),
   },
 }));
@@ -29,6 +34,12 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: mocks.store }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => mocks.localDeviceId }));
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: {
+    ensureInitialMessages: mocks.ensureInitialMessages,
+    enterView: () => mocks.releaseHistory,
+  },
+}));
 vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: (props: Record<string, unknown>) => {
     mocks.sessionViewProps = props;
@@ -47,10 +58,14 @@ const device = {
 describe('RemoteWorkerSessionPane', () => {
   beforeEach(() => {
     mocks.invoke.mockReset();
+    mocks.ensureInitialMessages.mockClear();
+    mocks.releaseHistory.mockClear();
     mocks.sessionViewProps = null;
     mocks.localDeviceId = 'this-mac';
     Object.values(mocks.store).forEach((fn) => fn.mockClear());
-    mocks.store.getSessionDeviceId.mockReturnValue(undefined);
+    const origins = new Map<string, string>();
+    mocks.store.getSessionDeviceId.mockImplementation((id) => origins.get(id));
+    mocks.store.pinSessionOrigin.mockImplementation((host, id) => { origins.set(id, host); });
     mocks.store.getDeviceSessions.mockReturnValue([]);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       deviceLink: { invoke: mocks.invoke },
@@ -94,7 +109,7 @@ describe('RemoteWorkerSessionPane', () => {
         chatRealtime
       />,
     );
-    expect(screen.getByText('orca.split.remoteWorkerUnreachable:Mac mini')).toBeTruthy();
+    expect(await screen.findByText('orca.split.remoteWorkerUnreachable:Mac mini')).toBeTruthy();
     expect(screen.getByText('orca.rolePill.deviceUnreachable')).toBeTruthy();
     expect(mocks.invoke).not.toHaveBeenCalled();
 
@@ -103,6 +118,36 @@ describe('RemoteWorkerSessionPane', () => {
       <RemoteWorkerSessionPane leadSessionId="lead-1" device={device} viewVisible chatRealtime />,
     );
     await screen.findByTestId('session-view');
+  });
+
+  it('starts history before cold metadata settles and shares a pending metadata read on return', async () => {
+    const row = { id: 'remote-1', status: 'active' };
+    let resolveFirst!: (value: typeof row) => void;
+    mocks.invoke.mockImplementation((host: string) => host === 'mac-mini'
+      ? new Promise<typeof row>((resolve) => { resolveFirst = resolve; })
+      : Promise.resolve({ id: 'remote-2', status: 'active' }));
+    const show = (target: typeof device) => (
+      <RemoteWorkerSessionPane key={target.remoteSessionId} leadSessionId="lead-1"
+        device={target} viewVisible chatRealtime />
+    );
+    const pane = render(show(device));
+    await waitFor(() => expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1));
+    const firstRead = mocks.ensureInitialMessages.mock.calls[0][1];
+    expect(screen.queryByTestId('session-view')).toBeNull();
+
+    pane.rerender(show({ ...device, deviceId: 'other-pc', remoteSessionId: 'remote-2' }));
+    await screen.findByTestId('session-view');
+    expect(mocks.sessionViewProps?.sessionIdProp).toBe('remote-2');
+    expect(mocks.releaseHistory).toHaveBeenCalledTimes(1);
+    pane.rerender(show(device));
+    await waitFor(() => expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(3));
+    expect(mocks.ensureInitialMessages.mock.calls[2]).toEqual(['remote-1', firstRead]);
+    expect(mocks.invoke.mock.calls.filter(([host]) => host === 'mac-mini')).toHaveLength(1);
+
+    await act(async () => resolveFirst(row));
+    await screen.findByTestId('session-view');
+    expect(mocks.sessionViewProps?.sessionIdProp).toBe('remote-1');
+    expect(mocks.store.mergeDeviceSessions.mock.calls.filter(([host]) => host === 'mac-mini')).toHaveLength(1);
   });
 
   it('refuses a task already owned by another device', async () => {
@@ -115,6 +160,32 @@ describe('RemoteWorkerSessionPane', () => {
     );
     expect(mocks.store.pinSessionOrigin).not.toHaveBeenCalled();
     expect(mocks.sessionViewProps).toBeNull();
+  });
+
+  it('loads the same device and task again after an account change without applying the old row', async () => {
+    const originalOwner = getDataOwnerGeneration().dataOwnerId;
+    const row = { id: 'remote-1', status: 'active', title: 'Previous' };
+    let finishPrevious!: (value: typeof row) => void;
+    mocks.invoke
+      .mockImplementationOnce(() => new Promise<typeof row>((resolve) => { finishPrevious = resolve; }))
+      .mockResolvedValueOnce({ ...row, title: 'Current' });
+    const pane = () => <RemoteWorkerSessionPane leadSessionId="lead-1" device={device} viewVisible chatRealtime />;
+    try {
+      setDataOwnerGeneration('previous-owner');
+      const view = render(pane());
+      await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(1));
+      setDataOwnerGeneration('current-owner');
+      view.rerender(pane());
+      await screen.findByTestId('session-view');
+      await act(async () => finishPrevious(row));
+      expect(mocks.invoke).toHaveBeenCalledTimes(2);
+      expect(mocks.releaseHistory).toHaveBeenCalledTimes(1);
+      expect(mocks.store.mergeDeviceSessions).toHaveBeenCalledExactlyOnceWith('mac-mini', 'Mac mini', [
+        { ...row, title: 'Current' },
+      ]);
+    } finally {
+      setDataOwnerGeneration(originalOwner);
+    }
   });
 
   it('keeps a loaded task mounted and read only while offline, then recovers', async () => {

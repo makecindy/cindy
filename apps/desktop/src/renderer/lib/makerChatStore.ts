@@ -102,7 +102,7 @@ import {
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
-import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
+import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin, Session } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
@@ -12692,7 +12692,7 @@ async function prefetchRemoteHistories(deviceId: string, sessionIds?: ReadonlySe
   }
 }
 
-function ensureInitialMessages(sessionId: string): void {
+function ensureInitialMessages(sessionId: string, initialSessionRead?: Promise<Session>): void {
   const state = getOrCreateState(sessionId);
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) {
@@ -12702,7 +12702,8 @@ function ensureInitialMessages(sessionId: string): void {
     hydrateRemoteMessagesFromCache(sessionId);
     return;
   }
-  requestInputProjection(sessionId);
+  // A route-confirmed Worker can start reading history before its composer mounts.
+  if (!initialSessionRead) requestInputProjection(sessionId);
   // Prefetch and other non-mounted callers still create a cache entry. Give
   // it a leave time like a viewed session so a cancelled navigation cannot
   // leave messages permanently exempt from soft eviction.
@@ -12735,9 +12736,11 @@ function ensureInitialMessages(sessionId: string): void {
 
   // Seed sdkSessionId from the server so resume works on app restart.
   // device-link 远程 session 经隧道读被控端 row(本地 DB 没有,直接 get 会 404)。
-  getSessionFor(sessionId)
+  const historyOwnerAtStart = getDataOwnerGeneration();
+  (initialSessionRead ?? getSessionFor(sessionId))
     .then((session) => {
       if (
+        (initialSessionRead && (session.id !== sessionId || !isDataOwnerGenerationCurrent(historyOwnerAtStart))) ||
         !isCurrentHistoryFetch(
           sessionId,
           historyFetchToken,

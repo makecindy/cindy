@@ -12,13 +12,14 @@ import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { beginTraceOperation } from '@/lib/performanceTraceProbe';
 import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { CCAgentSessionView } from './CCAgentSessionView';
+import { CCAgentSessionView, type WorkerViewCommit } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
 import { EditWorkerPopover } from './EditWorkerPopover';
 import { RemoteWorkerSessionPane } from './RemoteWorkerSessionPane';
@@ -27,6 +28,7 @@ import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
 import { useWorkerAgentDevices } from './hooks/useWorkerAgentDevices';
 import { subscribeNewWorkerShortcut } from './lib/newWorkerShortcut';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
+import type { TraceUiOperation } from '../../../shared/performanceTrace';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 
 export interface OrcaWorkerPanelProps {
@@ -92,8 +94,16 @@ function useLeadDeviceWorkerOrigins(
     remoteProjectsStore.subscribe,
     () => (selectedSessionId ? remoteProjectsStore.getSessionDeviceId(selectedSessionId) : undefined),
   );
-  return !leadDeviceId || !selectedSessionId || selectedOrigin !== undefined;
+  return !leadDeviceId || !selectedSessionId || selectedOrigin === leadDeviceId;
 }
+
+const workerCommitLabels: Record<WorkerViewCommit | 'selected', TraceUiOperation> = {
+  selected: 'worker-selection-commit',
+  history: 'worker-history-commit',
+  'fresh-history': 'worker-history-fresh-commit',
+  input: 'worker-input-ready',
+  'history-failed': 'worker-history-failed',
+};
 
 function sameVisibleSessionPayload(
   a: string | string[] | null,
@@ -164,35 +174,48 @@ export function OrcaWorkerPanel({
   const workerPaneReady = deferredWorkerSessionId === workerSessionId;
   const switchTrace = useRef<{
     lead: string;
+    deviceId: string | null | undefined;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
     target: string;
     mark: NonNullable<ReturnType<typeof beginTraceOperation>>;
-    selected: boolean;
-    history: boolean;
+    stages: Set<WorkerViewCommit | 'selected'>;
   } | null>(null);
+  const cancelSwitchTrace = useCallback(() => {
+    switchTrace.current?.mark('worker-switch-cancelled');
+    switchTrace.current = null;
+  }, []);
   const switchWorker = useCallback((target: string) => {
-    const mark = target !== selectedWorkerId && workerConversationVisible
-      ? beginTraceOperation('worker-switch') : undefined;
-    const pending = mark ? { lead: leadSessionId, target, mark, selected: false, history: false } : null;
+    const measure = workerConversationVisible && (target !== selectedWorkerId || switchTrace.current !== null);
+    cancelSwitchTrace();
+    const mark = measure ? beginTraceOperation('worker-switch') : undefined;
+    const pending = mark ? {
+      lead: leadSessionId, deviceId, owner: getDataOwnerGeneration(), target, mark,
+      stages: new Set<WorkerViewCommit | 'selected'>(),
+    } : null;
     switchTrace.current = pending;
     handleSwitchFocus(target, pending ? () => {
       if (switchTrace.current !== pending) return;
       pending.mark('worker-switch-failed');
       switchTrace.current = null;
     } : undefined);
-  }, [handleSwitchFocus, leadSessionId, selectedWorkerId, workerConversationVisible]);
-  const markWorkerCommit = useCallback((stage: 'selected' | 'history') => {
-    const pending = switchTrace.current;
-    if (!pending || pending.lead !== leadSessionId || pending.target !== selectedWorkerId ||
-        !workerConversationVisible || pending[stage]) return;
-    pending[stage] = true;
-    pending.mark(stage === 'selected' ? 'worker-selection-commit' : 'worker-history-commit');
-    if (pending.selected && pending.history) switchTrace.current = null;
-  }, [leadSessionId, selectedWorkerId, workerConversationVisible]);
+  }, [cancelSwitchTrace, deviceId, handleSwitchFocus, leadSessionId, selectedWorkerId, workerConversationVisible]);
+  const pendingTrace = switchTrace.current;
+  const markWorkerCommit = useCallback((stage: WorkerViewCommit | 'selected') => {
+    if (!pendingTrace || switchTrace.current !== pendingTrace || pendingTrace.lead !== leadSessionId ||
+        pendingTrace.deviceId !== deviceId || !isDataOwnerGenerationCurrent(pendingTrace.owner) ||
+        pendingTrace.target !== selectedWorkerId || !workerConversationVisible || pendingTrace.stages.has(stage)) return;
+    pendingTrace.stages.add(stage);
+    pendingTrace.mark(workerCommitLabels[stage]);
+    if (pendingTrace.stages.has('selected') && pendingTrace.stages.has('history') &&
+        pendingTrace.stages.has('fresh-history') && pendingTrace.stages.has('input')) switchTrace.current = null;
+  }, [deviceId, leadSessionId, pendingTrace, selectedWorkerId, workerConversationVisible]);
   useLayoutEffect(() => {
     if (workerConversationVisible) markWorkerCommit('selected');
-    else switchTrace.current = null;
-  }, [workerConversationVisible, markWorkerCommit]);
-  const onWorkerHistoryCommit = useCallback(() => markWorkerCommit('history'), [markWorkerCommit]);
+    else cancelSwitchTrace();
+  }, [workerConversationVisible, markWorkerCommit, cancelSwitchTrace]);
+  useLayoutEffect(() => cancelSwitchTrace, [cancelSwitchTrace, deviceId, leadSessionId]);
+  const onWorkerHistoryCommit = pendingTrace?.target === selectedWorkerId && workerConversationVisible
+    ? markWorkerCommit : undefined;
 
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
   const shownWorker = selectedWorkerRecord ?? focusedWorker;
@@ -331,7 +354,7 @@ export function OrcaWorkerPanel({
               </Button>
             )}
           </div>
-        ) : workerSessionId && (!workerPaneReady || !workerOriginReady) ? (
+        ) : workerSessionId && (!workerPaneReady || !workerOriginReady || (focusWritePending && deviceId === undefined)) ? (
           <div aria-busy="true" className="flex h-full items-center justify-center">
             <Spinner size={16} />
           </div>
