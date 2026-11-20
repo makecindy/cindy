@@ -7,6 +7,8 @@ import { adaptPluginNodeProcess, pluginNodeEnvironment } from '../cindy-brain/no
 import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 import { configurePreRunNodeScriptSpawner } from './pre-run-hook.js';
 
+const OUTPUT_DRAIN_MS = 100;
+
 /** Reuse the shipped utilityProcess bootstrap in raw child mode: no plugin APIs or broker
  * authorization are exposed. RunAsNode stays disabled. stdin remains a normal byte stream. */
 configurePreRunNodeScriptSpawner((script, cwd) => {
@@ -33,15 +35,32 @@ configurePreRunNodeScriptSpawner((script, cwd) => {
   let signalCode: string | null = null;
   let exited = false;
   let streams = 2;
-  const close = () => { if (exited && streams === 0) events.emit('close', exitCode, signalCode); };
+  let closed = false;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(drainTimer);
+    events.emit('close', exitCode, signalCode);
+  };
   for (const stream of [worker.stdout, worker.stderr]) {
-    (stream as NodeJS.ReadableStream).once('end', () => { streams--; close(); });
+    (stream as NodeJS.ReadableStream).once('end', () => {
+      streams--;
+      if (exited && streams === 0) close();
+    });
   }
   worker.once('spawn', () => { ready = true; for (const fn of waiting.splice(0)) fn(); });
   worker.on('error', error => { stdin.destroy(error); events.emit('error', error); });
-  worker.on('exit', (code, signal) => {
+  worker.once('exit', (code, signal) => {
     exitCode = code; signalCode = signal; exited = true;
-    events.emit('exit', code, signal); close();
+    events.emit('exit', code, signal);
+    if (streams === 0) {
+      close();
+    } else {
+      // Electron can report exit without EOF on both pipes. Give pending output
+      // time to arrive without waiting indefinitely for a missing end event.
+      drainTimer = setTimeout(close, OUTPUT_DRAIN_MS);
+    }
   });
   Object.defineProperties(events, {
     pid: { get: () => worker.pid }, exitCode: { get: () => exitCode }, signalCode: { get: () => signalCode },
