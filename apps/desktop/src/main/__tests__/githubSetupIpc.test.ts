@@ -1,3 +1,4 @@
+vi.mock('../git-context/githubAppAuthorization.desktop', () => ({ readGithubAppToken: async () => null, onGithubAppAuthorizationChanged: () => () => {} }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));

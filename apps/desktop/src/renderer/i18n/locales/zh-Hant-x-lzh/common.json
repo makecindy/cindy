@@ -16979,7 +16979,8 @@
             "token": "今用備用 Token",
             "recheck": "察連線",
             "summary": "掌 GitHub 儲存庫、Issues、PR 與 Actions。",
-            "otherMethods": "他種連線之法"
+            "otherMethods": "他種連線之法",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "倉庫之變",
@@ -16992,6 +16993,21 @@
             "repositories": "擇倉庫",
             "disconnect": "斷事件之連",
             "connect": "連 GitHub App"
+          },
+          "connection": {
+            "operations": "儲存庫操作",
+            "operationsMissing": "尚未取得儲存庫操作授權",
+            "checking": "正在檢查 GitHub 連線…",
+            "mismatch": "操作帳號與通知帳號不同，請核對後重新連線。",
+            "ready": "GitHub 帳號已連線。",
+            "close": "閉之",
+            "incomplete": "帳號已綁定，請補充此電腦的操作授權。",
+            "eventsOnly": "此帳號用於儲存庫通知；顯示帳號名稱不代表此電腦已取得操作授權。",
+            "connect": "連線 GitHub",
+            "alternative": "使用本機 GitHub 登入",
+            "cliDescription": "可沿用本機登入；個人通知等 GitHub App 不支援的功能仍需要此方式。",
+            "disconnect": "中斷 GitHub App 連線",
+            "repositories": "正在關注 {{count}} 個儲存庫"
           }
         },
         "unresolved": "{{count}} 條未決之 review 評論",

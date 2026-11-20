@@ -17053,7 +17053,8 @@
             "token": "Using fallback token",
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
-            "otherMethods": "Other connection methods"
+            "otherMethods": "Other connection methods",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "Repository events",
@@ -17066,6 +17067,21 @@
             "repositories": "Choose repositories",
             "disconnect": "Disconnect events",
             "connect": "Connect GitHub App"
+          },
+          "connection": {
+            "operations": "Repository operations",
+            "operationsMissing": "Repository access is not authorized yet",
+            "checking": "Checking GitHub connection…",
+            "mismatch": "Operations and notifications use different accounts. Check the accounts and reconnect.",
+            "ready": "GitHub account connected.",
+            "close": "Close",
+            "incomplete": "Account linked. Authorize repository operations on this computer to finish.",
+            "eventsOnly": "This account receives repository events. Its name alone does not confirm authorization on this computer.",
+            "connect": "Connect GitHub",
+            "alternative": "Use local GitHub sign-in",
+            "cliDescription": "Keep using your local sign-in. Personal notifications and other features unsupported by GitHub Apps still require it.",
+            "disconnect": "Disconnect GitHub App",
+            "repositories": "Repositories watched: {{count}}"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",

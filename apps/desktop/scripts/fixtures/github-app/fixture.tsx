@@ -1,3 +1,4 @@
+import { GithubAccountCard } from '../../../src/renderer/features/cc-agent/GithubAccountCard';
 import { GithubAppCard } from '../../../src/renderer/features/cc-agent/GithubAppCard';
 import { mountPage, forbid } from '../../ui-page/harness';
 
@@ -7,6 +8,8 @@ void mountPage({
     let finishSync: (() => void) | undefined;
     if (ctx.data.installationReturn) Object.assign(window, { finishGithubAppSync: () => finishSync?.() });
     return { gitContext: {
+      githubConnection: async () => ctx.data.account ?? { status: 'missing' },
+      onGithubConnected: () => () => {},
       githubAppStatus: async () => {
         checks++;
         if (ctx.data.loading) await new Promise(() => {});
@@ -22,5 +25,5 @@ void mountPage({
       disconnectGithubApp: forbid('disconnectGithubApp'),
     } };
   },
-  render: () => <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]"><GithubAppCard /></div>,
+  render: ctx => <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">{ctx.data.unified ? <GithubAccountCard includeEvents onConnected={() => {}} /> : <GithubAppCard />}</div>,
 });
