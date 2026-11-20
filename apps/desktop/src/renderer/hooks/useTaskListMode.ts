@@ -1,4 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { createContext, useSyncExternalStore } from 'react';
+export const InboxUnreadReporter = createContext<((unread: boolean) => void) | null>(null);
+
 export type TaskListMode = 'tasks' | 'inbox';
 const key = 'sidebar.taskListMode';
 let memory: TaskListMode | undefined;
