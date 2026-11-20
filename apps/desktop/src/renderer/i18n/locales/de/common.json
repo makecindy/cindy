@@ -16101,7 +16101,6 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
-      "openPage": "Vollständige Aufgabenseite öffnen",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",
@@ -16109,6 +16108,14 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
+      "viewCollaboration": "Zusammenarbeit anzeigen",
+      "openConversation": "Unterhaltung öffnen",
+      "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",
+      "returnToSideChat": "Zurück zur Rückfrage",
+      "reopenSideChat": "Rückfrage erneut öffnen",
+      "origin": "Dieses Gespräch begann als Rückfrage.",
+      "originNamed": "Dieses Gespräch begann als Rückfrage zu „{{title}}“.",
+      "originUnavailable": "Dieses Gespräch begann als Rückfrage. Die ursprüngliche Aufgabe ist nicht verfügbar.",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",
@@ -16117,9 +16124,10 @@
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
-      "closeTitle": "Nebenchat schließen?",
-      "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
-      "closeConfirm": "Schließen und löschen",
+      "closeTitle": "Diese Nachfrage schließen und archivieren?",
+      "closeDescription": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert.",
+      "closeDescriptionRunning": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert und ihre Worker werden angehalten.",
+      "closeConfirm": "Schließen und archivieren",
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
