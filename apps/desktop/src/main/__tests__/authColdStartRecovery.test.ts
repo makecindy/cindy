@@ -1124,6 +1124,50 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
   });
 
+  it.each(['inactive', 'discarded'] as const)('preserves pending active recovery after a compatibility rotation commits %s', async commit => {
+    const { h } = recoverySetup();
+    const fresh = setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    const otherKey = accountVaultKey('global', 'other');
+    fresh.vault.resources[otherKey] = { realm: 'global', refreshToken: 'test-other', metadata: {
+      membershipId: 'other', passportId: 'passport-other', kind: 'personal',
+    } };
+    fresh.useProductionCandidates();
+    fresh.deps.readActiveVaultRefreshCandidate.mockImplementation(() => ({
+      accountKey: ORIGINAL_KEY, realm: 'global', refreshToken: fresh.vault.resources[ORIGINAL_KEY].refreshToken,
+    }));
+    fresh.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(
+      new AuthApiError('AUTH_REQUEST_FAILED', 503, 'busy', Date.now() + 180_000),
+    );
+    void fresh.start();
+    await vi.advanceTimersByTimeAsync(1);
+    fresh.request.mockResolvedValue({ ok: false, status: 401,
+      data: { error: { code: 'INVALID_REFRESH_TOKEN' } } });
+    await vi.advanceTimersByTimeAsync(61_250);
+    expect(fresh.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledTimes(1);
+    const previousRequests = fresh.request.mock.calls.length;
+    fresh.saved.session.refreshToken = 'test-other';
+    fresh.request.mockImplementation(async (token: unknown) => {
+      if (token === 'test-other') {
+        // Exercise real CAS discard, not a mocked commit outcome.
+        if (commit === 'discarded') fresh.vault.resources[otherKey].refreshToken = 'test-other-concurrent';
+        return { ...fresh.ok, data: { ...fresh.ok.data, refreshToken: 'test-other-rotated',
+          membership: { id: 'other', kind: 'personal', passportId: 'passport-other' } } };
+      }
+      return { ok: false, status: 0, data: null };
+    });
+    await vi.advanceTimersByTimeAsync(122_500);
+    expect(fresh.vault.resources[otherKey].refreshToken).toBe(
+      commit === 'inactive' ? 'test-other-rotated' : 'test-other-concurrent',
+    );
+    expect(fresh.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledTimes(2);
+    expect(fresh.request.mock.calls.slice(previousRequests).map(([token]: unknown[]) => token)).toEqual(['test-other']);
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+    expect(fresh.clear).not.toHaveBeenCalled();
+  });
+
   it.each(['newer', 'cleared'] as const)('checks the current Resource before resuming Passport (%s)', async state => {
     const { h } = recoverySetup();
     h.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(
