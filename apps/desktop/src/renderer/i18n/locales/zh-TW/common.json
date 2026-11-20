@@ -8510,6 +8510,13 @@
         "openInSidebar": "在側邊欄中開啟",
         "panelPageHosted": "從插件頁開啟 · 離開插件頁自動關閉",
         "panelNone": "這個插件不含面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：允許遠端呼叫",
+          "description": "開啟後，你的其他電腦可以用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
+          "unsupported": "這個插件還不支援讓其他電腦使用它的引擎。",
+          "remoteControlOff": "這台電腦還沒有允許同帳號裝置遠端控制，其他電腦不能使用這個引擎。",
+          "ariaLabel": "允許你的其他電腦使用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "目前版本 {{version}}",
@@ -15878,6 +15885,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "這臺電腦無法恢復任務原來的執行狀態。請選擇其他電腦或供應商的模型，透過上下文交接繼續；原訊息會保留。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢復先前的對話。訊息已保留。請選擇其他引擎繼續，或建立新任務。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "這個插件引擎用不了任務所在電腦的工具，暫時不能從另一台電腦執行這個任務。請換一個引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "這個插件引擎只能執行本機的任務，還不能讓其他電腦使用。",
       "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦上為這個供應商開啟「允許遠端呼叫」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",
