@@ -320,7 +320,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       { src: userImage, galleryId: 'message:u-gallery:image:0' },
       { src: rootImage, galleryId: ghostCardGalleryId('card-1', 0) },
       { src: spawnImage, galleryId: ghostCardGalleryId(spawnCallId, 0) },
-      { src: anchoredImage },
+      { src: anchoredImage, galleryId: 'ghost-media:ghostcard-tool-1:image:0', name: `${'4'.repeat(64)}.png` },
     ]);
   });
 });

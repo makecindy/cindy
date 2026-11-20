@@ -1414,8 +1414,12 @@ export function collectSessionImageSrcs(
         }
       }
       // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
-      for (const media of item.media ?? []) {
-        if (media.kind === 'image' && media.url) push(media.url);
+      for (const [index, media] of (item.media ?? []).entries()) {
+        if (media.kind === 'image' && media.url)
+          push(media.url, {
+            galleryId: `ghost-media:${item.key}:image:${index}`,
+            name: previewSourceName(media.url, 'image'),
+          });
       }
     } else if (item.type === 'message') {
       const msg = item.message;
@@ -6952,6 +6956,7 @@ export function MessageStream({
                               shareId={`${item.key}:media`}
                               items={item.media}
                               sessionId={sessionId}
+                              galleryIdPrefix={`ghost-media:${item.key}`}
                               selectionActive={shareSelectionActive}
                             />
                           ) : null}

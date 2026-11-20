@@ -139,6 +139,33 @@ describe('Ghost card ImageLightbox gallery positioning', () => {
     expect(screen.getByText('1 / 2')).toBeTruthy();
   });
 
+  // 测试价值：SVG 等文件型图片存放在 message.files，不在历史画廊里；
+  // 从同条 PNG 打开时不能切到不含 SVG 的画廊，否则同条附件翻不到。
+  // 最小失败输入 = 消息集合为 PNG + SVG、任务图集 3 张；旧实现显示 1 / 3。
+  it('keeps the message collection when a file-type image is not in the task gallery', () => {
+    const png = 'xdt-image://gallery/png.png';
+    render(
+      <ImageGalleryContext.Provider
+        value={[
+          { src: png },
+          { src: 'xdt-image://gallery/b.png' },
+          { src: 'xdt-image://gallery/c.png' },
+        ]}
+      >
+        <AttachmentCollectionContext.Provider
+          value={[
+            { id: 'png', name: 'png.png', source: png, kind: 'image', media: true },
+            { id: 'svg', name: 'icon.svg', source: '/tmp/icon.svg', kind: 'image' },
+          ]}
+        >
+          <ImageLightbox src={png} enableGallery onClose={vi.fn()} />
+        </AttachmentCollectionContext.Provider>
+      </ImageGalleryContext.Provider>,
+    );
+
+    expect(screen.getByText('1 / 2')).toBeTruthy();
+  });
+
   it('opens the exact duplicate image selected inside a plugin card iframe', () => {
     const repeated = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     render(
