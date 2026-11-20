@@ -3753,10 +3753,23 @@ initializePluginOauthCards({
   },
 });
 
+function hasPendingWorkerQuestion(sessionId: string): boolean {
+  for (const entry of pendingInteractionResolvers.values()) {
+    if (entry.sessionId === sessionId && entry.kind === 'ask_user_question' && !entry.migrated) return true;
+  }
+  return false;
+}
+
+function publishWorkerQuestionState(entry: PendingInteractionEntry): void {
+  if (entry.kind !== 'ask_user_question' || !isKnownOrcaWorkerSession(entry.sessionId)) return;
+  broadcastSessionPatched(entry.sessionId, { orcaHasPendingQuestion: hasPendingWorkerQuestion(entry.sessionId) });
+}
+
 function clearPendingInteraction(requestId: string): PendingInteractionEntry | null {
   const entry = pendingInteractionResolvers.get(requestId);
   if (!entry) return null;
   pendingInteractionResolvers.delete(requestId);
+  if (!entry.migrated) publishWorkerQuestionState(entry);
   if (entry.timeoutId) clearTimeout(entry.timeoutId);
   return entry;
 }
@@ -4179,6 +4192,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.timeoutId = undefined;
     entry.migrated = true;
+    publishWorkerQuestionState(entry);
     taken.push({ requestId, request: entry.request, resolve: decision => {
       if (pendingInteractionResolvers.get(requestId) !== entry || entry.deferredDecision) return;
       if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) {
@@ -5750,6 +5764,7 @@ export function installDesktopInteractionListener(session: {
       // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
       // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
       pendingInteractionResolvers.set(req.requestId, entry);
+      publishWorkerQuestionState(entry);
       if (sharedPermission) {
         bindSharedPermission(req.requestId, entry, sharedPermission);
       } else {
@@ -6560,6 +6575,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setSessionRuntimeProjector(createSessionRuntimeProjector({
     projectScheduledPreferences,
     runtimePluginsSelected: (sessionId) => !!readRuntimePluginSettings(sessionId),
+    pendingWorkerQuestion: id => isKnownOrcaWorkerSession(id) ? hasPendingWorkerQuestion(id) : undefined,
   }));
   setSessionRuntimeCleanup(createSessionRuntimeCleanup({
     cancelPendingRemoteStart,
