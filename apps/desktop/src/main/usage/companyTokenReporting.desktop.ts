@@ -1,3 +1,4 @@
+import { isAnalyticsAllowed } from '../analytics-settings-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { directCompanyTokenRoute } from './companyTokenRoute.js';
@@ -54,13 +55,13 @@ const current = (id: Identity) => {
 };
 
 class CompanyAuthorizationError extends Error {}
-async function request(id: Identity, route: string, method = 'GET', body?: object) {
+async function sendRequest(signal: AbortSignal, id: Identity, route: string, method = 'GET', body?: object) {
   if (!current(id)) throw new Error('Company identity changed');
   const response = await net.fetch(id.base + route, {
     method,
     redirect: 'error',
     cache: 'no-store',
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     headers: {
       Authorization: 'Bearer ' + id.token,
       ...(body && { 'Content-Type': 'application/json' }),
@@ -79,7 +80,18 @@ function projectTurn(models: ReadonlySet<string>, day: string, samples: readonly
   });
 }
 
-export function createCompanyTokenReporting() {
+export function createCompanyTokenReporting(
+  subscribe: (listener: (allowed: boolean, explicitEnabled?: boolean) => void) => () => void,
+) {
+  let requests = new AbortController();
+  let uploads = new AbortController();
+  const request = (id: Identity, route: string, method?: string, body?: object) => {
+    // Finish an in-flight withdrawal before sending a subsequent enable for the same member.
+    const signal = route.endsWith('/participation')
+      ? requests.signal
+      : AbortSignal.any([requests.signal, uploads.signal]);
+    return sendRequest(signal, id, route, method, body);
+  };
   const dir = app.getPath('userData');
   const queue = new CompanyTokenQueue(path.join(dir, 'company-token-outbox.json'));
   const delegatedDir = path.join(dir, 'company-token-executor');
@@ -100,9 +112,10 @@ export function createCompanyTokenReporting() {
   let activeGeneration = -1;
   let syncing = false;
   let rerun = false;
+  let disposed = false;
   const visible = () => {
     const who = identity();
-    return policy &&
+    return isAnalyticsAllowed() && policy &&
       who?.owner === policy.owner &&
       who.generation === policy.generation &&
       Date.now() < policy.until
@@ -112,6 +125,7 @@ export function createCompanyTokenReporting() {
   const endpoint = (id: Identity) =>
     '/api/orgs/' + encodeURIComponent(id.orgId) + '/company-token-reporting';
   const refresh = async () => {
+    if (disposed) return;
     if (syncing) {
       rerun = true;
       return;
@@ -126,12 +140,21 @@ export function createCompanyTokenReporting() {
         purge();
         return;
       }
+      const offFile = optOutFile(who.owner);
+      const onFile = offFile + '.enable';
+      const localOff = existsSync(offFile);
+      const allowed = isAnalyticsAllowed();
+      const localOn = allowed && existsSync(onFile);
+      if (!allowed && !localOff) {
+        purge();
+        policy = null;
+        return;
+      }
       timer.refresh();
       const me = meResponseSchema.parse(await (await request(who, '/api/me')).json());
       if (!current(who) || invalidation !== version) return;
       const rule = me.membership.companyTokenReporting;
       if (
-        !rule ||
         me.membership.kind !== 'org' ||
         me.membership.id !== who.member ||
         me.membership.orgId !== who.orgId
@@ -140,7 +163,31 @@ export function createCompanyTokenReporting() {
         purge();
         return;
       }
-      const localOff = existsSync(optOutFile(who.owner));
+      if (!rule) {
+        policy = null;
+        purge();
+        // An enable for this login cannot enroll the member into a future company policy.
+        rmSync(onFile, { force: true });
+        return;
+      }
+      // Apply withdrawals before re-enrollment, including after a lost response or restart.
+      // Only an explicit action on the unified switch may undo a previous member opt-out.
+      if (localOff || localOn) {
+        policy = null;
+        purge();
+        let participating = rule.participating;
+        for (const [file, target] of [[offFile, false], [onFile, true]] as const) {
+          if (!existsSync(file) || (target && !isAnalyticsAllowed())) continue;
+          if (participating !== target) {
+            await request(who, endpoint(who) + '/participation', 'PUT', { participating: target });
+            if (!current(who) || invalidation !== version) return;
+            participating = target;
+          }
+          rmSync(file, { force: true });
+        }
+        rerun = participating && isAnalyticsAllowed();
+        return;
+      }
       const previous = policy;
       const same =
         previous?.owner === who.owner &&
@@ -153,19 +200,13 @@ export function createCompanyTokenReporting() {
         generation: who.generation,
         orgRevision: rule.orgRevision,
         memberRevision: rule.memberRevision,
-        participating: rule.participating && !localOff,
+        participating: rule.participating,
         models: new Set(rule.models),
         until: Date.now() + POLICY_CHECK_INTERVAL_MS + REQUEST_TIMEOUT_MS,
       };
       policyLoaded = true;
       if (!policy.participating) {
         purge();
-        if (localOff) {
-          if (rule.participating)
-            await request(who, endpoint(who) + '/participation', 'PUT', { participating: false });
-          if (current(who) && invalidation === version)
-            rmSync(optOutFile(who.owner), { force: true });
-        }
         return;
       }
       const scope = {
@@ -349,6 +390,8 @@ export function createCompanyTokenReporting() {
     const id = identity();
     if ((id?.owner ?? null) !== activeOwner || (id?.generation ?? -1) !== activeGeneration) {
       invalidation++;
+      requests.abort();
+      requests = new AbortController();
       if (activeOwner || !id) purge();
       activeOwner = id?.owner ?? null;
       activeGeneration = id?.generation ?? -1;
@@ -363,34 +406,38 @@ export function createCompanyTokenReporting() {
   }, POLICY_CHECK_INTERVAL_MS);
   timer.unref();
   const unsubscribe = auth.onAuthStateChange(() => onOwner(false));
+  let lastAllowed = isAnalyticsAllowed();
+  const unsubscribeSettings = subscribe((allowed, explicitEnabled) => {
+    if (allowed === lastAllowed && explicitEnabled === undefined) return;
+    lastAllowed = allowed;
+    uploads.abort();
+    uploads = new AbortController();
+    invalidation++;
+    policy = null;
+    purge();
+    const who = identity();
+    if (who && explicitEnabled !== undefined) {
+      const offFile = optOutFile(who.owner);
+      if (!explicitEnabled) {
+        rmSync(offFile + '.enable', { force: true });
+        writeFileSync(offFile, '', { mode: 0o600 });
+      } else if (allowed) {
+        writeFileSync(offFile + '.enable', '', { mode: 0o600 });
+      }
+    }
+    // Serialize preference requests; uploads use a separately cancellable signal.
+    void refresh();
+  });
   return {
     refresh: () => onOwner(true),
     dispose() {
+      disposed = true;
       clearInterval(timer);
       unsubscribe();
+      unsubscribeSettings();
+      requests.abort();
       invalidation++;
       policy = null;
-    },
-    view() {
-      const p = visible();
-      return p ? { participating: p.participating, generation: p.generation } : null;
-    },
-    async set(participating: boolean, generation: number) {
-      const p = visible(),
-        who = identity();
-      if (!p || p.generation !== generation || !who || typeof participating !== 'boolean')
-        throw new Error('Company statistics unavailable');
-      invalidation++;
-      const file = optOutFile(who.owner);
-      if (!participating) {
-        p.participating = false;
-        purge();
-        writeFileSync(file, '', { mode: 0o600 });
-      }
-      await request(who, endpoint(who) + '/participation', 'PUT', { participating });
-      if (!current(who)) return;
-      rmSync(file, { force: true });
-      await refresh();
     },
   };
 }

@@ -1,5 +1,4 @@
 {
-  "companyTokens": {"title": "会社のトークン使用量", "notice": "モデル名とトークン数のみを会社に送信します。", "syncFailed": "会社と設定を同期できませんでした。", "off": "オフ。この端末からの送信を停止しました。"},
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",

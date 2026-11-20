@@ -1,4 +1,3 @@
-import { useCompanyTokenView } from './usage/CompanyTokenReporting';
 import { generalSettings } from './GeneralSettings.settings-search';
 import { billingSettings } from './BillingSettings.settings-search';
 import { usageHistorySettings } from './usage/UsageHistorySection.settings-search';
@@ -155,7 +154,6 @@ function SettingsViewContent() {
   const { t } = useTranslation();
   const [searchActivation, setSearchActivation] = useState(0);
   const { mode, dataOwnerId, user } = useAuth();
-  const companyTokenView = useCompanyTokenView();
   const menuWidth = outletContext?.sidebarWidth ?? DEFAULT_SETTINGS_MENU_WIDTH;
   const isMac = window.electronAPI?.platform === 'darwin';
   const [helpAssistantOpen, setHelpAssistantOpen] = useState(false);
@@ -354,7 +352,6 @@ function SettingsViewContent() {
   const searchContext = useMemo<SettingsSearchContext>(() => ({
     locale,
     wallpaperMotionAvailable,
-    companyTokenParticipation: companyTokenView?.participating,
     region: CURRENT_CINDY_REGION,
     mode,
     membershipKind: user?.membershipKind ?? null,
@@ -375,7 +372,7 @@ function SettingsViewContent() {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, companyTokenView?.participating, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
   const requestedEntry = selectedPluginPage
     ? pluginSearchDocuments.find(document => document.page.id === selectedPluginPage.id && document.entry.id === rawSection)?.entry ?? null
     : resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
@@ -644,7 +641,7 @@ function SettingsViewContent() {
             {activeTab === 'usage' && (
               <div role="tabpanel" id={usageHistorySettings.usage.targetId} aria-labelledby="settings-tab-usage">
                 <section aria-label={t(usageHistorySettings.usage.titleKey)}>
-                  <UsageHistorySection companyTokenView={companyTokenView} />
+                  <UsageHistorySection />
                 </section>
               </div>
             )}

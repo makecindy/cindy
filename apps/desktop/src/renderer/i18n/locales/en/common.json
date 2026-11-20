@@ -1,5 +1,4 @@
 {
-  "companyTokens": {"title": "Company token usage", "notice": "Only model names and token counts are shared with your company.", "syncFailed": "Could not sync the preference with your company.", "off": "Off. This device has stopped reporting."},
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",

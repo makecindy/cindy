@@ -1,5 +1,4 @@
 {
-  "companyTokens": {"title": "公司用量統計", "notice": "僅向公司回報模型名稱和 Token 數量。", "syncFailed": "暫時無法與公司同步統計設定。", "off": "已關閉，本機停止回報。"},
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",

@@ -46,15 +46,6 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
-  it('finds the employee switch only while company reporting is available, including after opt-out', () => {
-    for (const [membershipKind, companyTokenParticipation, expected] of [
-      ['personal', undefined, false], ['org', undefined, false], ['org', false, true], ['org', true, true],
-    ] as const) {
-      const docs = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, membershipKind, companyTokenParticipation });
-      expect(searchSettings(docs, '公司用量统计').some(({ entry }) => entry.id === 'companyTokens.title')).toBe(expected);
-    }
-  });
-
   it('finds the local API import entry by its titles and source app names before mounting settings', () => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
     for (const query of [

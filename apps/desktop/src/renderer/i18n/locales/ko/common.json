@@ -1,5 +1,4 @@
 {
-  "companyTokens": {"title": "회사 토큰 사용량", "notice": "모델 이름과 토큰 수만 회사에 전송합니다.", "syncFailed": "회사와 설정을 동기화할 수 없습니다.", "off": "꺼짐. 이 기기에서 사용량 전송을 중지했습니다."},
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",

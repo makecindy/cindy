@@ -2526,10 +2526,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * 模式)。sendSync——renderer bootstrap 在首帧前判定「真首启」用,异步赶不上。 */
   authHasPersistedSessionHintSync: (): boolean =>
     ipcRenderer.sendSync('auth:has-persisted-session-hint-sync') === true,
-  companyTokenView: (): Promise<{ participating: boolean; generation: number } | null> =>
-    ipcRenderer.invoke('auth:company-token-view'),
-  companyTokenParticipation: (participating: boolean, generation: number): Promise<void> =>
-    ipcRenderer.invoke('auth:company-token-participation', participating, generation),
   authInitialize: (): Promise<{
     user: unknown;
     mode: 'signed-out' | 'local' | 'cloud';

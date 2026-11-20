@@ -166,7 +166,7 @@ export function recordSessionCodexTurnUsage(
           if (record && codexSegmentsReliable) {
             record(codexUsageSegments.flatMap(segment => segment.model
               ? [companyModelTokens(normalizeModelIdForPricing(segment.model), segment)] : []));
-          } else if (record && u.segments === undefined) {
+          } else if (record && execution?.model && u.segments === undefined) {
             record([{ model: pricingModel, input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens }]);
           }
         }

@@ -680,7 +680,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
-import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -6894,17 +6894,8 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
-  const companyReporting = !hostClientMode ? createCompanyTokenReporting() : null;
+  const companyReporting = !hostClientMode ? createCompanyTokenReporting(onAnalyticsPermissionChange) : null;
   app.once('will-quit', () => companyReporting?.dispose());
-  ipcMain.handle('auth:company-token-view', (event) => {
-    assertTrustedAppRendererEvent(event);
-    return companyReporting?.view() ?? null;
-  });
-  ipcMain.handle('auth:company-token-participation', async (event, participating: boolean, generation: number) => {
-    assertTrustedAppRendererEvent(event);
-    if (!companyReporting) throw new Error('Company statistics unavailable');
-    await companyReporting.set(participating, generation);
-  });
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;

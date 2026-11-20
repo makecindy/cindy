@@ -10,8 +10,10 @@ const ports = vi.hoisted(() => ({
   getPath: vi.fn(),
   getAuthState: vi.fn(),
   token: vi.fn(),
+  allowed: vi.fn(),
   subscribe: vi.fn(),
 }));
+vi.mock('../../analytics-settings-store.js', () => ({ isAnalyticsAllowed: ports.allowed }));
 vi.mock('electron', () => ({ app: { getPath: ports.getPath }, net: { fetch: ports.fetch } }));
 vi.mock('../../authManager.js', () => ({
   getActiveAuthRealm: () => 'cn',
@@ -53,14 +55,20 @@ const me = (enabled: boolean) => ({
 const counts = { input: 11, output: 2, cacheRead: 1, cacheWrite: 3 };
 let dir: string;
 let service: ReturnType<typeof createCompanyTokenReporting>;
+let settingsChanged: (allowed: boolean, explicitEnabled?: boolean) => void;
+const subscribeSettings = (listener: typeof settingsChanged) => {
+  settingsChanged = listener;
+  return () => {};
+};
 beforeEach(() => {
   vi.resetAllMocks();
+  ports.allowed.mockReturnValue(true);
   dir = mkdtempSync(path.join(os.tmpdir(), 'cindy-company-test-'));
   ports.getPath.mockReturnValue(dir);
   ports.getAuthState.mockReturnValue(state);
   ports.token.mockReturnValue('test');
   ports.subscribe.mockReturnValue(() => undefined);
-  service = createCompanyTokenReporting();
+  service = createCompanyTokenReporting(subscribeSettings);
 });
 afterEach(() => {
   service.dispose();
@@ -75,9 +83,8 @@ it.each([
   async (status) => {
     ports.getAuthState.mockReturnValue(status);
     service.refresh();
-    expect(service.view()).toBeNull();
     expect(startCompanyUsage()).toBeUndefined();
-    await expect(service.set(true, 1)).rejects.toThrow();
+    settingsChanged(true, true);
     expect(ports.fetch).not.toHaveBeenCalled();
     expect(readdirSync(dir)).toEqual([]);
   },
@@ -87,7 +94,7 @@ it('keeps the policy until its 12-hour recheck and ignores unchanged identity no
   vi.useFakeTimers();
   try {
     ports.fetch.mockResolvedValueOnce(Response.json(me(true))).mockResolvedValueOnce(Response.json(me(false)));
-    service = createCompanyTokenReporting();
+    service = createCompanyTokenReporting(subscribeSettings);
     service.refresh();
     await vi.advanceTimersByTimeAsync(0);
     const onAuthChange = ports.subscribe.mock.lastCall![0];
@@ -112,7 +119,6 @@ it('uses only the account endpoint until the company enables reporting; stops an
   });
   service.refresh();
   await vi.waitFor(() => expect(ports.fetch).toHaveBeenCalledTimes(1));
-  expect(service.view()).toBeNull();
   expect(startCompanyUsage()).toBeUndefined();
   enabled = true;
   service.refresh();
@@ -123,16 +129,17 @@ it('uses only the account endpoint until the company enables reporting; stops an
   record([{ model: 'gpt-5', ...counts }]);
   const file = path.join(dir, 'company-token-outbox.json');
   expect(existsSync(file)).toBe(true);
-  const change = service.set(false, 1);
+  ports.allowed.mockReturnValue(false);
+  settingsChanged(false, false);
   expect(companyExecutionReporting()?.available()).toBe(false);
   record([{ model: 'gpt-5', ...counts }]);
   expect(existsSync(file)).toBe(false);
-  await expect(change).rejects.toThrow('offline');
+  await vi.waitFor(() => expect(ports.fetch.mock.calls.filter(([url]) => url.endsWith('/participation'))).toHaveLength(1));
   expect(
     ports.fetch.mock.calls.map((call) => call[0]).filter((url) => !url.endsWith('/api/me')),
   ).toEqual(['https://tenant.invalid/api/orgs/org1/company-token-reporting/participation']);
   service.dispose();
-  service = createCompanyTokenReporting();
+  service = createCompanyTokenReporting(subscribeSettings);
   service.refresh();
   await vi.waitFor(() =>
     expect(
@@ -141,6 +148,63 @@ it('uses only the account endpoint until the company enables reporting; stops an
   );
   expect(startCompanyUsage()).toBeUndefined();
 });
+it('leaves a previous member withdrawal in place until an explicit enable, then only records new turns', async () => {
+  let participating = false;
+  const changes: boolean[] = [];
+  ports.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/api/me')) return Response.json({
+      ...me(true), membership: { ...member, companyTokenReporting: { ...rule, participating } },
+    });
+    if (url.endsWith('/participation')) {
+      participating = JSON.parse(options.body).participating;
+      changes.push(participating);
+      return new Response(null, { status: 204 });
+    }
+    throw new Error('unexpected delivery');
+  });
+  service.dispose();
+  ports.allowed.mockReturnValue(false);
+  service = createCompanyTokenReporting(subscribeSettings);
+  service.refresh();
+  expect(ports.fetch).not.toHaveBeenCalled();
+  ports.allowed.mockReturnValue(true);
+  settingsChanged(true);
+  await vi.waitFor(() => expect(ports.fetch).toHaveBeenCalledTimes(1));
+  expect(startCompanyUsage()).toBeUndefined();
+  expect(changes).toEqual([]);
+  settingsChanged(true, true);
+  await vi.waitFor(() => expect(startCompanyUsage()).toBeTypeOf('function'));
+  expect(changes).toEqual([true]);
+  const prior = startCompanyUsage()!;
+  ports.allowed.mockReturnValue(false);
+  settingsChanged(false, false);
+  prior([{ model: 'gpt-5', ...counts }]);
+  expect(existsSync(path.join(dir, 'company-token-outbox.json'))).toBe(false);
+  expect(companyExecutionReporting()?.challenge('nonce')).toBeNull();
+  await vi.waitFor(() => expect(changes).toEqual([true, false]));
+});
+
+it('cancels an in-flight report and discards its pending batch when the master switch closes', async () => {
+  const { CompanyTokenQueue } = await import('../companyTokenQueue');
+  const file = path.join(dir, 'company-token-outbox.json');
+  const scope = { owner: JSON.stringify(['cn', org.orgId, org.id]), orgRevision: 2, memberRevision: 1 };
+  new CompanyTokenQueue(file).add(scope, [{ day: '2020-01-01', model: 'gpt-5', ...counts }]);
+  let sent: AbortSignal | undefined;
+  ports.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/api/me')) return Response.json(me(true));
+    if (url.endsWith('/participation')) return new Response(null, { status: 204 });
+    sent = options.signal;
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+  });
+  service.refresh();
+  await vi.waitFor(() => expect(sent).toBeDefined());
+  ports.allowed.mockReturnValue(false);
+  settingsChanged(false, false);
+  expect(sent?.aborted).toBe(true);
+  expect(existsSync(file)).toBe(false);
+  await vi.waitFor(() => expect(ports.fetch.mock.calls.some(([url]) => url.endsWith('/participation'))).toBe(true));
+});
+
 it('drops an old in-flight policy response after logout and never reports a turn across identities', async () => {
   let finish!: (r: Response) => void;
   ports.fetch.mockReturnValue(
@@ -158,7 +222,6 @@ it('drops an old in-flight policy response after logout and never reports a turn
   service.refresh();
   finish(Response.json(me(true)));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(service.view()).toBeNull();
   expect(startCompanyUsage()).toBeUndefined();
   expect(readdirSync(dir)).toEqual([]);
 });
@@ -205,7 +268,7 @@ it('retains valid collection and the same pending batch when delivery fails', as
   });
   service.refresh();
   await vi.waitFor(() => expect(batches).toHaveLength(1));
-  expect(service.view()?.participating).toBe(true);
+  expect(companyExecutionReporting()?.available()).toBe(true);
   startCompanyUsage()!([{ model: 'gpt-5', ...counts }]);
   service.refresh();
   await vi.waitFor(() => expect(batches).toEqual([batches[0], batches[0]]));
