@@ -14232,6 +14232,8 @@
         "fastBadge": "Rapide"
       },
       "source": {
+        "lastConfirmed": "Dernière actualisation : {{time}}",
+        "unconfirmed": "Liste des modèles non actualisée",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",

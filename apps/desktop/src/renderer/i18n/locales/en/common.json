@@ -14117,6 +14117,8 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "lastConfirmed": "Last refreshed: {{time}}",
+        "unconfirmed": "Model list not up to date",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",

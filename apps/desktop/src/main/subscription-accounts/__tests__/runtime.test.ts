@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   tokens: vi.fn(),
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
+  savedModelFiles: new Map<string, string>(),
   directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -124,7 +125,13 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
   clearSubscriptionAccountCooling: h.clearCooling,
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
+vi.mock('../../utils/atomicWriteFile.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../utils/atomicWriteFile.js')>(),
+  atomicWriteFileSync: (file: string, body: string) => { h.savedModelFiles.set(file, body); },
+  readAtomicFileSync: (file: string) => h.savedModelFiles.get(file) ?? null,
+}));
 vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: (...parts: string[]) => [h.owner, ...parts].join('/'),
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
 }));
@@ -286,6 +293,7 @@ beforeEach(() => {
     chatgptAccountId: directory, canDispatch: () => true,
   }));
   h.usage.mockReset().mockResolvedValue({});
+  h.savedModelFiles.clear();
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
@@ -780,6 +788,67 @@ it.each(['anthropic', 'openai'].flatMap(provider => ['remove', 'remove-provider'
   expect(h.storedUsage.get(`${provider}:default`)).toEqual(sentinel);
 });
 describe('owner-only subscription identity', () => {
+  // Unit: workspace B cannot retain A's model list after its own first refresh times out.
+  it('does not reuse models across same-email workspace changes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-a', canDispatch: () => true });
+    h.rpc.mockResolvedValue({ data: [{ id: 'workspace-a-model' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      await refreshSubscriptionPool('openai');
+      h.rpc.mockRejectedValue(new Error('timed out'));
+      await refreshSubscriptionPoolCodexModels();
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  // Unit: the first launch after an upgrade may have only the CLI cache as evidence.
+  // A disk-only id must not become selectable, even while we recheck a shorter response.
+  it('rechecks conflicting first discovery without publishing disk-only models', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ fetched_at: new Date().toISOString(),
+      models: ['sol', 'astra'].map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+  });
+
+  // Unit: reopening the owner's runtime discards memory; transient failure must still
+  // retain Astra, and two complete matching responses can confirm a real contraction.
+  it('recovers persisted membership and corroborates a conflicting smaller model list once', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol' }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol'].map(slug => ({
+      slug, supported_in_api: true, visibility: 'list',
+    })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
   it('does not carry quota across same-email workspace changes', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });

@@ -14062,6 +14062,8 @@
         "fastBadge": "快速"
       },
       "source": {
+        "lastConfirmed": "上次重新整理：{{time}}",
+        "unconfirmed": "模型清單尚未更新",
         "unavailable": "模型無法使用",
         "reconnect": "重新連線",
         "manage": "管理來源",
