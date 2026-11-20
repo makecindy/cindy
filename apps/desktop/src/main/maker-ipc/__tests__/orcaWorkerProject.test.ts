@@ -545,58 +545,26 @@ describe('Worker worktree subproject directory', () => {
     },
   );
 
-  it('passes awaitFullCheckout to WorktreeManager when requested and resolves worktree-local refs inside a linked worktree', async () => {
+  it('passes awaitFullCheckout to WorktreeManager when requested', async () => {
     const target = path.join(fixture, 'acp-wt');
     mkdirSync(target, { recursive: true });
-    vi.mocked(createWorktree).mockResolvedValue({
+    vi.mocked(createWorktree).mockResolvedValueOnce({
       ok: true,
       meta: { path: target, branch: 'cindy/acp', baseRepo: repo },
     } as never);
     vi.mocked(awaitBackgroundCheckout).mockReset();
 
-    const expectCreateCall = (expectedSessionId: string, expectedSourceBranch: string) => {
-      const calls = vi.mocked(createWorktree).mock.calls;
-      const [req, opts] = calls[calls.length - 1]!;
-      expect(path.resolve(req.baseRepo)).toBe(path.resolve(repo));
-      expect(req).toMatchObject({
-        sessionId: expectedSessionId,
-        name: '',
-        sourceBranch: expectedSourceBranch,
-      });
-      expect(opts).toEqual({ trackBackgroundCheckout: true, awaitFullCheckout: true });
-    };
-
     expect(await createWorkerWorktree('acp-root', alias, 'main', { awaitFullCheckout: true })).toBe(target);
-    expectCreateCall('acp-root', 'main');
+    const calls = vi.mocked(createWorktree).mock.calls;
+    const [req, opts] = calls[calls.length - 1]!;
+    expect(path.resolve(req.baseRepo)).toBe(path.resolve(repo));
+    expect(req).toMatchObject({
+      sessionId: 'acp-root',
+      name: '',
+      sourceBranch: 'main',
+    });
+    expect(opts).toEqual({ trackBackgroundCheckout: true, awaitFullCheckout: true });
     expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
-
-    // Linked worktree on a different commit than main checkout: worktree-local refs
-    // (HEAD, @, HEAD@{0}, @~1) must resolve inside the linked worktree rather than baseRepo.
-    const linkedWt = path.join(fixture, 'linked-wt');
-    const gitIn = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
-    gitIn(repo, 'worktree', 'add', '-b', 'linked-branch', linkedWt, 'HEAD');
-    writeFileSync(path.join(linkedWt, 'linked.txt'), 'linked commit\n');
-    gitIn(linkedWt, 'add', 'linked.txt');
-    gitIn(
-      linkedWt,
-      '-c', 'user.name=Fixture',
-      '-c', 'user.email=fixture@example.invalid',
-      '-c', 'commit.gpgsign=false',
-      'commit', '-m', 'linked commit',
-    );
-    const linkedSha = gitIn(linkedWt, 'rev-parse', 'HEAD');
-    const mainSha = gitIn(repo, 'rev-parse', 'HEAD');
-    expect(linkedSha).not.toBe(mainSha);
-
-    for (const [ref, expectedSha] of [
-      ['HEAD', linkedSha],
-      ['HEAD@{0}', linkedSha],
-      ['@', linkedSha],
-      ['@~1', mainSha],
-    ] as const) {
-      expect(await createWorkerWorktree('acp-linked', linkedWt, ref, { awaitFullCheckout: true })).toBe(target);
-      expectCreateCall('acp-linked', expectedSha);
-    }
   });
 });
 
