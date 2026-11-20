@@ -704,6 +704,17 @@ describe('Scheduler', () => {
     await expect(h.scheduler.create({ ...baseInput, primaryHostKey: saved.primaryHostKey, targetSessionId: 'unrelated-task' })).rejects.toThrow('host');
   });
 
+  it('can rename a primary schedule with an explicit local model and a legacy remote default', async () => {
+    const saved = await h.scheduler.create({
+      ...baseInput, primaryHostKey: 'public/cindy-contacts', agentDeviceId: 'studio', modelAgentDeviceId: '',
+      modelAgentKind: 'codex', model: 'test-model', providerId: 'local-provider',
+    });
+    expect(await h.scheduler.update(saved.id, { name: 'renamed' })).toMatchObject({
+      name: 'renamed', agentDeviceId: 'studio', modelAgentDeviceId: '', primaryHostKey: 'public/cindy-contacts',
+    });
+    await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: 'other' })).rejects.toThrow('host');
+  });
+
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
   // update. A plugin engine only runs as a new task each run on the automation host; the minimal
   // failing inputs are a bound/persistent/worktree/remote/script plugin schedule being saved, or an

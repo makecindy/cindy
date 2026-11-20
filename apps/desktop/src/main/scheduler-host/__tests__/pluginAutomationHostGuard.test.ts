@@ -11,7 +11,7 @@ it('skips a follower, an offline host and remote execution before the first Agen
   const fire = vi.fn(async () => ({ sessionId: 'synthetic' }));
   const grants = vi.fn().mockResolvedValueOnce({ granted: false }).mockRejectedValueOnce(new Error('offline'));
   const guard = withPluginAutomationHost({ fire }, () => ({ run: grants }));
-  for (const task of [schedule, schedule, { ...schedule, agentDeviceId: 'other' }]) {
+  for (const task of [schedule, schedule, { ...schedule, agentDeviceId: 'other' }, { ...schedule, modelAgentDeviceId: 'other' }]) {
     expect(await guard.fire(task, context())).toMatchObject({ skipped: true });
   }
   expect(await withPluginAutomationHost({ fire }).fire(schedule, context())).toMatchObject({ skipped: true });
@@ -19,6 +19,17 @@ it('skips a follower, an offline host and remote execution before the first Agen
   expect(grants).toHaveBeenCalledTimes(2);
   await guard.fire({ ...schedule, primaryHostKey: undefined }, context());
   expect(fire).toHaveBeenCalledTimes(1);
+});
+
+it('runs an explicitly local model on the authorized host despite a legacy remote default', async () => {
+  const task = { ...schedule, agentDeviceId: 'studio', modelAgentDeviceId: '' };
+  const fire = vi.fn(async () => ({ sessionId: 'local-task' }));
+  const account = vi.fn().mockResolvedValueOnce({ granted: true, validForMs: 120_000 })
+    .mockResolvedValueOnce({ released: true });
+  const guard = withPluginAutomationHost({ fire }, () => ({ run: account }));
+  expect(await guard.fire(task, context())).toEqual({ sessionId: 'local-task' });
+  expect(fire).toHaveBeenCalledOnce();
+  expect(account.mock.calls.map(call => call[0])).toEqual(['acquire', 'release']);
 });
 
 it('keeps an interrupted continuation reclaimable when its host is offline or has changed', async () => {

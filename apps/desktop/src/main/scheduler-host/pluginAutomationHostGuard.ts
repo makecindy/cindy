@@ -20,7 +20,10 @@ export function skipPrimaryHostRun(ctx: FireContext, resultText: string, session
 export function withPluginAutomationHost(runner: ScheduleRunner, accountFor?: (key: string) => Account): ScheduleRunner {
   return { async fire(schedule, ctx) {
     if (!schedule.primaryHostKey) return runner.fire(schedule, ctx);
-    if (!accountFor || schedule.agentDeviceId || schedule.modelAgentDeviceId || (schedule.targetSessionId && !schedule.persistentSession)) return skipPrimaryHostRun(ctx, 'This automation needs its selected execution computer.');
+    const modelDeviceId = schedule.modelAgentDeviceId ?? schedule.agentDeviceId;
+    if (!accountFor || modelDeviceId || (schedule.targetSessionId && !schedule.persistentSession)) {
+      return skipPrimaryHostRun(ctx, 'This automation needs its selected execution computer.');
+    }
     return runOnPrimary(runner, schedule, ctx, accountFor(schedule.primaryHostKey));
   } };
 }

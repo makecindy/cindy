@@ -131,7 +131,8 @@ function validateScheduleExecutionShape(
   schedule: Pick<Schedule, 'primaryHostKey' | 'agentKind' | 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
-  if (schedule.primaryHostKey && (schedule.agentDeviceId || schedule.modelAgentDeviceId || (schedule.targetSessionId && !schedule.persistentSession))) {
+  const modelDeviceId = schedule.modelAgentDeviceId ?? schedule.agentDeviceId;
+  if (schedule.primaryHostKey && (modelDeviceId || (schedule.targetSessionId && !schedule.persistentSession))) {
     throw new Error('Choose a model on the tidy-up host and run it in its own task.');
   }
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
