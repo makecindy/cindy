@@ -214,7 +214,9 @@ export interface SpeedReading {
 
 export interface TokenSpeedSnapshot {
   /** A null value explicitly means there is no qualifying measurement yet. */
-  measurement?: { latest: SpeedReading | null; average: number | null };
+  measurement?: { latest: SpeedReading | null; average: number | null; sampleAgeMs?: number };
+  /** Viewer-local projection set at status ingestion. Never read from the wire. */
+  localSampleAt?: number;
 
   /** Sliding-window rate while streaming; final average once the turn ended. */
   rate: number;
@@ -274,12 +276,36 @@ export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | und
   return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
     ...(trace ? { trace } : {}),
     ...(measurement && reading !== undefined && (measurement.average === null || finite(measurement.average))
-      ? { measurement: { average: measurement.average, latest: reading } } : {}),
+      ? { measurement: { average: measurement.average, latest: reading,
+        ...(reading && finite(measurement.sampleAgeMs) ? { sampleAgeMs: measurement.sampleAgeMs } : {}) } } : {}),
     elapsedMs: speed.elapsedMs, streaming: speed.streaming,
     ...(finite(speed.totalOutputTokens) && speed.totalOutputTokens >= speed.tokens
       ? { totalOutputTokens: speed.totalOutputTokens } : {}),
     ...(finite(speed.peak) ? { peak: speed.peak } : {}),
     ...(readRequestMark(speed.request) ? { request: readRequestMark(speed.request) } : {}) };
+}
+
+/** Map a host sample into the receiving clock. Older hosts only provide a timestamp. */
+export function tokenSpeedSampleAt(speed: TokenSpeedSnapshot, now: number): number | undefined {
+  const reading = speed.measurement?.latest;
+  if (!reading) return undefined;
+  const age = speed.measurement?.sampleAgeMs;
+  return speed.localSampleAt ?? (age === undefined ? Math.min(now, reading.measuredAt) : now - age);
+}
+
+/** Anchor the sample before storing it so opening a view later cannot restart its lifetime. */
+export function receiveTokenSpeedSnapshot(
+  value: unknown, previous?: TokenSpeedSnapshot, now = Date.now(),
+): TokenSpeedSnapshot | undefined {
+  const speed = readTokenSpeedSnapshot(value);
+  if (!speed) return undefined;
+  const sampleAt = tokenSpeedSampleAt(speed, now);
+  if (sampleAt === undefined) return speed;
+  const sameSample = previous?.measurement?.latest?.measuredAt === speed.measurement?.latest?.measuredAt;
+  return {
+    ...speed,
+    localSampleAt: sameSample ? Math.min(previous?.localSampleAt ?? sampleAt, sampleAt) : sampleAt,
+  };
 }
 
 /** Record a host speed snapshot into the same chart model as counter samples. */
@@ -313,11 +339,11 @@ export function recordTokenSpeed(
   const reading = speed.measurement?.latest;
   const measured = speed.measurement === undefined && speed.streaming && speed.rate > 0;
   const now = input.now ?? Date.now();
-  // A repeated frame cannot renew a reading. Cap a host clock ahead of ours at first receipt.
-  const sampleTime = reading
-    ? Math.min(now, reading.measuredAt, sameTurn && reading.measuredAt === history.hostMeasuredAt
-      ? history.latestSampleAt ?? now : now)
-    : undefined;
+  // Host time identifies a reading; its age and first receipt determine local expiry.
+  const sampleAt = tokenSpeedSampleAt(speed, now);
+  const sampleTime = sampleAt !== undefined && sameTurn && reading?.measuredAt === history.hostMeasuredAt
+    ? Math.min(sampleAt, history.latestSampleAt ?? sampleAt)
+    : sampleAt;
   const next: RateHistory = {
     ...history,
     ...(newMark ? {

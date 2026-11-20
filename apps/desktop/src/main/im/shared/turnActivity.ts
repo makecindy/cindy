@@ -11,7 +11,7 @@
 import { imText } from './imText';
 import { summarizeToolUseText } from '@cindy/maker-shared/message-presentation';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
-import { RATE_SAMPLE_FRESH_MS, readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { RATE_SAMPLE_FRESH_MS, readTokenSpeedSnapshot, tokenSpeedSampleAt } from '@cindy/maker-shared/usage-format';
 
 /** Keep parity with the desktop/mobile running work preview. */
 export const MAX_VISIBLE_STEPS = 5;
@@ -188,7 +188,9 @@ export function tokenRateFromStatus(data: unknown, previous: number | null): num
   const speed = readTokenSpeedSnapshot(record.tokenSpeed);
   if (speed?.measurement) {
     const reading = speed.measurement.latest;
-    return reading && Date.now() - reading.measuredAt < RATE_SAMPLE_FRESH_MS
+    const now = Date.now();
+    const sampleAt = tokenSpeedSampleAt(speed, now);
+    return reading && sampleAt !== undefined && now - sampleAt < RATE_SAMPLE_FRESH_MS
       ? Math.round(reading.rate) : null;
   }
   if (!speed || speed.rate <= 0) return previous;

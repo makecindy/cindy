@@ -546,6 +546,7 @@ export class CalibratedTokenSpeedMeter {
       measurement: {
         average: this.measuredMs > 0 ? this.measuredTokens * 1_000 / this.measuredMs : null,
         latest: this.latestReading,
+        ...(this.latestReading ? { sampleAgeMs: Math.max(0, now - this.latestReading.measuredAt) } : {}),
       },
       tokens: Math.round(tokens),
       elapsedMs,
