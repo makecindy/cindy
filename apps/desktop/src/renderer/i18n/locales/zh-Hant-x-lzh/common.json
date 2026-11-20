@@ -15124,6 +15124,7 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
+      "pluginEngineStatus": "後臺續作未輟…",
       "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
       "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
       "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
@@ -15829,6 +15830,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所連者無權用前一模型，故易模型時未能壓縮上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察其連線，或另擇可用之模型。",
       "MODEL_CATALOG_UNCONFIRMED": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請覽謬誤詳情，待 Harness 就緒再試。",

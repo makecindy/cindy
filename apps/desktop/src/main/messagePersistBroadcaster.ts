@@ -1219,15 +1219,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * Late child results are still useful after a parent turn has ended, but must
    * not borrow the next turn's persistence context. Keep snapshots keyed by the
    * in-flight collab tool ids for events explicitly marked `turnScope=background`.
+   * Plugin engines (ACP) keep a call they have not finished open past `end_turn`
+   * and report its result between turns, so every pending call of theirs is kept.
    */
   const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
 
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
+    const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
     const collabToolUseIds = new Set(
       [...knownToolUseIds].filter(
-        (toolUseId) => toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+        (toolUseId) =>
+          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
       ),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
