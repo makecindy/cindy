@@ -13,7 +13,7 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
@@ -211,6 +211,9 @@ export function FolderPickerPopover({
   const [projectQuery, setProjectQuery] = useState('');
   // 搜索结果的键盘高亮位置。方向键移动它,回车选中它;输入变化时归零。
   const [activeProjectIndex, setActiveProjectIndex] = useState(0);
+  // 组合框结构:焦点留在搜索框,高亮项通过 aria-activedescendant 暴露给读屏。
+  // 与同目录的 WorktreeChipsRow 保持一致。
+  const projectListboxId = useId();
   const [browseFailed, setBrowseFailed] = useState(false);
   const projectSearchRef = useRef<HTMLInputElement>(null);
   const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
@@ -332,6 +335,9 @@ export function FolderPickerPopover({
          语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
       <div
         key={project.key ?? project.path}
+        id={`${projectListboxId}-option-${index}`}
+        role="option"
+        aria-selected={isActiveTarget}
         data-folder-picker-index={index}
         className={cn(
           'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
@@ -544,6 +550,16 @@ export function FolderPickerPopover({
                     }}
                     placeholder={t('newChat.folderPicker.searchProjects')}
                     aria-label={t('newChat.folderPicker.searchProjects')}
+                    // 组合框:焦点留在输入框,方向键移动的高亮项通过 activedescendant 播报。
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={visibleProjectOptions.length > 0}
+                    aria-controls={projectListboxId}
+                    aria-activedescendant={
+                      activeProjectQuery && visibleProjectOptions.length > 0
+                        ? `${projectListboxId}-option-${activeProjectOptionIndex}`
+                        : undefined
+                    }
                     className={cn(
                       'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
                       'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
@@ -558,6 +574,8 @@ export function FolderPickerPopover({
             )}
             <div
               ref={setProjectScrollEl}
+              id={projectListboxId}
+              role="listbox"
               data-folder-picker-scroll="true"
               onScroll={updateScrollFade}
               className={cn(

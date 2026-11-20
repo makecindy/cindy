@@ -225,6 +225,31 @@ describe('FolderPickerPopover project search', () => {
     // 换查询后高亮回到第一项,不应延续上一次的位置。
     expect(onSelect).toHaveBeenCalledWith(manyProjects[0].path, 'project', manyProjects[0]);
   });
+
+  // 读屏用户看不到背景色:高亮必须同时通过 aria-activedescendant 暴露给辅助技术。
+  // 组合框结构对齐同目录的 WorktreeChipsRow。
+  it('exposes the highlighted project through the combobox', () => {
+    renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    const rowOf = (name: string) =>
+      screen.getByText(name).closest('[data-folder-picker-index]') as HTMLElement;
+
+    fireEvent.change(input, { target: { value: 'cindy' } });
+
+    const listbox = screen.getByRole('listbox');
+    expect(input.getAttribute('aria-controls')).toBe(listbox.id);
+    expect(input.getAttribute('role')).toBe('combobox');
+    expect(rowOf('cindy').getAttribute('role')).toBe('option');
+
+    // 默认指向首项。
+    expect(input.getAttribute('aria-activedescendant')).toBe(rowOf('cindy').id);
+    expect(rowOf('cindy').getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input.getAttribute('aria-activedescendant')).toBe(rowOf('cindy-server').id);
+    expect(rowOf('cindy-server').getAttribute('aria-selected')).toBe('true');
+    expect(rowOf('cindy').getAttribute('aria-selected')).toBe('false');
+  });
 });
 
 // #9695: exercise the real portal and DOM event cancellation, which the old
