@@ -148,6 +148,8 @@ interface Running {
   /** A server replica refused `executor` (mid-rollout): this turn renews without it. */
   executorRefused?: boolean;
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
+  /** A chat-only queue can own the input before its asynchronous dispatch receipt arrives. */
+  inputObserved?: boolean;
   /** A short grace lets the already captured terminal drain its persistence queue. */
   orphanedAt?: number;
   /** Chat-only dispatch uses a queue receipt while recovery retains this source identity. */
@@ -3431,7 +3433,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
         },
         onQueued: async clientId => { run.sourceClientId ??= run.clientId; run.clientId = clientId; }, onAccepted: async () => {
-          if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
+          if (!current()) throw new Error('STALE_EXECUTOR');
+          if (running.get(execution.id) !== run || run.settlement) {
+            await deps.abortLane(lane.sessionId, run.sourceClientId ?? run.clientId);
+            throw new Error('STALE_EXECUTOR');
+          }
           if (!run.accepted && lane.name.topic) deps.refineTopicTitle?.(lane.sessionId, lane.created ? lane.name.title : undefined, {
             ...lane.name.topic, text: (!run.plan && titleWords(thread?.root)) || lane.name.topic.text,
           });
@@ -3749,10 +3755,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A live Desktop is not evidence that this exact input is still executing.
       // Do not renew an orphan forever after a lost terminal or a newer task turn.
       // Reuse the existing heartbeat and terminal receipt; never abort the newer input.
-      const inputLive = run.accepted && run.sessionId && deps.isGroupInputLive
+      const inputLive = run.sessionId && deps.isGroupInputLive
         ? deps.isGroupInputLive(run.sessionId, run.clientId)
           || (!run.inTask && !!run.sourceClientId && deps.isGroupInputLive(run.sessionId, run.sourceClientId)) : undefined;
-      if (inputLive === false) {
+      if (inputLive) run.inputObserved = true;
+      const ownershipKnown = run.accepted || run.inputObserved;
+      if (ownershipKnown && inputLive === false) {
         run.orphanedAt ??= Date.now();
         if (Date.now() - run.orphanedAt >= 30_000) {
           deps.log?.warn('Group execution lost its input owner', { executionId: run.execution.id,
@@ -3768,7 +3776,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       else if (run.pauseStarted !== undefined) { run.started += Date.now() - run.pauseStarted; run.pauseStarted = undefined; }
       // Confirmed active/queued/recovering inputs may run arbitrarily long. The
       // Session watchdog owns a stalled provider; this cap only covers setup/legacy hosts.
-      const timedOut = inputLive === undefined && !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
+      const timedOut = (!ownershipKnown || inputLive === undefined) && !paused && Date.now() - run.started > TURN_TIMEOUT_MS;
       if (timedOut) {
         await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
           outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT' }, true);

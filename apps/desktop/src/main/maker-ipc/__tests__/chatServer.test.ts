@@ -1825,6 +1825,32 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deliveries()).toHaveLength(1);
   });
 
+  // Chat-only receipt acceptance waits for actual dispatch. Keep a coordinator-owned
+  // queued input alive across that wait; when ownership is lost, retire it promptly.
+  it('renews a live queued input while dispatch acceptance is still pending', async () => {
+    let queued = true;
+    let release!: () => void;
+    const receipt = new Promise<void>(resolve => { release = resolve; });
+    deps.dispatch = vi.fn(async input => {
+      await input.onQueued?.('waiting-queue-id');
+      await receipt;
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
+    deps.isGroupInputLive = (_sessionId, id) => queued && id === 'waiting-queue-id';
+    await start();
+    vi.setSystemTime(Date.now() + 3 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures()).toHaveLength(0);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    queued = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(failures()).toHaveLength(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
   it('resets the orphan grace when the original input becomes live again', async () => {
     let live = true;
     deps.isGroupInputLive = () => live;
@@ -1843,6 +1869,18 @@ describe('Chat Server result delivery and refresh', () => {
 
   it('fences the prior terminal and Stop receipt when the same execution is explicitly retried', async () => {
     deps.isGroupInputLive = () => true;
+    let releaseOldReceipt!: () => void;
+    const oldReceipt = new Promise<void>(resolve => { releaseOldReceipt = resolve; });
+    let firstDispatch = true;
+    deps.dispatch = vi.fn(async input => {
+      if (firstDispatch) {
+        firstDispatch = false;
+        await input.onQueued?.('old-queue-receipt');
+        await oldReceipt;
+      }
+      await input.onAccepted?.();
+      return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+    });
     await start();
     const oldInput = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
     await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput, outcome: 'error' });
@@ -1864,6 +1902,10 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.abortLane).not.toHaveBeenCalled();
     const newInput = vi.mocked(deps.dispatch).mock.calls[1][0].clientId;
     expect(newInput).not.toBe(oldInput);
+    releaseOldReceipt();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.abortLane).toHaveBeenCalledWith('lane', oldInput);
+    expect(deps.abortLane).not.toHaveBeenCalledWith('lane');
     expect(await service.settleLaneTurn({ ...terminal, activeInputClientId: oldInput })).toBe(false);
     expect(deliveries()).toHaveLength(0);
     await service.settleLaneTurn({ ...terminal, activeInputClientId: newInput, resultText: 'New reply' });
