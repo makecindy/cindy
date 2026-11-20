@@ -48,7 +48,11 @@ vi.mock('../projectDirectoryValidation.js', async (original) => ({
   validateProjectDirectories: h.validateDirectories,
 }));
 vi.mock('../projectDirectoryRoot.js', () => ({
-  validateLocalProjectDirectory: (workingDir: string) => ({ ok: true, workingDir }),
+  // The real helper returns the normalized spelling: Windows separators become `/`.
+  validateLocalProjectDirectory: (workingDir: string) => ({
+    ok: true,
+    workingDir: workingDir.replace(/\\/g, '/'),
+  }),
   validateExistingLocalProjectDirectory: h.validateRoot,
 }));
 vi.mock('../projectIconMedia.js', () => ({
@@ -343,6 +347,33 @@ it('allocates an automatic project and returns its real identity', async () => {
   });
   expect(result.createdProjectKey).toBe('local:/Projects/Created');
   expect(h.register).toHaveBeenCalled();
+});
+
+// #11632: prepareNewProject returns the folder path from path.join(), which on Windows
+// spells separators as `\`. Committing that folder must use the same identity rules as
+// the request instead of demanding picker proof for the directory it just allocated.
+it('commits an automatic project allocated with a native Windows path', async () => {
+  vi.mocked(prepareNewProject).mockResolvedValueOnce({
+    directory: 'C:\\Projects\\Demo',
+    cleanup: vi.fn(),
+  });
+  const result = await updateProjectInfo(
+    {
+      ...h.stamp,
+      create: true,
+      projectKey: 'local:',
+      field: 'profile',
+      value: { name: 'Demo', directories: [] },
+    },
+    projectRendererAuthorization(7, 'form', h.stamp, vi.fn(), () => {}),
+  );
+  expect(result.createdProjectKey).toBe('local:C:/Projects/Demo');
+  expect(h.register).toHaveBeenCalledWith(
+    'C:/Projects/Demo',
+    expect.any(Number),
+    process.platform,
+    expect.any(Object),
+  );
 });
 
 // PR #11126: actual core writes previously trusted arbitrary Renderer paths.

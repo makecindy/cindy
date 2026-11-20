@@ -33,7 +33,7 @@ import {
 } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectIcons, setProjectIcon } from './projectIconStore.js';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from './appSessionState.js';
-import { normalizeProjectKey } from '../shared/projectKeys.js';
+import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import {
   validProjectIcon,
   type HostProjectAliasesSnapshot,
@@ -252,7 +252,11 @@ async function writeProjectInfo(
       assertCurrent();
       const previousDirectories = currentDirectories();
       const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
-      if (authorizedCreation !== projectKey) {
+      // The recursive commit carries the allocator's native spelling; compare identities, not strings.
+      if (
+        projectKeyComparisonKey(authorizedCreation, process.platform) !==
+        projectKeyComparisonKey(projectKey, process.platform)
+      ) {
         await authorizeProjectDirectoryChanges({
           projectKey,
           authorization,
