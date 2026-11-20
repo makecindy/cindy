@@ -24,6 +24,8 @@ import { desktopMcpAppHeights } from '@/lib/mcpAppMeasuredHeights';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
+import { getDraft } from '@/lib/composerDraftStore';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 // Local diagnostics only: renderer logs remain excluded from log uploads. Never
 // log the original exception; it may contain HTML, tool data or credential URLs.
@@ -151,6 +153,7 @@ interface McpAppCardProps {
   fallbackText?: string;
   plugin?: unknown;
   customMcp?: unknown;
+  composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
   source?: { instanceId: string; viewId: string };
@@ -194,7 +197,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, composerPlacement, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -305,6 +308,22 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     heightGuard.resize(element.clientWidth);
     let frame: HTMLIFrameElement | undefined;
     let localViewId: string | undefined;
+    // The same declared View may be placed on multiple messages in one task.
+    const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
+    const stopComposerAttachment = deviceId === undefined && sessionId !== null
+      ? window.electronAPI?.maker?.onMcpAppComposerAttachment?.((payload) => {
+          if (disposed || payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
+          if ('requestId' in payload) {
+            const key = draftResourceKey(payload.resourceKey);
+            const present = !!getDraft(sessionId)?.attachments.some(file => file.mcpAppResourceKey === key);
+            void window.electronAPI.maker.mcpApps(sessionId, { op: 'host-result', requestId: payload.requestId, result: present }).catch(() => {});
+            return;
+          }
+          appendMcpAppComposerAttachment(sessionId, {
+            ...payload.attachment, mcpAppResourceKey: draftResourceKey(payload.attachment.mcpAppResourceKey),
+          });
+        })
+      : undefined;
     const invoke: AppInvoker = (id, input) =>
       window.electronAPI.maker.mcpApps(id, deviceId ? { ...input, deviceId } : input);
     const post = (message: AppRpc) => frame?.contentWindow?.postMessage(message, '*');
@@ -558,6 +577,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           }
         }
       }
+      stopComposerAttachment?.();
       void controller
         .close()
         .catch(() => {})
@@ -568,7 +588,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection, heights, heightKey, rememberLayout]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;

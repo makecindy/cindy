@@ -44,6 +44,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   app: { getPath: () => state.userData },
+  webContents: { fromId: vi.fn() },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
@@ -60,6 +61,7 @@ vi.mock('@cindy/mcps', () => ({
 }));
 vi.mock('../host.js', () => ({
   appServerRevision: (config: unknown) => JSON.stringify(config),
+  validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) => ({ category: 'text', mimeType }),
   McpAppsHost: class {
     open = state.open;
     dispatch = state.dispatch;
@@ -140,6 +142,7 @@ beforeEach(() => {
   };
   state.updateResult = [state.row];
   state.owner = {
+    userId: 'owner-a',
     client: {
       drizzle: {
         select: () => ({
@@ -179,6 +182,35 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Tier: unit at the production Main IPC boundary. A local MCP App resource
+  // must be staged and delivered back to the renderer, using the same owner
+  // identity as the active DB snapshot. The previous code read a nonexistent
+  // `dataOwnerId` field and rejected every request with MCP_APP_OWNER_ONLY.
+  it('stages a local composer attachment with the DB snapshot user id', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ipc-'));
+    state.userData = root;
+    const send = vi.fn();
+    const target = { isDestroyed: () => false, send };
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue(target as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: 'card-resource', name: 'sample.txt',
+        mimeType: 'text/plain', size: 3, bytes: new Uint8Array([97, 98, 99]),
+        assertCurrent: async () => {},
+      });
+      expect(send).toHaveBeenCalledWith('maker:mcp-apps:composer-attachment', expect.objectContaining({
+        sessionId: 'task', viewId: 'view',
+        attachment: expect.objectContaining({ name: 'sample.txt', size: 3, mimeType: 'text/plain' }),
+      }));
+      const stagedPath = send.mock.calls[0]![1].attachment.path as string;
+      expect(await fs.readFile(stagedPath)).toEqual(Buffer.from('abc'));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   // Security regression #10649, unit: a trusted renderer's path is not proof
   // that the user supplied its bytes. Reject it before any provider dispatch.
   it.each([false, true])('rejects a renderer-supplied absolute attachment path before dispatch (with bytes: %s)', async withBytes => {

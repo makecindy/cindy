@@ -184,6 +184,11 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 
 ## 卡片来源、宿主按钮与固定尺寸（2026-11-16）
 
+本机 composer 附件能力沿用现有本地沙箱和 `maker:mcp-apps:v1`，只在执行电脑本机 View 的
+初始化能力里可选声明 `cindy/composer-attachment`，不加入 device-link、relay 或手机协议。
+资源读取和落盘在执行端完成，远程查看端、手机、共享访客与 Node Host 不声明也不处理该能力。
+旧查看端忽略该可选能力，页面必须在动态导入失败或能力缺失时继续可用。
+
 公开 `mcpAppHistory` version 1 增加可选 `plugin: {name,source?}` 与 `customMcp: {name}`。
 source 是宿主记录的生成时快照，只包含 `{kind: "official"|"organization"|"market"|"third-party"|"local"|"unknown"}`；
 同账号与共享访客历史均不发送 namespace，公开 organization 无 namespace 仍按市场来源显示。

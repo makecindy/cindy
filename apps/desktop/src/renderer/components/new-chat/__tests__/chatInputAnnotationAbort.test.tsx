@@ -23,6 +23,7 @@ import type { PermissionSelector } from '../PermissionSelector';
 import type { ModelSelector } from '../ModelSelector';
 import type { UseVoiceInputOptions, UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -350,6 +351,30 @@ it('does not replace the empty editor after an external empty-draft notification
   }));
   expect(changed).not.toHaveBeenCalled();
   expect(h.editor!.state.selection.from).toBe(1);
+});
+
+// Unit: the MCP receipt can reach the real editor before its debounced keystroke
+// save. A stored-text assertion alone missed the visible rollback.
+it('keeps freshly typed text when a card immediately adds a composer attachment', async () => {
+  const sessionId = 'composer-regression';
+  saveDraft(sessionId, { text: plainTextToTiptapDoc('old'), attachments: [] });
+  renderComposer();
+  await waitFor(() => expect(h.editor?.getText()).toBe('old'));
+  vi.useFakeTimers();
+  try {
+    act(() => { h.editor!.commands.setContent('<p>fresh input</p>'); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('old'));
+    act(() => appendMcpAppComposerAttachment(sessionId, {
+      id: 'receipt', name: 'sample.txt', ext: '.txt', path: '/cache/sample.txt',
+      size: 1, category: 'text', mimeType: 'text/plain',
+    }));
+    expect(h.editor!.getText()).toBe('fresh input');
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('fresh input'));
+    expect(getDraft(sessionId)?.attachments.map(file => file.id)).toEqual(['receipt']);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // #8084 / r4428883080: thread textarea coverage missed ChatInput's debounced text save.

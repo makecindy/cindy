@@ -200,6 +200,8 @@ interface UserMessageProps {
    *  fork IPC takes (sessionId, clientId) to locate the fork point. When
    *  omitted, the Fork button is not rendered. */
   messageClientId?: string;
+  /** Queued messages carry their stable row id before they have history actions. */
+  clientId?: string;
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to select stop-then-rewind confirmation; fork is allowed from stable history. */
   sessionRunning?: boolean;
@@ -855,6 +857,7 @@ export function UserMessage({
   agentKind,
   remoteHostId,
   messageClientId,
+  clientId,
   sessionRunning,
   delivery,
   isFirstUserMessage,
@@ -1735,7 +1738,7 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
-                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId, clientId: messageClientId ?? clientId,
                         disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
                         context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div

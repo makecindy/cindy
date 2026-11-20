@@ -115,7 +115,7 @@ try {
       { name: 'host-sdk-raw', setup(builder) {
         builder.onResolve({ filter: /ext-apps\/app-with-deps\?raw$/ }, () => ({ path: createRequire(import.meta.url).resolve('@modelcontextprotocol/ext-apps/app-with-deps'), namespace: 'sdk-raw' }));
         builder.onLoad({ filter: /.*/, namespace: 'sdk-raw' }, async args => ({ contents: await readFile(args.path, 'utf8'), loader: 'text' }));
-        builder.onResolve({ filter: /viewStateSdk(?:React)?\.js\?raw$/ }, args => ({ path: path.resolve(scriptDir, '../src/main/mcp-apps', args.path.split('/').pop().replace('?raw', '')), namespace: 'sdk-raw' }));
+        builder.onResolve({ filter: /(?:viewStateSdk(?:React)?|composerAttachmentSdk)\.js\?raw$/ }, args => ({ path: path.resolve(scriptDir, '../src/main/mcp-apps', args.path.split('/').pop().replace('?raw', '')), namespace: 'sdk-raw' }));
       } },
       {
         name: 'test-only-owner',

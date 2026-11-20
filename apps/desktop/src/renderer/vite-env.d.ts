@@ -6088,6 +6088,7 @@ interface ElectronAPI {
     onProvidersChanged: (cb: () => void) => () => void;
 
     mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) => () => void;
     onPluginUiAction: (callback: (input: unknown) => void) => () => void;
     onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。

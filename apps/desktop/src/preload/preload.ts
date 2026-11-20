@@ -894,6 +894,7 @@ const fanOutMakerLocalModelInstallProgress = createIpcFanOut('maker:local-model:
 const fanOutMakerProviderOAuthProgress = createIpcFanOut('maker:provider:oauth:progress');
 // 自定义 MCP 服务器增删改广播 → 设置页 McpServersSection refetch。
 const fanOutMakerMcpChanged = createIpcFanOut('maker:mcp:changed');
+const fanOutMcpAppComposerAttachment = createIpcFanOut('maker:mcp-apps:composer-attachment');
 // 自定义供应商上游错误的结构化广播（payload = { agent, providerId, providerName, code, retryable, status }）。
 const fanOutMakerProviderUpstreamError = createIpcFanOut('maker:provider:upstream-error');
 // Claude Auto classifier 失败后单会话降级到 ask 的结构化广播。
@@ -7186,6 +7187,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) =>
+      fanOutMcpAppComposerAttachment((data) => cb(data as import('../shared/mcpApps').McpAppComposerAttachment)),
     onPluginUiAction: (callback: (input: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, input: unknown) => callback(input);
       ipcRenderer.on('plugin-ui:action', listener);

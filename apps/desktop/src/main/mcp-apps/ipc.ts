@@ -6,7 +6,7 @@ import { createPluginFileAccess } from './pluginFileAccess.js';
 import { configurePluginAppearanceFiles } from './appearance.js';
 import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
 import { ipcMain, shell, BrowserWindow, dialog, webContents } from 'electron';
-import { bindPluginUiResource, finishPluginUiAction } from './hostUi.js';
+import { bindPluginUiResource, finishPluginUiAction, hasComposerAttachmentInWindow } from './hostUi.js';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -15,6 +15,7 @@ import { preparePluginAttachmentResult } from './pluginAttachment.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { stageLocalFileToCache, cleanupOwnedUnpersistedStagedChatAttachments } from '../file-browser/remote-file-cache.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
+import { ingestChatImageBuffer } from '../cindy-media/chatAttachments.js';
 import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import fs from 'node:fs/promises';
@@ -39,9 +40,9 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { getRemoteLinkCloseEpoch, onRemoteLinkClosed, remoteInvoke } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { McpAppsHost, appServerRevision, type McpAppsHostDeps } from './host.js';
+import { McpAppsHost, appServerRevision, validateComposerAttachment, type McpAppsHostDeps } from './host.js';
 import { readAppServer, setMcpAppsHost } from './runtime.js';
-import { MCP_APPS_INVOKE, parseMcpAppRecord } from '../../shared/mcpApps.js';
+import { MCP_APPS_INVOKE, MCP_APP_COMPOSER_ATTACHMENT_EVENT, parseMcpAppRecord, type McpAppComposerAttachment } from '../../shared/mcpApps.js';
 import { handleMcpAppOperation, handleMcpAppFrameOperation } from './operations.js';
 import { RemoteMcpAppViews } from './remoteViews.js';
 import {
@@ -71,6 +72,10 @@ export function registerMcpAppsIpc(
 ): void {
   let saving = false;
   const slots = new McpAppViewSlots();
+  let assertSessionForComposer: ((sessionId: string) => Promise<{
+    owner: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>;
+    session: { remoteHostId?: string | null };
+  }>) | undefined;
   const providerCalls = new Map<string, Map<string, AbortController>>();
   const currentOwner = () => getCurrentDbClientSnapshot() ?? undefined;
   const pluginFiles = configurePluginAppearanceFiles(createPluginFileAccess({
@@ -107,9 +112,54 @@ export function registerMcpAppsIpc(
         saving = false;
       }
     },
+    hasComposerAttachment: hasComposerAttachmentInWindow,
+    sendComposerAttachment: async ({ caller, sessionId, viewId, resourceKey, name, mimeType, size, bytes, assertCurrent }) => {
+      if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
+      const scope = await assertSessionForComposer?.(sessionId);
+      if (!scope?.owner.userId || scope.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+      if (size !== bytes.byteLength || size < 1 || size > 64 * 1024 * 1024) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+      const validated = validateComposerAttachment(bytes, mimeType);
+      const { category, mimeType: normalizedMimeType } = validated;
+      const ext = (() => {
+        const base = name.split(/[\\/]/).pop() ?? name;
+        const dot = base.lastIndexOf('.');
+        return dot > 0 ? base.slice(dot).toLowerCase() : category === 'pdf' ? '.pdf' : category === 'text' ? '.txt' : '.bin';
+      })();
+      await assertCurrent();
+      const stagedPath = await stageLocalFileToCache({
+        ownerId: scope.owner.userId,
+        suggestedName: name,
+        expectedSize: BigInt(size),
+        copyTo: target => fs.writeFile(target, bytes, { flag: 'wx' }),
+      });
+      try {
+        await assertCurrent();
+        // Prepare the preview before delivery so the tray can append synchronously.
+        let imageUrl: string | undefined;
+        if (category === 'image') {
+          try {
+            imageUrl = (await ingestChatImageBuffer({ buffer: bytes, mimeType: normalizedMimeType }, scope.owner.client.drizzle)).url;
+          } catch { /* The staged file can still be attached if preview preparation fails. */ }
+          await assertCurrent();
+        }
+        const senderId = Number(caller.slice('renderer:'.length));
+        const target = Number.isSafeInteger(senderId) ? webContents.fromId(senderId) : undefined;
+        if (!target || target.isDestroyed()) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+        const payload: McpAppComposerAttachment = {
+          sessionId, viewId,
+          attachment: { id: randomUUID(), mcpAppResourceKey: resourceKey, name, path: stagedPath, ext, size, category, mimeType: normalizedMimeType,
+            ...(imageUrl ? { url: imageUrl, originalName: name } : {}) },
+        };
+        target.send(MCP_APP_COMPOSER_ATTACHMENT_EVENT, payload);
+      } catch (error) {
+        await cleanupOwnedUnpersistedStagedChatAttachments({ ownerId: scope.owner.userId, filePaths: [stagedPath] });
+        throw error;
+      }
+    },
     pluginFiles,
     disposeDocument: removeMcpAppDocument,
   });
+  assertSessionForComposer = assertSession;
   setMcpAppsHost(host);
   setMcpAppFileReader((id, token, request) => host.readPluginFile(id, token, request));
   const remoteViews = new RemoteMcpAppViews({

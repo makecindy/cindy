@@ -29,6 +29,8 @@ export interface McpAppsServicePorts {
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
+  hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
+  sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
 }
 
@@ -49,6 +51,8 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   };
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
+    hasComposerAttachment: ports.hasComposerAttachment,
+    sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,
     owner: currentOwner,
     config: readAppServer,
