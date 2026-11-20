@@ -106,11 +106,13 @@ describeMigrationReplay('existing side-chat teams', () => {
         // process could publish its lead. Reopening must repair only that lead.
         reopened.exec(`
           ALTER TABLE sessions ADD orca_role TEXT;
+          ALTER TABLE orca_teams ADD completed_at INTEGER;
+          ALTER TABLE orca_teams ADD updated_at INTEGER;
           ALTER TABLE orca_workers ADD session_id TEXT;
           ALTER TABLE orca_workers ADD status TEXT;
           INSERT INTO sessions (id, source, status, sdk_session_id)
             VALUES ('interrupted', 'side-chat', 'active', 'native-interrupted');
-          INSERT INTO orca_teams VALUES ('team-interrupted', 'interrupted', 'active');
+          INSERT INTO orca_teams (id, lead_session_id, status) VALUES ('team-interrupted', 'interrupted', 'active');
           INSERT INTO orca_workers (id, team_id) VALUES ('worker-interrupted', 'team-interrupted');
         `);
         reconcileStrandedOrcaLeads(reopened);
@@ -121,6 +123,17 @@ describeMigrationReplay('existing side-chat teams', () => {
             { id: 'interrupted', source: 'side-chat', sdk_session_id: 'native-interrupted', side_chat_promoted: 1 },
             { id: 'live', source: 'side-chat', sdk_session_id: 'native-live', side_chat_promoted: 1 },
           ]);
+        // Simulate an archive interrupted after its durable status write.
+        reopened.exec(`
+          UPDATE sessions SET status = 'archived', orca_role = 'lead' WHERE id = 'live';
+          INSERT INTO sessions (id, source, status, orca_role) VALUES ('worker-task', 'desktop', 'active', 'worker');
+          UPDATE orca_workers SET session_id = 'worker-task', status = 'running' WHERE id = 'worker';
+        `);
+        reconcileStrandedOrcaLeads(reopened);
+        expect(reopened.prepare("SELECT status FROM orca_teams WHERE id = 'team-live'").pluck().get()).toBe('completed');
+        expect(reopened.prepare("SELECT status FROM sessions WHERE id = 'worker-task'").pluck().get()).toBe('archived');
+        expect(reopened.prepare("SELECT orca_role FROM sessions WHERE id = 'live'").pluck().get()).toBeNull();
+        expect(reopened.prepare("SELECT status FROM orca_teams WHERE id = 'team-interrupted'").pluck().get()).toBe('active');
       } finally {
         reopened.close();
       }

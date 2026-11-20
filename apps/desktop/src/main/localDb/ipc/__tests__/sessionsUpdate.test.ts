@@ -202,6 +202,7 @@ import {
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
   promoteSideChatLeadInDb,
+  setSideChatArchiveCleanup,
   restoreArchivedSessionForSend,
   persistSessionFields,
   registerSessionIpc,
@@ -324,6 +325,8 @@ function createDb(): void {
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
+    CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
+    CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
     CREATE TABLE recent_workdirs (
       path TEXT PRIMARY KEY NOT NULL,
       last_used_at INTEGER NOT NULL
@@ -433,6 +436,7 @@ afterEach(async () => {
   setSessionRestoreObserver(null);
   _setStoreForTests(null);
   setSessionRuntimeCleanup(null);
+  setSideChatArchiveCleanup(undefined);
   setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
   setSessionRouteLockImplementation(null);
@@ -443,13 +447,31 @@ afterEach(async () => {
   }
 });
 
+// Unit: host IPC preserves durable history and only stops the validated linked task.
+it('scopes linked archive to the raw source and parent, and retries cleanup on the persisted archive', async () => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1 WHERE id = 'codex-local';
+  `);
+  const cleanup = vi.fn(async () => {
+    const row = h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'codex-local'").get();
+    expect(row).toEqual({ status: 'archived' });
+  }).mockRejectedValueOnce(new Error('shutdown interrupted'));
+  setSideChatArchiveCleanup(cleanup);
+  const patch = (archiveSideChatParentId: string) => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId });
+  await expect(patch('wrong-parent')).rejects.toThrow('no longer matches');
+  expect(cleanup).not.toHaveBeenCalled();
+  await expect(patch('cc-local')).rejects.toThrow('shutdown interrupted');
+  await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', parentSessionId: 'cc-local' });
+  expect(cleanup).toHaveBeenCalledTimes(2);
+  expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'cc-local'").get()).toEqual({ status: 'active' });
+});
+
 // DB IPC regression: a committed worker promotes only its owning follow-up.
 // The production update and detail read must leave the raw provenance and native identity intact.
 it('makes a follow-up independently visible only when its worker exists', async () => {
   h.sqlite!.exec(`
-    CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT);
-    CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
-    INSERT INTO orca_teams VALUES ('team', 'codex-local');
+    INSERT INTO orca_teams VALUES ('team', 'codex-local', 'active');
     UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
       sdk_session_id = 'native-fork', orca_role = 'lead' WHERE id = 'codex-local';
   `);

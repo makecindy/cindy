@@ -16041,9 +16041,10 @@
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
       "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
       "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
-      "closeTitle": "サイドチャットを閉じますか？",
-      "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
-      "closeConfirm": "閉じて削除",
+      "closeTitle": "この追加質問を閉じてアーカイブしますか？",
+      "closeDescription": "左側のタスクリストにある対応タスクもアーカイブされます。",
+      "closeDescriptionRunning": "左側のタスクリストにある対応タスクもアーカイブされ、Worker は停止します。",
+      "closeConfirm": "閉じてアーカイブ",
       "closeFailed": "サイドチャットを閉じられませんでした。もう一度お試しください。"
     },
     "botStartedTasks": {

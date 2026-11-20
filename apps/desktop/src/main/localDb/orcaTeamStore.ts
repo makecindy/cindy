@@ -285,13 +285,20 @@ export async function createActiveTeam(input: {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const id = input.id ?? createId();
-  await db.insert(orcaTeams).values({
-    id,
-    leadSessionId: input.leadSessionId,
-    status: 'active',
-    completedAt: null,
-    createdAt: now,
-    updatedAt: now,
+  await withSessionRouteLock(input.leadSessionId, async () => {
+    if (getDbClient().drizzle !== db) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    const [closed] = await db.select({ id: sessions.id }).from(sessions).where(and(
+      eq(sessions.id, input.leadSessionId), eq(sessions.source, 'side-chat'), ne(sessions.status, 'active'),
+    )).limit(1);
+    if (closed) throwIpcError('PRECONDITION_FAILED', 'Follow-up is no longer active');
+    await db.insert(orcaTeams).values({
+      id,
+      leadSessionId: input.leadSessionId,
+      status: 'active',
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
   });
   const created = await getTeamById(id);
   if (!created) throwIpcError('INTERNAL', `Orca team ${id} not found after create`);
@@ -747,11 +754,15 @@ export async function setSessionOrcaRole(
   };
   assertCurrent();
   const db = owner!.client.drizzle;
-  await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
+  const changed = await db.update(sessions).set({ orcaRole: role }).where(and(
+    eq(sessions.id, sessionId),
+    role === 'lead' ? sql`NOT (${sessions.source} = 'side-chat' AND ${sessions.status} <> 'active')` : undefined,
+  )).returning({ id: sessions.id });
   // The issued write belongs to the captured DB. Never broadcast its result
   // into another account, or after the owning creation has been cancelled.
   assertCurrent();
-  broadcastSessionPatch(sessionId, { orcaRole: role });
+  if (changed.length) broadcastSessionPatch(sessionId, { orcaRole: role });
+  else if (role === 'lead') throwIpcError('PRECONDITION_FAILED', 'Lead is no longer active');
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {

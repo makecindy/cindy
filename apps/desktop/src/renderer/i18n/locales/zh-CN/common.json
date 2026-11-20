@@ -16041,9 +16041,10 @@
       "mainTaskOnly": "请从主任务打开侧边追问。",
       "sharedTaskUnavailable": "共享任务不支持侧边追问",
       "archivedTask": "请先取消归档，再打开侧边追问",
-      "closeTitle": "关闭侧边追问？",
-      "closeDescription": "将停止并删除本次追问，主任务不受影响。",
-      "closeConfirm": "关闭并删除",
+      "closeTitle": "关闭并归档这条追问？",
+      "closeDescription": "左侧任务列表中的这条追问也会归档。",
+      "closeDescriptionRunning": "左侧任务列表中的这条追问也会归档，协同 Worker 将停止。",
+      "closeConfirm": "关闭并归档",
       "closeFailed": "关闭侧边追问失败，请稍后重试。"
     },
     "botStartedTasks": {

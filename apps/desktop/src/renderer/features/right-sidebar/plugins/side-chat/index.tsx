@@ -1,7 +1,5 @@
 import { lazy } from 'react';
 import { MessagesSquare } from 'lucide-react';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { readSessionBatch } from '@/lib/sessionBatchRead';
 import { registerTabKind } from '../../registry';
 import { hasTabCloseInterceptor, setActiveTab } from '../../store';
 import type { TabKindPlugin } from '../../types';
@@ -27,11 +25,8 @@ const plugin: TabKindPlugin<SideChatState> = {
   serializeState: hydrateSideChatState,
   onBeforeClose: async (state, ctx) => {
     if (!state.sessionId || hasTabCloseInterceptor(ctx.tabId)) return true;
-    const owner = getDataOwnerGeneration();
-    const [result] = await readSessionBatch([state.sessionId], state.deviceId ?? undefined);
-    if (!isDataOwnerGenerationCurrent(owner)) return false;
-    if (result?.value?.sideChatPromoted && result.value.parentSessionId === ctx.sessionId) return true;
-    // Recovered, unmounted tabs must install their confirmation before deletion.
+    // Recovered, unmounted tabs must install the close handler before a task
+    // can be reclaimed.
     await setActiveTab(ctx.sessionId, ctx.tabId);
     return false;
   },

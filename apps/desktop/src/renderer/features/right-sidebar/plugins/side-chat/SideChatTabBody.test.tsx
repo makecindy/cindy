@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TabKindHostContext } from '../../types';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), invoke: vi.fn(), subscribe: vi.fn(), pin: vi.fn(), confirm: vi.fn(), status: vi.fn(), merge: vi.fn(), cache: vi.fn(), closeTab: vi.fn(), detached: false, t: (key: string) => key }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), invoke: vi.fn(), subscribe: vi.fn(), pin: vi.fn(), confirm: vi.fn(), archive: vi.fn(), status: vi.fn(), merge: vi.fn(), cache: vi.fn(), closeTab: vi.fn(), detached: false, t: (key: string) => key }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 // Match the stable translation callback; changing it on every render restarts the metadata read.
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
@@ -34,10 +34,10 @@ describe('side chat panel lifecycle', () => {
     mocks.confirm.mockResolvedValue(false); mocks.status.mockResolvedValue(undefined);
     mocks.subscribe.mockReturnValue(() => {});
     mocks.closeTab.mockResolvedValue(undefined);
-    mocks.invoke.mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat', model: 'old-model' });
+    mocks.invoke.mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat', model: 'old-model', status: 'active' });
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
       deviceLink: { invoke: mocks.invoke, onRemotePush: mocks.subscribe },
-      localDb: { sessions: { get: vi.fn().mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat' }) }, sessionsPush: { onPatched: mocks.subscribe } },
+      localDb: { sessions: { get: vi.fn().mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat', status: 'active' }), archiveLinkedSideChat: mocks.archive }, sessionsPush: { onPatched: mocks.subscribe } },
     } });
   });
   afterEach(cleanup);
@@ -50,7 +50,7 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:get', ['child']);
     await act(async () => {
       mocks.subscribe.mock.calls[0][0]({ deviceId: 'host', channel: 'local-db:sessions:patched', payload: { sessionId: 'child', patch: { model: 'new-model' } } });
-      resolve({ id: 'child', parentSessionId: 'parent', source: 'side-chat', model: 'old-model' });
+      resolve({ id: 'child', parentSessionId: 'parent', source: 'side-chat', model: 'old-model', status: 'active' });
     });
     const editor = JSON.parse(screen.getByTestId('editor').textContent!);
     expect(editor).toMatchObject({
@@ -78,17 +78,18 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  // Unit: a restored local tab cannot rely on receiving the promotion push again.
-  it('restores a linked local tab and closes it without confirming or deleting', async () => {
-    vi.mocked(window.electronAPI.localDb.sessions.get).mockResolvedValueOnce({
-      id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true, orcaRole: 'lead',
+  // Unit: a recovered linked tab derives the dialog from persisted metadata.
+  it('deduplicates linked close confirmation and submits the owning parent', async () => {
+    vi.mocked(window.electronAPI.localDb.sessions.get).mockResolvedValue({
+      id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true, orcaRole: 'lead', status: 'active',
     } as Awaited<ReturnType<typeof window.electronAPI.localDb.sessions.get>>);
+    mocks.confirm.mockResolvedValue(true);
     await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: null }} ctx={ctx} active />); });
-    expect(screen.getByTestId('editor')).toBeTruthy();
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(mocks.closeTab).not.toHaveBeenCalled();
-    expect(await close!()).toBe(true);
-    expect(mocks.confirm).not.toHaveBeenCalled();
+    await expect(Promise.all([close!(), close!()])).resolves.toEqual([true, true]);
+    expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      description: 'chat.sideChat.closeDescriptionRunning',
+    }));
+    expect(mocks.archive).toHaveBeenCalledExactlyOnceWith('child', 'parent');
     expect(mocks.status).not.toHaveBeenCalled();
   });
 
@@ -131,52 +132,54 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  it('cancels without deleting, and a failed remote deletion keeps the panel open', async () => {
+  it('does not confirm ordinary deletion and preserves the conditional delete on failure', async () => {
     await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
+    mocks.status.mockRejectedValueOnce(new Error('offline'));
     await expect(close!()).resolves.toBe(false);
-    expect(mocks.status).not.toHaveBeenCalled();
-    mocks.confirm.mockResolvedValue(true); mocks.status.mockRejectedValueOnce(new Error('offline'));
-    await expect(close!()).resolves.toBe(false);
-    expect(mocks.status).toHaveBeenCalledWith('child', 'deleted', { kind: 'device-link', deviceId: 'host' }, undefined, 'side-chat');
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.status).toHaveBeenCalledExactlyOnceWith('child', 'deleted', { kind: 'device-link', deviceId: 'host' }, undefined, 'side-chat');
   });
 
-  // Unit regression: a confirmation awaiting a click must not delete the now-independent task.
-  // A real mounted panel receives the promotion push before the old dialog resolves.
-  it.each([true, false])('links in place and prevents a stale destructive confirmation (%s)', async active => {
-    let confirm!: (accepted: boolean) => void;
-    mocks.confirm.mockReturnValue(new Promise<boolean>(resolve => { confirm = resolve; }));
-    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active={active} />); });
-    let closing!: Promise<boolean>;
-    await act(async () => { closing = close!(); });
-    await act(async () => {
-      mocks.subscribe.mock.calls[0][0]({ deviceId: 'host', channel: 'local-db:sessions:patched',
-        payload: { sessionId: 'child', patch: { source: 'desktop', sideChatPromoted: true, orcaRole: 'lead' } } });
-      confirm(true);
+  // Unit: a lost delete race must stop and get consent before any archive write.
+  it('confirms the archive when a guarded delete finds that the task has since linked', async () => {
+    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
+    const linked = { id: 'child', parentSessionId: 'parent', sideChatPromoted: true, orcaRole: 'lead', status: 'active' };
+    mocks.status.mockImplementationOnce(async () => {
+      mocks.invoke.mockResolvedValue(linked);
+      throw new Error('[PRECONDITION_FAILED] Task is linked');
     });
-    expect(await closing).toBe(true);
-    expect(mocks.closeTab).not.toHaveBeenCalled();
-    expect(mocks.status).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    if (active) {
-      const view = screen.getByRole('button', { name: 'chat.sideChat.viewCollaboration' });
-      fireEvent.click(view);
-      fireEvent.click(view);
-      expect(mocks.navigate).toHaveBeenCalledTimes(2);
-      expect(mocks.navigate).toHaveBeenLastCalledWith('/cc-agent/child?device=host', {
-        state: { orcaWorkersReveal: { leadSessionId: 'child' } },
-      });
-    }
+    await expect(close!()).resolves.toBe(false);
+    expect(mocks.status).toHaveBeenCalledTimes(1);
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'local-db:sessions:patch-meta')).toBe(false);
   });
 
-  it('only closes the tab when the host wins the delete race before its push arrives', async () => {
-    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
-    mocks.confirm.mockResolvedValue(true);
-    mocks.status.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] Task is linked'));
-    mocks.invoke.mockResolvedValueOnce({ id: 'child', parentSessionId: 'parent', sideChatPromoted: true, status: 'active' });
-    expect(await close!()).toBe(true);
-    expect(mocks.status).toHaveBeenCalledTimes(1);
-    expect(mocks.invoke).toHaveBeenLastCalledWith('host', 'local-db:sessions:get', ['child']);
-  });
+  // Unit: explicitly unsupported and unknown outcomes both keep the tab. A later
+  // explicit attempt sends the same scoped request, never an unguarded update.
+  it.each(['[INVALID_PARAMS] field not allowed in patch-meta: archiveSideChatParentId', 'timed out'])(
+    'preserves the remote follow-up and retries only after another click (%s)', async failure => {
+      mocks.invoke.mockImplementation(async (_device, channel) => {
+        if (channel === 'local-db:sessions:get') return {
+          id: 'child', parentSessionId: 'parent', sideChatPromoted: true, orcaRole: null, status: 'active',
+        };
+        throw new Error(failure);
+      });
+      mocks.confirm.mockResolvedValue(true);
+      await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
+      await expect(close!()).resolves.toBe(false);
+      expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        description: 'chat.sideChat.closeDescription',
+      }));
+      await expect(close!()).resolves.toBe(false);
+      const writes = mocks.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:sessions:patch-meta');
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toEqual(['host', 'local-db:sessions:patch-meta', [
+        'child', { status: 'archived', archiveSideChatParentId: 'parent' },
+      ]]);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(mocks.status).not.toHaveBeenCalled();
+    },
+  );
 
   it('shows a return action in the restricted sidebar window without mounting a chat editor', () => {
     mocks.detached = true;

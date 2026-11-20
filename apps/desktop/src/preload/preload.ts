@@ -6283,6 +6283,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:restore-if-archived', id, expected),
       update: (id: string, patch: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
+      archiveLinkedSideChat: (id: string, parentId: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:sessions:patch-meta', id, { status: 'archived', archiveSideChatParentId: parentId }),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
       setPinnedCardSummaries: (enabled: boolean): Promise<void> =>

@@ -16115,9 +16115,10 @@
       "mainTaskOnly": "Open a side chat from the main task.",
       "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
       "archivedTask": "Unarchive this task to open a side chat.",
-      "closeTitle": "Close side chat?",
-      "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
-      "closeConfirm": "Close and delete",
+      "closeTitle": "Close and archive this follow-up?",
+      "closeDescription": "The matching task in the left sidebar will also be archived.",
+      "closeDescriptionRunning": "The matching task in the left sidebar will also be archived, and its workers will stop.",
+      "closeConfirm": "Close and archive",
       "closeFailed": "Could not close the side chat. Try again."
     },
     "botStartedTasks": {

@@ -53,7 +53,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const childId = state.sessionId;
   const retiredChildRef = useRef<string | null>(null);
   const linkedChildRef = useRef<string | null>(null);
-  const readChildRef = useRef<string | null>(null);
+  const pendingClose = useRef<Promise<boolean> | null>(null);
   const [linkedChild, setLinkedChild] = useState<string | null>(null);
   const [collaboration, setCollaboration] = useState<{ childId: string; role: Session['orcaRole'] } | null>(null);
   const [remoteSession, setRemoteSession] = useState<Session | null>(null);
@@ -77,15 +77,17 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     let unavailable = false;
     let bufferedPatch: Partial<Session> = {};
     const valid = () => !disposed && isDataOwnerGenerationCurrent(owner);
-    const dismiss = () => {
+    const dismiss = (status: 'archived' | 'deleted' = 'deleted') => {
       if (!valid() || unavailable) return;
       unavailable = true;
       retiredChildRef.current = childId;
       // Unmount the composer immediately, even while tab persistence settles.
       setUnavailableChild(childId);
-      makerChatStore.closeSessionQuery(childId);
       makerChatStore.purgeSession(childId);
-      discardDraft(childId);
+      if (status === 'deleted') {
+        makerChatStore.closeSessionQuery(childId);
+        discardDraft(childId);
+      }
       void closeTab(ctx.sessionId, ctx.tabId, { skipBeforeClose: true })
         .catch(() => { if (valid()) toast.error(t('chat.sideChat.closeFailed')); });
     };
@@ -99,7 +101,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     const applyPatch = (payload: { sessionId?: string; patch?: Partial<Session> } | null) => {
       if (!valid() || unavailable || payload?.sessionId !== childId || !payload.patch) return;
       bufferedPatch = { ...bufferedPatch, ...payload.patch };
-      if (payload.patch.status === 'deleted') { dismiss(); return; }
+      if (payload.patch.status === 'deleted' || (payload.patch.status === 'archived'
+        && (bufferedPatch.sideChatPromoted || linkedChildRef.current === childId))) {
+        dismiss(payload.patch.status); return;
+      }
       updateCollaboration(payload.patch);
       if (deviceId) {
         setRemoteSession(previous => previous?.id === childId
@@ -124,9 +129,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       if (value.id !== childId || value.parentSessionId !== ctx.sessionId) {
         throw new Error('Side chat owner mismatch');
       }
-      if (value.status === 'deleted') { dismiss(); return; }
+      if (value.status === 'deleted' || (value.status === 'archived' && value.sideChatPromoted)) {
+        dismiss(value.status); return;
+      }
       if (value.source !== 'side-chat' && !value.sideChatPromoted) throw new Error('Side chat owner mismatch');
-      readChildRef.current = childId;
       const merged = { ...value, ...bufferedPatch };
       updateCollaboration(merged);
       if (!deviceId) return;
@@ -140,41 +146,65 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     void read().catch(() => { if (valid() && !unavailable) setLoadFailed(true); });
     return () => { disposed = true; off(); };
   }, [active, childId, ctx.sessionId, ctx.tabId, readChild, retry, state.deviceId, t]);
-  const close = useCallback(async () => {
-    if (!childId) return true;
-    if (retiredChildRef.current === childId) return false;
-    if (linkedChildRef.current === childId) return true;
+  const close = useCallback(() => {
+    if (!childId) return Promise.resolve(true);
+    if (pendingClose.current) return pendingClose.current;
     const owner = getDataOwnerGeneration();
-    if (readChildRef.current !== childId) {
-      const latest = await readChild(childId).catch(() => null);
-      if (retiredChildRef.current === childId || !isDataOwnerGenerationCurrent(owner)) return false;
-      if (linkedChildRef.current === childId || (latest?.id === childId
-        && latest.parentSessionId === ctx.sessionId && latest.sideChatPromoted)) return true;
-    }
-    if (!await confirm({
-      title: t('chat.sideChat.closeTitle'), description: t('chat.sideChat.closeDescription'),
-      confirmText: t('chat.sideChat.closeConfirm'),
-    })) return false;
-    if (retiredChildRef.current === childId || !isDataOwnerGenerationCurrent(owner)) return false;
-    if (linkedChildRef.current === childId) return true;
-    try {
-      await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' },
-        undefined, 'side-chat');
-      makerChatStore.closeSessionQuery(childId);
-      makerChatStore.purgeSession(childId);
-      discardDraft(childId);
-      return true;
-    } catch (error) {
-      if (extractIpcError(error)?.code === 'PRECONDITION_FAILED' && isDataOwnerGenerationCurrent(owner)) {
-        // The host won a race with an older confirmation. Verify the same branch;
-        // the failed conditional delete is never retried.
-        const latest = await readChild(childId).catch(() => null);
-        if (isDataOwnerGenerationCurrent(owner) && latest?.id === childId
-          && latest.parentSessionId === ctx.sessionId && latest.sideChatPromoted && latest.status !== 'deleted') return true;
+    const current = () => isDataOwnerGenerationCurrent(owner);
+    const matches = (row: Session | null): row is Session => row?.id === childId
+      && row.parentSessionId === ctx.sessionId && (row.source === 'side-chat' || row.sideChatPromoted === true);
+    const archive = async (snapshot: Session) => {
+      const confirmArchive = (showWorkers: boolean) => confirm({
+        title: t('chat.sideChat.closeTitle'),
+        description: t(showWorkers ? 'chat.sideChat.closeDescriptionRunning' : 'chat.sideChat.closeDescription'),
+        confirmText: t('chat.sideChat.closeConfirm'),
+      });
+      const canCommit = () => current() && retiredChildRef.current !== childId;
+      const warnsAboutWorkers = snapshot.orcaRole !== null;
+      if (!await confirmArchive(warnsAboutWorkers) || !canCommit()) return false;
+      if (!warnsAboutWorkers) {
+        const latest = await readChild(childId);
+        if (!canCommit() || !matches(latest) || latest.status !== 'active') return false;
+        if (latest.orcaRole !== null && (!await confirmArchive(true) || !canCommit())) return false;
       }
-      if (retiredChildRef.current !== childId) toast.error(t('chat.sideChat.closeFailed'));
-      return false;
-    }
+      if (state.deviceId) {
+        await window.electronAPI.deviceLink.invoke(state.deviceId, 'local-db:sessions:patch-meta', [
+          childId, { status: 'archived', archiveSideChatParentId: ctx.sessionId },
+        ]);
+      } else {
+        await window.electronAPI.localDb.sessions.archiveLinkedSideChat(childId, ctx.sessionId);
+      }
+      if (current()) makerChatStore.purgeSession(childId);
+      return current();
+    };
+    const request = (async () => {
+      try {
+        const latest = await readChild(childId);
+        if (!current() || !matches(latest)) return false;
+        if (latest.status === 'deleted' || (latest.status === 'archived' && latest.sideChatPromoted)) return true;
+        if (latest.sideChatPromoted) return await archive(latest);
+        try {
+          await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' },
+            undefined, 'side-chat');
+        } catch (error) {
+          if (extractIpcError(error)?.code !== 'PRECONDITION_FAILED' || !current()) throw error;
+          const linked = await readChild(childId);
+          if (current() && matches(linked) && linked.sideChatPromoted && linked.status === 'active') return await archive(linked);
+          throw error;
+        }
+        if (!current()) return false;
+        makerChatStore.closeSessionQuery(childId);
+        makerChatStore.purgeSession(childId);
+        discardDraft(childId);
+        return true;
+      } catch {
+        if (current() && retiredChildRef.current !== childId) toast.error(t('chat.sideChat.closeFailed'));
+        return false;
+      }
+    })();
+    pendingClose.current = request;
+    void request.then(() => { if (pendingClose.current === request) pendingClose.current = null; });
+    return request;
   }, [childId, confirm, ctx.sessionId, readChild, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
   if (unavailableChild && unavailableChild === childId) return null;

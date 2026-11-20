@@ -32,8 +32,10 @@ describe('reconcileStrandedOrcaLeads', () => {
     const { db, runSqls } = makeDb({ changesBySql: () => 1 });
     reconcileStrandedOrcaLeads(db);
 
-    expect(runSqls).toHaveLength(4);
-    const [archiveWorkers, doneWorkers, clearLeads] = runSqls;
+    expect(runSqls).toHaveLength(5);
+    const [endArchivedTeam, archiveWorkers, doneWorkers, clearLeads] = runSqls;
+    expect(endArchivedTeam).toContain("UPDATE orca_teams SET status = 'completed'");
+    expect(endArchivedTeam).toContain("source = 'side-chat' AND side_chat_promoted = 1 AND status = 'archived'");
 
     // 1) archive ONLY still-active orphan worker sessions of non-active teams — must not touch
     //    already-archived rows, and must not resurrect user-deleted (status='deleted') sessions.
@@ -60,7 +62,7 @@ describe('reconcileStrandedOrcaLeads', () => {
   it('still runs the idempotent statements when nothing is stranded (changes=0, no throw)', () => {
     const { db, runSqls } = makeDb({ changesBySql: () => 0 });
     expect(() => reconcileStrandedOrcaLeads(db)).not.toThrow();
-    expect(runSqls).toHaveLength(4);
+    expect(runSqls).toHaveLength(5);
   });
 
   it('does not propagate errors (must not block ensureReady)', () => {

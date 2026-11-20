@@ -144,7 +144,7 @@ import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
-import { assertSessionDeleteTarget } from '../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../sessionDeleteTarget.js';
 import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
 import { isTaskListBotLane, restoreArchivedTaskForSend } from '../archivedTaskRestore.js';
 import { applyAgentSwitchResumeFallbackAtomicallyWithPorts, applyAgentSwitchToSessionRowWithPorts, type AgentSwitchRowPatch } from '../agentSwitchRows.js';
@@ -161,7 +161,12 @@ import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget', 'archiveSideChatParentId']);
+let finishSideChatArchive: ((sessionId: string, assertCurrent: () => Promise<void>) => Promise<void>) | undefined;
+
+export function setSideChatArchiveCleanup(cleanup: typeof finishSideChatArchive): void {
+  finishSideChatArchive = cleanup;
+}
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
@@ -480,7 +485,7 @@ async function deleteDependentSideChats(
   // Compatibility for callers without the transaction API (legacy adapters).
   const children = await dbClient.drizzle.select({ id: sessions.id }).from(sessions)
     .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.source, 'side-chat'),
-      eq(sessions.sideChatPromoted, false), ne(sessions.status, 'deleted')));
+      eq(sessions.sideChatPromoted, false), ne(sessions.status, 'deleted'), sql.raw(`NOT ${COMMITTED_SIDE_CHAT_WORKER_SQL}`)));
   for (const child of children) {
     if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
     await patchSessionMetaInDb(child.id, { status: 'deleted', deleteTarget: 'side-chat' });
@@ -1641,6 +1646,7 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
+    if ('archiveSideChatParentId' in p && !isDeviceLinkInvoke()) assertTrustedAppRendererEvent(_e);
     const updated = await patchSessionMetaInDb(
       sid,
       p as Parameters<typeof patchSessionMetaInDb>[1],
@@ -1708,7 +1714,7 @@ async function cancelValidatedCreation(
 ): Promise<void> {
   if (status !== 'archived' && status !== 'deleted') return;
   const cancel = captureSessionCreationCancellation(dbClient, sessionId);
-  const [target] = await dbClient.drizzle.select({ source: sessions.source, sideChatPromoted: sessions.sideChatPromoted })
+  const [target] = await dbClient.drizzle.select(sessionDeletionGuardColumns)
     .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
   if (status === 'deleted') assertDeleteTarget(target, deleteTarget);
@@ -1720,7 +1726,14 @@ async function cancelValidatedCreation(
   cancel();
 }
 
-function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean }, target?: SessionDeleteTarget): void {
+const sessionDeletionGuardColumns = {
+  source: sessions.source,
+  sideChatPromoted: sessions.sideChatPromoted,
+  hasCommittedWorker: sql<number>`CASE WHEN ${sessions.source} = 'side-chat' AND NOT ${sessions.sideChatPromoted}
+    THEN ${sql.raw(COMMITTED_SIDE_CHAT_WORKER_SQL)} ELSE 0 END`,
+};
+
+function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean; hasCommittedWorker?: number }, target?: SessionDeleteTarget): void {
   try {
     assertSessionDeleteTarget(row, target);
   } catch (err) {
@@ -1731,7 +1744,7 @@ function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean }, 
 async function assertDeleteTargetInDb(
   db: DbClient['drizzle'], id: string, target?: SessionDeleteTarget,
 ): Promise<void> {
-  const [row] = await db.select({ source: sessions.source, sideChatPromoted: sessions.sideChatPromoted })
+  const [row] = await db.select(sessionDeletionGuardColumns)
     .from(sessions).where(eq(sessions.id, id)).limit(1);
   if (row) assertDeleteTarget(row, target);
 }
@@ -2059,12 +2072,47 @@ export async function restoreArchivedSessionForSend(
   await restoreArchivedTaskForSend(sessionId, options, { patchSessionMetaInDb, captureOwnerScope, isOwnerScopeCurrent });
 }
 
+async function archiveLinkedSideChatInDb(
+  sessionId: string,
+  parentId: string,
+  options: { signal?: AbortSignal; beforeWrite?: () => void },
+): Promise<ReturnType<typeof sessionToCamel>> {
+  const cleanup = finishSideChatArchive;
+  if (!cleanup) throwIpcError('UNSUPPORTED_CAPABILITY', 'Linked follow-up archive is unavailable');
+  const client = getDbClient();
+  const scope = captureOwnerScope();
+  const assertCurrent = () => {
+    if (getDbClient() !== client || !isOwnerScopeCurrent(scope) || options.signal?.aborted)
+      throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    options.beforeWrite?.();
+  };
+  return withSessionRouteLock(sessionId, async () => {
+    assertCurrent();
+    const row = await selectSessionWithCount(client.drizzle, sessionId);
+    assertCurrent();
+    if (!row || row.source !== 'side-chat' || !row.sideChatPromoted || row.parentSessionId !== parentId
+      || (row.status !== 'active' && row.status !== 'archived')) {
+      throwIpcError('PRECONDITION_FAILED', 'The linked follow-up no longer matches this tab');
+    }
+    const archived = row.status === 'archived' ? sessionToCamel(row) : await patchSessionMetaInDb(
+      sessionId, { status: 'archived', pinnedAt: null }, { routeLockHeld: true, beforeWrite: assertCurrent },
+    );
+    // The archived row is durable before runtime cleanup. Startup reconciles
+    // linked Leads whose active team remained after an interruption.
+    assertCurrent();
+    await cleanup(sessionId, async () => assertCurrent());
+    assertCurrent();
+    return { ...archived, orcaRole: null };
+  });
+}
+
 export async function patchSessionMetaInDb(
   sessionId: string,
   rawPatch: {
     status?: 'active' | 'archived' | 'deleted';
     discardWorktreeChanges?: true;
     deleteTarget?: SessionDeleteTarget;
+    archiveSideChatParentId?: string;
     title?: string;
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
@@ -2072,7 +2120,7 @@ export async function patchSessionMetaInDb(
   options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
-  const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, ...patch } = rawPatch;
+  const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, archiveSideChatParentId, ...patch } = rawPatch;
   const discardWorktreeChanges = validateDiscardWorktreeChanges(discardRequested, patch.status);
   const deleteTarget = validateDeleteTarget(deleteRequested, patch.status);
   validateSnoozeTime(patch.snoozedUntil);
@@ -2080,6 +2128,13 @@ export async function patchSessionMetaInDb(
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
     }
+  }
+  if ('archiveSideChatParentId' in rawPatch) {
+    if (typeof archiveSideChatParentId !== 'string' || !archiveSideChatParentId
+      || patch.status !== 'archived' || Object.keys(rawPatch).length !== 2) {
+      throwIpcError('INVALID_PARAMS', 'Invalid linked follow-up archive intent');
+    }
+    return archiveLinkedSideChatInDb(sessionId, archiveSideChatParentId, options);
   }
   if (
     patch.status !== undefined &&

@@ -40,6 +40,15 @@ const log = createLogger('orca-stranded-lead-reconcile');
 export function reconcileStrandedOrcaLeads(db: Database.Database): void {
   try {
     const run = db.transaction(() => {
+      // The archive is durable before Worker shutdown. If shutdown was
+      // interrupted, there are no local SDK handles at startup; the existing
+      // ended-worker reconciliation and remote release can finish both sides.
+      const archivedTeams = db.prepare(`
+        UPDATE orca_teams SET status = 'completed', completed_at = ?, updated_at = ?
+        WHERE status = 'active' AND lead_session_id IN (
+          SELECT id FROM sessions WHERE source = 'side-chat' AND side_chat_promoted = 1 AND status = 'archived'
+        )
+      `).run(Date.now(), Date.now()).changes;
       // 1) 归档「属于非 active team」且仍 active 的孤儿 worker session(对齐 archiveWorkersByTeam)。
       //    只命中 status='active' —— 已 archived 的无需再动,已被用户软删除的 status='deleted'
       //    必须原样保留(不能借 reconcile 复活用户删掉的记录)。
@@ -85,11 +94,11 @@ export function reconcileStrandedOrcaLeads(db: Database.Database): void {
               AND EXISTS (SELECT 1 FROM orca_workers worker WHERE worker.team_id = team.id)
           )
       `).run().changes;
-      return { archivedWorkerSessions, doneWorkers, clearedLeads, promotedLeads };
+      return { archivedTeams, archivedWorkerSessions, doneWorkers, clearedLeads, promotedLeads };
     });
 
     const res = run();
-    if (res.archivedWorkerSessions > 0 || res.doneWorkers > 0 || res.clearedLeads > 0 || res.promotedLeads > 0) {
+    if (res.archivedTeams || res.archivedWorkerSessions || res.doneWorkers || res.clearedLeads || res.promotedLeads) {
       log.warn(
         JSON.stringify({
           event: 'localDb.reconcile.strandedOrcaState.cleared',

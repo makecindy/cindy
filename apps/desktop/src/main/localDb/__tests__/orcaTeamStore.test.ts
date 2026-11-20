@@ -673,6 +673,7 @@ describe('orcaTeamStore', () => {
         forked_at_message_id TEXT,
         worktree_path TEXT,
         source TEXT NOT NULL DEFAULT 'desktop',
+        side_chat_promoted INTEGER NOT NULL DEFAULT 0,
         feishu_open_id TEXT,
         feishu_bot_app_id TEXT,
         im_bot_context_id TEXT,

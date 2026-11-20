@@ -12,7 +12,7 @@ import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-revie
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
-import { assertSessionDeleteTarget } from '../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -45,6 +45,7 @@ const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
 const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
+const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
 const assertSessionDeleteTarget = ${assertSessionDeleteTarget.toString()};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
@@ -1281,7 +1282,11 @@ function sessionsSetTerminalStatus(readyDb, args) {
     const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
-    if (status === 'deleted') assertSessionDeleteTarget(existing, payload.deleteTarget);
+    if (status === 'deleted') {
+      const hasCommittedWorker = existing.source === 'side-chat' && !existing.sideChatPromoted
+        && Boolean(readyDb.prepare('SELECT id FROM sessions WHERE id = ? AND ' + COMMITTED_SIDE_CHAT_WORKER_SQL).get(sessionId));
+      assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
+    }
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
@@ -1296,6 +1301,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
           "WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted' " +
+          'AND NOT ' + COMMITTED_SIDE_CHAT_WORKER_SQL + ' ' +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
@@ -1587,7 +1593,7 @@ function orcaUpsertWorker(readyDb, args) {
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
     const activeTeam = readyDb.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = orca_teams.lead_session_id AND source = 'side-chat' AND status <> 'active') LIMIT 1",
     ).get(teamId);
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');

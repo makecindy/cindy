@@ -16228,9 +16228,10 @@
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
       "sharedTaskUnavailable": "As conversas paralelas não estão disponíveis em tarefas partilhadas.",
       "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
-      "closeTitle": "Fechar conversa paralela?",
-      "closeDescription": "Este seguimento será interrompido e o respetivo histórico será eliminado. A tarefa principal continua em execução.",
-      "closeConfirm": "Fechar e eliminar",
+      "closeTitle": "Fechar e arquivar esta pergunta de seguimento?",
+      "closeDescription": "A tarefa correspondente na barra lateral esquerda também será arquivada.",
+      "closeDescriptionRunning": "A tarefa correspondente na barra lateral esquerda também será arquivada e os seus Workers serão parados.",
+      "closeConfirm": "Fechar e arquivar",
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {

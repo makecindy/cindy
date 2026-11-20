@@ -93,14 +93,15 @@ export function restoreSideChatTabs(sessionId: string, isActive: () => boolean =
       const childId = (tab.state as { sessionId?: string } | null)?.sessionId;
       return childId && !childIds.has(childId) ? [{ tabId: tab.id, childId }] : [];
     });
-    // The recovery list intentionally omits linked tasks so a closed tab stays closed.
-    // Check only existing unmatched tabs before treating that omission as deletion.
+    // Linked tasks are absent from the recovery list. Check existing unmatched
+    // tabs for terminal status before dropping the stored label.
     const details = new Map((await readSessionBatch(unlisted.map(tab => tab.childId), deviceId ?? undefined))
       .map(result => [result.sessionId, result]));
     for (const { tabId, childId } of unlisted) {
       if (!valid()) return;
       const result = details.get(childId);
-      if (result?.value?.status === 'deleted' || result?.errorCode === 'NOT_FOUND') {
+      if (result?.value?.status === 'deleted' || (result?.value?.status === 'archived' && result.value.sideChatPromoted)
+        || result?.errorCode === 'NOT_FOUND') {
         await closeTab(sessionId, tabId, { skipBeforeClose: true });
       }
     }
@@ -179,10 +180,14 @@ export async function reopenLinkedSideChat(
 ): Promise<void> {
   if (deviceId && isSharedTaskPeer(deviceId)) throw new Error('Side chat parent unavailable');
   const owner = getDataOwnerGeneration();
-  const [parent] = await readSessionBatch([parentId], deviceId ?? undefined);
+  const [parent, child] = await readSessionBatch([parentId, childId], deviceId ?? undefined);
   if (!isDataOwnerGenerationCurrent(owner)) return;
   if (parent?.value?.id !== parentId || parent.value.status === 'deleted' || parent.value.hiddenAt) {
     throw new Error('Side chat parent unavailable');
+  }
+  if (child?.value?.id !== childId || child.value.parentSessionId !== parentId
+    || child.value.status !== 'active' || !child.value.sideChatPromoted) {
+    throw new Error('Linked follow-up is no longer active');
   }
   if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
     if (!isDataOwnerGenerationCurrent(owner)) return;

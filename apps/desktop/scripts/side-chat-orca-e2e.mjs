@@ -29,6 +29,7 @@ const workerRequest = 'E2E worker request';
 const parentReply = 'E2E_FIXTURE_PARENT_REPLY';
 const sideReply = 'E2E_FIXTURE_FOLLOWUP_REPLY';
 const workerReply = 'E2E_FIXTURE_WORKER_REPLY';
+const runningWorkerRequest = 'E2E hold this Worker turn open';
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -43,7 +44,7 @@ async function close(server) {
   await new Promise(resolve => server.close(resolve));
 }
 
-function modelFixture(requests) {
+function modelFixture(requests, heldWorker) {
   return createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url, 'http://localhost').pathname;
@@ -68,6 +69,13 @@ function modelFixture(requests) {
         return;
       }
       const input = JSON.stringify(payload.input);
+      if (input.includes(runningWorkerRequest)) {
+        heldWorker.started = true;
+        response.on('close', () => { heldWorker.stopped = true; });
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write('event: response.created\ndata: {"type":"response.created","response":{"id":"resp_held","status":"in_progress","output":[]}}\n\n');
+        return;
+      }
       const turn = input.includes(workerRequest) ? 'worker'
         : input.includes(sideRequest) ? 'side-chat' : input.includes(parentRequest) ? 'parent' : 'other';
       requests.push(turn);
@@ -103,7 +111,7 @@ async function until(description, read, timeoutMs = 25_000) {
 
 function controls(session) {
   const cli = async (...args) => (await run('agent-browser', ['--session', session, ...args], {
-    timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+    timeout: 90_000, maxBuffer: 2 * 1024 * 1024,
   })).stdout.trim();
   const evaluate = async (fn, ...args) => JSON.parse(await cli('eval', `(${fn.toString()})(...${JSON.stringify(args)})`));
   const snapshot = () => cli('snapshot', '-i');
@@ -193,7 +201,7 @@ async function captureAppearance(ui, evidenceDir, name) {
   }
 }
 
-async function exercise(ui, baseUrl, workdir, evidenceDir) {
+async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker }) {
   const { cli, evaluate, clickControl } = ui;
   const setup = await evaluate(async ({ baseUrl, workdir, providerId, model, fakeKey, parentRequest, parentTitle }) => {
     const api = window.electronAPI;
@@ -226,9 +234,13 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
       && messages.some(message => message.role === 'assistant' && String(message.content).includes(reply)));
   }, parentId, parentReply));
 
-  await clickControl('expand sidebar', /button "(展开|Expand)" \[expanded=false/);
-  await clickControl('create side chat', /button "(新建侧边追问|New side chat)"/);
-  const side = await until('the attached side-chat tab and persisted child', () => evaluate(async id => {
+  const createFollowUp = async () => {
+    const snapshot = await ui.snapshot();
+    if (/button "(展开|Expand)" \[expanded=false/.test(snapshot)) {
+      await clickControl('expand sidebar', /button "(展开|Expand)" \[expanded=false/);
+    }
+    await clickControl('create side chat', /button "(新建侧边追问|New side chat)"/);
+    return until('the attached side-chat tab and persisted child', () => evaluate(async id => {
     const api = window.electronAPI;
     const tabs = await api.localDb.rightSidebarTabs.list({ sessionId: id });
     const tab = tabs.tabs.find(tab => tab.id === tabs.activeTabId && tab.kind === 'side-chat');
@@ -236,6 +248,19 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
     const child = await api.localDb.sessions.get(tab.state.sessionId);
     return { tabId: tab.id, id: child.id, parent: child.parentSessionId, source: child.source, sdkId: child.sdkSessionId };
   }, parentId));
+  };
+  const closeSideTab = tabId => cli('click', `[data-tab-pill="${tabId}"] button[data-no-drag]`);
+  const archiveDialog = /关闭并归档这条追问|Close and archive this follow-up/;
+  const ordinary = await createFollowUp();
+  await closeSideTab(ordinary.tabId);
+  await until('ordinary follow-up closes without a confirmation', async () => {
+    assert.doesNotMatch(await ui.snapshot(), archiveDialog);
+    return evaluate(async id => {
+      if (document.querySelector('[role="alertdialog"]')) throw new Error('Ordinary follow-up unexpectedly prompted');
+      return (await window.electronAPI.localDb.sessions.get(id)).status === 'deleted';
+    }, ordinary.id);
+  });
+  const side = await createFollowUp();
   assert.equal(side.parent, parentId);
   assert.equal(side.source, 'side-chat');
   assert.ok(side.sdkId, 'The native fork was not created');
@@ -247,7 +272,6 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   const tabSelector = id => `[data-tab-pill="${id}"]`;
   const openCollaboration = () => clickControl('view collaboration', /button "(查看协同|View collaboration)"/);
   const returnToSideChat = () => clickControl('return to side chat', /button "(回到侧边追问|Back to side chat)"/);
-  const reopenSideChat = () => clickControl('reopen the closed side chat', /button "(重新打开侧边追问|Reopen side chat)"/);
   const closeSidebar = () => clickControl('close the sidebar with its existing control', /button "(关闭侧栏|Close Sidebar)"/i);
   const readActiveSideChat = () => evaluate(async (id, childId) => {
     if (location.hash.split('?')[0] !== '#/cc-agent/' + id) return null;
@@ -354,41 +378,27 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   await until('full page opens from the left while its parent sidebar is collapsed', () => onRoute(side.id));
   await returnToSideChat();
   await until('return opens the collapsed parent sidebar and preserves its tab', async () => await readActiveSideChat() === side.tabId);
-  await cli('click', `${tabSelector(side.tabId)} button[data-no-drag]`);
-  await until('only the parent tab closes', () => evaluate(async (parentId, side, workerId) => {
-    const api = window.electronAPI;
-    if (location.hash.split('?')[0] !== '#/cc-agent/' + parentId) return false;
-    const tabs = await api.localDb.rightSidebarTabs.list({ sessionId: parentId });
-    const [worker] = await api.localDb.orcaWorkflows.listWorkersByLead(side.id);
-    return !tabs.tabs.some(tab => tab.id === side.tabId) && !document.querySelector(`[data-tab-pill="${side.tabId}"]`)
-      && !document.querySelector('[role="alertdialog"]') && worker?.sessionId === workerId
-      && (await api.localDb.sessions.get(side.id)).status === 'active';
-  }, parentId, side, worker.id));
-
-  await cli('click', rowSelector(side.id));
-  await until('independent task opens from task list', () => onRoute(side.id));
-  await until('closed side chat has a reopen action in the origin row', () => evaluate(() => {
-    const row = document.querySelector('[data-testid="linked-side-chat-origin"]');
-    return /^(重新打开侧边追问|Reopen side chat)$/.test(row?.querySelector('button')?.textContent.trim() ?? '');
-  }));
-  await captureAppearance(ui, evidenceDir, 'closed-origin');
-  await reopenSideChat();
-  const reopenedTab = await until('explicit return reopens the same follow-up', readActiveSideChat);
-  assert.notEqual(reopenedTab, side.tabId, 'The dismissed tab should be newly opened for the same task');
-  assert.equal(await evaluate(async (parent, child) => {
-    const { tabs } = await window.electronAPI.localDb.rightSidebarTabs.list({ sessionId: parent });
-    return tabs.filter(tab => tab.kind === 'side-chat' && tab.state.sessionId === child).length;
-  }, parentId, side.id), 1);
-  await until('reopened editor still has the same draft', () => evaluate((tabId, draft) =>
-    document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')
-      ?.querySelector('.tiptap[contenteditable="true"]')?.textContent.includes(draft), reopenedTab, sidebarDraft));
+  await closeSideTab(side.tabId);
+  await until('confirms archive and Worker stop', async () => {
+    const snapshot = await ui.snapshot();
+    return archiveDialog.test(snapshot) && /Worker 将停止|workers will stop/.test(await cli('snapshot'));
+  });
+  await captureAppearance(ui, evidenceDir, 'archive-running-confirm');
+  await clickControl('cancel archive', /button "(取消|Cancel)"/);
+  await until('cancel leaves the same active task, draft, and sidebar tab', async () =>
+    await readActiveSideChat() === side.tabId && await evaluate(async (id, tabId, draft) => {
+      const row = await window.electronAPI.localDb.sessions.get(id);
+      return row.status === 'active' && row.orcaRole === 'lead'
+        && document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')
+          ?.querySelector('.tiptap[contenteditable="true"]')?.textContent.includes(draft);
+    }, side.id, side.tabId, sidebarDraft));
 
   // E2E: use the existing composer action/confirmation. A linked task should
   // retain an ordinary entry after the active team ends, with the same route.
   await toggleCollaboration();
   await clickControl('confirm ending collaboration', /button "(结束协同|Stop collaboration)"/i);
   await until('the same linked task remains listed after collaboration ends', async () =>
-    await readActiveSideChat() === reopenedTab && await evaluate(async (id, selector) => {
+    await readActiveSideChat() === side.tabId && await evaluate(async (id, selector) => {
       const task = await window.electronAPI.localDb.sessions.get(id);
       return task.sideChatPromoted === true && task.orcaRole === null && task.status === 'active'
         && Boolean(document.querySelector(selector));
@@ -405,7 +415,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   await until('ended conversation opens as the same task without a reveal intent', () => evaluate(id =>
     location.hash.split('?')[0] === '#/cc-agent/' + id && !history.state?.usr?.orcaWorkersReveal, side.id));
   await returnToSideChat();
-  await until('return from the ordinary conversation preserves the side chat', async () => await readActiveSideChat() === reopenedTab);
+  await until('return from the ordinary conversation preserves the side chat', async () => await readActiveSideChat() === side.tabId);
   await startCollaboration();
   await openCollaboration();
   const restartedWorker = await until('re-enabled collaboration reveals a new worker for the same task', async () => {
@@ -414,9 +424,54 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   }, 40_000);
   assert.equal(restartedWorker.provider, providerId);
   await returnToSideChat();
-  await until('final preview remains on the re-enabled follow-up', async () => await readActiveSideChat() === reopenedTab);
-  return { parentId, sideChatId: side.id, worker, restartedWorker, stayedOnParent: true, sharedDraft: true,
-    sidebarRevealedAgain: true, reopenedTab, openedAfterEnding: true, narrowOrigin: true, returnedAfterParentCollapse: true };
+  await until('same follow-up still open after re-enabling', async () => await readActiveSideChat() === side.tabId);
+  const result = { parentId, sideChatId: side.id, worker, restartedWorker, stayedOnParent: true, sharedDraft: true,
+    sidebarRevealedAgain: true, previewTab: side.tabId, openedAfterEnding: true, narrowOrigin: true, returnedAfterParentCollapse: true };
+  if (preview) return result;
+
+  const archiveAndReadHistory = async ({ workerExpected }) => {
+    await closeSideTab((await until('active follow-up before archive', readActiveSideChat)));
+    await until('archive confirmation appears', async () => archiveDialog.test(await ui.snapshot()));
+    if (workerExpected) {
+      await captureAppearance(ui, evidenceDir, 'archive-running-confirm');
+    } else {
+      assert.doesNotMatch(await cli('snapshot'), /Worker 将停止|workers will stop/);
+      await captureAppearance(ui, evidenceDir, 'archive-ended-confirm');
+    }
+    await clickControl('confirm close and archive', /button "(关闭并归档|Close and archive)"/);
+    await until('same task is archived with history retained and active tab removed', () => evaluate(async (parentId, childId, reply) => {
+      const api = window.electronAPI;
+      const [child, parent, tabs, messages, workers] = await Promise.all([
+        api.localDb.sessions.get(childId), api.localDb.sessions.get(parentId),
+        api.localDb.rightSidebarTabs.list({ sessionId: parentId }),
+        api.localDb.messages.list(childId, { limit: 30 }), api.localDb.orcaWorkflows.listWorkersByLead(childId),
+      ]);
+      return child.status === 'archived' && child.orcaRole === null && parent.status === 'active' && !workers.length
+        && !tabs.tabs.some(tab => tab.kind === 'side-chat' && tab.state.sessionId === childId)
+        && messages.some(message => String(message.content).includes(reply));
+    }, parentId, side.id, sideReply));
+  };
+  await evaluate(async (id, prompt, workdir, model) => {
+    await window.electronAPI.maker.send(id, prompt, { agentKind: 'codex', workingDir: workdir, model, permissionMode: 'ask' }, { throwOnStartFailure: true });
+  }, restartedWorker.id, runningWorkerRequest, workdir, model);
+  await until('a real Worker turn is streaming when closed', () => heldWorker.started && !heldWorker.stopped);
+  await archiveAndReadHistory({ workerExpected: true });
+  await until('model stream disconnected by actual Worker shutdown', () => heldWorker.stopped);
+  assert.equal(await evaluate(async id => (await window.electronAPI.localDb.sessions.get(id)).status, restartedWorker.id), 'archived');
+  await evaluate(id => { location.hash = '#/cc-agent/' + id; }, side.id);
+  await until('archive page cannot reopen a side tab', () => evaluate(reply => {
+    const row = document.querySelector('[data-testid="linked-side-chat-origin"]');
+    return row && !row.querySelector('button') && document.body.innerText.includes(reply);
+  }, sideReply));
+  // Reuse the existing status endpoint for explicit restore; the archived
+  // history should open the same task, with no previous team resurrected.
+  await evaluate(async id => { await window.electronAPI.localDb.sessions.update(id, { status: 'active' }); }, side.id);
+  await clickControl('open the restored side chat', /button "(重新打开侧边追问|Reopen side chat)"/);
+  assert.notEqual(await until('restored follow-up on the same original parent', readActiveSideChat), side.tabId);
+  await archiveAndReadHistory({ workerExpected: false });
+  return { ...result, ordinaryDeletedWithoutConfirm: true, archiveCancelPreservedDraft: true,
+    runningWorkerStopped: true, archivedHistoryRetained: true, endedCollaborationArchived: true };
+
 }
 
 const evidenceDir = await mkdtemp(path.join(tmpdir(), 'cindy-sidechat-orca-e2e-'));
@@ -425,7 +480,8 @@ const sandbox = `sidechat-orca-e2e-${path.basename(evidenceDir).slice(-6).toLowe
 const profile = defaultIsolatedUserDataDir(sandbox, region);
 const workdir = path.join(evidenceDir, 'project');
 const requests = [];
-const server = modelFixture(requests);
+const heldWorker = { started: false, stopped: false };
+const server = modelFixture(requests, heldWorker);
 let connection;
 const ui = controls(sandbox);
 let startedAgentBrowser = false;
@@ -455,7 +511,7 @@ try {
   });
   await ui.cli('tab', window.tabId);
   await until('main renderer', async () => (await ui.snapshot()).includes('textbox'), 45_000);
-  const result = await exercise(ui, `http://127.0.0.1:${modelPort}/v1`, workdir, evidenceDir);
+  const result = await exercise(ui, `http://127.0.0.1:${modelPort}/v1`, workdir, evidenceDir, { preview, heldWorker });
   assert.ok(requests.includes('parent') && requests.includes('worker'), 'Both tasks must use the loopback-only fixture');
   const recordedModels = await until('recorded local model usage', async () => {
     const models = await ui.evaluate(async () => {
@@ -468,7 +524,7 @@ try {
   await writeFile(path.join(evidenceDir, 'result.json'), JSON.stringify({ ...result, requests, recordedModels, desktopPid: pid }, null, 2));
   if (preview) {
     await ui.cli('set', 'media', 'light');
-    console.log(`PREVIEW_READY pid=${pid} cdpPort=${port} modelPort=${modelPort} parent=${result.parentId} child=${result.sideChatId} tab=${result.reopenedTab}`);
+    console.log(`PREVIEW_READY pid=${pid} cdpPort=${port} modelPort=${modelPort} parent=${result.parentId} child=${result.sideChatId} tab=${result.previewTab}`);
     console.log(`REPORT=${evidenceDir}`);
     await new Promise(resolve => {
       connection.browser.once('disconnected', resolve);
@@ -500,7 +556,9 @@ try {
     process.exitCode = 1;
   }
   if (!process.exitCode) {
-    console.log('PASS The linked follow-up stays in the parent and can open, reveal and return to the same task.');
+    console.log(preview
+      ? 'PASS Linked follow-up navigation and preview.'
+      : 'PASS Follow-up navigation, archive confirmation, Worker shutdown and retained history.');
   }
   console.log(`REPORT=${evidenceDir}`);
 }

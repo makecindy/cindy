@@ -1993,6 +1993,33 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // Integration: hold the display projection back and settle both write orders
+  // through the production DB worker, including its inline fallback.
+  it.each([false, true])('guards follow-up deletion against a Worker commit (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'parent');
+      for (const id of ['worker-wins', 'delete-wins']) {
+        await seedSession(client, id, { source: 'side-chat', parentSessionId: 'parent' });
+        await seedSession(client, id + '-worker');
+        await client.exec("INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, 'active', 1, 1)", [id, id]);
+      }
+      const createWorker = (id: string) => client.tx('orca.upsertWorker', {
+        id: id + '-worker', teamId: id, sessionId: id + '-worker', label: 'review', now: 2,
+      });
+      const closeSideChat = (sessionId: string) => client.tx('sessions.setTerminalStatus', {
+        sessionId, status: 'deleted', deleteTarget: 'side-chat',
+      });
+      await createWorker('worker-wins');
+      await expect(closeSideChat('worker-wins')).rejects.toThrow('collaboration is being linked');
+      await closeSideChat('delete-wins');
+      await expect(createWorker('delete-wins')).rejects.toThrow('no longer active');
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'deleted' });
+      expect(await client.queryOne("SELECT status, side_chat_promoted FROM sessions WHERE id = 'worker-wins'"))
+        .toEqual({ status: 'active', side_chat_promoted: 0 });
+      expect(await client.query("SELECT session_id FROM orca_workers")).toEqual([{ session_id: 'worker-wins-worker' }]);
+    }, { useInlineWorker });
+  });
+
   it('rewind.commit follows transcript parent links and preserves the prior assistant when timestamps are inverted', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

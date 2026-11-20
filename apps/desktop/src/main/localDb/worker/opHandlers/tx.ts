@@ -11,7 +11,7 @@ import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
-import { assertSessionDeleteTarget } from '../../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../../sessionDeleteTarget.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
@@ -2266,7 +2266,11 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
       | { id: string; status: string; source: string; sideChatPromoted: number } | undefined;
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
-    if (status === 'deleted') assertSessionDeleteTarget(existing, payload.deleteTarget);
+    if (status === 'deleted') {
+      const hasCommittedWorker = existing.source === 'side-chat' && !existing.sideChatPromoted
+        && Boolean(db.prepare(`SELECT id FROM sessions WHERE id = ? AND ${COMMITTED_SIDE_CHAT_WORKER_SQL}`).get(sessionId));
+      assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
+    }
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
@@ -2285,6 +2289,7 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
           WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted'
+            AND NOT ${COMMITTED_SIDE_CHAT_WORKER_SQL}
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
@@ -3506,7 +3511,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
   const now = expectNumber(payload.now, 'now');
   db.transaction(() => {
     const activeTeam = db.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
+      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = orca_teams.lead_session_id AND source = 'side-chat' AND status <> 'active') LIMIT 1",
     ).get(teamId);
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);

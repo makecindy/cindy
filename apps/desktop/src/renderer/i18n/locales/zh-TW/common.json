@@ -16041,9 +16041,10 @@
       "mainTaskOnly": "請從主任務開啟側邊追問。",
       "sharedTaskUnavailable": "共享任務不支援側邊追問",
       "archivedTask": "請先取消歸檔，再開啟側邊追問",
-      "closeTitle": "關閉側邊追問？",
-      "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
-      "closeConfirm": "關閉並刪除",
+      "closeTitle": "關閉並封存這則追問？",
+      "closeDescription": "左側任務清單中的這則追問也會封存。",
+      "closeDescriptionRunning": "左側任務清單中的這則追問也會封存，協作 Worker 將停止。",
+      "closeConfirm": "關閉並封存",
       "closeFailed": "刪除追問失敗，請稍後重試。"
     },
     "botStartedTasks": {

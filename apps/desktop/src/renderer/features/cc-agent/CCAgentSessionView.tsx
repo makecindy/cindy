@@ -6179,6 +6179,7 @@ function CCAgentSessionContent({
             parentId={session.parentSessionId ?? null}
             deviceId={originDeviceId}
             parentAccessAvailable={originAccessAvailable}
+            archived={session.status !== 'active'}
           />
         )}
         {showOrcaLeadIdentityBar && (

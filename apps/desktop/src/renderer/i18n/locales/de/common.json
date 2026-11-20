@@ -16078,9 +16078,10 @@
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
-      "closeTitle": "Nebenchat schließen?",
-      "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
-      "closeConfirm": "Schließen und löschen",
+      "closeTitle": "Diese Nachfrage schließen und archivieren?",
+      "closeDescription": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert.",
+      "closeDescriptionRunning": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert und ihre Worker werden angehalten.",
+      "closeConfirm": "Schließen und archivieren",
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {

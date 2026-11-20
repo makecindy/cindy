@@ -1479,7 +1479,7 @@ import {
 import {
   refreshActiveModelContextSettings,
 } from './runtimeSetModel.js';
-import { patchSessionMetaInDb, updateSessionInDb } from '../localDb/ipc/sessions.js';
+import { patchSessionMetaInDb, setSideChatArchiveCleanup, updateSessionInDb } from '../localDb/ipc/sessions.js';
 import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
@@ -15638,7 +15638,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    *   - SESSION_DISABLE_ORCA IPC handler (renderer 手动 toggle)
    *   - cindy_helper end_team MCP tool (Lead agent 自动调)
    */
-  async function disableOrcaInternal(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<{ ok: true }> {
+  async function disableOrcaInternal(leadSessionId: string, assertCurrent?: () => Promise<void>,
+    requireWorkerClosed = false): Promise<{ ok: true }> {
     const team = await getActiveTeamByLead(leadSessionId);
     await assertCurrent?.();
     if (!team) {
@@ -15705,6 +15706,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         try {
           await maker.closeSession(w.sessionId);
         } catch (err) {
+          if (requireWorkerClosed) throw err;
           log.warn('disableOrca: closeSession failed', {
             sessionId: w.sessionId,
             err: err instanceof Error ? err.message : String(err),
@@ -15746,6 +15748,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
     return disableOrcaInternal(leadSessionId);
+  });
+
+  setSideChatArchiveCleanup(async (sessionId, assertCurrent) => {
+    await disableOrcaInternal(sessionId, assertCurrent, true);
+    await assertCurrent();
+    await maker.closeSession(sessionId);
+    broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId: sessionId });
   });
 
   // Local-only reads: intentionally absent from the device-link allowlist.

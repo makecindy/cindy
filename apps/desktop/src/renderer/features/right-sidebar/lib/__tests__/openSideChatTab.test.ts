@@ -210,16 +210,30 @@ describe('side chat task entry', () => {
   // Unit: the ordinary page must reopen the same hosted child on its parent,
   // even when no renderer-local tab survives from the first visit.
   it.each([null, 'execution-host'])('returns to the same parent and reuses the child on %s', async deviceId => {
-    mocks.readBatch.mockResolvedValue([{ sessionId: 'parent', value: { id: 'parent', status: 'active' } }]);
+    mocks.readBatch.mockResolvedValue([
+      { sessionId: 'parent', value: { id: 'parent', status: 'active' } },
+      { sessionId: 'child', value: { id: 'child', status: 'active', sideChatPromoted: true, parentSessionId: 'parent' } },
+    ]);
     const navigate = vi.fn();
     await reopenLinkedSideChat('parent', 'child', deviceId, navigate);
     await reopenLinkedSideChat('parent', 'child', deviceId, navigate);
     expect(mocks.tabs).toEqual([{ id: 'tab-0', kind: 'side-chat', state: { sessionId: 'child', deviceId } }]);
     expect(mocks.activate).toHaveBeenCalledWith('parent', 'tab-0');
     expect(mocks.create).not.toHaveBeenCalled();
-    expect(mocks.readBatch).toHaveBeenCalledWith(['parent'], deviceId ?? undefined);
+    expect(mocks.readBatch).toHaveBeenCalledWith(['parent', 'child'], deviceId ?? undefined);
     expect(mocks.reveal).toHaveBeenCalledWith('open', { sessionId: 'parent', userInitiated: false });
     expect(navigate).toHaveBeenLastCalledWith(deviceId ? '/cc-agent/parent?device=execution-host' : '/cc-agent/parent');
+  });
+
+  it('does not recreate a tag for the archived task', async () => {
+    mocks.readBatch.mockResolvedValue([
+      { value: { id: 'parent', status: 'active' } },
+      { value: { id: 'child', status: 'archived', sideChatPromoted: true, parentSessionId: 'parent' } },
+    ]);
+    const navigate = vi.fn();
+    await expect(reopenLinkedSideChat('parent', 'child', null, navigate)).rejects.toThrow('no longer active');
+    expect(mocks.add).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('does not duplicate a detached window tab when the main window has an empty projection', async () => {
