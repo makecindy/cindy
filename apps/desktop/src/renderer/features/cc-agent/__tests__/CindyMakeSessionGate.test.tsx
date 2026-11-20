@@ -18,7 +18,9 @@ const state = vi.hoisted(() => ({
   origins: new Map<string, string>(),
   readCurrent: true,
 }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: {
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: (id: string) => state.origins.get(id),
+  remoteProjectsStore: {
   subscribe: () => () => {}, getMergedRemoteSessions: () => state.remote,
   getCreationPreview: (id: string) => id === state.previewId ? {} : undefined,
   getSessionDeviceId: (id: string) => state.origins.get(id),
@@ -76,6 +78,14 @@ describe('remote task route origin', () => {
     state.previewId = 'child';
     await act(async () => { mountRoute('/cc-agent/child'); });
     expect(screen.getByText('Remote composer')).toBeTruthy();
+    expect(state.getSession).not.toHaveBeenCalled();
+  });
+
+  it('does not mount an explicitly local composer on a cached remote origin', async () => {
+    state.origins.set('child', 'other');
+    await act(async () => { mountRoute('/cc-agent/child?device=local'); });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.queryByText('Remote composer')).toBeNull();
     expect(state.getSession).not.toHaveBeenCalled();
   });
 

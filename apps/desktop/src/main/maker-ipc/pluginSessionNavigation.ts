@@ -1,4 +1,5 @@
 import type { InvokeResultPayload } from '@cindy/device-link';
+import { extractIpcError } from '../../shared/ipcError.js';
 
 interface NavigationPorts {
   selfDeviceId(): string | null;
@@ -31,7 +32,11 @@ export async function openPluginSession(
       throw new Error('REMOTE_UNAVAILABLE');
     });
     assertCurrent();
-    if (!reply.ok) throw new Error('REMOTE_UNAVAILABLE');
+    if (!reply.ok) {
+      const missing = reply.error.code === 'IPC_ERROR'
+        && extractIpcError(new Error(reply.error.message))?.code === 'NOT_FOUND';
+      throw new Error(missing ? 'TARGET_UNAVAILABLE' : 'REMOTE_UNAVAILABLE');
+    }
     value = reply.result;
   }
   assertCurrent();
@@ -40,5 +45,5 @@ export async function openPluginSession(
     || row.hiddenAt != null || row.orcaRole === 'worker' || row.source === 'bot' || row.source === 'review' || row.companion) {
     throw new Error('TARGET_UNAVAILABLE');
   }
-  ports.navigate(sessionId, deviceId);
+  ports.navigate(sessionId, deviceId ?? 'local');
 }
