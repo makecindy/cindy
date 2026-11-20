@@ -6,10 +6,11 @@ import {
   accountVaultKey,
   AuthApiError,
   parseAuthSessionRecord,
+  passportVaultKey,
   retryAfterDeadline,
   serializeAuthSessionRecord,
 } from '@cindy/auth-client';
-import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
+import { runRefreshWithReplacementRetry, resolveSessionExpiredReason } from '../authRefreshFailure';
 import {
   applyRefreshedCredentialsToVault,
   AUTH_ACCOUNT_VAULT_VERSION,
@@ -47,6 +48,7 @@ const source = ts.createSourceFile(
 );
 const names = new Set([
   'apiFetch',
+  'recoverActiveResourceSession',
   'commitDesktopRefreshCredentials',
   'initialize',
   'receiveHostAuthState',
@@ -83,6 +85,7 @@ let foreignDeviceLocalSignOut = false;
 let refreshPromise = null, sessionInvalidationPromise = null;
 let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
+const uncertainResourceRefreshTokens = new Map();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
 const AUTH_REGION = 'global';
@@ -127,6 +130,7 @@ return {
     vault.activeAccountKey = '["global","other"]';
     vault.resources['["global","other"]'] = { realm: 'global', refreshToken: 'other-refresh' };
   },
+  cancelRecovery: () => { loginFlowEpoch++; },
   stop: stopColdStartRecovery,
   renewSavedAccount: (input) => refreshSavedResourceSession({ ...input, expectedLoginFlowEpoch: loginFlowEpoch }),
   logoutForTest: () => { stopColdStartRecovery(); authStateEpoch++; saved.session = null;
@@ -163,12 +167,17 @@ function setup(random = 0) {
   const clear = vi.fn(async () => {
     saved.session.refreshToken = '';
   });
+  const authClient = { discover: vi.fn(), exchangeAccountMembership: vi.fn(async () => ok.data) };
   const deps = {
     saved,
     vault,
     onStartupFallback: vi.fn(),
     transactAuthAccountVault: transaction,
     accountVaultKey,
+    passportVaultKey,
+    isLoggedOutVaultAccount: (value: any, key: string) => loggedOutAccountKeySet(value).has(key),
+    refreshPassportSessionSingleFlight: vi.fn(async () => ({ accountToken: "test-passport-access" })),
+    expireRuntimeAuth: vi.fn(async () => { saved.session = null; vault.activeAccountKey = null; }),
     applyRefreshedCredentialsToVault,
     writeResourceSessionToVault,
     isDefinitiveRefreshError,
@@ -201,16 +210,17 @@ function setup(random = 0) {
     ownerChangeShellGate: { isPending: () => false },
     sealedLoginFlowCommitDepths: new Set(),
     runRefreshWithReplacementRetry,
+    resolveSessionExpiredReason,
     loginPreparingErrorState,
     requestAuthRefresh: request,
     loadClientEndpointsForRealm: vi.fn(async () => {}),
     loadLoginProviders: loadProviders,
-    createAuthClient: () => ({ discover: vi.fn() }),
+    createAuthClient: () => authClient,
     log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     readActiveVaultRefreshCandidate: () => null,
     clearConfirmedDeadRefreshTokens: clear,
     resetActiveAuthRealmToBuild: vi.fn(),
-    isPassiveSharedUserDataInstance: () => false,
+    isPassiveSharedUserDataInstance: vi.fn(() => false),
     canRestoreAuthSessionForMembership: () => true,
     getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
     withCloudOwnerCommit: async (options: any) => {
@@ -240,7 +250,7 @@ function setup(random = 0) {
     notifyAuthListeners: vi.fn(),
   };
   const main = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
-  return { ...main, saved, vault, request, ok, transaction, clear, loadProviders, deps };
+  return { ...main, saved, vault, request, ok, transaction, clear, loadProviders, deps, authClient };
 }
 
 describe('saved login recovery after startup network failure', () => {
@@ -967,4 +977,154 @@ return { readAuthAccountVault, writeAuthAccountVault, emptyAuthAccountVault, wri
       [account.accountKey, account.isCurrent])).toEqual(accountsBefore.map((account: { accountKey: string; isCurrent: boolean }) =>
       [account.accountKey, account.isCurrent]));
   });
+});
+
+// #8694, unit: real refresh orchestration + commit with memory ports. Existing
+// startup/backoff tests never exercised INVALID after a lost rotation response.
+// Minimal failure: status=0, then INVALID with the same active Resource/Passport.
+// Reuse the file-level production-function harness; no extra eval or real waits.
+describe('active Passport recovery after an uncertain Resource rotation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function recoverySetup() {
+    const h = setup();
+    h.activateRuntime();
+    h.vault.resources[ORIGINAL_KEY].metadata = {
+      membershipId: 'original',
+      passportId: 'passport-original',
+      kind: 'personal',
+    };
+    h.vault.passports = {
+      [passportVaultKey('global', 'passport-original')]: { passportId: 'passport-original' },
+    };
+    const exchange = h.authClient.exchangeAccountMembership;
+    return { h, exchange };
+  }
+
+  async function rejectAfterLoss(h: ReturnType<typeof setup>) {
+    await h.runtimeRefresh();
+    h.request.mockResolvedValue({
+      ok: false,
+      status: 401,
+      data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+    });
+    await vi.advanceTimersByTimeAsync(61_250);
+  }
+
+  it('restores and persists the original account instead of expiring a recoverable login', async () => {
+    const { h, exchange } = recoverySetup();
+    await rejectAfterLoss(h);
+    expect(exchange).toHaveBeenCalledWith('test-passport-access', 'original');
+    expect(h.saved.session?.refreshToken).toBe('test-rotated');
+    expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('keeps the account when the add-account lifecycle cancels recovery (rejected=%s)', async rejected => {
+    const { h, exchange } = recoverySetup();
+    h.deps.refreshPassportSessionSingleFlight.mockImplementationOnce(async () => {
+      h.cancelRecovery();
+      if (rejected) throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'rejected');
+      return { accountToken: 'test-passport-access' };
+    });
+    await rejectAfterLoss(h);
+    expect(exchange).not.toHaveBeenCalled();
+    expect(h.saved.session?.refreshToken).toBe('test-refresh');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    expect(h.backoff.remaining(0)).toBeGreaterThan(0);
+  });
+
+  it('honors the Passport recovery server cooldown without expiring or re-requesting', async () => {
+    const { h, exchange } = recoverySetup();
+    h.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(
+      new AuthApiError('AUTH_REQUEST_FAILED', 503, 'busy', Date.now() + 600_000),
+    );
+    await rejectAfterLoss(h);
+    expect(exchange).not.toHaveBeenCalled();
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    const count = h.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(500_000);
+    expect(h.request).toHaveBeenCalledTimes(count);
+    expect(h.saved.session?.refreshToken).toBe('test-refresh');
+  });
+
+  it('recovers the saved active account during cold-start retries too', async () => {
+    const { h } = recoverySetup();
+    const fresh = setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    void fresh.start();
+    await vi.advanceTimersByTimeAsync(1);
+    fresh.request.mockResolvedValue({
+      ok: false,
+      status: 401,
+      data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+    });
+    await vi.advanceTimersByTimeAsync(61_250);
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(fresh.clear).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a vault generation advanced during membership exchange', async () => {
+    const { h, exchange } = recoverySetup();
+    exchange.mockImplementationOnce(async () => {
+      h.vault.resources[ORIGINAL_KEY].refreshToken = 'test-newer-generation';
+      return h.ok.data;
+    });
+    await rejectAfterLoss(h);
+    expect(h.vault.resources[ORIGINAL_KEY].refreshToken).toBe('test-newer-generation');
+    expect(h.saved.session?.refreshToken).toBe('test-refresh');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(['logout', 'switch'])('does not reactivate the original account after %s during exchange', async action => {
+    const { h, exchange } = recoverySetup();
+    exchange.mockImplementationOnce(async () => {
+      if (action === 'logout') h.logoutForTest();
+      else h.changeOwner();
+      return h.ok.data;
+    });
+    await rejectAfterLoss(h);
+    if (action === 'logout') {
+      expect(h.saved.session).toBeNull();
+      expect(h.vault.resources[ORIGINAL_KEY]).toBeUndefined();
+    } else {
+      expect(h.saved.session?.refreshToken).toBe('other-refresh');
+      expect(h.vault.activeAccountKey).toBe(accountVaultKey('global', 'other'));
+      expect(h.vault.resources[ORIGINAL_KEY].refreshToken).toBe('test-rotated');
+    }
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(['passive', 'tombstone', 'missing-passport'])('does not recover an ineligible %s account', async condition => {
+    const { h, exchange } = recoverySetup();
+    if (condition === 'passive') h.deps.isPassiveSharedUserDataInstance.mockReturnValue(true);
+    // The captured port remains stable; configure its mock before runtime admission.
+    if (condition === 'tombstone') h.vault.loggedOutAccountKeys = [ORIGINAL_KEY];
+    if (condition === 'missing-passport') h.vault.passports = {};
+    await rejectAfterLoss(h);
+    expect(exchange).not.toHaveBeenCalled();
+    expect(h.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
+  });
+
+  it.each(['INVALID_REFRESH_TOKEN', 'MEMBERSHIP_DISABLED', 'DEVICE_MISMATCH'])(
+    'does not use Passport to override a fresh %s rejection',
+    async (code) => {
+      const { h, exchange } = recoverySetup();
+      h.request.mockResolvedValue({ ok: false, status: 401, data: { error: { code } } });
+      const pending = h.runtimeRefresh();
+      await vi.advanceTimersByTimeAsync(1_250);
+      await pending;
+      expect(exchange).not.toHaveBeenCalled();
+      expect(h.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
+      expect(h.deps.expireRuntimeAuth).toHaveBeenCalled();
+    },
+  );
 });
