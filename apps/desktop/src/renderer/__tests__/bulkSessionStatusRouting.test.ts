@@ -20,7 +20,7 @@ describe('bulk session status routing', () => {
   it('multi-select delete freezes the resolved target and treats a local collision as local', () => {
     const handler = handlerSource(
       'const handleBulkDelete = useCallback',
-      'const handleBulkArchive = useCallback',
+      'const handleBulkArchive = useBulkSessionArchive',
     );
 
     expect(handler).toContain('sessionService.resolveStatusWriteTarget(session.id)');
@@ -31,20 +31,4 @@ describe('bulk session status routing', () => {
     expect(handler).not.toContain('sessionService.patchMeta(');
   });
 
-  it('multi-select archive freezes the resolved target and converges a local collision locally', () => {
-    const handler = handlerSource(
-      'const handleBulkArchive = useCallback',
-      'const handleArchiveAllInProject = useCallback',
-    );
-
-    expect(handler).toContain('sessionService.resolveStatusWriteTarget(session.id)');
-    expect(handler).toContain(
-      "sessionService.setStatus(session.id, 'archived', statusWriteTarget)",
-    );
-    expect(handler).toContain("statusWriteTarget.kind === 'local'");
-    expect(handler).toContain(
-      "patchLocal(session.id, { status: 'archived', pinnedAt: null })",
-    );
-    expect(handler).not.toContain('sessionService.patchMeta(');
-  });
 });

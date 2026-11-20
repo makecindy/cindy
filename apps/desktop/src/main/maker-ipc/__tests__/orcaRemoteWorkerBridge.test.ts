@@ -237,10 +237,14 @@ describe('cross-device Worker bridge', () => {
     'routes %s to the same owning Lead',
     async (tool) => {
       const s = setup();
-      const result = await s.executionProvider.invokeTool(s.ctx, tool, { worker_id: 'worker-1' });
+      const result = await s.executionProvider.invokeTool(s.ctx, tool, {
+        worker_id: 'worker-1',
+        ...(tool === 'read_lead_history' ? { order: 'desc', limit: 8 } : {}),
+      });
       expect(json(result)).toMatchObject({ worker_id: 'worker-1', lead_session_id: 'lead-1' });
-      if (tool === 'read_lead_history')
-        expect(json(result).messages[0].content).toBe('Lead context');
+      if (tool === 'read_lead_history') {
+        expect(json(result)).toMatchObject({ order: 'desc', messages: [{ content: 'Lead context' }] });
+      }
       expect(s.dispatch).not.toHaveBeenCalled();
       expect(s.settled).not.toHaveBeenCalled();
     },

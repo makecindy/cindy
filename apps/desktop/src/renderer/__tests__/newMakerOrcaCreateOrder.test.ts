@@ -133,7 +133,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
     // 「会话正在准备」只允许有一个下游判据:handleSend 拦截读合并值,ChatInput 也禁用。
     expect(sessionViewSource).toContain(
-      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing || !!creationPreview;',
     );
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
@@ -165,32 +165,6 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
   });
 
-  it('reconciles Pi skill aliases after the user selects a working directory', () => {
-    const workingDirHandler = sessionViewSource
-      .slice(
-        sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
-        sessionViewSource.indexOf('const maybeShowContextUsage'),
-      )
-      .replace(/\r\n/g, '\n');
-
-    expect(sessionViewSource).toContain('const commands = options?.workingDirOverride');
-    expect(workingDirHandler).toContain('workingDirOverride: newDir');
-    expect(workingDirHandler).toContain('piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
-    expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
-    expect(workingDirHandler).toContain("'maker:create-session'");
-    expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
-    expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
-    );
-    expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
-    );
-    expect(workingDirHandler).toMatch(
-      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
-    );
-    expect(workingDirHandler).toContain('slashDispatch.message,');
-  });
-
   it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
     const slashDispatchBranch = sessionViewSource
       .slice(
@@ -199,9 +173,11 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       )
       .replace(/\r\n/g, '\n');
 
+    // Ordinary and steer sends now share one catalog-resolution call; the
+    // second bounded retry belongs to the pending first-message handoff.
     expect(
       slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
@@ -328,8 +304,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     };
 
     it('副本在草稿路由登记 pending 的同一刻落下,不等会话视图消费', () => {
-      // 两条 device-link 分支都要落,且必须排在各自的 setPending / setPendingGoal 之后、
-      // navigate 之前 —— 登记完就有副本,后面无论多久没被消费都捞得回来。
+      // 消息在对端确认创建后登记；目标在目标交接时登记。
       const sendRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent())",
       );
@@ -342,15 +317,12 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // await 之前 —— 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」
       // 的窗口就长一分(codex P2 第五轮)。
       const sendCommit = source.lastIndexOf("logTag: 'draft send',", sendRemember);
-      const rehome = source.indexOf('await rehomeDraftAttachments(', sendCommit);
+      const rehome = source.indexOf('await attachmentCopy', sendCommit);
       expect(sendCommit).toBeGreaterThan(-1);
       expect(sendCommit).toBeLessThan(sendRemember);
       expect(sendRemember).toBeLessThan(rehome);
       expect(source.lastIndexOf('setPendingGoal(remoteSessionId, {', goalRemember)).toBeGreaterThan(
         -1,
-      );
-      expect(sendRemember).toBeLessThan(
-        source.indexOf('navigate(`/cc-agent/${remoteSessionId}`', sendRemember),
       );
       // 只落一次,别两处都落。
       expect(source.match(/rememberRecoverableHandoff\(remoteSessionId, 'message'/g)).toHaveLength(

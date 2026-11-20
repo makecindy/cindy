@@ -41,7 +41,7 @@ mountPage({
       ))}
       <span>SendButton</span>
       <SendButton disabled={false} onClick={() => {}} />
-      <span data-send-sample="hover" className="inline-flex"><style>{'[data-send-sample="hover"] button{background:var(--send-btn-hover-bg)!important}[data-send-sample="pressed"] button{background:var(--send-btn-pressed-bg)!important}'}</style><SendButton disabled={false} onClick={() => {}} /></span>
+      <span data-send-sample="hover" className="inline-flex"><style>{'[data-send-sample="hover"] .composer-send-face{background:var(--send-btn-hover-bg)!important}[data-send-sample="pressed"] .composer-send-face{background:var(--send-btn-pressed-bg)!important}'}</style><SendButton disabled={false} onClick={() => {}} /></span>
       <span data-send-sample="pressed" className="inline-flex"><SendButton disabled={false} onClick={() => {}} /></span>
       <span data-pointer="send" className="inline-flex"><SendButton disabled={false} onClick={() => {}} /></span>
     </div>

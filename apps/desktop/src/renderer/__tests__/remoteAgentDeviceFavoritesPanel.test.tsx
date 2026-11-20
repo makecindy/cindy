@@ -160,6 +160,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import {
@@ -373,6 +374,68 @@ describe('本机任务:收藏另一台电脑上的模型', () => {
     expect(within(favoritesGroup()).getByText('C Model')).toBeTruthy();
     expect(within(list()).queryByText('gone-model')).toBeNull();
     expect(listModelFavorites()).toHaveLength(2);
+  });
+});
+
+// §1.2 模型选择器（2026-11-18）：本机连接断开且另一台有相同来源时，
+// unit 经 ModelSelectorContent 验证点选前可读原因、浏览不移动、点击即选那台。
+// 以一个本机断开的来源和 Studio 的同一份覆盖可用来源与直接分享用例之外的分支。
+describe('本机这份用不了：可明确选择另一台电脑上的同一供应商', () => {
+  const askDevices = [...devices, { deviceId: 'share:one', name: 'one' }];
+  const copyOf = (local: object) => ({ ...local, connected: true, remoteInvocationEnabled: true });
+  beforeEach(() => {
+    const local = catalogs.local[0] as object;
+    const studio = catalogs.byDevice['device-c'];
+    const shared = catalogs.byDevice['share:one'];
+    catalogs.local[0] = { ...local, connected: false };
+    catalogs.byDevice['device-c'] = [...studio!, copyOf(local)];
+    catalogs.byDevice['share:one'] = [copyOf(local)];
+    onTestFinished(() => {
+      catalogs.local[0] = local;
+      catalogs.byDevice['device-c'] = studio!;
+      if (shared) catalogs.byDevice['share:one'] = shared; else delete catalogs.byDevice['share:one'];
+    });
+  });
+  const renderPicker = () => {
+    const onUnifiedSelect = vi.fn(async (_selection: { agentDevice?: unknown }) => true);
+    render(
+      <ConfirmDialogProvider>
+        <ModelSelectorContent
+          modelId="a-model" effort="high" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+          currentProviderId="a-local" onProviderChange={vi.fn()} vendorKey="cc"
+          onUnifiedSelect={onUnifiedSelect} remoteAgent={{ devices: askDevices, selectedDeviceId: null }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    return onUnifiedSelect;
+  };
+  const pick = async (rail: string, model: string) => {
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    await act(async () => fireEvent.click(rowOf(list(), model)));
+  };
+
+  it('浏览时显示本机不可用原因，点击直接选择 Studio', async () => {
+    const onUnifiedSelect = renderPicker();
+    await act(async () => fireEvent.click(document.querySelector('[data-rail-item="remote:device-c:a-local"]')!));
+    const row = rowOf(list(), 'A Model');
+    expect(within(row).getByText('newChat.modelSelector.discoveredCopy.unavailableHere')).toBeTruthy();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(row));
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onUnifiedSelect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      providerId: 'a-local', modelId: 'a-model', agentDevice: { deviceId: 'device-c', name: 'Studio' },
+    }));
+  });
+
+  it('分享的同一供应商、只有那台电脑才有的供应商：直接用，不问', async () => {
+    const onUnifiedSelect = renderPicker();
+    await pick('remote:share:one:a-local', 'A Model');
+    await pick('remote:device-c:c-open', 'C Model');
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onUnifiedSelect.mock.calls.map(([selection]) => selection.agentDevice)).toEqual([
+      { deviceId: 'share:one', name: 'one' },
+      { deviceId: 'device-c', name: 'Studio' },
+    ]);
   });
 });
 

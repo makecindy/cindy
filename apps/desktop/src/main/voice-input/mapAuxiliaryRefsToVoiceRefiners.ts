@@ -50,6 +50,7 @@ function isActiveCatalogVoiceRoute(route: CatalogModelPinRoute): boolean {
 export function isActiveCatalogVoiceRefinerProfile(
   profile: Pick<VoiceInputRefinerProfile, 'id'>,
 ): boolean {
+  if (profile.id.startsWith('remote-cat:')) return false;
   if (!profile.id.startsWith(CATALOG_MODEL_PIN_PREFIX)) return true;
   const route = decodeCatalogModelPin(profile.id);
   return Boolean(route && isActiveCatalogVoiceRoute(route));

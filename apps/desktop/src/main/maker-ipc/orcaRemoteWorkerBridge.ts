@@ -158,6 +158,11 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       ) {
         throwIpcError('PERMISSION_DENIED', 'remote worker does not belong to this active team');
       }
+      // 插件引擎 Worker 只在本机创建(docs/plans/acp-plugin-bridge.md)，不会经另一台电脑回报。
+      const workerAgentKind = worker.session.agentKind;
+      if (workerAgentKind === 'acp') {
+        throwIpcError('PERMISSION_DENIED', 'plugin engine workers run on this computer only');
+      }
       // The model cannot supply a local context or select an arbitrary Lead. Reuse local
       // schemas, sender labels, dispatch/queue semantics and manual-report settlement.
       const settle =
@@ -171,7 +176,7 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       const send = (reportClientId?: string, onReportRejected?: () => void) => deps.invokeTool(
         {
           sessionId: worker.sessionId,
-          agentKind: worker.session.agentKind,
+          agentKind: workerAgentKind,
           workingDir: '',
           mcpCallerAttested: true,
           mcpCallerKind: 'root',

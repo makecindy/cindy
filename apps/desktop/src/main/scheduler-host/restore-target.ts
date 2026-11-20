@@ -14,7 +14,8 @@ export function isManagedScheduledTarget(target: ScheduledTargetLifecycle): bool
 }
 
 /** Scheduled input uses the ordinary restore boundary, including its managed-task
- * exclusions and multi-device status broadcast. Never archive again after a run. */
+ * exclusions and multi-device status broadcast. Only a quiet round re-archives the task,
+ * outside this restorer (quietRunArchive.ts). */
 export function createScheduledTargetRestorer(runtime: {
   getSessionRowSnapshotStrict: typeof import('../localDb/sessionDispatchSnapshot').getSessionRowSnapshotStrict;
   restoreArchivedSessionForSend: typeof import('../localDb/ipc/sessions').restoreArchivedSessionForSend;

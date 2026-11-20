@@ -32,6 +32,44 @@ describe('createOwnerEnsureCoordinator', () => {
     expect(ensure).toHaveBeenCalledOnce();
   });
 
+  // #9555 / unit: the same queued readiness entry must reject an old recovery
+  // generation before touching a DB, including an owner change during preflight.
+  it('fences explicit recovery across same-owner generations and keeps ordinary readiness passive', async () => {
+    let generation = 1;
+    const preflight = deferred<void>();
+    const ensure = vi.fn(async () => ({ ready: true as const }));
+    const prepare = vi.fn(async (_id, recovery) => { if (recovery) await preflight.promise; });
+    const run = createOwnerEnsureCoordinator({
+      isOwnerCurrent: (id, recovery) => id === 'owner-a' && (!recovery || recovery.ownerGeneration === generation),
+      beforeEnsureReady: prepare, ensureReady: ensure, discardReadyOwner: vi.fn(),
+    });
+    const recovery = run('owner-a', { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+    generation = 2;
+    const queuedOld = run('owner-a', { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    const passive = run('owner-a');
+    preflight.resolve();
+    await expect(recovery).resolves.toMatchObject({ ready: false });
+    await expect(queuedOld).resolves.toMatchObject({ ready: false });
+    await expect(passive).resolves.toEqual({ ready: true });
+    expect(ensure).toHaveBeenCalledOnce();
+    expect(prepare.mock.calls).toEqual([
+      ['owner-a', { dataOwnerId: 'owner-a', ownerGeneration: 1 }], ['owner-a', undefined],
+    ]);
+  });
+
+  it.each([false, true])('keeps a corrupt client quarantined when the ready hook encounters corruption (wrapped=%s)', async wrapped => {
+    const discard = vi.fn();
+    const run = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true, ensureReady: async () => ({ ready: true }),
+      getCorruptionError: () => wrapped ? Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' }) : null,
+      onReady: () => { throw wrapped ? new Error('Drizzle query failed') : Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' }); },
+      discardReadyOwner: discard,
+    });
+    await expect(run('owner-a')).resolves.toMatchObject({ ready: false, error: { code: 'DB_RUNTIME_CORRUPT' } });
+    expect(discard).not.toHaveBeenCalled();
+  });
+
   it('drops an owner superseded while its preflight is pending', async () => {
     let activeOwner = 'cloud-a';
     const preflightA = deferred<void>();

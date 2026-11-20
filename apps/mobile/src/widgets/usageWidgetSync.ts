@@ -31,25 +31,72 @@ const native = requireOptionalNativeModule<{
   readSnapshot(): string | null;
   clearSnapshot(): void;
   readPinnedDeviceIds(): string[];
+  /** iOS binaries with background refresh (`UsageWidgetBackgroundRefresh.swift`). */
+  finishBackgroundRefresh?(success: boolean): Promise<void>;
+  addListener?(event: 'onBackgroundRefresh', listener: () => void): { remove(): void };
 }>('CindyUsageWidgets');
 
 export const usageWidgetsSupported = native !== null;
 
+/**
+ * Runs `refresh` each time iOS grants the app background time for the widgets (it asks for it
+ * while a widget is placed), and tells iOS when it is done. Android and binaries without the
+ * native support never call it.
+ */
+export function onUsageWidgetBackgroundRefresh(refresh: () => Promise<boolean>): () => void {
+  if (!native?.addListener || !native.finishBackgroundRefresh) return () => {};
+  let running = false;
+  const subscription = native.addListener('onBackgroundRefresh', () => {
+    if (running) return;
+    running = true;
+    void refresh().catch(() => false).then((success) => {
+      running = false;
+      void native.finishBackgroundRefresh?.(success)?.catch(() => undefined);
+    });
+  });
+  return () => subscription.remove();
+}
+
+// Stable snapshot for React subscribers. Older app binaries can still show the same
+// foreground data even when their native home-screen widget module is unavailable.
+let currentStore: UsageWidgetStore | null | undefined;
+const listeners = new Set<() => void>();
+
+function publishStore(store: UsageWidgetStore | null) {
+  currentStore = store;
+  for (const listener of listeners) listener();
+}
+
+export function subscribeUsageWidgetStore(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function writeUsageWidgetStore(store: UsageWidgetStore): boolean {
-  return native?.writeSnapshot(JSON.stringify(store)) ?? false;
+  const persisted = native?.writeSnapshot(JSON.stringify(store)) ?? false;
+  publishStore(store);
+  return persisted;
 }
 
 export function readUsageWidgetStore(): UsageWidgetStore | null {
+  if (currentStore !== undefined) return currentStore;
   try {
     const store = JSON.parse(native?.readSnapshot() ?? 'null') as Partial<UsageWidgetStore> | null;
-    return store?.version === 2 && store.states && Array.isArray(store.computers) ? store as UsageWidgetStore : null;
+    currentStore = store?.version === 2 && store.states && Array.isArray(store.computers) ? store as UsageWidgetStore : null;
   } catch {
-    return null;
+    currentStore = null;
   }
+  return currentStore;
 }
 
 export function clearUsageWidgetState(): void {
   native?.clearSnapshot();
+  publishStore(null);
+}
+
+export function automaticUsageState(store: UsageWidgetStore | null, userId?: string) {
+  if (!userId || store?.accountId !== userId || !store.autoDeviceId) return null;
+  return store.states[store.autoDeviceId] ?? null;
 }
 
 /** Computers that home-screen widgets are set to; the widgets record them when they draw. */
@@ -96,6 +143,7 @@ export async function refreshUsageWidgetStore(
   invoke: Invoke,
   pinned: readonly string[] = [],
   nowMs: () => number = Date.now,
+  isCurrent: () => boolean = () => true,
 ): Promise<UsageWidgetStore> {
   const computers = devices.filter(isWidgetComputer);
   const listed = new Set(computers.map(device => device.deviceId));
@@ -106,6 +154,7 @@ export async function refreshUsageWidgetStore(
   let autoDeviceId = previous?.autoDeviceId && listed.has(previous.autoDeviceId) ? previous.autoDeviceId : null;
   const outcomes = new Map<string, 'answered' | 'too-old' | 'failed'>();
   const ask = async (device: DeviceView) => {
+    if (!isCurrent()) throw new Error('Widget refresh expired');
     let outcome: 'answered' | 'too-old' | 'failed' = 'failed';
     try {
       const result = await invoke<{ ok?: boolean; snapshot?: unknown }>(
@@ -153,4 +202,30 @@ export async function refreshUsageWidgetStore(
     computers: computers.map(device => ({ id: device.deviceId, name: device.selfName || device.name })),
     states,
   };
+}
+
+/** Refresh one account, fencing every request and the final write after waits. */
+export async function refreshUsageWidgets(
+  latest: { readonly current: {
+    readDeviceList: () => Promise<{ devices: DeviceView[] }>;
+    invoke: Invoke;
+    accountGeneration: number;
+    userId: string | null;
+  } },
+  generation: number,
+  active: () => boolean,
+): Promise<boolean> {
+  const isCurrent = () => active() && latest.current.accountGeneration === generation;
+  if (!isCurrent()) return false;
+  const { devices } = await latest.current.readDeviceList();
+  if (!isCurrent()) return false;
+  const accountId = latest.current.userId;
+  if (!accountId) return false;
+  const stored = readUsageWidgetStore();
+  const store = await refreshUsageWidgetStore(
+    stored?.accountId === accountId ? stored : null, devices, latest.current.invoke,
+    readPinnedUsageWidgetDevices(), Date.now, isCurrent,
+  );
+  if (!isCurrent()) return false;
+  return writeUsageWidgetStore({ ...store, accountId });
 }

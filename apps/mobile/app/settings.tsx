@@ -64,6 +64,7 @@ import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHost
 import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
 import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
 import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
+import { openManualGiftCard } from '@/gift-card/giftCardIntent';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -597,8 +598,7 @@ export default function SettingsScreen() {
   const resumeAnalyticsReporting = useCallback(async () => {
     const status = await initMobileTapdb();
     if (!status.ok) return;
-    const userId = auth.user?.id;
-    if (userId) await setTapdbUser(userId);
+    await setTapdbUser(auth.user?.tapdbChargeAlias, auth.user?.tapdbUsageAlias);
   }, [auth.user?.id]);
 
   const toggleAnalytics = useCallback(async () => {
@@ -930,6 +930,17 @@ export default function SettingsScreen() {
             />
           </SettingsGroup>
         ) : null}
+
+        {/* 礼品卡:与外部链接共用根级兑换面板,这里只负责打开。 */}
+        <SettingsGroup footer={t('giftCard.settingsFooter')} testID="settings.giftCard" title={t('giftCard.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('giftCard.action')}
+            chevron={false}
+            label={t('giftCard.action')}
+            onPress={openManualGiftCard}
+            testID="settings.giftCard.redeem"
+          />
+        </SettingsGroup>
 
         <SettingsGroup title={t('sharedTask.title')}>
           <ActionInfoRow

@@ -185,6 +185,7 @@ describe('GhostInstallConsentHost', () => {
 
   it.each([
     ['capability:context', 'context', 'Read the current task and selected text'],
+    ['contribution:header', '{"position":"composer.header","kind":"button","tool":"refresh"}', 'Show a button in the area above the input box'],
     ['capability:appearance', 'appearance', 'Change the declared appearance settings'],
     ['capability:visibility', 'visibility', 'Show or hide the window and declared interface regions'],
     ['appearance:bodyFont', 'bodyFont', 'Change the message font'],

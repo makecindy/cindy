@@ -108,9 +108,11 @@ vi.mock("lucide-react-native", () =>
   Object.fromEntries(
     [
       "Check",
+      "CircleDashed",
       "Archive",
       "ArchiveRestore",
       "Ellipsis",
+      "Clock",
       "Pin",
       "PinOff",
     ].map((name) => [name, () => null]),
@@ -126,15 +128,20 @@ vi.mock("@/session/swipeRowRegistry", () => ({
   pinToggleAction: () => ({ label: "pin" }),
   statusToggleAction: () => ({ label: "archive", action: "archive" }),
 }));
+vi.mock("@/components/AppText", () => ({
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+}));
 vi.mock("@/theme", () => ({
+  fontWeight: { medium: "500" },
   iconSize: { swipeAction: 24 },
   iconStroke: { regular: 2 },
+  textStyles: { body: { fontSize: 16, lineHeight: 22 } },
   useTheme: () => ({ colors: {} }),
   useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
 vi.mock("@/theme/tokens", () => ({
   radius: { pill: 9999 },
-  spacing: { md: 12 },
+  spacing: { sm: 8, md: 12, lg: 16 },
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -209,7 +216,7 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
       render("b");
       expect(runtime.reset).toHaveBeenCalledOnce();
       expect(runtime.translation.value).toBe(0);
-      expect(controls.registry.onRowClose).toHaveBeenCalledWith("a");
+      expect(controls.registry.onRowClose).toHaveBeenCalledWith(expect.stringMatching(/:a$/));
       drag(value);
       release(direction);
       expect(controls[action]).toHaveBeenCalledExactlyOnceWith(
@@ -253,6 +260,26 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     ).not.toHaveBeenCalled();
     expect(runtime.close).toHaveBeenCalledOnce();
   });
+  // 2026-11-20 用户要求:两个方向拉长后的胶囊都要有文字,文案即该动作的名称。
+  it("labels both stretched capsules with their action names", () => {
+    render("a");
+    const label = (button: string) =>
+      host.querySelector(`[data-testid="swipe.${button}"] span`)?.textContent;
+    expect(label("readAction")).toBe("session.row.markRead");
+    expect(label("archiveAction")).toBe("archive");
+    expect(host.querySelector('[data-testid="swipe.pinAction"] span')).toBeNull();
+    expect(host.querySelector('[data-testid="swipe.optionsAction"] span')).toBeNull();
+  });
+  // 2026-11-20 用户要求:中间态不留空——拉过面板宽度、未到全滑阈值(400 宽屏为 220)时,
+  // 主按钮跟着拉长到次按钮旁边:200 - 3 个间距(36) - 次按钮(56) = 108。
+  it.each([200, -200])("stretches the primary action beside the secondary one before arming: %s", (value) => {
+    render("a");
+    drag(value);
+    const widths = runtime.styles.map((fn) => fn().width);
+    expect(widths).toContain(108);
+    expect(widths).not.toContain(176);
+    expect(runtime.timing).not.toHaveBeenCalled();
+  });
   it("keeps layout width responsive in both directions and resets the armed state", () => {
     render("a");
     expect(runtime.timing).not.toHaveBeenCalled();
@@ -272,4 +299,23 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
       1, 0, 1, 0,
     ]);
   });
+});
+
+// Integration: only inbox rows replace More; full-swipe archive remains unchanged.
+it('uses snooze in the inbox secondary slot, while ordinary rows retain More', () => {
+  const onSnooze = vi.fn();
+  const session = { id: 'follow', status: 'active' } as RemoteSession;
+  const draw = (inboxMode: boolean) => act(() => root.render(
+    <SwipeableSessionRow {...controls} onSnooze={onSnooze} inboxMode={inboxMode} session={session} testID="swipe">row</SwipeableSessionRow>,
+  ));
+  draw(true);
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(onSnooze).toHaveBeenCalledWith(session);
+  expect(controls.onShowOptions).not.toHaveBeenCalled();
+  drag(-260);
+  release('left');
+  expect(controls.onArchive).toHaveBeenCalledWith(session);
+  draw(false);
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(controls.onShowOptions).toHaveBeenCalledWith(session);
 });

@@ -63,9 +63,9 @@ describe('resolveNewMakerDefaultTuple', () => {
     { defaultEffort: 'max', efforts: ['low', 'medium', 'high'], expected: 'high' },
     { defaultEffort: undefined, efforts: [], expected: null },
   ])('keeps a usable model with incomplete or stale effort metadata: %j', ({ defaultEffort, efforts, expected }) => {
-    const candidate = { ...model('gpt-6.1-sol'), defaultEffort, efforts } as CatalogModel;
+    const candidate = { ...model('gpt-6.2-sol'), defaultEffort, efforts } as CatalogModel;
     expect(resolve([provider({ id: 'openai', access: 'subscription', models: { codex: [candidate] } })]))
-      .toMatchObject({ model: 'gpt-6.1-sol', effort: expected });
+      .toMatchObject({ model: 'gpt-6.2-sol', effort: expected });
   });
 
   it('没有来源或清单仍在加载时不编造默认组合', () => {
@@ -87,13 +87,13 @@ describe('resolveNewMakerDefaultTuple', () => {
         id: 'openai',
         access: 'subscription',
         models: {
-          codex: [{ ...model('chatgpt/gpt-6.1-sol', 'medium'), efforts: ['medium', 'high'] }],
+          codex: [{ ...model('chatgpt/gpt-6.2-sol', 'medium'), efforts: ['medium', 'high'] }],
         },
       }),
       expected: {
         vendor: 'codex',
         providerId: 'openai',
-        model: 'chatgpt/gpt-6.1-sol',
+        model: 'chatgpt/gpt-6.2-sol',
         effort: 'medium',
       },
     },
@@ -156,13 +156,13 @@ describe('resolveNewMakerDefaultTuple', () => {
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-6.1-sol')] },
+      models: { codex: [model('chatgpt/gpt-6.2-sol')] },
     });
     for (const sources of [
       [gateway, anthropic, openai],
       [openai, anthropic, gateway],
     ]) {
-      expect(resolve(sources)).toMatchObject({ vendor: 'codex', providerId: 'openai', model: 'chatgpt/gpt-6.1-sol' });
+      expect(resolve(sources)).toMatchObject({ vendor: 'codex', providerId: 'openai', model: 'chatgpt/gpt-6.2-sol' });
     }
     expect(resolve([anthropic, openai])).toMatchObject({ providerId: 'openai' });
     expect(resolve([gateway, anthropic])).toMatchObject({ providerId: 'anthropic' });
@@ -205,7 +205,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('gpt-6.1-sol')] },
+      models: { codex: [model('gpt-6.2-sol')] },
     });
     if (reason === 'disconnected') gateway.connected = false;
     if (reason === 'suspended') gateway.suspended = true;
@@ -242,7 +242,7 @@ describe('resolveNewMakerDefaultTuple', () => {
       'claude-code': [model('claude-opus-5-5')], pi: [model('claude-opus-5-5')], codex: [model('claude-opus-5-5')],
     } });
     const openai = provider({ id: 'openai', access: 'subscription', models: {
-      codex: [model('gpt-6.1-sol')], pi: [model('gpt-6.1-sol')], 'claude-code': [model('gpt-6.1-sol')],
+      codex: [model('gpt-6.2-sol')], pi: [model('gpt-6.2-sol')], 'claude-code': [model('gpt-6.2-sol')],
     } });
     expect(resolve([anthropic], new Set(['codex', 'pi']))).toBeNull();
     expect(resolve([openai], new Set(['cc', 'pi']))).toBeNull();
@@ -252,7 +252,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     const failedOpenai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-6.1-sol')] },
+      models: { codex: [model('chatgpt/gpt-6.2-sol')] },
       failed: true,
     });
     const gateway = provider({
@@ -303,21 +303,21 @@ describe('resolveNewMakerDefaultTuple', () => {
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-6.1-sol', 'medium')] },
+      models: { codex: [model('chatgpt/gpt-6.2-sol', 'medium')] },
     });
     expect(resolve([openai])).toMatchObject({ effort: 'medium' });
   });
 
   it.each([false, true])('searches independent accounts before model fallback (visibility callback: %s)', withVisibility => {
     const stale = provider({ id: 'openai', access: 'subscription', models: { codex: [model('gpt-6-sol')] } });
-    const account = provider({ id: 'openai-account', access: 'subscription', models: { codex: [model('gpt-6.1-sol')] } });
+    const account = provider({ id: 'openai-account', access: 'subscription', models: { codex: [model('gpt-6.2-sol')] } });
     account.auth = { method: 'oauth', native: 'codex' };
     const args = { providers: [stale, account], providersLoading: false, availableAgents: allAgents,
       availableAgentsLoaded: true, ...(withVisibility ? { isModelEnabled: () => true } : {}) };
-    expect(resolveNewMakerDefaultTuple(args)).toMatchObject({ providerId: account.id, model: 'gpt-6.1-sol' });
+    expect(resolveNewMakerDefaultTuple(args)).toMatchObject({ providerId: account.id, model: 'gpt-6.2-sol' });
     if (withVisibility) {
       // Once no account has a visible Sol, retain the enabled model fallback.
-      expect(resolveNewMakerDefaultTuple({ ...args, isModelEnabled: (_agent, _providerId, m) => m.id !== 'gpt-6.1-sol' }))
+      expect(resolveNewMakerDefaultTuple({ ...args, isModelEnabled: (_agent, _providerId, m) => m.id !== 'gpt-6.2-sol' }))
         .toMatchObject({ providerId: stale.id, model: 'gpt-6-sol' });
     }
     const claude = provider({ id: 'claude-account', access: 'subscription', models: { 'claude-code': [model('claude-opus-5-5')] } });
@@ -457,7 +457,7 @@ describe('resolveNewMakerDefaultTuple', () => {
       const openai = provider({
         id: 'openai',
         access: 'subscription',
-        models: { codex: [model('gpt-6.1-sol')] },
+        models: { codex: [model('gpt-6.2-sol')] },
       });
       const byok = pool('org-pool', [groupAuto(['pi'])]);
       expect(resolve([byok, openai])).toMatchObject({ providerId: 'openai', vendor: 'codex' });
@@ -469,7 +469,8 @@ describe('resolveNewMakerDefaultTuple', () => {
   });
 
   it('recognizes earlier automatic tuples without declaring them current defaults', () => {
-    for (const modelId of ['gpt-6-sol', 'chatgpt/gpt-6-sol']) {
+    // GPT-6.1 Sol was the factory default until GPT-6.2 Sol replaced it.
+    for (const modelId of ['gpt-6.1-sol', 'chatgpt/gpt-6.1-sol', 'gpt-6-sol', 'chatgpt/gpt-6-sol']) {
       expect(isKnownProductDefaultTupleIdentity({ vendor: 'codex', providerId: 'openai', model: modelId })).toBe(true);
     }
     expect(isKnownProductDefaultTupleIdentity({ vendor: 'codex', providerId: 'openai', model: 'gpt-6-astra' })).toBe(true);

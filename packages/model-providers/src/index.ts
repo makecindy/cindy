@@ -337,7 +337,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
+export { copilotModelsUrl, parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
@@ -358,4 +358,5 @@ export {
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';
 
-export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from './subscriptionIdentity.js';
+export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy, listedSourceFolds, effectiveRunLocation, RUN_LOCATION_LOCAL } from './subscriptionIdentity.js';
+export type { ListedSourceComputer, ListedSourceRef, ListedSourcesInput, ListedSourceFolds } from './subscriptionIdentity.js';

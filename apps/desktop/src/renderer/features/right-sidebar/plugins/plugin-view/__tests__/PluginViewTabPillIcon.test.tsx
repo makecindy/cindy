@@ -68,6 +68,15 @@ describe('plugin-view 页签图标', () => {
     expect(view.container.querySelector('.lucide-database')).toBeTruthy();
   });
 
+  it.each([
+    ['tablet-smartphone', 'tablet-smartphone'],
+    ['future-device', 'database'],
+    ['constructor', 'database'],
+  ])('renders the supported navigation symbol for %s', (preferredIcon, expected) => {
+    installGhost({ iconDataUrl: undefined, manifest: { id: INSTANCE_ID, name: 'x', mainView: { icon: 'database', preferredIcon } } });
+    expect(renderPill().container.querySelector('.lucide-' + expected)).toBeTruthy();
+  });
+
   it('插件既没有图标也没有 mainView.icon 时显示默认拼图', () => {
     installGhost({ iconDataUrl: undefined });
     const view = renderPill();

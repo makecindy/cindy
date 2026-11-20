@@ -26,6 +26,7 @@ import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { Tip } from '@/components/ui/tooltip';
 import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProviderGroupMembers';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
@@ -56,6 +57,7 @@ export function ownRemoteProviderKey(deviceId: string, providerId: string): stri
 
 export interface OwnRemoteProviderList {
   entries: readonly OwnRemoteProvider[];
+  ownedShares: ReturnType<typeof useOwnedProviderShares>;
   /** 被其他电脑的供应商组收进去的分享(「分享给我的供应商」里不再单独列出)。 */
   hiddenShareIds: ReadonlySet<string>;
 }
@@ -70,7 +72,7 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
   const catalogs = useDevicesProviders(deviceIds, { retainDisplaySnapshot: true });
   // 本机自己建的组：组那一项就是本机的供应商(在上面本机那一段)，组里的远程供应商与分享同样收起。
   const localGroups = useLocalProviderGroups();
-  return useMemo(() => {
+  const { entries, hiddenShareIds } = useMemo(() => {
     const groups = collectRemoteProviderGroups(
       devices.flatMap((device) => {
         const catalog = catalogs.get(device.deviceId);
@@ -117,6 +119,14 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
     }
     return { entries, hiddenShareIds };
   }, [catalogs, devices, localGroups]);
+  const ownedShares = useOwnedProviderShares(entries.map(entry => entry.deviceId));
+  const visibleEntries = useMemo(
+    // Merged entries still exist for saved routes. Keep management rows for shares and groups.
+    () => entries.filter(({ deviceId, provider, group }) =>
+      !provider.subscriptionPoolAlias || group || ownedShares.get(deviceId)?.has(provider.id)),
+    [entries, ownedShares],
+  );
+  return { entries: visibleEntries, hiddenShareIds, ownedShares };
 }
 
 export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
@@ -161,6 +171,8 @@ export function OwnRemoteProviderRows({
             <button
               type="button"
               data-testid="own-remote-provider-row"
+              data-settings-search-action="Open the detail of a provider on another of your computers"
+              data-listed-source={`${entry.deviceId}:${entry.provider.id}`}
               aria-current={selected}
               aria-label={label}
               onClick={() => onSelect(entry.key)}

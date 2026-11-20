@@ -53,6 +53,8 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([payload]: unknown[]) => payload ?? {},
   })),
   // --- Sessions ---
+  { desktopChannel: 'maker:runtime-plugins', webPath: 'maker.runtimePlugins', hostPath: '/api/runtime-plugins',
+    trustedRenderer: true, body: ([sessionId, value]) => ({ sessionId, value }) },
   {
     desktopChannel: 'local-db:sessions:list',
     webPath: 'localDb.sessions.list',

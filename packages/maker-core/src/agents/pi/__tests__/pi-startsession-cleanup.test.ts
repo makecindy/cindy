@@ -675,6 +675,27 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
   });
 
+  // PR #10213 Windows CI: a failed initial durable scan logged through a deps
+  // alias assigned only after startup. Existing cases did not force scan failure
+  // before an RPC rejection, so they missed the unhandled TDZ error (unit tier).
+  it('reports a durable scan failure without masking a failed startup', async () => {
+    knobs.getStateRejects = true;
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      throw new Error('initial scan unavailable');
+    });
+    const warn = vi.fn();
+    const agent = new PiAgent(buildDeps({ logger: { ...noopLogger, warn } }));
+
+    await expect(agent.startSession(opts())).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError', cause: new Error('get_state rejected (mock)'),
+    });
+    expect(warn).toHaveBeenCalledWith('pi subagent durable status refresh failed', {
+      message: 'initial scan unavailable',
+    });
+    expect(disposed).toBe(1);
+    expect(knobs.closeCount).toBe(1);
+  });
+
   // #9855: the startup error previously exposed only the RPC timeout. Exercise
   // startSession, not a formatter; simulate SF_DATALESS metadata, not a real
   // iCloud stall. Existing cases cover confirmed/unconfirmed cleanup separately.
@@ -2786,6 +2807,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('routes model resume through the same retained-session helper and returns its generation id', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
+    // #9705: resume must snapshot the live parent settings, not a stale child home.
+    const settingsFile = path.join(knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!, 'settings.json');
+    const settings = { ...JSON.parse(readFileSync(settingsFile, 'utf8')),
+      shellPath: '/fixture/current shell', shellCommandPrefix: ' export PREFIX=live\n' };
+    writeFileSync(settingsFile, JSON.stringify(settings));
     const resumedId = '123e4567-e89b-42d3-a456-426614174098';
     const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun').mockResolvedValue(resumedId);
     try {
@@ -2798,6 +2824,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       })));
       expect(resumeSpy).toHaveBeenCalledWith(expect.any(String), '123e4567-e89b-42d3-a456-426614174097',
         'check again', expect.objectContaining({ runtimeOwnerId: expect.any(String), launchRunner: expect.any(Function) }), 'one-child');
+      expect(JSON.parse(resumeSpy.mock.calls[0]![3].runtimeSnapshot!.settingsJson!.toString('utf8'))).toMatchObject({
+        shellPath: settings.shellPath, shellCommandPrefix: settings.shellCommandPrefix,
+      });
     } finally { await handle.close(); }
   });
 

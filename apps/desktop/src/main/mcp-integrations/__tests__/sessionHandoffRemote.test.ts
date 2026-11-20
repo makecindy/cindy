@@ -85,29 +85,43 @@ describe('cross-device send_to_session sender', () => {
 
   // Unit/protocol: creation must negotiate before mutation, bind all options to its
   // receipt and preserve the receipt until the queued first message is consumed.
-  it('negotiates ordinary creation and binds its configuration without retrying', async () => {
-    const create = { permissionMode: 'ask' as const, projectDir: '/remote/project', model: 'selected' };
+  it.each([
+    ['older host', false, undefined, false, 'Fix login'],
+    ['current host', true, undefined, false, undefined],
+    ['explicit title on an older host', false, 'Ticket 42', false, 'Ticket 42'],
+    ['explicit title on a current host', true, 'Ticket 42', false, 'Ticket 42'],
+    ['plugin on an older host', false, undefined, true, undefined],
+  ] as const)('negotiates ordinary creation and binds its exact title without retrying (%s)', async (_case, autoTitle, title, plugin, expectedTitle) => {
+    const create = { permissionMode: 'ask' as const, projectDir: '/remote/project', model: 'selected', ...(title ? { title } : {}) };
+    const expectedCreate = { ...create, ...(expectedTitle ? { title: expectedTitle } : {}) };
+    const message = 'Fix\n  login';
+    const sender = plugin ? { kind: 'plugin' as const, pluginId: 'dashboard' } : { sessionId: 'me' };
     let supported = false;
     const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
       const wire = args[0] as { action?: string; taskActionReceipt: string; create?: unknown };
-      if (wire.action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1, ordinaryCreateVersion: supported ? 1 : undefined } };
+      if (wire.action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, ordinaryCreateVersion: supported ? 1 : undefined, pluginCaller: 1,
+        ...(autoTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
+      } };
       issued.push(wire.taskActionReceipt);
-      expect(wire).toMatchObject({ action: 'create', create });
+      expect(wire.action).toBe('create');
+      expect(wire.create).toEqual(expectedCreate);
       return { ok: true, result: { ...accepted, wakeKind: 'created', targetSessionId: 'new-id', model: 'selected', workingDir: '/remote/project' } };
     });
     const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
     const run = () => send({ deviceId: 'mbp', sessionId: 'new-id' }, {
-      message: 'hi', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+      message, sender: async () => sender, create: async () => create,
     });
     expect(await run()).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
     expect(invoke).toHaveBeenCalledOnce();
     supported = true;
     expect(await run()).toMatchObject({ ok: true, wakeKind: 'created', model: 'selected' });
     expect(invoke).toHaveBeenCalledTimes(3);
-    const receipt = { receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 'new-id', message: 'hi' };
-    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation(create) })).toBe(true);
+    const receipt = { receiptId: issued.at(-1)!, ...(plugin ? { pluginId: 'dashboard' } : { sessionId: 'me' }), targetSessionId: 'new-id', message };
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation(expectedCreate) })).toBe(true);
     expect(await validateRemoteTaskActionReceipt('mbp', receipt)).toBe(false);
-    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...create, permissionMode: 'bypassPermissions' }) })).toBe(false);
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...expectedCreate, permissionMode: 'bypassPermissions' }) })).toBe(false);
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...expectedCreate, title: 'Changed' }) })).toBe(false);
   });
 
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one

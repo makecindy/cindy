@@ -1,8 +1,9 @@
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 import { Text } from '@/components/AppText';
-import { canOpenChatPathChip, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
-import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { canOpenChatPathChip, isUncPathOutsideWorkdir, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
+import { ChatFilePathContext, MarkdownLinkActivationContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useRowStateHook, type RowStateHook } from '@/session/listRowState';
 import { peekRemotePathVerdict, peekRemotePathVerdictForRender, remotePathVerdictKey, subscribeRemotePathVerdictChange, verifyRemotePathCached, type RemotePathVerdict } from '@/session/remotePathVerdict';
 
@@ -38,6 +39,27 @@ export function ChatPathChipSpan({
   /** Explicit state hook; defaults to recycling state only inside a LegendList message row. */
   usePathState?: RowStateHook;
 }) {
+  const interaction = useChatPathInteraction({ candidate, streaming, explicitLink, usePathState: usePathStateOverride });
+  return (
+    <SpanText
+      onLongPress={interaction.onLongPress}
+      onPress={interaction.onPress}
+      style={interaction.lit ? chipStyle : plainStyle}
+      testID={interaction.lit ? 'message.markdownPathChip' : undefined}
+    >
+      {display}
+    </SpanText>
+  );
+}
+
+/** Shared execution path for native spans and the selectable table document. */
+export function useChatPathInteraction({ candidate, streaming, explicitLink = false, usePathState: usePathStateOverride }: {
+  candidate: ChatPathCandidate | null;
+  streaming?: boolean;
+  explicitLink?: boolean;
+  usePathState?: RowStateHook;
+}): { lit: boolean; onPress?: () => void; onLongPress?: () => void } {
+  const activation = useContext(MarkdownLinkActivationContext);
   const rowStateHook = useRowStateHook();
   const usePathState = usePathStateOverride ?? rowStateHook;
   const ctx = useContext(ChatFilePathContext);
@@ -92,6 +114,8 @@ export function ChatPathChipSpan({
     if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
+    // workdir 外的 UNC 不自动验证(见 isUncPathOutsideWorkdir);显式链接仍可点,点击时才 stat。
+    if (isUncPathOutsideWorkdir(ctx.workdir, target.absPath)) return;
     let cancelled = false;
     void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
       // 不看返回值:结论已落缓存,统一重新派生。
@@ -115,14 +139,16 @@ export function ChatPathChipSpan({
     : verdict !== undefined && verdict !== 'nonfile';
   const lit = !!ctx && !!candidate && !!target && (explicitLink || verdictAllowsLit);
   if (!lit) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
+    return { lit: false };
   }
   const kind: 'file' | 'directory' =
     verdict === 'directory' || (verdict !== 'file' && candidate.directoryShape) ? 'directory' : 'file';
   if (!canOpenChatPathChip(kind, target.relPath)) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
+    return { lit: false };
   }
   const activate = async (action: (value: ChatFilePathTarget) => void) => {
+    const owner = activation ? getMobileAuthOwner() : null;
+    if (activation && (!activation.active || owner?.switching)) return;
     let actionKind = kind;
     if (explicitLink) {
       // A visible authored link may be tapped before background verification,
@@ -136,7 +162,10 @@ export function ChatPathChipSpan({
         // Preserve the existing preview/browser failure UX and copy menu when
         // the host is unavailable; no local lookup or connection reset.
       }
-      if (actionScope.current?.ctx !== ctx || actionScope.current.target?.absPath !== target.absPath) return;
+      const isCurrentAction = activation
+        ? activation.active && owner !== null && isMobileAuthOwnerCurrent(owner)
+        : actionScope.current?.ctx === ctx && actionScope.current.target?.absPath === target.absPath;
+      if (!isCurrentAction) return;
     }
     if (!canOpenChatPathChip(actionKind, target.relPath)) return;
     action({
@@ -146,14 +175,8 @@ export function ChatPathChipSpan({
       ...(actionKind === 'file' && candidate.line !== undefined ? { line: candidate.line } : {}),
     });
   };
-  return (
-    <SpanText
-      onLongPress={ctx.onLongPressPath ? () => { void activate(ctx.onLongPressPath!); } : undefined}
-      onPress={() => { void activate(ctx.onOpenPath); }}
-      style={chipStyle}
-      testID="message.markdownPathChip"
-    >
-      {display}
-    </SpanText>
-  );
+  return { lit: true,
+    onLongPress: ctx.onLongPressPath ? () => { void activate(ctx.onLongPressPath!); } : undefined,
+    onPress: () => { void activate(ctx.onOpenPath); },
+  };
 }

@@ -68,7 +68,8 @@ export function createRuntimePluginControl(deps: {
       const targets = deps.readSettings(sessionId)?.[point];
       if (!targets?.length) return undefined;
       const saved = turns.get(sessionId);
-      const turnBudget = point === 'will-search-memory' ? createWaitBudget(GHOST_CONTROL_POINTS[point].timeoutMs, now)
+      const turnBudget = point === 'will-search-memory' || point === 'will-tool-call' || point === 'did-tool-result'
+        ? createWaitBudget(GHOST_CONTROL_POINTS[point].timeoutMs, now)
         : saved?.current() ? saved.budget : beginTurn(sessionId);
       const selection = JSON.stringify(targets);
       const ownerCurrent = deps.captureOwner();
@@ -98,7 +99,12 @@ export function createRuntimePluginControl(deps: {
             const result = answer.result!;
             const assertResultCurrent = () => {
               assertCurrent();
-              if (result[RUNTIME_PLUGIN_RESULT_CURRENT]?.() === false) throw new Error('Runtime plugin approval changed');
+              if (result[RUNTIME_PLUGIN_RESULT_CURRENT]?.() === false) {
+                if (point === 'will-tool-call' || point === 'did-tool-result') {
+                  throw new RuntimePluginControlError('block', target.pluginId, true, 'selection-changed');
+                }
+                throw new Error('Runtime plugin approval changed');
+              }
             };
             assertResultCurrent();
             if (result.action === 'skip' || result.action === 'block') {
@@ -122,6 +128,7 @@ export function createRuntimePluginControl(deps: {
           }));
           for (let i = 0; i < targets.length; i++) await applyResult(targets[i], answers[i]);
         } else for (const target of targets) {
+          if ((point === 'will-tool-call' || point === 'did-tool-result') && turnBudget.remaining() <= 0) break;
           let answer;
           try { answer = { result: await ask(target) }; }
           catch (error) { answer = { error }; }

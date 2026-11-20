@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, MANUAL_ABORT_RECOVERY_GRACE_MS } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import { createPiTranslateContext, translatePiEvent } from './agents/pi/translator.js';
-import { newCodexRuntimeState, translateItemNotification } from './agents/codex/translator.js';
+import { newCodexRuntimeState, translateItemNotification, translateOmittedItem } from './agents/codex/translator.js';
 import { AUTO_REVIEW_USER_INTENT, type AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionResolver } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
@@ -389,6 +389,35 @@ it('does not count a Codex call repeated in a script burst, but still stops a mo
   }
   expect(t.errors()).toHaveLength(1);
   expect(t.errors()[0]).toMatchObject({ data: { toolLoop: { kind: 'consecutive', count: 4 } } });
+});
+
+// #8412, unit: production translator -> Session -> monitor. Existing tests feed
+// real result text only. Thirty omitted completions must close their tools and
+// retain input-based review, without fabricating equal-output hard stops.
+it('keeps omitted Codex results out of equal-output loop detection', async () => {
+  const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
+  const t = setup('codex', false, reviewer);
+  const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+  await t.session.send('Process the changing results.');
+  for (let i = 0; i < 35; i++) {
+    await vi.advanceTimersByTimeAsync(3_000);
+    translateItemNotification('started', { threadId: 'parent', turnId: 'turn', item: {
+      type: 'commandExecution', id: `omitted-${i}`, command: 'read-next-result', cwd: '/repo',
+      status: 'inProgress', aggregatedOutput: '', exitCode: null,
+    } }, t.queue, context);
+    translateOmittedItem('completed', { threadId: 'parent', turnId: 'turn',
+      item: { id: `omitted-${i}`, type: 'commandExecution' } }, t.queue, context);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(t.seen.filter(event => event.type === 'tool_result')).toHaveLength(35);
+  expect(t.errors()).toEqual([]);
+  expect(t.handle.abort).not.toHaveBeenCalled();
+  expect(reviewer).toHaveBeenCalled();
+  expect(reviewer.mock.calls[0]![0].verdict.reason).toBe('pingpong');
+  // Lifecycle closure is still visible to graceful stop, independent of output evidence.
+  t.handle.requestGracefulStop = vi.fn(async () => {});
+  await expect(t.session.requestGracefulStop()).resolves.toMatchObject({ status: 'requested' });
+  expect(t.handle.requestGracefulStop).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])('keeps translated Codex waits alive with agent states=%s', async (hasAgentStates) => {

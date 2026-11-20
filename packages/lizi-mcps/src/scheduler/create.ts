@@ -15,11 +15,11 @@
 
 import { z } from 'zod';
 
-import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
+import { EFFORT, EXECUTION_MODE, SCHEDULE_AGENT_KIND, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
-import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
+import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -36,6 +36,7 @@ export function registerScheduleCreateTool(
     category: 'scheduler',
     description:
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
+      '单条 GitHub PR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；manual=true 只按变化触发，也可保留周期补查。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
       '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
@@ -94,8 +95,12 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
-      agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
-      modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=不按时间自动触发（nextFireAt 为空），仍可立即运行；配合 webhookTrigger 即仅由事件触发。false 或省略=按 cronExpr / intervalMs 定时触发，可与 Webhook 并存。cronExpr / timezone 仍必填并保留，便于以后恢复定时；适用于 agent 和 script 执行方式。'),
+      agentKind: z.enum(SCHEDULE_AGENT_KIND).describe('claude-code / codex / pi；acp = 本机插件提供的执行引擎(取 schedule_list_models 的 pluginEngines)'),
+      modelAgentKind: z.enum(SCHEDULE_AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复。插件引擎：agentKind 与 modelAgentKind 都传 acp，providerId 传 pluginEngines[].providerId，model 传其 models[].id(default = 由引擎自己选)；只能每次新建任务、在本机运行，不能绑定已有任务、不能用 worktree、不能配运行位置'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
       modelAgentDeviceId: z.string().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
       kind: z
@@ -158,6 +163,7 @@ export function registerScheduleCreateTool(
         .nullable()
         .optional()
         .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
+      prTrigger: schedulePrTriggerSchema,
       webhookTrigger: z
         .strictObject({
           events: z
@@ -299,6 +305,11 @@ export function registerScheduleCreateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
+        }
+        const caller = getSessionContext?.().sessionId;
+        if (caller && deps.getSessionProject && !input.targetSessionId && input.workingDir && input.workspaceKind !== 'dialogue') {
+          const source = await deps.getSessionProject(caller);
+          if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
         return scheduler.create(input);
       });

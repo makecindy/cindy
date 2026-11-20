@@ -1,3 +1,4 @@
+import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { selectCodexUsageForModel } from "@cindy/maker-shared/codex-usage-buckets";
 import { isCodexGatewayWireModel } from "@cindy/model-providers/classification";
 import { formatRemoteError } from "@cindy/maker-shared/device-link-contract";
@@ -19,7 +20,9 @@ import {
   shouldFallbackToLegacyCodexUsage,
 } from "./sessionControls";
 
-type Reader = Pick<
+import { isPluginEngineProviderId, isPluginEngineSessionKind, PLUGIN_ENGINE_PROVIDER_PREFIX } from './pluginEngines';
+
+type Reader = Partial<Pick<MobileMakerTransport, "getPluginEngineUsage">> & Pick<
   MobileMakerTransport,
   | "getCodexRateLimits"
   | "getAccountUsage"
@@ -28,7 +31,7 @@ type Reader = Pick<
 >;
 /** Mobile presentation only; this shape is never sent through device-link. */
 export interface SessionMenuAccountUsage {
-  source: "chatgpt" | "claude" | "xai" | "gateway" | "api" | "unavailable";
+  source: "plugin" | "chatgpt" | "claude" | "xai" | "gateway" | "api" | "unavailable";
   plan: string | null;
   updatedAt: number | null;
   windows: Array<{
@@ -41,7 +44,7 @@ export interface SessionMenuAccountUsage {
   amounts: Array<{
     id: "balance" | "cycle" | "today";
     amount: number;
-    currency: "CNY" | "USD";
+    currency: string;
     limit?: number;
   }>;
   /** The account read cannot prove this task's frozen auth route. */
@@ -189,6 +192,21 @@ export async function readSessionMenuAccountUsage(
   // The host projects runtime-effective selection onto providerId. Missing
   // selection alone proves neither a Gateway nor a subscription route.
   const provider = session.providerId?.trim() || null;
+  if (isPluginEngineSessionKind(session.agentKind)) {
+    const result = empty("plugin");
+    if (!isPluginEngineProviderId(provider)) return result;
+    const usage = await reader.getPluginEngineUsage?.(provider.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length));
+    if (!usage) return result;
+    result.updatedAt = usage.updatedAt;
+    result.windows = (usage.windows ?? []).map((row, index) => ({
+      id: String(index), minutes: null, modelLabel: row.label, remainingPercent: row.remainingPercent,
+      resetsAt: row.resetsAt ? row.resetsAt / 1000 : null,
+    }));
+    result.amounts = (usage.balances ?? []).map(row => ({
+      id: "balance", currency: row.currency, amount: Number(row.amount),
+    }));
+    return result;
+  }
   const model = session.model.trim();
   const claudeRoute = await readDefaultClaudeRoute(session, reader);
   const family = sessionSubscriptionFamily(session, accountProvider, claudeRoute);
@@ -263,11 +281,7 @@ async function readClaudeAccount(
     await reader.getSubscriptionUsage("claude", accountScope(session)),
   );
   const result = empty("claude");
-  result.plan =
-    typeof snapshot.subscriptionType === "string" &&
-    snapshot.subscriptionType.trim()
-      ? snapshot.subscriptionType.trim()
-      : null;
+  result.plan = formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName);
   result.updatedAt = finite(snapshot.updatedAt) ? snapshot.updatedAt : null;
   const now = Date.now();
   const add = (
@@ -442,7 +456,7 @@ function projectCodexAccount(
   return {
     source: "chatgpt",
     accountOnly,
-    plan: typeof selectedPlan === "string" ? selectedPlan : plan,
+    plan: formatCodexPlanLabel(typeof selectedPlan === "string" ? selectedPlan : plan),
     updatedAt: timestamps.length > 0 ? Math.min(...timestamps) : observedAt,
     windows,
     amounts: [],

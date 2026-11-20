@@ -1,12 +1,24 @@
 ## 插件界面扩展：具名页面、原生入口和宿主操作
 
-这是**尚未发布的新能力**。按 §0a 核验执行宿主源码包含 `mcpApps.host` 和 `open-resource`，
-不要将已有 MCP Apps 的 `0.1.122-beta` 下限当成本章能力的发布版本。
-正式发布插件时，填写实际包含所需能力的首个 Cindy 版本；不要猜版本号。
+按 §0a 核验执行宿主源码包含 `mcpApps.host` 和 `open-resource`。
 本章新增入口用于 Desktop 本机。旧工具卡片的手机/远程查看和旧 panel/mainView/taskView 保持原契约。
 
 复杂页面继续使用官方 MCP Apps `App`、资源、主题、CSP 和销毁协议。
 业务仍由原 `main.js` 执行，不另起 MCP 服务，不为打开页面伪造工具调用。
+
+### 标题、全屏与可用尺寸
+
+右侧栏页签（含分离窗口）、入口旁弹层、`sidebar.section` 不重复显示卡片标题；加载与重试在页面区域。
+来源由宿主安装记录决定，例外来源只在入口/页签悬停提示中显示，页面不能通过改名隐藏来源。
+`message.body`、`tool.body`、`settings.section` 仍有紧凑标题栏。
+桌面有标题栏且已就绪的页面默认有全屏按钮，前提是 App 的 `availableDisplayModes` 支持 fullscreen；手机只有 inline。
+资源可声明 `hostFullscreenButton: false` 隐藏该按钮（缺省 true），只影响宿主按钮，不禁止 `app.requestDisplayMode({mode:"fullscreen"})`。
+该字段映射为资源 `_meta["cindy/host-fullscreen-button"]`，自定义 MCP 可直接提供此扩展。
+旧宿主的资源解析保留并忽略该字段，不会拒装；要依赖按钮隐藏行为时，核验实际发布版本并填写对应 `minCindyVersion`，不要猜版本号。
+
+页签与全屏收到固定 `hostContext.containerDimensions: {width,height}`，页面铺满可用区域；
+尺寸变化走原 host-context 更新。页面应处理自身滚动，不要使用 `overflow:hidden` 截掉长内容。
+对话、弹层和折叠区仍是 `{width,maxHeight}` 内容高度模式；不要把这两种模式混作同一种自动增高布局。
 
 ### 声明与打开
 
@@ -32,7 +44,7 @@
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
-仅适用于 `composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
+仅适用于 `composer.header/composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
 弹层方式在安装/更新时随声明展示，不需要为入口单独授权。例：
 `{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
@@ -45,7 +57,8 @@
 
 | position | 位置 |
 | --- | --- |
-| `composer.toolbar` | 输入框工具栏 |
+| `composer.header` | 任务输入框卡片正上方，与输入框同宽；只显示一行，超宽横向滚动，长标题截断并保留完整提示；建议少量短入口，无贡献时不占空间 |
+| `composer.toolbar` | 输入框内底部工具栏 |
 | `session.header` | 任务标题栏 |
 | `statusbar` | 输入框下方的任务状态栏，位于目录／对话标识与用量信息之间 |
 | `message.actions` | 消息操作栏 |
@@ -278,7 +291,7 @@ await publish();
 ### 完整示例
 
 [host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示原生入口、折叠侧栏、附件交接与重命名、输入补全、统一设置、
-全局/任务视图、命令、草稿和宿主操作。示例的历史 MCP Apps 版本下限只用于源码自测；发布前按实际新版本修改，
+全局/任务视图、命令、草稿和宿主操作。使用示例时按 §2 填写 `minCindyVersion`，
 并让用户提供图标或明确同意生成图标，不能生成占位色块。
 用包含本章实现的宿主执行 `ghost_forge_pack`；安装另需用户指示。验收应覆盖安装/更新整版确认、无分项记录的已装插件能力可用、旧插件无感兼容、
 无候选历史消息不通信，以及关闭/撤权后停止投递。

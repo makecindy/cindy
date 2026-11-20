@@ -30,6 +30,13 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({ reportCindyGateway
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: () => null }));
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: async () => { throw new Error('no local runtime'); } }));
 vi.mock('../../utility-model/UtilityModelSelection.js', () => ({ getUtilityModelChainProfiles: () => { throw new Error('legacy profile chain read'); } }));
+// This gateway-only fixture has no subscription accounts. Keep the real catalog
+// shared with Host, without loading Desktop's UI/provider-service assembly.
+vi.mock('../createDesktopProviderService.js', async () => {
+  const { getActiveCatalog } = await import('../active-catalog.js');
+  return { getDesktopSelectableCatalog: () => getActiveCatalog() };
+});
+vi.mock('../../subscription-accounts/runtime.js', () => ({ acquireSubscriptionAccount: async () => null }));
 
 import { desktopMakerLogger } from '../logger-adapter.js';
 import { createAutoPermissionReviewer } from '../auto-permission-reviewer.js';
@@ -57,11 +64,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
-  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
+  requestText: (request, prompt, { signal }) => requestAutoReviewText(prompt, signal, request.sessionId),
 });
 /** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
 const reviewToolLoop = createToolLoopReviewer({
-  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
 });
 // ---- end of the copy ----
 

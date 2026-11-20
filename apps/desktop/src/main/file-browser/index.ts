@@ -154,6 +154,7 @@ interface ReadFileArgs extends RemoteRoutedArgs {
 }
 
 interface WriteFileArgs extends RemoteRoutedArgs {
+  expectedResolvedPath?: string;
   workdir: string;
   relPath: string;
   content: string;
@@ -894,8 +895,9 @@ export function registerFileBrowserIpc(): void {
             workdir: args.workdir,
             relPath: args.relPath,
             content: args.content,
+            expectedResolvedPath: args.expectedResolvedPath,
           })
-        : await writeFile(args.workdir, args.relPath, args.content);
+        : await writeFile(args.workdir, args.relPath, args.content, args.expectedResolvedPath);
       return { ok: true as const, ...result };
     } catch (err) {
       log.warn('write-file failed', { relPath: args.relPath, error: String(err) });

@@ -21,7 +21,7 @@
  *   - localStorage key `cc-agent.sidebar.filter.projectOrder`
  *   - owner-scoped localStorage key derived from `cc-agent.sidebar.filter.manualProjectOrder`
  *
- * GC（mount 后由编排层在 sessions 首次加载完成时调用一次 `gc(activeWorkingDirs)`）：
+ * GC（由编排层在每种列表的项目集首次就绪时调用一次 `gc(activeWorkingDirs)`）：
  *   - 剔除 projects 数组中已不在 activeWorkingDirs 集合的条目
  *   - 剔除后空 → 自动回退到 'all'
  *
@@ -45,6 +45,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { useTaskListMode, type TaskListMode } from '@/hooks/useTaskListMode';
+import { cancelActiveSortable } from '@/components/sidebar/SortableList';
 import type { TaskBotIdentity } from '@/features/bots/botFollowScopes';
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -57,6 +59,8 @@ import {
 
 import {
   loadCreators,
+  loadHideAutomations,
+  persistHideAutomations,
   persistCreators,
   nextCreatorsAfterToggle,
   normalizeTaskCreators,
@@ -66,9 +70,14 @@ import {
   loadVendor,
   loadGroupBy,
   loadGroupDialogue,
+  loadGroupAutomation,
   loadGroupDevice,
   loadLastActivity,
   loadSortBy,
+  loadPinnedSortBy,
+  persistPinnedSortBy,
+  PINNED_SORT_BY_KEY,
+  type PinnedSortBy,
   loadProjectOrder,
   loadManualProjectOrder,
   migrateLegacyManualSort,
@@ -79,6 +88,7 @@ import {
   persistVendor,
   persistGroupBy,
   persistGroupDialogue,
+  persistGroupAutomation,
   persistGroupDevice,
   persistLastActivity,
   persistSortBy,
@@ -127,6 +137,8 @@ export interface UseSidebarFilterReturn {
   /** Status 维度（默认 'active'）。 */
   status: FilterStatus;
   creators: FilterCreators;
+  hideAutomations: boolean;
+  setHideAutomations: (hide: boolean) => void;
   creatorOptions: readonly TaskBotIdentity[];
   toggleCreator: (key: string) => void;
   setCreatorsAll: () => void;
@@ -147,10 +159,14 @@ export interface UseSidebarFilterReturn {
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
   groupDialogue: boolean;
+  /** 「自动化归为一组」开关:true = 自动化运行的任务收进「自动化」组;默认 true。 */
+  groupAutomation: boolean;
   /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;
+  /** 置顶区独立的显示排序；默认保留手动顺序。 */
+  pinnedSortBy: PinnedSortBy;
   /** 按项目分组时的项目行顺序。默认 'activity'。 */
   projectOrder: FilterProjectOrder;
   /** Project 分组自定义顺序。元素为 normalized workingDir。 */
@@ -166,7 +182,7 @@ export interface UseSidebarFilterReturn {
   /** 切回 'all'（不取消勾选状态，是显式 reset）。 */
   setProjectsAll: () => void;
   /**
-   * 由编排层在 sessions 首次加载完成后调用一次（带去重 ref guard），
+   * 由编排层在每种列表的项目集首次就绪后调用一次（按列表去重），
    * 把 projects 数组里已不在 activeWorkingDirs 集合内的条目剔除。
    * 调用幂等。
    */
@@ -179,10 +195,14 @@ export interface UseSidebarFilterReturn {
   setGroupBy: (groupBy: FilterGroupBy) => void;
   /** 设置「对话归为一组」，持久化到 localStorage。 */
   setGroupDialogue: (groupDialogue: boolean) => void;
+  /** 设置「自动化归为一组」，持久化到 localStorage。 */
+  setGroupAutomation: (groupAutomation: boolean) => void;
   /** 设置「按设备分组」，持久化到 localStorage。 */
   setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
+  /** 设置置顶显示排序，保留原有手动顺序。 */
+  setPinnedSortBy: (sortBy: PinnedSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
   /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
@@ -223,11 +243,37 @@ function isExactOwnerStampCurrent(
   );
 }
 
+function useModeFilterState<T>(mode: TaskListMode, load: (mode: TaskListMode) => T) {
+  const tasks = useState(() => load('tasks'));
+  const inbox = useState(() => load('inbox'));
+  return mode === 'inbox' ? inbox : tasks;
+}
+
+/** Run project-filter cleanup once each mode has a nonempty, unfiltered catalogue. */
+export function useSidebarFilterGc(
+  mode: TaskListMode,
+  activeProjectKeys: readonly string[],
+  gc: UseSidebarFilterReturn['gc'],
+): void {
+  const gcDoneRef = useRef<Record<TaskListMode, boolean>>({ tasks: false, inbox: false });
+  useEffect(() => {
+    if (gcDoneRef.current[mode] || activeProjectKeys.length === 0) return;
+    gc(activeProjectKeys);
+    gcDoneRef.current[mode] = true;
+  }, [mode, activeProjectKeys, gc]);
+}
+
 export function useSidebarFilter(
   hiddenProjectKeys: ReadonlySet<string>,
   initialSnapshot: SidebarSettingsSnapshot,
   creatorOptions: readonly TaskBotIdentity[] = [],
 ): UseSidebarFilterReturn {
+  const { mode } = useTaskListMode();
+  const [hideAutomations, setHideAutomationsState] = useModeFilterState(mode, loadHideAutomations);
+  const setHideAutomations = useCallback((hide: boolean) => {
+    setHideAutomationsState(hide);
+    persistHideAutomations(hide, mode);
+  }, [mode, setHideAutomationsState]);
   const ownerId = initialSnapshot.dataOwnerId;
   const ownerStamp = useMemo<DataOwnerPushStamp>(
     () => ({
@@ -238,37 +284,36 @@ export function useSidebarFilter(
   );
   const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
-  const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects(ownerId));
-  const [storedCreators, setCreators] = useState<FilterCreators>(() => loadCreators(ownerId));
+  const [projects, setProjectsState] = useModeFilterState(mode, scope => loadProjects(ownerId, scope));
+  const [storedCreators, setCreators] = useModeFilterState(mode, scope => loadCreators(ownerId, scope));
   const normalizeCreators = useCallback((selected: FilterCreators): FilterCreators =>
     normalizeTaskCreators(selected, creatorOptions), [creatorOptions]);
   const creators = useMemo(() => normalizeCreators(storedCreators), [normalizeCreators, storedCreators]);
   useEffect(() => {
     if (creators === storedCreators) return;
     setCreators(creators);
-    persistCreators(creators, ownerId);
-  }, [creators, storedCreators, ownerId]);
+    persistCreators(creators, ownerId, mode);
+  }, [creators, storedCreators, ownerId, mode, setCreators]);
   const toggleCreator = useCallback((key: string) => {
     setCreators(previous => {
       const next = nextCreatorsAfterToggle(normalizeCreators(previous), key);
-      persistCreators(next, ownerId);
+      persistCreators(next, ownerId, mode);
       return next;
     });
-  }, [ownerId, normalizeCreators]);
+  }, [ownerId, normalizeCreators, mode, setCreators]);
   const setCreatorsNone = useCallback(() => {
     setCreators('none');
-    persistCreators('none', ownerId);
-  }, [ownerId]);
+    persistCreators('none', ownerId, mode);
+  }, [ownerId, mode, setCreators]);
   const setCreatorsAll = useCallback(() => {
     setCreators('all');
-    persistCreators('all', ownerId);
-  }, [ownerId]);
-  const [vendor, setVendorState] = useState<FilterVendor>(() => loadVendor());
-  const [lastActivity, setLastActivityState] = useState<FilterLastActivity>(() =>
-    loadLastActivity(),
-  );
+    persistCreators('all', ownerId, mode);
+  }, [ownerId, mode, setCreators]);
+  const [vendor, setVendorState] = useModeFilterState(mode, loadVendor);
+  const [lastActivity, setLastActivityState] = useModeFilterState(mode, loadLastActivity);
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
+  const [groupAutomation, setGroupAutomationState] = useState<boolean>(() => loadGroupAutomation());
   const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => {
     migrateLegacyManualSort();
@@ -277,6 +322,29 @@ export function useSidebarFilter(
   const [projectOrder, setProjectOrderState] = useState<FilterProjectOrder>(() =>
     loadProjectOrder(),
   );
+  const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
+  const pinnedSortByRef = useRef(pinnedSortBy);
+  const applyPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    if (next === pinnedSortByRef.current) return;
+    pinnedSortByRef.current = next;
+    // Sortable may have moved a card into another column. Restore its DOM
+    // before React reconciles the newly sorted entries against their parents.
+    cancelActiveSortable('[data-sortable-scope="pinned"]');
+    setPinnedSortByState(next);
+  }, []);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    applyPinnedSortBy(next);
+    persistPinnedSortBy(next);
+  }, [applyPinnedSortBy]);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
+        applyPinnedSortBy(loadPinnedSortBy());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [applyPinnedSortBy]);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );
@@ -422,10 +490,10 @@ export function useSidebarFilter(
     setProjectsState((prev) => {
       const next = removeProjectsFromFilter(prev, hiddenProjectKeys, window.electronAPI.platform);
       if (next === prev) return prev;
-      persistProjects(next, ownerId);
+      persistProjects(next, ownerId, mode);
       return next;
     });
-  }, [hiddenProjectKeys, ownerId]);
+  }, [hiddenProjectKeys, ownerId, mode, setProjectsState]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.sidebarSettings.onPinnedOrderChanged(
@@ -464,11 +532,11 @@ export function useSidebarFilter(
       setProjectsState((prev) => {
         const next = nextProjectsAfterToggle(prev, workingDir, window.electronAPI.platform);
         if (next === prev) return prev;
-        persistProjects(next, ownerId);
+        persistProjects(next, ownerId, mode);
         return next;
       });
     },
-    [ownerId],
+    [ownerId, mode, setProjectsState],
   );
 
   const ensureProjectIncluded = useCallback(
@@ -476,27 +544,27 @@ export function useSidebarFilter(
       setProjectsState((prev) => {
         const next = includeProjectInFilter(prev, workingDir, window.electronAPI.platform);
         if (next === prev) return prev;
-        persistProjects(next, ownerId);
+        persistProjects(next, ownerId, mode);
         return next;
       });
     },
-    [ownerId],
+    [ownerId, mode, setProjectsState],
   );
 
   const setProjectsAll = useCallback(() => {
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
-      persistProjects('all', ownerId);
+      persistProjects('all', ownerId, mode);
       return 'all';
     });
-  }, [ownerId]);
+  }, [ownerId, mode, setProjectsState]);
 
   const gc = useCallback(
     (activeWorkingDirs: readonly string[]) => {
       setProjectsState((prev) => {
         const next = gcProjectsAgainstActive(prev, activeWorkingDirs, window.electronAPI.platform);
         if (next === prev) return prev;
-        persistProjects(next, ownerId);
+        persistProjects(next, ownerId, mode);
         return next;
       });
       setManualProjectOrderState((prev) => {
@@ -512,7 +580,7 @@ export function useSidebarFilter(
         return next;
       });
     },
-    [ownerId],
+    [ownerId, mode, setProjectsState],
   );
 
   const projectsAsSet = useMemo<Set<string> | null>(
@@ -522,13 +590,13 @@ export function useSidebarFilter(
 
   const setVendor = useCallback((v: FilterVendor) => {
     setVendorState(v);
-    persistVendor(v);
-  }, []);
+    persistVendor(v, mode);
+  }, [mode, setVendorState]);
 
   const setLastActivity = useCallback((next: FilterLastActivity) => {
     setLastActivityState(next);
-    persistLastActivity(next);
-  }, []);
+    persistLastActivity(next, mode);
+  }, [mode, setLastActivityState]);
 
   const setGroupBy = useCallback((next: FilterGroupBy) => {
     setGroupByState(next);
@@ -538,6 +606,11 @@ export function useSidebarFilter(
   const setGroupDialogue = useCallback((next: boolean) => {
     setGroupDialogueState(next);
     persistGroupDialogue(next);
+  }, []);
+
+  const setGroupAutomation = useCallback((next: boolean) => {
+    setGroupAutomationState(next);
+    persistGroupAutomation(next);
   }, []);
 
   const setGroupDevice = useCallback((next: boolean) => {
@@ -556,18 +629,19 @@ export function useSidebarFilter(
   }, []);
 
   const resetContentFilters = useCallback(() => {
+    setHideAutomations(false);
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
-      persistProjects('all', ownerId);
+      persistProjects('all', ownerId, mode);
       return 'all';
     });
     setCreators('all');
-    persistCreators('all', ownerId);
+    persistCreators('all', ownerId, mode);
     setVendorState('all');
-    persistVendor('all');
+    persistVendor('all', mode);
     setLastActivityState('all');
-    persistLastActivity('all');
-  }, [ownerId]);
+    persistLastActivity('all', mode);
+  }, [ownerId, mode, setCreators, setProjectsState, setVendorState, setLastActivityState, setHideAutomations]);
 
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
@@ -587,8 +661,10 @@ export function useSidebarFilter(
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
-      updatePinnedOrder(
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) => {
+      // 显示排序不能写回手动顺序，也忽略切换模式后迟到的拖拽回调。
+      if (pinnedSortByRef.current !== 'manual') return Promise.resolve();
+      return updatePinnedOrder(
         () =>
           normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
             sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
@@ -598,7 +674,8 @@ export function useSidebarFilter(
           baseOrder: Array.from(baseOrder),
           order: nextOrder,
         }),
-      ),
+      );
+    },
     [updatePinnedOrder],
   );
 
@@ -641,11 +718,13 @@ export function useSidebarFilter(
   );
 
   const isSessionContentFiltered =
-    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all';
+    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all' || hideAutomations;
 
   const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
   return {
+    hideAutomations,
+    setHideAutomations,
     creators,
     creatorOptions,
     toggleCreator,
@@ -660,8 +739,10 @@ export function useSidebarFilter(
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
+    pinnedSortBy,
     projectOrder,
     manualProjectOrder,
     manualPinnedOrder,
@@ -674,8 +755,10 @@ export function useSidebarFilter(
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
+    setPinnedSortBy,
     setProjectOrder,
     resetContentFilters,
     setManualProjectOrder,

@@ -646,3 +646,13 @@ describe('createPeerUsageSync', () => {
     expect((await sync.snapshot()).peerRows.size).toBe(0);
   });
 });
+
+it('preserves auxiliary receipts and the task token split through the cross-device sanitizer', () => {
+  const row = { day: '2026-11-17', agentKind: 'auxiliary', source: 'title', providerId: 'saved-provider',
+    requestCount: 2, model: 'helper', money: { amount: 0, currency: 'USD', approximate: false, kind: 'actual-cost' },
+    inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheCreateTokens: 0 };
+  const parsed = sanitizeUsageDeviceRows({ spendDays: [], modelRows: [row], tasks: [],
+    sessionRows: [{ day: '2026-11-17', sessionId: 'task', tokens: 20, auxiliaryTokens: 15 }] });
+  expect(parsed?.modelRows).toEqual([row]);
+  expect(parsed?.sessionRows[0]).toMatchObject({ tokens: 20, auxiliaryTokens: 15 });
+});

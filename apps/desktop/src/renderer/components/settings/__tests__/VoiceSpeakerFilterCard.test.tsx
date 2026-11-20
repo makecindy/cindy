@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VoiceSpeakerFilterStatus } from '../../../../shared/voiceSpeakerFilter';
+import { initialDownloadProgress } from '../../../../shared/downloadProgress';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -87,6 +88,26 @@ describe('VoiceSpeakerFilterCard', () => {
 
     expect(onEnabledChange).toHaveBeenCalledWith(true);
     expect(api.downloadModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the shared download meter while models download and still lets the user cancel', async () => {
+    mockStatus({
+      ...baseStatus,
+      modelState: 'downloading',
+      downloadedBytes: 14_000_000,
+      download: {
+        ...initialDownloadProgress('retrying', baseStatus.totalBytes),
+        loaded: 14_000_000,
+        percent: 48,
+        attempt: 2,
+        retryReason: 'network',
+      },
+    });
+    renderCard({ enabled: true });
+    expect((await screen.findByRole('progressbar')).getAttribute('aria-valuenow')).toBe('48');
+    expect(screen.getByText('downloadProgress.retry.network')).toBeTruthy();
+    fireEvent.click(screen.getByText('settings.voiceInput.speakerFilter.model.cancel'));
+    expect(api.cancelDownload).toHaveBeenCalledOnce();
   });
 
   it('does not download again when the models are already there', async () => {

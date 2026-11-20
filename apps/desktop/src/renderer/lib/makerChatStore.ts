@@ -4,19 +4,23 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
+import { chatRemoteErrorGuidanceKey } from './autoReviewUnavailableGuidance';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
   asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+  remoteInteractionHandling,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { findErrorTailMessage } from './errorTailMessage';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
-import type { ImMessageSource } from '../../shared/imMessageSource';
+import { createPluginRelayImSource, type ImMessageSource } from '../../shared/imMessageSource';
+import { splitPluginMessage } from '../../shared/pluginMessage';
 import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { readBotStarterOptions } from '../../shared/botStarterOptions';
@@ -64,6 +68,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
+import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProviderId,
@@ -146,7 +151,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -187,7 +192,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -206,7 +211,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError } from '@/utils/ipcError';
+import { extractIpcError, hostProfileInUseI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -245,6 +250,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
+import { providerErrorExplanation } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -375,15 +381,19 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return held;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
   const parsed = parseAgentErrorCode(msg);
-  return parsed ? `chat.remoteError.${parsed.code}` : undefined;
+  return parsed ? chatRemoteErrorGuidanceKey(parsed.code, null) : undefined;
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
@@ -392,12 +402,16 @@ export function decodeRemoteErrorMessage(msg: string): string {
   if (limitKey) return i18n.t(limitKey);
   const parsed = parseAgentErrorCode(msg);
   return parsed
-    ? i18n.t(`chat.remoteError.${parsed.code}`, { defaultValue: parsed.fallback })
+    ? i18n.t(chatRemoteErrorGuidanceKey(parsed.code, null)!, { defaultValue: parsed.fallback })
     : msg;
 }
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
+  // say why and what to do here, in the window's language (the Host's own sentence is not shown).
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.
   if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
@@ -411,15 +425,19 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
+  if (providerErrorExplanation(message)) return message;
+  if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
+  // The banner localizes this stable reason. Keep the host's bounded cause in
+  // the raw detail/diagnosis path instead of replacing it with summary copy.
+  if (reason === 'silent-stop-exhausted') return message;
   return reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')
-      : reason === 'silent-stop-exhausted'
-        ? i18n.t('logic.errors.silentStopExhausted')
-        : reason === 'codex-auto-review-unavailable'
-          ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+      : reason === 'codex-auto-review-unavailable'
+        ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+        : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -986,6 +1004,7 @@ export interface PendingPlanReview {
  * 超时/会话清理由 main 兜底并广播 INTERACTION_DISMISSED 清卡。
  */
 export interface PendingIssueConfirm {
+  submitting?: boolean;
   requestId: string;
   draft: IssueConfirmDraft;
   /**
@@ -1178,40 +1197,6 @@ interface RemoteOptimisticSendScope {
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
-
-/** 各 session「正在识别图片中」toast id（duration 0 手动 dismiss），按 sessionId 隔离，
- *  避免不同会话/窗口的输出互相误 dismiss；agent 首个输出或失败收口时清理对应 session。 */
-const _visionBridgeToastIds = new Map<string, string>();
-
-/** 清理指定 session 的「正在识别图片中」toast（dismiss 找不到 id 时是 no-op，安全）。 */
-function dismissVisionBridgeToast(sessionId: string): void {
-  const id = _visionBridgeToastIds.get(sessionId);
-  if (id) {
-    toast.dismiss(id);
-    _visionBridgeToastIds.delete(sessionId);
-  }
-}
-
-/** 视觉桥用户提示事件 reason 枚举（识别中 / fallback / 不可用）。 */
-const VISION_BRIDGE_REASONS = new Set([
-  'vision-bridge-recognizing',
-  'vision-bridge-fallback',
-  'vision-bridge-unavailable',
-]);
-
-/**
- * 视觉桥提示事件判定：reason 命中枚举 且 source 是 main 合成的 'vision-bridge' 专用来源
- * 且 isTerminal === false。三重校验避免把普通 agent / 远程转发的 error（含伪造 reason）
- * 误当视觉桥提示弹 toast，或吞掉真实终态错误。
- */
-function isVisionBridgeReason(event: unknown): boolean {
-  if (!event || typeof event !== 'object') return false;
-  const { type, data, source } = event as { type?: string; data?: unknown; source?: unknown };
-  if (type !== 'error' || source !== 'vision-bridge') return false;
-  const reason = (data as { reason?: unknown } | null)?.reason;
-  if (typeof reason !== 'string' || !VISION_BRIDGE_REASONS.has(reason)) return false;
-  return (data as { isTerminal?: unknown } | null)?.isTerminal === false;
-}
 
 function captureRemoteOptimisticSendScope(
   sessionId: string,
@@ -2588,7 +2573,11 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
-  target: 'claude-code' | 'codex' | 'pi';
+  /**
+   * 'acp' = 切到插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 是 acp-plugin:<插件>:<引擎>。
+   * 内置引擎的展示与切换链路只读 builtinAgentSwitchIntent()，插件引擎由选择器单独呈现。
+   */
+  target: 'claude-code' | 'codex' | 'pi' | 'acp';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -2598,6 +2587,23 @@ export interface AgentSwitchIntentRecord {
    * 意图期内模型目录、选中态与 trigger 都按这台电脑显示。
    */
   agentDeviceId?: string | null;
+}
+
+/** 切到内置引擎的意图。 */
+export type BuiltinAgentSwitchIntentRecord = AgentSwitchIntentRecord & { target: 'claude-code' | 'codex' | 'pi' };
+
+/** 内置引擎那一套展示与切换只看内置意图；待切到插件引擎时按「没有内置意图」处理。 */
+export function builtinAgentSwitchIntent(
+  intent: AgentSwitchIntentRecord | null | undefined,
+): BuiltinAgentSwitchIntentRecord | null {
+  return intent && intent.target !== 'acp' ? (intent as BuiltinAgentSwitchIntentRecord) : null;
+}
+
+/** 待切到插件引擎的意图(下一条消息发送时生效)。 */
+export function pluginEngineAgentSwitchIntent(
+  intent: AgentSwitchIntentRecord | null | undefined,
+): AgentSwitchIntentRecord | null {
+  return intent?.target === 'acp' ? intent : null;
 }
 
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
@@ -3724,8 +3730,6 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  * explicitly free a specific session.
  */
 function _purgeSession(sessionId: string): void {
-  // session 删除/归档/驱逐：清掉该 session 的「正在识别图片中」toast，防残留。
-  dismissVisionBridgeToast(sessionId);
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
@@ -4130,16 +4134,34 @@ function _trimSessionMessages(sessionId: string): void {
   // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
   // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
   // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
-  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
-  // 不可见，同样不裁。
+  // 上翻阅读中不裁；快照缺地板（旧快照/窗口未建立）时无法证明前缀不可见，同样不裁。
   if (_activeViewSessions.has(sessionId)) {
     const scroll = readSessionScroll(sessionId);
-    if (scroll?.isNearBottom === false) return;
-    const floorIdx = scroll?.windowFloorClientId
-      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
-      : -1;
-    if (floorIdx < 0) return;
-    floors.push(floorIdx);
+    // 聚合所有挂载视图的地板：同会话双面板（如 Orca worker 面板 + 侧栏）各自记录，
+    // 旧快照/未带 viewId 的写入回退到单槽 windowFloorClientId。
+    const floorIds = scroll?.renderFloorsByView
+      ? Object.values(scroll.renderFloorsByView)
+      : scroll?.windowFloorClientId
+        ? [scroll.windowFloorClientId]
+        : [];
+    const floorIdxs = floorIds
+      .map((id) => messageIndexByClientId(state.messages, id))
+      .filter((idx) => idx >= 0);
+    // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
+    if (floorIdxs.length === 0) return;
+    const deepestFloorIdx = Math.min(...floorIdxs);
+    // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
+    // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
+    // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
+    // 任一视图的渲染窗口地板距尾超过暖读上限才算深读；所有地板都在尾部附近时，
+    // 各视图的读者窗口就是各自地板到结尾，裁掉更老的前缀不动任何视图。
+    if (
+      scroll?.isNearBottom === false &&
+      state.messages.length - deepestFloorIdx > WARM_READING_MAX_MESSAGES
+    ) {
+      return;
+    }
+    floors.push(...floorIdxs);
   }
   // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
   // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
@@ -4316,7 +4338,8 @@ function resolveGatewayRecoveryProviderId(
   if (createOpts && Object.prototype.hasOwnProperty.call(createOpts, 'providerId')) {
     return createOpts.providerId ?? null;
   }
-  if (session.agentSwitchIntent) return session.agentSwitchIntent.providerId;
+  const builtinIntent = builtinAgentSwitchIntent(session.agentSwitchIntent);
+  if (builtinIntent) return builtinIntent.providerId;
   return session.sessionProviderId;
 }
 
@@ -6043,10 +6066,19 @@ function isLegacyRedactedThinkingPlaceholder(m: Message, text: string): boolean 
 // F1-a: 所有 agent 消息(assistant/tool_use/tool_result/thinking/ask_user/plan_review)
 // 的落库已收口 main(messagePersistBroadcaster),handleStreamEvent 退化为纯 UI reducer、
 // 不再写库 → 不再需要 sessionId 形参(已从签名移除,各调用点同步去掉第三个实参)。
+/** Old execution hosts may still emit retired feature notices. Ignore them at
+ * ingress and in the reducer so a late notice cannot resurrect an idle turn.
+ * Remove once mixed-version hosts no longer send this source. */
+function isRetiredVisionNotice(event: { type: string; source?: unknown; data?: unknown }): boolean {
+  return event.type === 'error' && event.source === 'vision-bridge' &&
+    (event.data as { isTerminal?: unknown } | null)?.isTerminal === false;
+}
+
 export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
 ): SessionChatState {
+  if (isRetiredVisionNotice(event)) return inputState;
   const reconnectAttempt =
     event.type === 'error'
       ? parseReconnectAttemptMessage(
@@ -6112,7 +6144,6 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
-      dismissVisionBridgeToast(event.sessionId);
       const { text, isFinal, isFullText } = event.data as {
         text: string;
         isFinal: boolean;
@@ -6558,7 +6589,6 @@ export function handleStreamEvent(
     }
 
     case 'tool_use': {
-      dismissVisionBridgeToast(event.sessionId);
       const { toolUseId, toolName, input } = parseMessageToolUse({
         role: 'tool_use', content: event.data,
       });
@@ -6582,6 +6612,7 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
+          ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
           ...(toolName === 'update_plan'
             ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
             : {}),
@@ -6603,6 +6634,7 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
@@ -6653,9 +6685,6 @@ export function handleStreamEvent(
     }
 
     case 'done': {
-      // turn 终态兜底清理：done 时清掉该 session 的「正在识别图片中」toast，
-      // 即使没有 text/tool_use 也不残留（视觉桥要么已结束要么被放弃）。
-      dismissVisionBridgeToast(event.sessionId);
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -6807,46 +6836,17 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
-        imageCount,
         toolLoop: toolLoopRaw,
         outputLimit: outputLimitRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
-        imageCount?: number;
         toolLoop?: unknown;
         outputLimit?: unknown;
       };
       const toolLoop = parseToolLoopErrorDetails(toolLoopRaw);
       const outputLimit = parseOutputLimitDetails(outputLimitRaw);
-      // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
-      // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
-      // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
-      // 转发的同名 reason error 不通过校验，继续走普通 error 处理（不吞真实错误）。
-      if (isVisionBridgeReason(event)) {
-        if (reason === 'vision-bridge-recognizing') {
-          const count = typeof imageCount === 'number' && imageCount > 0 ? imageCount : 1;
-          // 先清旧 id 再存新：连续 recognizing（多图/多 turn）不残留上一张的 loading toast。
-          dismissVisionBridgeToast(event.sessionId);
-          _visionBridgeToastIds.set(
-            event.sessionId,
-            toast.info(i18n.t('chat.visionBridge.analyzing', { count }), { duration: 0 }),
-          );
-          return state;
-        }
-        // fallback / unavailable：识别结束（失败或降级），清掉对应 session 的 loading toast，
-        // 避免「正在识别中」与「已回退」同时挂着。
-        dismissVisionBridgeToast(event.sessionId);
-        if (reason === 'vision-bridge-fallback') {
-          toast.warning(i18n.t('chat.visionBridge.fallback'), { duration: 5000 });
-          return state;
-        }
-        if (reason === 'vision-bridge-unavailable') {
-          toast.warning(i18n.t('chat.visionBridge.unavailable'), { duration: 6000 });
-          return state;
-        }
-      }
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -6858,9 +6858,6 @@ export function handleStreamEvent(
           : safeErrMsgRaw;
       const errMsg = liveErrorBannerText(safeErrMsg, reason);
       const isTerminalError = isTerminalErrorData(event.data);
-      // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
-      // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
-      if (isTerminalError) dismissVisionBridgeToast(event.sessionId);
       if (!isTerminalError) {
         // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
         // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
@@ -7611,7 +7608,7 @@ function mergeLiveGenerationStatus(
   // Speed belongs to the turn that produced it: a new turn drops the old value,
   // frames without the field keep the latest one (including the final average).
   // An unreliable frame without it means the host withdrew the speed (suspend).
-  const tokenSpeed = readTokenSpeedSnapshot(update.tokenSpeed)
+  const tokenSpeed = receiveTokenSpeedSnapshot(update.tokenSpeed, isTurnStart ? undefined : previous.tokenSpeed)
     ?? (isTurnStart || update.generationReliable === false ? undefined : previous.tokenSpeed);
   // Turn start drops leftover metrics from the previous turn, then keeps any
   // live fields carried by this same status. A reconnect-shaped first event
@@ -7880,7 +7877,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+    source?: 'claude-code' | 'codex' | 'pi';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
     turnScope?: 'turn' | 'background';
@@ -7932,7 +7929,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -8522,15 +8519,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const payload = raw as MakerEventPayload;
     if (!payload?.sessionId || !payload.event) return;
     const { sessionId, event } = payload;
+    if (isRetiredVisionNotice(event)) return;
     const persistId = payload.persistId;
     const resolvedContent = payload.resolvedContent;
-
-    // 视觉桥提示只信本机 main 直发：远端（device-link 转发）入站的 source:'vision-bridge'
-    // 事件一律丢弃——source 是 main 合成标记不是防伪签名，已配对远端可伪造；不转发远端
-    // 视觉桥提示（它属于发起会话所在设备的本地 UI 反馈）。
-    if (ingress.remoteDeviceId && isVisionBridgeReason(event)) {
-      return;
-    }
 
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
@@ -8602,6 +8593,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
+      // Status labels are not turn completion: Claude emits Done before a
+      // silent-stop done, Pi after it. Only the stream done/error below settles
+      // remote preparation, using the same rule for every agent source.
       return;
     }
 
@@ -8839,6 +8833,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true
+        && (event.type !== 'error' || isTerminalErrorData(event.data))) {
+        noteStartingTerminal(sessionId, event.agentMeta?.replyToClientId);
+      }
       const state = sessions.get(sessionId);
       const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
         && event.turnOrigin.surface !== 'im' && state
@@ -8874,13 +8872,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // MEM-OPT-1: trim non-active sessions after turn completes
       queueMicrotask(_trimMessagesIfNeeded);
     }
-    // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
-    // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
-    // recoverableError 链路（否则会被误渲染成「SDK error surfaced」错误横幅）。三重校验
-    // 保证不吞真实终态错误、不把普通 agent/远程 error 误当视觉桥提示。
-    if (event.type === 'error' && isVisionBridgeReason(event)) {
-      return;
-    }
+
     if (event.type === 'error') {
       const errData = (event.data as { message?: string; sdkError?: string }) ?? {};
       const errMsg = redactSensitiveText(errData.message ?? '');
@@ -9020,7 +9012,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       (ingress.remoteDeviceId || remoteSnapshotDeviceId) &&
       (kind === 'issue_confirm' ||
         kind === 'rename_sessions_confirm' ||
-        kind === 'ghost_grant_confirm')
+        kind === 'ghost_grant_confirm') &&
+      remoteInteractionHandling({ request }) === 'desktop-only'
     ) {
       setState(sessionId, (s) => {
         const confirmation: PendingRemoteDesktopConfirmation = {
@@ -9031,7 +9024,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         if (!current) {
           return {
             ...s,
-            pendingIssueConfirm: null,
+            pendingIssueConfirm: s.pendingIssueConfirm?.requestId === request.requestId ? null : s.pendingIssueConfirm,
             pendingRenameSessionsConfirm: null,
             pendingGhostGrantConfirm: null,
             pendingRemoteDesktopConfirmation: confirmation,
@@ -9214,14 +9207,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ...s,
         pendingIssueConfirm: {
           requestId: request.requestId,
+          submitting: s.pendingIssueConfirm?.requestId === request.requestId && s.pendingIssueConfirm.submitting,
           draft,
           env,
           submissionIdentity,
           githubUserIdentity,
           suggestedPublicName,
         },
-        pendingRemoteDesktopConfirmation: null,
-        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -11245,6 +11237,7 @@ function reconcilePendingInteractions(
       const authoritativeQuestionIds = new Set<string>();
       const authoritativePlanIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
+      const authoritativeIssueConfirmIds = new Set<string>();
       const authoritativeInputHandoffIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
@@ -11274,7 +11267,11 @@ function reconcilePendingInteractions(
           typeof request.requestId === 'string' &&
           request.requestId.length > 0
         ) {
-          authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          if (request.kind === 'issue_confirm' && remoteInteractionHandling({ request }) === 'resolvable') {
+            authoritativeIssueConfirmIds.add(request.requestId);
+          } else {
+            authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          }
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
@@ -11333,6 +11330,9 @@ function reconcilePendingInteractions(
           authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
             ? state.pluginSetupCommandInFlight
             : null;
+        const nextIssueConfirm = (stickyDeviceAtStart || interactionOriginAtStart) &&
+          state.pendingIssueConfirm && !authoritativeIssueConfirmIds.has(state.pendingIssueConfirm.requestId)
+          ? null : state.pendingIssueConfirm;
         const nextRemoteDesktopConfirmation =
           stickyDeviceAtStart || interactionOriginAtStart
             ? state.pendingRemoteDesktopConfirmation &&
@@ -11370,6 +11370,7 @@ function reconcilePendingInteractions(
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
           nextInputHandoff === state.pendingInputHandoff &&
+          nextIssueConfirm === state.pendingIssueConfirm &&
           nextCommand === state.pluginSetupCommandInFlight &&
           promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
           !remoteQueueChanged
@@ -11389,6 +11390,7 @@ function reconcilePendingInteractions(
           pendingPermission: nextPermission,
           pendingAppPermissions: appPermissions,
           pendingInputHandoff: nextInputHandoff,
+          pendingIssueConfirm: nextIssueConfirm,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -15019,8 +15021,9 @@ export function buildCreateOptsForCurrentSession(
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
-    ...(current.agentSwitchIntent
-      ? { providerId: current.agentSwitchIntent.providerId }
+    // 待切到插件引擎时 createOpts 仍描述当前引擎：主进程在发送事务里先完成切换，再按任务行启动插件引擎。
+    ...(builtinAgentSwitchIntent(current.agentSwitchIntent)
+      ? { providerId: current.agentSwitchIntent!.providerId }
       : current.sessionProviderId !== undefined
         ? { providerId: current.sessionProviderId }
         : {}),
@@ -15085,7 +15088,7 @@ function prewarmSession(
   void prewarmSessionFor(sessionId, createOpts).catch(() => undefined);
 }
 
-function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
+function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean, clientId: string): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
   // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
@@ -15096,7 +15099,7 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
   // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
-  markSessionStarting(sessionId);
+  markSessionStarting(sessionId, clientId);
 }
 
 /**
@@ -15797,6 +15800,8 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  /** Reuse the bubble already displayed during remote creation. */
+  firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
   /** 本条消息正文前缀含「选中引用」编码块,渲染侧据此启用胶囊化解析。 */
   quotesEncoded?: boolean;
@@ -15956,10 +15961,12 @@ function sendMessage(
           opts,
           clearGenerationAtStart,
           remoteScopeAtStart,
+          undefined,
+          opts?.firstMessageIdentity,
         );
       }
       if (remoteScopeAtStart) {
-        const identity = {
+        const identity = opts?.firstMessageIdentity ?? {
           clientId: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         };
@@ -16189,7 +16196,7 @@ async function sendMessageCore(
 
   // Renderer 只做 UI 乐观排序；DB user_send_at 和队列事务都由 main coordinator
   // 在 enqueue intent 内处理。这里不再本地 mutate pendingQueue，也不再触发 drain。
-  touchSessionUserSend(sessionId, workingDir, wasFirst);
+  touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
 
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
@@ -16588,7 +16595,7 @@ async function steerMessageCore(
   // 插话被受理(远程 outbox 收下 / 主进程受理或物化进队列)才作废关闭错误的待补标意图:之后
   // 落库的错误属于这次插话,不再代关掉的那次错误补标。被拒的插话不作废,否则关掉的错误随后
   // 落库时补标不了。
-  touchSessionUserSend(sessionId, workingDir, false);
+  touchSessionUserSend(sessionId, workingDir, false, queued.clientId);
   // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
   // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
   // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。
@@ -16844,9 +16851,6 @@ function stopSession(
   if (!sessionId) return;
   // 用户主动 Stop：这个会话是他在盯的，行要留全（MEM-OPT-3 不按后台会话压它）。
   _locallyEngagedSessions.add(sessionId);
-  // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
-  // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
-  dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -16988,7 +16992,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     return;
   }
   if (!state?.error) return;
-  const tailRowId = persistedTailRowIdForLiveError(state);
+  const tailRowId = getLiveErrorMessageClientId(state);
   if (tailRowId) markLiveErrorRowDisposed(sessionId, tailRowId);
   _disposedLiveErrorIntents.set(sessionId, {
     text: state.error,
@@ -17011,7 +17015,7 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
 }
 
 /**
- * live 横幅没有绑定落库行时，找出它对应的已落库尾部错误行。
+ * 返回 live 横幅拥有的精确落库行；旧 Host 没有绑定时才按尾部与文案安全认领。
  *
  * 错误落库后若用户没在看这个任务(或之后离开过)，live 横幅会交给历史错误卡，绑定一并清掉；
  * main 的输入投影仍带着这次错误，之后任何一次投影(打开任务、队列变化、协同派活等)都会把
@@ -17019,15 +17023,19 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
  * 保留绑定：后来的新错误(远程断线期间漏收的新一轮、scheduler 发送前失败直接换掉错误等)
  * 可能不经过新一轮启动就顶替旧错误，保留的绑定会被错用到新错误上，关闭标掉的是旧行。
  *
- * 改在关闭时按当前看到的内容认领：已加载历史的最后一条(与尾部错误卡同一判定)是未处置的
- * error 行，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为是同一次错误。对不上
- * (历史未加载、尾部不是 error、文案不同)就什么都不标，不会标到无关行。
+ * 改在显示/关闭时按当前看到的内容认领：共享尾部选择器找到未处置的 error 行
+ * (跳过位置/模型/历史边界卡)，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为
+ * 是同一次错误。历史未加载、已有真实进展或文案不同就不认领，不会标到无关行。
  * 关闭的错误可能还没落库：尾部仍是同文案的旧行时，这里会把旧行一起标掉(它不在尾部之后
  * 就不再显示，没有可见影响)，真正那一行由 claimDisposedLiveErrorRow 等它落库后补标。
  */
-function persistedTailRowIdForLiveError(state: SessionChatState): string | null {
-  if (!state.error || !state.historyLoaded) return null;
-  const tail = state.messages[state.messages.length - 1];
+export function getLiveErrorMessageClientId(
+  state: Pick<SessionChatState, 'error' | 'errorPersistId' | 'historyLoaded' | 'messages' | 'disposedErrorPersistId'>,
+): string | null {
+  if (!state.error) return null;
+  if (state.errorPersistId) return state.errorPersistId;
+  if (!state.historyLoaded) return null;
+  const tail = findErrorTailMessage(state.messages, state.disposedErrorPersistId);
   return tail && isUndisposedErrorRowFor(tail, state.error, state.disposedErrorPersistId)
     ? tail.clientId
     : null;
@@ -17180,7 +17188,7 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): Promise<void> {
+function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -17225,8 +17233,9 @@ function retryLastError(sessionId: string): Promise<void> {
     markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const retryOpts = expected ? { ...boundaryOpts, ...expected } : boundaryOpts;
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
+    retryOpts ? input.retryLastError(sessionId, retryOpts) : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
       // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
@@ -17386,8 +17395,6 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
 }
 
 async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
-  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
-  dismissVisionBridgeToast(sessionId);
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
@@ -17763,6 +17770,8 @@ function submitQuestionDecision(
   requestId: string,
   decision: Record<string, unknown>,
   onAccepted: () => void,
+  targetDevice?: string,
+  onSettled?: () => void,
 ): void {
   const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
@@ -17771,16 +17780,18 @@ function submitQuestionDecision(
   const epoch = _messagesEpoch.get(sessionId) ?? 0;
   const authority = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
-  const isCurrent = () => isDataOwnerGenerationCurrent(owner) &&
+  const isSameSession = () => isDataOwnerGenerationCurrent(owner) &&
     (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
-    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority &&
-    remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+    (targetDevice
+      ? getStickySessionDeviceId(sessionId) === targetDevice && !isRemoteTerminalSessionTombstoned(sessionId, targetDevice)
+      : remoteProjectsStore.getSessionDeviceId(sessionId) === origin);
+  const isCurrent = () => isSameSession() && (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority;
   bumpInteractionReconcileEpoch(sessionId);
   void (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const receipt = await Promise.race([
-        makerApiFor(sessionId).resolveInteraction(requestId, decision),
+        (targetDevice ? makerApiForDevice(targetDevice) : makerApiFor(sessionId)).resolveInteraction(requestId, decision),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('Interaction receipt timeout')), 15_000);
         }),
@@ -17794,6 +17805,7 @@ function submitQuestionDecision(
       const state = sessions.get(sessionId);
       // A winning dismissal from another window/Stop remains authoritative.
       if (state?.pendingAskUser?.requestId !== requestId &&
+        state?.pendingIssueConfirm?.requestId !== requestId &&
         state?.pendingPlanReview?.requestId !== requestId) return;
       log.warn('Question decision receipt unavailable', error);
       // A rejection may mean either an ended request or paused execution.
@@ -17813,11 +17825,14 @@ function submitQuestionDecision(
       if (!isCurrent()) return;
       const current = sessions.get(sessionId);
       if (current?.pendingAskUser?.requestId !== requestId &&
+        current?.pendingIssueConfirm?.requestId !== requestId &&
         current?.pendingPlanReview?.requestId !== requestId) return;
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
     } finally {
       if (timer) clearTimeout(timer);
       questionDecisionsInFlight.delete(key);
+      // A relay reset invalidates old receipts, but the same pending card must become retryable.
+      if (isSameSession()) onSettled?.();
     }
   })();
 }
@@ -18183,9 +18198,20 @@ function respondToIssueConfirm(
 ): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
-  if (!state.pendingIssueConfirm) return;
+  if (!state.pendingIssueConfirm || state.pendingIssueConfirm.submitting) return;
 
   const { requestId } = state.pendingIssueConfirm;
+  const device = getStickySessionDeviceId(sessionId) ?? remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (device) {
+    const setSubmitting = (submitting: boolean) => setState(sessionId, (current) =>
+      current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: { ...current.pendingIssueConfirm, submitting } } : current);
+    setSubmitting(true);
+    submitQuestionDecision(sessionId, requestId, { kind: 'issue_confirm', ...result }, () =>
+      setState(sessionId, (current) => current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: null } : current), device, () => setSubmitting(false));
+    return;
+  }
   bumpInteractionReconcileEpoch(sessionId);
 
   // 先清 UI,再回包(同 respondToPermission 的时序)。
@@ -18625,8 +18651,6 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
  */
 function closeSessionQuery(sessionId: string): void {
   if (!sessionId) return;
-  // 会话关闭：清掉该 session 的「正在识别图片中」toast，防残留。
-  dismissVisionBridgeToast(sessionId);
   makerApiFor(sessionId)
     .closeSession(sessionId)
     .catch((err) => log.warn('maker.closeSession failed:', err));
@@ -18696,16 +18720,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // session when the action started.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
-  const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
-  const continuedErrorTailClientId =
-    syntheticTriggerKind(prompt) === 'continue' &&
-    originalTail?.role === 'error' &&
-    !originalTail.errorDismissed
-      ? originalTail.clientId
-      : null;
+  const continuedErrorTailClientId = syntheticTriggerKind(prompt) === 'continue'
+    ? findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId
+    : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
   return getSessionFor(sessionId)
@@ -18888,8 +18908,12 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'acp'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  // 插件引擎意图必须指出是哪一个引擎，否则按「无意图」处理。
+  if (item.targetAgentKind === 'acp'
+    && !pluginEngineKeyFromProviderId(typeof item.providerId === 'string' ? item.providerId : null)) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
   if (item.providerId != null && typeof item.providerId !== 'string') return null;
@@ -19057,14 +19081,18 @@ function mirrorSessionFields(
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
-  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
-    const nextKind = dbToMakerAgentKind(patch.agentKind);
+  const pluginEngineFlip = isPluginEngineKind(patch.agentKind);
+  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi' || pluginEngineFlip) {
+    // 插件引擎任务的事件走 Claude Code 这套通用 reducer，与直接打开的插件引擎任务一致
+    // (dbAgentKindToMakerKind 对 'acp' 回落 'claude-code')。
+    const nextKind = pluginEngineFlip ? 'claude-code' : dbToMakerAgentKind(patch.agentKind as string);
+    const intentTarget = pluginEngineFlip ? 'acp' : nextKind;
     setState(sessionId, (s) => {
       // New hosts publish the full runtime snapshot before explicitly clearing
       // the consumed intent with CAS. An agent-kind match alone may belong to
       // an older switch to the same engine, not the user's latest model choice.
       const intentApplied = !('runtimeEffective' in patch) &&
-        !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === nextKind;
+        !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === intentTarget;
       if (s.agentKind === nextKind && !intentApplied) return s;
       return {
         ...s,
@@ -19993,6 +20021,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
+    const replyToFields = typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
+      ? { replyToClientId: m.agentMeta.replyToClientId } : {};
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
@@ -20002,7 +20032,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -20038,6 +20068,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
@@ -20189,6 +20220,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           role: m.role,
           content: m.content,
           isStreaming: false,
+          ...replyToFields,
         };
       }
       const c = (m.content && typeof m.content === 'object' ? m.content : {}) as Record<
@@ -20206,6 +20238,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         role: m.role,
         content: message,
         isStreaming: false,
+        ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
@@ -20235,13 +20268,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { ...(sessionImport as Record<string, unknown>) },
       };
     }
-    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
-    const contextRebuild =
-      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
-        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
-        : undefined;
+    // 同一引擎换干净原生会话：展开查看发给新窗口的交接内容。
+    const contextRebuild = m.role === 'assistant' ? m.agentMeta?.contextRebuild : undefined;
     if (contextRebuild && typeof contextRebuild === 'object') {
-      const c = contextRebuild as Record<string, unknown>;
+      const c = contextRebuild;
       return {
         clientId: m.clientId,
         role: 'assistant' as const,
@@ -20251,6 +20281,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: {
           reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
         },
       };
     }
@@ -20275,6 +20307,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           fromModel: typeof c.fromModel === 'string' ? c.fromModel : null,
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
           resumed: c.resumed === true,
           ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
             ? { nativeHistory: c.nativeHistory } : {}),
@@ -20403,12 +20437,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      // Both ingress paths share the Desktop card, but local IM must not opt
-      // older Mobile clients into legacy Hook/system-card semantics.
-      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
+      // 插件来源标签照常显示在卡片上方。
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource
+        ?? (sourcePlugin?.relay
+          ? createPluginRelayImSource(sourcePlugin.relay, splitPluginMessage(parsed.text, parsed.pastedTextRanges))
+          : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),

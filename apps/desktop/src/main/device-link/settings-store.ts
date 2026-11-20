@@ -9,9 +9,6 @@ import type { withAvailabilityPolicyMutation } from './providerShareAvailability
  *    开关打开即授权,同账号设备无需逐次批准;详见 device-link 设计稿)
  *  - revokedControllers: 逐设备访问黑名单(被撤销访问权限的控制端 deviceId 列表)。
  *    全局开着时,名单内的设备单独被挡;持久化,被控端重启 / 离线后仍生效(恢复才解除)。
- *  - modelUseRevokedControllers: 被单独关掉「用本机模型」的同账号控制端 deviceId 列表。
- *    「用本机模型」跟着「控制本机」：控制本机开着时默认可用，名单内的设备借不到本机的模型
- *    (远程 Agent)，其余远程控制不受影响。
  *  - disabledControlDeviceIds: 本机不再主动控制的目标设备 deviceId 列表。它只影响本机
  *    控制其它设备的镜像 / 入口,不改变对方的被控授权。
  *  - lastKnownDeviceNames: 本机最后一次看见的有效设备名缓存。relay 离线后 Redis presence
@@ -52,8 +49,6 @@ export interface DeviceLinkSettings {
   keepAwake: boolean;
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
-  /** 单独关掉「用本机模型」的同账号控制端 deviceId 列表(远程 Agent 拒绝它们)。 */
-  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
@@ -76,7 +71,6 @@ const DEFAULTS: DeviceLinkSettings = {
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
-  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -100,7 +94,6 @@ function normalize(raw: unknown): DeviceLinkSettings {
     revokedControllers: Array.isArray(r.revokedControllers)
       ? r.revokedControllers.filter((x): x is string => typeof x === 'string')
       : [],
-    modelUseRevokedControllers: normalizeStringList(r.modelUseRevokedControllers),
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
@@ -156,27 +149,50 @@ let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
 /**
- * The process keeps settings files it cannot read (override-settings-file.ts, set by the Host
- * only): the unreadable file stays, reads as the defaults (everything off) until it changes, and
- * refuses writes, as createOverrideSettingsFile does. Never set on the desktop.
+ * Writes require a readable baseline after a filesystem failure or when the Host preserves
+ * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
  */
 let cachedUnreadable = false;
+const READ_RETRY_DELAY_MS = 1_000;
+let retryReadAt = 0;
 
 function statMtimeMs(file: string): number | null {
   try {
     return fs.statSync(file).mtimeMs;
-  } catch {
-    return null; // 文件不存在
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-function readDeviceLinkSettings(): DeviceLinkSettings {
+function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
   const file = settingsFilePath();
-  const mtimeMs = statMtimeMs(file);
-  if (cached && mtimeMs === cachedMtimeMs) return cached;
+  let mtimeMs: number | null;
+  let contents: string | undefined;
   try {
-    if (mtimeMs !== null) {
-      cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    mtimeMs = statMtimeMs(file);
+    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
+    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
+    // old grant, and let the next eligible read retry even if the mtime hasn't changed.
+    const now = performance.now();
+    if (now >= retryReadAt) {
+      log.warn('device-link-settings.json read failed → falling back to defaults', {
+        error: error instanceof Error ? error.message : String(error),
+        path: file,
+      });
+      retryReadAt = now + READ_RETRY_DELAY_MS;
+    }
+    cached = null;
+    cachedUnreadable = true;
+    return { ...DEFAULTS };
+  }
+  retryReadAt = 0;
+  try {
+    if (contents !== undefined) {
+      cached = normalize(JSON.parse(contents));
       cachedMtimeMs = mtimeMs;
       cachedUnreadable = false;
       return cached;
@@ -289,9 +305,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   tag: string,
 ): DeviceLinkSettings[K] {
   // 强制丢缓存取盘上最新基线(mtime 粒度粗时缓存可能骗过 read)
-  cached = null;
-  cachedMtimeMs = null;
-  const current = readDeviceLinkSettings();
+  const current = readDeviceLinkSettings(true);
   if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
@@ -307,7 +321,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
 
 /**
  * 以 updater 形式更新某个 key:updater 在写锁内基于盘上最新值执行。
- * 数组 / map 类 key(revokedControllers / modelUseRevokedControllers / disabledControlDeviceIds /
+ * 数组 / map 类 key(revokedControllers / disabledControlDeviceIds /
  * lastKnownDeviceNames)的增删改**必须**走本函数,不要在锁外算好整值再
  * writeDeviceLinkSetting(见 writeMergedOnce 注释)。返回最终写入的值。
  */

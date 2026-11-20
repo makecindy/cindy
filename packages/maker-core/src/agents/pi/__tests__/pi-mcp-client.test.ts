@@ -62,12 +62,69 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
-    connect: () => context.connect({ name: 'cindy', url: 'https://example.test/mcp' }, 'fake-token'),
+    connect: (server: { name: string; displayName?: string; url: string } = {
+      name: 'cindy', url: 'https://example.test/mcp',
+    }) => context.connect(server, 'fake-token'),
     resultHook: (event: unknown) => resultHooks[0]?.(event),
     list: (params: unknown = {}, signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', params, signal) };
 }
 
 afterEach(() => vi.useRealTimers());
+
+// Native registration boundary: an unselected/isolated task installs no plugin
+// listeners and cannot serialize tool data or send an extension UI request.
+describe('Pi native plugin hook opt-in', () => {
+  it.each([
+    { points: '', guest: false, review: false, events: [] },
+    { points: 'call', guest: false, review: false, events: ['tool_call'] },
+    { points: 'result', guest: false, review: false, events: ['tool_result'] },
+    { points: 'call,result', guest: true, review: false, events: [] },
+    { points: 'call,result', guest: false, review: true, events: [] },
+    { points: 'call,result', guest: false, review: false, events: ['tool_call', 'tool_result'] },
+  ])('registers only the selected native points: $points/$guest/$review', async ({ points, guest, review, events }) => {
+    const start = source.indexOf('  // Native plugin hooks run before');
+    const end = source.indexOf('  // ── 权限门', start);
+    const on = vi.fn();
+    const stringify = vi.fn(JSON.stringify);
+    const input = vi.fn(async () => '{}');
+    const permission = vi.fn(() => ({ reviewOnly: review }));
+    runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+      process: { env: { CINDY_PI_TOOL_LIFECYCLE: points } },
+      pi: { on }, guestToolGate: guest, currentPermissionState: permission,
+      JSON: { stringify, parse: JSON.parse },
+    });
+    expect(on.mock.calls.map(([event]) => event)).toEqual(events);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    if (!points) expect(permission).not.toHaveBeenCalled();
+    if (events.includes('tool_call')) {
+      const callback = on.mock.calls.find(([event]) => event === 'tool_call')![1];
+      await callback({ toolName: 'read', toolCallId: 'call', input: { path: 'fixture.txt' } }, { ui: { input } });
+      expect(input).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+// Security regression: JSON __proto__ must remain an enumerable own property,
+// rather than introducing an inherited path that later scanners cannot see.
+it('keeps transformed Pi input as own JSON data without invoking prototype setters', async () => {
+  const start = source.indexOf('  // Native plugin hooks run before');
+  const end = source.indexOf('  // ── 权限门', start);
+  let callback: ((event: { toolName: string; toolCallId: string; input: Record<string, unknown> }, ctx: unknown) => Promise<unknown>) | undefined;
+  runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    process: { env: { CINDY_PI_TOOL_LIFECYCLE: 'call' } }, guestToolGate: null,
+    currentPermissionState: () => ({ reviewOnly: false }),
+    pi: { on: (_event: string, handler: typeof callback) => { callback = handler; } },
+  });
+  const input: Record<string, unknown> = { path: '/fixture/safe.txt' };
+  const prototype = Object.getPrototypeOf(input);
+  await callback!({ toolName: 'read', toolCallId: 'call', input }, { ui: {
+    input: async () => '{"input":{"__proto__":{"path":"/fixture/.ssh/id_rsa"}}}',
+  } });
+  expect(Object.getPrototypeOf(input)).toBe(prototype);
+  expect(input.path).toBeUndefined();
+  expect(Object.entries(input)).toEqual([['__proto__', { path: '/fixture/.ssh/id_rsa' }]]);
+});
 
 describe('Pi MCP request lifecycle', () => {
   // #10691: the registered gateway and real approval hook must reject missing
@@ -104,7 +161,7 @@ describe('Pi MCP request lifecycle', () => {
     await h.approveInput(input);
     h.gateway.add('cindy', h.client, [{ name: 'ghost_call', inputSchema: { type: 'object' } }]);
     await h.list({ server: 'cindy', tool: 'ghost_call' });
-    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    await expect(h.invoke(input)).rejects.toThrow('"inputSchema":{"type":"object"}');
     expect(h.approvals).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
     await h.approveInput(input, 'fresh');
@@ -150,17 +207,103 @@ describe('Pi MCP request lifecycle', () => {
     expect(resolved.tool.serverName).toBe('4de87c18-f95d-4460-aeef-47aed2160c77');
   });
 
-  it('rejects an ambiguous display name with the matching stable ids', async () => {
-    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
-    h.gateway.add('mcp_one', h.client, [{ name: 'probe' }], 'shared-name');
-    h.gateway.add('mcp_two', h.client, [{ name: 'probe' }], 'shared-name');
+  // #10529: named aliases were covered, but an unnamed UUID still leaked into
+  // discovery. Unit tier: real initialization, gateway tools and approval hook;
+  // only HTTP is injected. Missing and whitespace-only metadata are both valid.
+  it.each([undefined, '   '])('discovers and calls an unnamed UUID MCP with %j names', async emptyName => {
+    const id = '4de87c18-f95d-4460-aeef-47aed2160c77';
+    const displayName = '未命名 MCP (4de87c18)';
+    const inputSchema = { type: 'object', properties: { value: { type: 'string' } } };
+    const calls: unknown[] = [];
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      const body = JSON.parse(String(options!.body));
+      if (body.method === 'initialize') return Response.json({ result: { serverInfo: { name: emptyName } } });
+      if (body.method === 'tools/list') return Response.json({ result: { tools: [{ name: 'probe', inputSchema }] } });
+      if (body.method === 'tools/call') calls.push(body.params);
+      return Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } });
+    }));
+    const connect = () => h.connect({ name: id, displayName: emptyName, url: 'https://example.test/mcp' });
+    const connected = await connect();
+    h.gateway.add(id, connected.client, connected.tools, connected.displayName);
+    h.gateway.registerReconnect(id, connect);
 
-    const result = await h.list({ server: 'shared-name' });
+    expect((await h.list({ query: '未命名 MCP' })).details.tools).toEqual([
+      expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
+    ]);
+    const input = { server: displayName, tool: 'probe', args: { value: 'example' } };
+    await expect(h.invoke(input)).rejects.toThrow(JSON.stringify(inputSchema));
+    expect((await h.list({ server: displayName, tool: 'probe' })).details.tools[0].inputSchema).toEqual(inputSchema);
+    await h.approveInput(input, 'alias');
+    await expect(h.invoke(input, 'alias')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    // The alias and original ID share disclosure and the canonical approval identity.
+    const byId = { ...input, server: id };
+    await h.approveInput(byId, 'id');
+    await h.invoke(byId, 'id');
+    expect(h.approvals).toEqual([
+      expect.objectContaining({ toolName: 'mcp__' + id + '__probe', input: input.args }),
+      expect.objectContaining({ toolName: 'mcp__' + id + '__probe', input: input.args }),
+    ]);
+    expect(calls).toEqual(Array(2).fill({ name: 'probe', arguments: input.args }));
+
+    h.gateway.markUnavailable(id, 'HTTP 503');
+    expect((await h.list({ server: displayName })).details.tools).toEqual([
+      expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
+    ]);
+    expect(calls).toHaveLength(2); // Reconnecting must not replay a tool call.
+  });
+
+  // A first-call receipt must not insert a large third-party definition into context.
+  // Unit: use the registered Pi gateway. An exact lookup must still return that same definition in full.
+  it('leaves oversized first-use definitions behind a named lookup', async () => {
+    const fetchImpl = vi.fn();
+    const h = gatewayWithFetch(fetchImpl);
+    const description = 'long description '.repeat(150);
+    h.gateway.add('catalog', h.client, [{ name: 'lookup', description, inputSchema: { type: 'object' } }]);
+    const input = { server: 'catalog', tool: 'lookup', args: {} };
+    await h.approveInput(input, 'large');
+    const attempt = h.invoke(input, 'large');
+    await expect(attempt).rejects.toThrow('cindy_mcp_list_tools with {"server":"catalog","tool":"lookup"}');
+    await expect(attempt).rejects.not.toThrow(description);
+    expect(h.approvals).toHaveLength(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const exact = await h.list({ server: 'catalog', tool: 'lookup' });
+    expect(exact.details.tools[0].description).toBe(description);
+  });
+
+  it.each([
+    { configured: ' configured ', protocol: 'protocol', expected: 'configured' },
+    { configured: ' ', protocol: ' protocol ', expected: 'protocol' },
+  ])('preserves name precedence during initialization: $expected', async ({ configured, protocol, expected }) => {
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      const body = JSON.parse(String(options!.body));
+      return Response.json({ result: body.method === 'initialize'
+        ? { serverInfo: { name: protocol } } : { tools: [{ name: 'probe' }] } });
+    }));
+    const id = '4de87c18-f95d-4460-aeef-47aed2160c77';
+    const connected = await h.connect({ name: id, displayName: configured, url: 'https://example.test/mcp' });
+    h.gateway.add(id, connected.client, connected.tools, connected.displayName);
+    expect((await h.list({ server: expected })).details.tools).toEqual([
+      expect.objectContaining({ server: expected, serverId: id, name: 'probe' }),
+    ]);
+  });
+
+  it.each([
+    { ids: ['mcp_one', 'mcp_two'], displayName: 'shared-name', alias: 'shared-name' },
+    { ids: ['4de87c18-f95d-4460-aeef-47aed2160c77', '4de87c18-f95d-4460-aeef-47aed2160c78'],
+      displayName: undefined, alias: '未命名 MCP (4de87c18)' },
+  ])('rejects an ambiguous display name with the matching stable ids: $alias', async ({ ids, displayName, alias }) => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    for (const id of ids) h.gateway.add(id, h.client, [{ name: 'probe' }], displayName);
+
+    const result = await h.list({ server: alias });
     expect(result.details).toMatchObject({
       ok: false,
       errorCode: 'AMBIGUOUS_SERVER',
-      matchingServerIds: ['mcp_one', 'mcp_two'],
+      matchingServerIds: ids,
     });
+    for (const id of ids) {
+      expect(h.gateway.resolveCall({ server: id, tool: 'probe', args: {} }).tool.serverName).toBe(id);
+    }
   });
 
   it('reconnects an unavailable MCP when discovery uses its display name', async () => {

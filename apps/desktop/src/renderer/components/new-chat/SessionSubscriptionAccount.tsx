@@ -2,12 +2,12 @@
  * 已建立任务实际在用的订阅账号(subscription-account-pools.md「任务的账号」，2026-11-11 用户要求)。
  * 账号池里的任务固定在一个账号上：输入框下方的用量、模型列表里这个供应商(含供应商组那一项)的账号名与
  * 用量都按这个账号显示，不拿默认账号或下一个待分配的账号顶替。账号在执行这个任务的电脑上：本机任务问
- * 本机，远程 Agent、远程控制与供应商组问那台。没有账号池、绑的是默认账号或旧任务时沿用原来的读取；
+ * 本机，远程 Agent、远程控制与供应商组问那台。没有账号池或池前未绑定的旧任务沿用原来的读取；
  * 旧执行端通过已有的原生会话用量查询兼容，不借用默认账号的身份。
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
-import type { ProviderView } from '@cindy/model-providers';
+import { actualSourceIdForModel, isCodexGatewayWireModel, type ProviderView } from '@cindy/model-providers';
 import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 
 import {
@@ -90,6 +90,7 @@ async function readOlderHostTaskUsage(
     state: 'usage-only',
     usage: {
       codex: {
+        ...(typeof value.planType === 'string' ? { planType: value.planType } : {}),
         buckets: table as NonNullable<SubscriptionAccountUsage['codex']>['buckets'],
         credits: credits && typeof credits === 'object' ? credits : null,
       },
@@ -98,7 +99,7 @@ async function readOlderHostTaskUsage(
 }
 
 interface ContextValue {
-  providerId: string;
+  providerId: string | null;
   /** 执行任务的电脑；null = 本机。 */
   deviceId: string | null;
   account: SessionSubscriptionAccountState;
@@ -108,15 +109,32 @@ const Context = createContext<ContextValue | null>(null);
 
 /**
  * 这一轮会不会经账号池选账号：与执行端 subscription-accounts/agent.ts 的 providerFor 同口径——
- * Claude Code 显式选 Anthropic，或三种引擎显式选 OpenAI；SSH 远程与默认路由不进账号池。
+ * Claude Code 显式选 Anthropic，或三种引擎显式选 OpenAI；SSH 不进账号池。
+ * 旧 Codex 空来源可显式开启任务绑定探测，消费端仍须确认订阅形态，不能据此推断默认账号。
  */
 export function sessionSubscriptionPoolProvider(
   agent: 'cc' | 'codex' | 'pi',
   providerId: string | null | undefined,
   remoteHostId?: string | null,
   provider?: ProviderView,
+  probeImplicitCodex = false,
+  implicitRoute?: { modelId?: string | null; providers: ProviderView[]; catalogReady: boolean },
 ): SubscriptionProvider | null {
   if (remoteHostId) return null;
+  // Old Codex tasks may retain a null display route after the executor bound an account.
+  // This only enables a task-scoped query, not an OpenAI/default-account classification.
+  if (probeImplicitCodex && agent === 'codex' && providerId == null) {
+    // Match historicalCodexAccount: a recorded binding cannot override a model's
+    // gateway/bridge credentials or a connected non-OpenAI default source.
+    if (!implicitRoute?.catalogReady) return null;
+    const model = implicitRoute.modelId?.trim() ?? '';
+    if (isCodexGatewayWireModel(model) || model.startsWith('xai/') || model.startsWith('chatgpt/'))
+      return null;
+    const source = model
+      ? actualSourceIdForModel(implicitRoute.providers, null, model.replace(/\[1m\]$/, ''), 'codex')
+      : null;
+    return source && source !== 'openai' ? null : 'openai';
+  }
   const kind = provider && provider.id === providerId
     ? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? providerId : providerId;
   if (kind === 'anthropic') return agent === 'cc' ? kind : null;
@@ -161,6 +179,7 @@ export function SessionSubscriptionAccountProvider({
 }: {
   /** Subscription family; the actual source may be an independent account provider. */
   providerId: string | null | undefined;
+  /** null probes an old Codex task; undefined keeps the ordinary named-pool route. */
   routeProviderId?: string | null;
   /** 执行任务的另一台电脑；null = 本机(不传本机自己的 id)。 */
   deviceId: string | null;
@@ -173,14 +192,17 @@ export function SessionSubscriptionAccountProvider({
   const pool =
     isSubscriptionProvider(providerId) && (sessionId || nativeSessionId) ? providerId : null;
   const remoteDeviceId = deviceId || null;
-  const route = routeProviderId || pool;
+  // Explicit null is the old task's unsaved route. Keep it distinct from the named OpenAI
+  // source so browsing another source cannot inherit this task's private account.
+  const implicitCodex = pool === 'openai' && routeProviderId === null;
+  const route = implicitCodex ? null : routeProviderId || pool;
   const ownerGeneration = useOptionalDataOwnerGeneration();
   const foreground = useDocumentVisible(pool !== null);
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     pool && remoteDeviceId ? remoteDeviceId : undefined,
   );
   const key = pool
-    ? [remoteDeviceId ?? '', pool, route, sessionId ?? '', nativeSessionId ?? ''].join('\n')
+    ? [remoteDeviceId ?? '', pool, implicitCodex ? '<implicit-codex>' : route, sessionId ?? '', nativeSessionId ?? ''].join('\n')
     : '';
   const [loaded, setLoaded] = useState<{
     key: string;
@@ -218,7 +240,8 @@ export function SessionSubscriptionAccountProvider({
               )
             : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
           view = parseSubscriptionSessionAccountView(raw, pool);
-          if (route !== pool && view?.routeProviderId !== route) view = null;
+          if (implicitCodex ? view?.routeProviderId !== undefined : route !== pool && view?.routeProviderId !== route)
+            view = null;
         } catch (error) {
           // 旧执行端或临时读取失败，先尝试已有的原生会话查询；明确不支持的记下，不再重发。
           if (remoteDeviceId && isUnsupportedSessionAccountQuery(error))
@@ -259,7 +282,7 @@ export function SessionSubscriptionAccountProvider({
       offChanged?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration]);
+  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration, implicitCodex]);
 
   const loading = useMemo<SessionSubscriptionAccountState | null>(
     () => (pool ? { providerId: pool, state: 'loading' } : null),
@@ -274,8 +297,8 @@ export function SessionSubscriptionAccountProvider({
         ? cached.view
         : loading;
   const value = useMemo<ContextValue | null>(
-    () => (route && account ? { providerId: route, deviceId: remoteDeviceId, account } : null),
-    [route, remoteDeviceId, account],
+    () => ((route || implicitCodex) && account ? { providerId: route, deviceId: remoteDeviceId, account } : null),
+    [route, remoteDeviceId, account, implicitCodex],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
@@ -287,9 +310,11 @@ export function SessionSubscriptionAccountProvider({
 export function useSessionSubscriptionAccount(
   providerId: string | null | undefined,
   remoteDeviceId: string | null,
+  allowImplicitCodex = false,
 ): SessionSubscriptionAccountState | null {
   const value = useContext(Context);
-  if (!value || !providerId || value.providerId !== providerId) return null;
+  if (!value || (providerId == null && !allowImplicitCodex) || value.providerId !== (providerId ?? null))
+    return null;
   return (remoteDeviceId || null) === value.deviceId ? value.account : null;
 }
 
@@ -297,14 +322,17 @@ export interface SessionAccountDisplay {
   /** 跟在供应商后面的账号名；null = 还不知道，不借用默认账号的名字。 */
   identity: string | null;
   plan?: string;
-  /** false：原来的读取读的就是这个账号(默认账号)，用量照旧。 */
+  planTier?: string;
+  planDisplayName?: string;
+  planType?: string;
+  /** False only for an older host or a task with no account binding. */
   replacesUsage: boolean;
   /** replacesUsage 时这个账号自己的用量；null = 暂无。 */
   usage: SubscriptionAccountUsage | null;
 }
 
 /**
- * 用量读谁：null = 原来的读取就是这个账号(没有账号池、默认账号、旧任务)；否则只用这个账号自己的
+ * 用量读谁：null = 原来的读取就是这个账号(没有账号池、池前旧任务)；否则只用这个账号自己的
  * 用量，还没读到或账号不可用时为 null，不借用默认账号。
  */
 export function sessionAccountUsage(
@@ -313,7 +341,7 @@ export function sessionAccountUsage(
   if (!account || account.state === 'legacy') return null;
   if (account.state === 'usage-only') return { usage: account.usage };
   if (account.state !== 'bound') return { usage: null };
-  return account.account.isDefault ? null : { usage: account.account.usage ?? null };
+  return { usage: account.account.usage ?? null };
 }
 
 /** null = 按原来的读取显示。 */
@@ -330,10 +358,13 @@ export function sessionAccountDisplay(
     return { identity: t('subscriptionAccounts.unassigned'), ...replaces };
   if (account.state === 'unavailable')
     return { identity: t('subscriptionAccounts.boundUnavailable'), ...replaces };
-  const { identity, number, plan } = account.account;
+  const { identity, number, plan, planTier, planDisplayName, planType } = account.account;
   return {
     identity: identity ?? t('providerGroup.member.accountFallback', { index: number }),
     ...(plan ? { plan } : {}),
+    ...(planTier ? { planTier } : {}),
+    ...(planDisplayName ? { planDisplayName } : {}),
+    ...(planType ? { planType } : {}),
     ...replaces,
   };
 }
@@ -353,6 +384,7 @@ export function sessionAccountCodexPayload(
   return {
     ...general,
     ...credits,
+    planType: general?.planType ?? codex.planType,
     source: 'codex-app-server',
     appServerBuckets: buckets,
     // 账号池仅有原生桶，不伪造 WHAM；桥接模型同样按实际模型选择原生桶。

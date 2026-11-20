@@ -154,10 +154,10 @@ describe('群聊与伙伴行同一套几何', () => {
   it('群行沿用对称的 10px 内边距、任务行高度、44px 头像位、14/12/11 字号', () => {
     expect(groupRow).toContain('gap-2.5 rounded-lg px-2.5 py-2 text-left');
     expect(groupRow).toContain('SIDEBAR_LIST_ROW_HEIGHT_CLASS,');
-    expect(groupRow).toContain('<span className="relative flex shrink-0"><BotGroupSidebarAvatar');
-    expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
+    expect(groupRow).toContain('<span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar');
+    expect(groupRow).toContain('<span className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">');
     expect(groupRow).toContain('min-w-0 truncate text-14 leading-5');
     expect(groupRow).toContain("'min-w-0 flex-1 truncate text-12 leading-4'");
-    expect(groupRow).toContain("'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums'");
+    expect(groupRow).toContain("'ml-auto min-w-10 shrink-0 whitespace-nowrap text-right text-11 leading-4 tabular-nums'");
   });
 });
