@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { buildWebShim } from './web-client-build.mjs';
 import { createHostServer } from './server.mjs';
 import { createHostService } from './service.mjs';
+import { createEventHub } from './events.mjs';
+import { createWebAuth } from './web-auth.mjs';
+import { projectHostAuthState } from './auth-state.ts';
 
 // Production entry: evaluate the browser shim and invoke its public preload API.
 // Regression: auth aliases doubled /api, local entry spread a Promise and
@@ -15,11 +18,12 @@ import { createHostService } from './service.mjs';
 // file. Regressions: shadowed pricing routes, incompatible approval/steer shapes,
 // and success-shaped placeholders. Minimal inputs below hit public API methods.
 const source = await buildWebShim(fileURLToPath(new URL('../../web/shim.js', import.meta.url)));
+const emptyOwnerProfile = { sidebar: {}, voiceInput: { settings: {}, history: [] } };
 const cleanups = [];
 afterEach(() => { for (const close of cleanups.splice(0)) close(); });
 function browser(respond = () => ({}), script = source, openEvents = (_url, { signal }) => new Promise((_resolve, reject) => {
   signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-})) {
+}), schedule = setTimeout) {
   const calls = [];
   const listeners = new Map();
   const redirects = [];
@@ -28,7 +32,7 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   const context = vm.createContext({
     window, navigator: { language: 'en', platform: 'test', clipboard: { writeText() {} } },
     document: { createElement: () => ({ dataset: {} }), head: { appendChild() {} } },
-    location: { href: 'http://127.0.0.1:1234/#/cc-agent/old', replace(url) { redirects.push(url); } }, console, TextDecoder, AbortController, URL, URLSearchParams, setTimeout, clearTimeout,
+    location: { href: 'http://127.0.0.1:1234/#/cc-agent/old', replace(url) { redirects.push(url); } }, console, TextDecoder, AbortController, URL, URLSearchParams, setTimeout: schedule, clearTimeout,
     fetch: async (url, options) => {
       // Keep the background event subscription pending, without timers/handles.
       if (url.startsWith('/events')) return openEvents(url, options);
@@ -314,6 +318,7 @@ test('an expired browser pairing keeps the page and can reconnect after pairing 
   const b = browser(url => {
     if (url === '/api/ghosts') return [];
     if (!authorized) return new Response('pair again', { status: 401 });
+    if (url === '/api/profile') return emptyOwnerProfile;
     return { dataOwnerId: 'owner', user: { id: 'user' }, isAuthenticated: true };
   }, source, () => {
     if (!authorized) return new Response(null, { status: 401 });
@@ -342,4 +347,270 @@ test('an expired browser pairing keeps the page and can reconnect after pairing 
   assert.equal(auth.at(-1).dataOwnerId, 'owner');
   assert.ok(b.calls.every(c => !c.url.includes('/enqueue')));
   assert.deepEqual(b.redirects, []);
+});
+
+// #10600: the actual shim must forward login actions and keep paired browsers
+// on the account login page after logout. Existing alias tests only read auth.
+test('web login uses real Host state and logout does not navigate to pairing', async () => {
+  const b = browser((url, body) => url.endsWith('login-state')
+    ? { success: true, state: { step: 'identifier', providers: { social: ['google'] } } }
+    : { success: true, state: { step: 'identifier' } });
+  assert.equal((await b.api.authGetLoginState()).state.step, 'identifier');
+  b.window.open = () => ({ close() {} });
+  await b.api.authDispatchLoginAction({ type: 'discover-sso-org', org: 'example' });
+  await b.api.authLogout();
+  assert.deepEqual(b.calls.map(({ url, body }) => ({ url, body })), [
+    { url: '/api/auth/login-state', body: {} },
+    { url: '/api/auth/login-action', body: { action: { type: 'discover-sso-org', org: 'example' } } },
+    { url: '/api/auth/logout', body: {} },
+  ]);
+  assert.deepEqual(b.redirects, []);
+});
+
+test('browser authorization opens on the controller and waits for the Host outcome', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const popup = { location: 'about:blank', opener: {}, close() {} };
+  const b = browser(url => url.endsWith('login-action')
+    ? { success: true, state: { step: 'browser-redirect', label: 'Google' }, authorizeUrl: 'https://auth.example.invalid/authorize' }
+    : { success: true, state: { step: 'completed', membership: { id: 'owner' } } });
+  b.window.open = () => popup;
+  const pending = b.api.authDispatchLoginAction({ type: 'start-browser', kind: 'social', providerOrConnectionId: 'google', label: 'Google' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(popup.location, 'https://auth.example.invalid/authorize');
+  assert.equal(popup.opener, null);
+  t.mock.timers.tick(1000);
+  assert.equal((await pending).state.step, 'completed');
+  assert.deepEqual(b.calls.map(call => call.url), ['/api/auth/login-action', '/api/auth/login-state']);
+});
+
+test('blocked browser authorization does not leave a Host login running', async () => {
+  const b = browser();
+  b.window.open = () => null;
+  const result = await b.api.authDispatchLoginAction({ type: 'start-browser', kind: 'social', providerOrConnectionId: 'google', label: 'Google' });
+  assert.equal(result.code, 'BROWSER_OPEN_FAILED');
+  assert.equal(b.calls.length, 0);
+});
+
+
+test('sole SSO auto-start reuses the tab reserved before asynchronous discovery', async () => {
+  const popup = { close() {} };
+  let opens = 0;
+  const b = browser((url, body) => body?.action?.type === 'discover-sso-org'
+    ? { success: true, state: { step: 'method-choice', methods: [{ type: 'sso', connectionId: 'idp' }] } }
+    : { success: true, state: { step: 'completed' }, authorizeUrl: 'https://auth.example.invalid/sso' });
+  b.window.open = () => { opens++; return popup; };
+  await b.api.authDispatchLoginAction({ type: 'discover-sso-org', org: 'example' });
+  await b.api.authDispatchLoginAction({ type: 'start-browser', kind: 'sso', providerOrConnectionId: 'idp', label: 'SSO' });
+  assert.equal(opens, 1);
+  assert.equal(popup.location, 'https://auth.example.invalid/sso');
+});
+
+// Account expiry changes the account projection on the existing paired page;
+// it must not start another pairing flow or navigate away from the login shell.
+test('account expiry returns the paired browser to the signed-out projection', async () => {
+  let stream;
+  const b = browser(url => {
+    if (url === '/api/profile') return emptyOwnerProfile;
+    if (url.endsWith('login-state')) return { success: true, state: { step: 'identifier' } };
+    return { user: { id: 'owner' }, dataOwnerId: 'owner', canEnterApp: true, isAuthenticated: true };
+  }, source,
+    () => new Response(new ReadableStream({ start(controller) { stream = controller; } })));
+  const auth = [];
+  b.api.onAuthStateChange(state => auth.push(state));
+  for (let n = 0; n < 30; n++) await Promise.resolve();
+  stream.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ seq: 1, type: 'auth_changed', user: null,
+    dataOwnerId: null, mode: 'signed-out', canEnterApp: false, isAuthenticated: false }) + '\n\n'));
+  for (let n = 0; n < 30; n++) await Promise.resolve();
+  assert.equal(auth.at(-1).canEnterApp, false);
+  assert.equal(auth.at(-1).user, null);
+  assert.equal((await b.api.authGetLoginState()).state.step, 'identifier');
+  assert.equal(b.calls.some(call => call.url === '/web/session'), false);
+  assert.deepEqual(b.redirects, []);
+});
+
+
+// #10600: raw SSE assertions missed cursor gaps after filtering. Exercise the
+// actual server, protocol=2 decoder and shim; only the reconnect clock is sped up.
+test('signed-out protocol-2 streams stay idle through hidden events and reconcile at auth boundaries', { timeout: 5000 }, async t => {
+  const events = createEventHub();
+  events.publish({ type: 'text', data: { text: 'hidden-replay' } });
+  let ready = false;
+  let ownerGeneration = 0;
+  let opens = 0;
+  let closes = 0;
+  const webAuth = createWebAuth();
+  const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
+  // main.ts uses this full projection for both HTTP snapshots and auth events.
+  const authState = () => projectHostAuthState({ account: { authenticated: ready, realm: 'global' },
+    accountUser: ready ? { id: 'owner' } : null, owner: ready ? 'owner' : null,
+    generation: ownerGeneration, deviceId: null });
+  const server = createHostServer({ token: 'unused-test-token', events, webAuth, isOwnerReady: () => ready,
+    getAuthState: authState, profile: () => emptyOwnerProfile,
+  });
+  server.on('request', (request, response) => {
+    if (request.url.startsWith('/events')) response.on('close', () => { closes++; });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const b = browser((url, body) => fetch(base + url, { method: 'POST', headers: { cookie }, body: JSON.stringify(body) }),
+    source, (url, { signal }) => { opens++; return fetch(base + url, { headers: { cookie }, signal }); },
+    (callback, ms) => setTimeout(callback, ms === 1000 ? 0 : ms));
+  t.after(() => { b.close(); server.closeAllConnections(); server.close(); });
+  const states = [];
+  const auth = [];
+  const waiters = [];
+  b.api.onAuthStateChange(state => auth.push(state));
+  b.api.hostConnection.onStateChanged(state => {
+    states.push(state);
+    for (const check of waiters) check();
+  });
+  const connected = n => new Promise(resolve => {
+    const check = () => { if (states.at(-1)?.status === 'connected' && states.at(-1).connection === n) resolve(); };
+    waiters.push(check); check();
+  });
+  const received = [];
+  b.api.maker.onEvent(event => received.push(event));
+  await connected(1);
+  assert.equal(auth.at(-1).canEnterApp, false);
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner().ownerGeneration, 0);
+  for (let batch = 0; batch < 2; batch++) {
+    for (let i = 0; i < 100; i++) events.publish({ type: 'text', data: { text: 'hidden-live' } });
+    for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(opens, batch + 1);
+    assert.equal(closes, batch);
+    assert.equal(received.length, 0);
+    events.publish({ type: 'auth_changed', ...authState() });
+    await connected(batch + 2);
+    assert.equal(opens, batch + 2);
+    assert.equal(auth.at(-1).canEnterApp, false);
+  }
+  ready = true;
+  ownerGeneration = 3;
+  events.clear();
+  events.publish({ type: 'auth_changed', ...authState() });
+  await connected(4);
+  assert.equal(auth.at(-1).canEnterApp, true);
+  assert.deepEqual(auth.slice(-2).map(state => state.ownerGeneration), [3, 3]);
+  assert.ok(auth.slice(-2).every(state => state.dataOwnerId === 'owner'));
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner().ownerGeneration, 3);
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner().dataOwnerId, 'owner');
+  assert.equal(b.api.sidebarSettings.loadSnapshot().ownerGeneration, 3);
+  const delivered = new Promise(resolve => b.api.maker.onEvent(resolve));
+  events.publish({ type: 'text', sessionId: 'task', data: { text: 'ready-live' } });
+  assert.equal((await delivered).event.data.text, 'ready-live');
+  ready = false;
+  ownerGeneration = 4;
+  events.publish({ type: 'text', data: { text: 'expired-hidden' } });
+  await connected(5);
+  assert.equal(auth.at(-1).canEnterApp, false);
+  assert.equal(opens, 5);
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner().ownerGeneration, 4);
+  assert.deepEqual(b.redirects, []);
+});
+
+// fnOS VM #10600: in-process login reached generation 3, but the cached claim
+// stayed at generation 1 and left modelVisibilityPrefs in owner-pending. The
+// public shim boundary is sufficient; no renderer/React harness is needed.
+test('account events refresh synchronous model and sidebar owner stamps', async () => {
+  let stream;
+  const signedOut = { user: null, dataOwnerId: null, ownerGeneration: 0 };
+  const b = browser(url => url === '/api/profile' ? emptyOwnerProfile : signedOut,
+    source, () => new Response(new ReadableStream({ start(controller) {
+    stream = controller;
+    for (const phase of ['start', 'ready']) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({
+      type: 'host_stream', phase, runtime: 'owner-stamp-test', seq: 0, reason: 'initial',
+    }) + '\n\n'));
+  } }), { headers: { 'x-cindy-event-protocol': '2' } }));
+  const previousClaim = b.api.maker.claimLegacyModelVisibilityOwner();
+  const previousSidebar = b.api.sidebarSettings.loadSnapshot();
+  assert.equal(previousClaim.dataOwnerId, null);
+  assert.equal(previousClaim.ownerGeneration, 0);
+  assert.equal(previousClaim.canWriteOwnerScoped, false);
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner(), previousClaim);
+  let seq = 0;
+  const publish = auth => new Promise(resolve => {
+    const unsubscribe = b.api.onAuthStateChange(value => {
+      if (value.ownerGeneration !== auth.ownerGeneration) return;
+      unsubscribe(); resolve(b.api.maker.claimLegacyModelVisibilityOwner());
+    });
+    stream.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'auth_changed', seq: ++seq, ...auth }) + '\n\n'));
+  });
+  const loggedIn = await publish({ user: { id: 'owner' }, dataOwnerId: 'owner', ownerGeneration: 3 });
+  assert.equal(loggedIn.dataOwnerId, 'owner');
+  assert.equal(loggedIn.ownerGeneration, 3);
+  assert.equal(loggedIn.canWriteOwnerScoped, true);
+  assert.notEqual(loggedIn, previousClaim);
+  assert.equal(b.api.maker.claimLegacyModelVisibilityOwner(), loggedIn);
+  const sidebar = b.api.sidebarSettings.loadSnapshot();
+  assert.notEqual(sidebar, previousSidebar);
+  assert.equal(sidebar.dataOwnerId, 'owner');
+  assert.equal(sidebar.ownerGeneration, 3);
+  const renewed = await publish({ user: { id: 'owner' }, dataOwnerId: 'owner', ownerGeneration: 4 });
+  assert.equal(renewed.ownerGeneration, 4);
+  assert.notEqual(renewed, loggedIn);
+  assert.equal(b.api.sidebarSettings.loadSnapshot().ownerGeneration, 4);
+  const loggedOut = await publish({ user: null, dataOwnerId: null, ownerGeneration: 5 });
+  assert.equal(loggedOut.ownerGeneration, 5);
+  assert.equal(loggedOut.dataOwnerId, null);
+  assert.equal(loggedOut.canWriteOwnerScoped, false);
+});
+
+test('in-place sign-in loads owner settings before publishing auth or allowing sidebar writes', { timeout: 5000 }, async () => {
+  let stream;
+  const { promise: profileRequested, resolve: requestProfile } = Promise.withResolvers();
+  const { promise: profile, resolve: finishProfile } = Promise.withResolvers();
+  const signedOut = { user: null, dataOwnerId: null, ownerGeneration: 0 };
+  const sidebar = { pinnedOrder: ['saved-pin'], hiddenProjectKeys: ['saved-project'], hiddenMainViewGhostIds: ['saved-ghost'] };
+  const voiceInput = { settings: { enabled: true }, history: [] };
+  const b = browser((url, body) => {
+    if (url === '/api/profile') { requestProfile(); return profile; }
+    if (url === '/api/settings/sidebar/set') return body.value;
+    return signedOut;
+  }, source, () => new Response(new ReadableStream({ start(controller) { stream = controller; } })));
+  const signedIn = [];
+  const voiceChanges = [];
+  const pinChanges = [];
+  const loggedIn = new Promise(resolve => b.api.onAuthStateChange(auth => {
+    if (auth.dataOwnerId) {
+      signedIn.push(b.api.sidebarSettings.loadSnapshot());
+      resolve();
+    }
+  }));
+  b.api.voiceInput.onDataChanged(value => voiceChanges.push(value));
+  b.api.sidebarSettings.onPinnedOrderChanged((order, stamp) => pinChanges.push({ order, stamp }));
+  assert.equal(b.api.sidebarSettings.loadSnapshot().dataOwnerId, null);
+  assert.deepEqual(Array.from(b.api.voiceInput.getDataSnapshot().history), []);
+  stream.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({
+    seq: 1, type: 'auth_changed', user: { id: 'owner' }, dataOwnerId: 'owner', ownerGeneration: 3,
+  }) + '\n\n'));
+
+  // The old shim announces auth immediately with an empty, authoritative sidebar.
+  await Promise.race([profileRequested, loggedIn]);
+  assert.equal(signedIn.length, 0);
+  await assert.rejects(b.api.sidebarSettings.setProjectHidden('new-project', true));
+  assert.equal(b.calls.some(call => call.url === '/api/settings/sidebar/set'), false);
+  finishProfile({ sidebar, voiceInput });
+  await loggedIn;
+
+  assert.deepEqual(Array.from(signedIn[0].pinnedOrder), sidebar.pinnedOrder);
+  assert.equal(signedIn[0].pinnedOrderIsAuthoritative, true);
+  assert.equal(b.api.voiceInput.getDataSnapshot().settings.enabled, true);
+  assert.equal(voiceChanges[0].settings.enabled, true);
+  assert.deepEqual(Array.from(pinChanges[0].order), sidebar.pinnedOrder);
+  assert.equal(pinChanges[0].stamp.ownerGeneration, 3);
+  await b.api.sidebarSettings.setProjectHidden('new-project', true, {
+    dataOwnerId: 'owner', ownerGeneration: 3,
+  });
+  assert.deepEqual(b.calls.at(-1).body.value, {
+    ...sidebar, hiddenProjectKeys: ['saved-project', 'new-project'],
+  });
+});
+
+test('boot owner generation is available synchronously before the event connection opens', () => {
+  const boot = { auth: { user: { id: 'boot-owner' }, ownerId: 'boot-owner', ownerGeneration: 7 } };
+  const b = browser(() => ({}), `window.__cindyBoot = ${JSON.stringify(boot)};\n${source}`);
+  const claim = b.api.maker.claimLegacyModelVisibilityOwner();
+  assert.equal(claim.dataOwnerId, 'boot-owner');
+  assert.equal(claim.ownerGeneration, 7);
+  assert.equal(b.api.sidebarSettings.loadSnapshot().ownerGeneration, 7);
 });

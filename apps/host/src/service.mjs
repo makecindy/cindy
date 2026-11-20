@@ -54,6 +54,13 @@ export function createHostService(deps) {
     if (url.pathname === '/api/me') {
         return { status: 200, body: await deps.me() };
     }
+    if (url.pathname === '/api/auth/login-state') {
+        return { status: 200, body: await deps.getLoginState() };
+    }
+    if (url.pathname === '/api/auth/login-action') {
+        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
+        return { status: 200, body: await deps.dispatchLoginAction(body?.action, context.caller) };
+    }
     if (url.pathname === '/api/auth/state') {
         return { status: 200, body: await (deps.getAuthState ? deps.getAuthState() : deps.me()) };
     }
