@@ -275,3 +275,105 @@ it('keeps a failing window or account read inside the deferred follow-up', async
     windows.mockRestore();
   }
 });
+
+// Unit: dated, tiered Model Registry tariffs must win over static provider-models.json
+// `model.cost` on preset-backed API-key connections (default and custom multi-account IDs),
+// deprecation cutoffs must not fall back to static costs, and non-Registry providers
+// (such as OpenRouter) keep imported `model.cost` including tiered long-context bands.
+describe('API-key preset reference prices and static cost precedence', () => {
+  const geminiPreset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const geminiAccount = buildUserProvider({
+    id: 'gemini-work',
+    name: 'Gemini Work',
+    runtimes: {
+      pi: {
+        baseUrl: geminiPreset.runtimes.pi!.baseUrl,
+        wireProtocol: 'openai-chat',
+        catalogPresetId: 'google-gemini-api',
+        models: [
+          { id: 'gemini-4-neon', name: 'Gemini 4 Neon' },
+          { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon' },
+          { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
+          { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+        ],
+      },
+    },
+  });
+  const openaiApiAccount = buildUserProvider({
+    id: 'openai-api-work',
+    name: 'OpenAI API Work',
+    runtimes: {
+      codex: {
+        baseUrl: 'https://api.openai.com/v1',
+        catalogPresetId: 'openai-api',
+        models: [{ id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' }],
+      },
+    },
+  });
+  const openrouterGemini = buildUserProvider({
+    id: 'openrouter-work',
+    name: 'OpenRouter Work',
+    runtimes: {
+      pi: {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        wireProtocol: 'openai-chat',
+        models: [{ id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' }],
+      },
+    },
+  });
+
+  it('prefers dated, tiered Registry tariffs over static model.cost on custom API-key accounts', () => {
+    const providers = [geminiAccount, openaiApiAccount, openrouterGemini];
+    const nov20 = getReferenceModelPricing({ at: '2026-11-20', providers });
+    const dec01 = getReferenceModelPricing({ at: '2026-12-01', providers });
+
+    // Custom multi-account google-gemini-api resolves Registry tariffs including Priority.
+    expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-4-neon', 'pi')).toMatchObject({
+      providerId: 'gemini-work',
+      currency: 'USD',
+      inputPerMtok: 3,
+      outputPerMtok: 15,
+      cacheReadPerMtok: 0.15,
+      priority: { inputPerMtok: 5.4, outputPerMtok: 27, cacheReadPerMtok: 0.27 },
+    });
+
+    // Scheduled 2026-12-01 price increase on gemini-4-carbon is NOT shadowed by static model.cost.
+    expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-4-carbon', 'pi')).toMatchObject({
+      inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.1,
+    });
+    expect(getModelPriceQuote(dec01, 'gemini-work', 'gemini-4-carbon', 'pi')).toMatchObject({
+      inputPerMtok: 4, outputPerMtok: 20, cacheReadPerMtok: 0.2,
+    });
+
+    // Long-context >200K band survives on google-gemini-api.
+    expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-3.1-pro-preview', 'pi')?.inputTokenPriceBands).toEqual([
+      expect.objectContaining({ minInputTokens: 0, maxInputTokens: 200001, inputPerMtok: 2, outputPerMtok: 12 }),
+      expect.objectContaining({ minInputTokens: 200001, inputPerMtok: 4, outputPerMtok: 18 }),
+    ]);
+
+    // Deprecated gemini-2.5-pro stops pricing on 2026-12-01 and does NOT resurrect static model.cost.
+    expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-2.5-pro', 'pi')).toMatchObject({
+      inputPerMtok: 1.25, outputPerMtok: 10,
+    });
+    expect(getModelPriceQuote(dec01, 'gemini-work', 'gemini-2.5-pro', 'pi')).toBeUndefined();
+
+    // Official direct preset openai-api resolves to canonical openai Registry tariffs.
+    expect(getModelPriceQuote(nov20, 'openai-api-work', 'gpt-6.2-sol', 'codex')).toMatchObject({
+      providerId: 'openai-api-work',
+      currency: 'USD',
+      inputPerMtok: 2,
+      outputPerMtok: 10,
+    });
+
+    // Non-Registry providers (OpenRouter) keep imported model.cost and project cost.tiers.
+    expect(getModelPriceQuote(nov20, 'openrouter-work', 'google/gemini-3.1-pro-preview', 'pi')).toMatchObject({
+      providerId: 'openrouter-work',
+      inputPerMtok: 2,
+      outputPerMtok: 12,
+      inputTokenPriceBands: [
+        expect.objectContaining({ minInputTokens: 0, maxInputTokens: 200001, inputPerMtok: 2, outputPerMtok: 12 }),
+        expect.objectContaining({ minInputTokens: 200001, inputPerMtok: 4, outputPerMtok: 18 }),
+      ],
+    });
+  });
+});

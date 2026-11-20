@@ -8,7 +8,7 @@
  * the Desktop window broadcast (broadcastReferenceModelPricing) and re-exports this module.
  */
 
-import type { AgentKind, Catalog } from '@cindy/model-providers';
+import type { AgentKind, Catalog, CatalogModel } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
@@ -19,7 +19,11 @@ import {
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { getByokPricing } from '../model-access/byokPricing.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
+import {
+  accountReferencePriceQuote as providerReferencePriceQuote,
+  providerHasRegistryReferenceTariff,
+  providerSnapshotReferencePriceQuote,
+} from './accountReferencePrice.js';
 import {
   applyModelPriceOverrides,
   mergeStoredModelPriceOverride,
@@ -30,6 +34,54 @@ export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
+
+function modelCostQuote(
+  providerId: string,
+  model: CatalogModel,
+): ModelPriceQuote | undefined {
+  const cost = model.cost;
+  if (cost?.input === undefined || cost.output === undefined) return undefined;
+  if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) return undefined;
+  const tiers = (cost.tiers ?? [])
+    .filter(tier => Number.isFinite(tier.inputTokensAbove) && tier.inputTokensAbove >= 0)
+    .sort((a, b) => a.inputTokensAbove - b.inputTokensAbove);
+  const inputTokenPriceBands = tiers.length > 0
+    ? [
+        {
+          minInputTokens: 0,
+          maxInputTokens: tiers[0]!.inputTokensAbove + 1,
+          inputPerMtok: cost.input,
+          outputPerMtok: cost.output,
+          ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+          ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+        },
+        ...tiers.map((tier, index) => ({
+          minInputTokens: tier.inputTokensAbove + 1,
+          ...(tiers[index + 1] ? { maxInputTokens: tiers[index + 1]!.inputTokensAbove + 1 } : {}),
+          inputPerMtok: tier.input ?? cost.input,
+          outputPerMtok: tier.output ?? cost.output,
+          ...(tier.cacheRead !== undefined || cost.cacheRead !== undefined
+            ? { cacheReadPerMtok: tier.cacheRead ?? cost.cacheRead }
+            : {}),
+          ...(tier.cacheWrite !== undefined || cost.cacheWrite !== undefined
+            ? { cacheCreatePerMtok: tier.cacheWrite ?? cost.cacheWrite }
+            : {}),
+        })),
+      ]
+    : undefined;
+  return {
+    providerId,
+    modelId: model.id,
+    currency: 'USD',
+    source: 'provider-reference',
+    approximate: true,
+    inputPerMtok: cost.input,
+    outputPerMtok: cost.output,
+    ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+    ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+    ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
+  };
+}
 
 /**
  * Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。
@@ -50,28 +102,42 @@ export function getReferenceModelPricing(
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry, at);
   for (const provider of options.providers ?? catalog.providers) {
-    // Connection-local prices belong to this account and engine, including OAuth
-    // discovery quotes. Publishing only Registry routes dropped them all.
-    if (provider.source === 'user' && provider.id !== 'xd') {
+    if (provider.id === 'xd') continue;
+    // Prefer dated, tiered Model Registry tariffs whenever this connection's route
+    // declares one, so stale static `provider-models.json` `model.cost` entries never
+    // shadow scheduled price transitions, long-context tiers, priority rates or
+    // deprecation cutoffs. Fall back to connection-local/discovered `model.cost` only
+    // when the Registry declares no tariff table for this route (e.g. OpenRouter).
+    if (provider.source === 'user') {
+      const nativeOAuth = provider.auth?.method === 'oauth' && Boolean(provider.auth.native);
       for (const [agent, models] of Object.entries(provider.models)) {
+        const agentKind = agent as AgentKind;
         for (const model of models ?? []) {
-          const cost = model.cost;
-          if (cost?.input === undefined || cost.output === undefined) continue;
-          if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) continue;
-          (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = {
-            providerId: provider.id, modelId: model.id, currency: 'USD',
-            source: 'provider-reference', approximate: true,
-            inputPerMtok: cost.input, outputPerMtok: cost.output,
-            ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
-            ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
-          };
+          const registryQuote = providerSnapshotReferencePriceQuote(
+            provider,
+            model.id,
+            registry,
+            { agent: agentKind, at, ...(nativeOAuth ? { officialOnly: true } : {}) },
+          );
+          if (registryQuote) {
+            (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = registryQuote;
+            continue;
+          }
+          if (providerHasRegistryReferenceTariff(provider, provider.id, model.id, registry, agentKind)) {
+            continue;
+          }
+          const localQuote = modelCostQuote(provider.id, model);
+          if (localQuote) {
+            (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = localQuote;
+          }
         }
       }
+      continue;
     }
     if (provider.auth?.method !== 'oauth' || !provider.auth.native) continue;
     for (const [agent, models] of Object.entries(provider.models)) {
       for (const model of models ?? []) {
-        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind, at, officialOnly: true });
+        const quote = providerSnapshotReferencePriceQuote(provider, model.id, registry, { agent: agent as AgentKind, at, officialOnly: true });
         if (quote) (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
       }
     }
