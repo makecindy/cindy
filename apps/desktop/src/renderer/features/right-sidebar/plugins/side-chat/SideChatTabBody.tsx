@@ -214,9 +214,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
       <div className="mx-4 flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
-        <p className="text-13 leading-5 text-[var(--text-primary)]">
-          {t(collaborationEnded ? 'chat.sideChat.openFromTaskList' : 'chat.sideChat.context')}
-        </p>
+        <div className="text-13 leading-5 text-[var(--text-primary)]">
+          <p>{t('chat.sideChat.context')}</p>
+          {collaborationEnded && <p>{t('chat.sideChat.openFromTaskList')}</p>}
+        </div>
         {childId && linkedChild === childId && (collaborationActive || collaborationEnded) && <Button size="sm" variant="secondary" tone="quiet" className="shrink-0"
           onClick={() => {
             const route = sideChatTaskRoute(childId, state.deviceId);

@@ -16098,7 +16098,7 @@
       "returnToMain": "Continue in main window",
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
-      "context": "Ask a follow-up here while the main task continues.",
+      "context": "Uses completed context from when you opened it. The main task keeps running. History stays until you close this tab.",
       "viewCollaboration": "View collaboration",
       "openConversation": "Open conversation",
       "openFromTaskList": "Also available in the task list on the left.",

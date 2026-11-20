@@ -16211,7 +16211,7 @@
       "returnToMain": "Continuar na janela principal",
       "commandDescription": "Abrir uma conversa paralela com o contexto desta tarefa. O texto opcional torna-se um rascunho de pergunta.",
       "title": "Conversa paralela",
-      "context": "Continue a conversa aqui enquanto a tarefa principal decorre.",
+      "context": "Usa o contexto concluído no momento em que foi aberta. A tarefa principal continua em execução. O histórico mantém-se até fechar este separador.",
       "viewCollaboration": "Ver colaboração",
       "openConversation": "Abrir conversa",
       "openFromTaskList": "Também disponível na lista de tarefas à esquerda.",

@@ -16061,7 +16061,7 @@
       "returnToMain": "Im Hauptfenster fortfahren",
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
-      "context": "Hier können Sie nachfragen, während die Hauptaufgabe weiterläuft.",
+      "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
       "viewCollaboration": "Zusammenarbeit anzeigen",
       "openConversation": "Unterhaltung öffnen",
       "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",

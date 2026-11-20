@@ -16024,7 +16024,7 @@
       "returnToMain": "回到主視窗繼續追問",
       "commandDescription": "基於主任務開啟側邊追問。可在命令後附上問題，作為追問草稿。",
       "title": "側邊追問",
-      "context": "在這裡繼續追問，主任務會繼續執行。",
+      "context": "使用開啟時主任務已完成的上下文。主任務會繼續執行，關閉此分頁前追問記錄都會保留。",
       "viewCollaboration": "查看協同",
       "openConversation": "開啟對話",
       "openFromTaskList": "也可從左側任務列表開啟。",

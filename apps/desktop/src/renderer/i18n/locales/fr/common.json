@@ -16211,7 +16211,7 @@
       "returnToMain": "Continuer dans la fenêtre principale",
       "commandDescription": "Ouvrir une conversation annexe avec le contexte de cette tâche. Le texte facultatif devient une question en brouillon.",
       "title": "Conversation annexe",
-      "context": "Posez votre question ici pendant que la tâche principale se poursuit.",
+      "context": "Utilise le contexte des réponses déjà terminées au moment de l'ouverture. La tâche principale continue de s'exécuter. L'historique est conservé jusqu'à la fermeture de cet onglet.",
       "viewCollaboration": "Voir la collaboration",
       "openConversation": "Ouvrir la conversation",
       "openFromTaskList": "Aussi accessible dans la liste des tâches à gauche.",

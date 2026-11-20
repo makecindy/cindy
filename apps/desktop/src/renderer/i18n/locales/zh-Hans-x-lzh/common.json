@@ -16016,7 +16016,7 @@
       "returnToMain": "归主窗续问",
       "commandDescription": "依主差事开旁问。可于命令后附问，以为追问草稿。",
       "title": "旁问",
-      "context": "于此续问，主事照行。",
+      "context": "以开启时已成之上下文为据；主差事照常行之。阖此分页前，所问之录犹存。",
       "viewCollaboration": "观协同",
       "openConversation": "启此对话",
       "openFromTaskList": "亦可自左栏任务表开启。",

@@ -16211,7 +16211,7 @@
       "returnToMain": "Continuar en la ventana principal",
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
-      "context": "Haz tu consulta aquí mientras continúa la tarea principal.",
+      "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
       "viewCollaboration": "Ver colaboración",
       "openConversation": "Abrir conversación",
       "openFromTaskList": "También en la lista de tareas de la izquierda.",
