@@ -2,6 +2,9 @@ import {
   findBaseModel,
   findModelRegistryRoute,
   providerCatalogId,
+  providerEndpointBindings,
+  providerWireProtocolForApi,
+  type Catalog,
   type AgentKind,
   type ModelRegistry,
   type Provider,
@@ -31,34 +34,78 @@ function candidateRegistryModelIds(catalogId: string, modelId: string): string[]
   return [modelId];
 }
 
+// A projection is reused for every historical day; a catalog refresh replaces its snapshot.
+const presetIndexes = new WeakMap<Catalog, WeakMap<Provider, Map<string, string | null>>>();
+
+function verifiedPresets(provider: Provider) {
+  const catalog = getActiveCatalog();
+  let providers = presetIndexes.get(catalog);
+  if (!providers) {
+    providers = new WeakMap();
+    presetIndexes.set(catalog, providers);
+  }
+  let index = providers.get(provider);
+  if (index) return index;
+  index = new Map();
+  for (const [engine, models] of Object.entries(provider.models)) {
+    const agent = engine as AgentKind;
+    const routing = provider.routing[agent];
+    if (!routing) continue;
+    const defaultWire = agent === 'pi' ? 'openai-chat' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+    for (const model of models) {
+      const presetId = model.catalogPresetId ?? provider.id;
+      const runtime = catalog.presets?.find(p => p.id === presetId)?.runtimes[agent];
+      const declared = runtime?.models.find(m => m.id === model.id);
+      const actualUrl = model.route?.baseUrl ?? routing.upstream;
+      const actualWire = model.route?.wireProtocol ?? providerWireProtocolForApi(model.api ?? model.piApi) ?? routing.wireProtocol ?? defaultWire;
+      const actualPath = model.route?.requestPath ?? routing.requestPath ?? '';
+      const expected = model.selectedInterface?.providerId === presetId ? model.selectedInterface.route : declared?.route;
+      const matches = runtime && !model.interfaceUnavailable &&
+        providerEndpointBindings(expected?.baseUrl ?? runtime.baseUrl, actualUrl) !== null &&
+        actualPath === (expected?.requestPath ?? runtime.requestPath ?? '') &&
+        actualWire === (expected?.wireProtocol ?? providerWireProtocolForApi(declared?.api ?? declared?.piApi) ?? runtime.wireProtocol ?? defaultWire);
+      const id = matches ? presetId : null;
+      index.set(agent + '\0' + model.id, id);
+      // An agent-independent lookup must agree across every engine exposing this model.
+      if (!index.has(model.id)) index.set(model.id, id);
+      else if (index.get(model.id) !== id) index.set(model.id, null);
+    }
+  }
+  providers.set(provider, index);
+  return index;
+}
+
+const tariffProviders = new WeakMap<ModelRegistry, Set<string>>();
+
 function candidateCatalogIds(
   provider: Provider | undefined,
   providerId: string,
   modelId: string,
+  registry: ModelRegistry | null | undefined,
   agent?: AgentKind,
 ): string[] {
-  if (providerId === 'xd' || provider?.id === 'xd') return [];
+  if (!registry || providerId === 'xd' || provider?.id === 'xd') return [];
+  let channels = tariffProviders.get(registry);
+  if (!channels) {
+    channels = new Set(registry.models.flatMap(entry => entry.routes.map(route => route.providerId)));
+    tariffProviders.set(registry, channels);
+  }
   const ids: string[] = [];
   const add = (id: string | undefined): void => {
-    if (!id || id === 'xd' || ids.includes(id)) return;
+    if (!id || id === 'xd' || !channels.has(id) || ids.includes(id)) return;
     ids.push(id);
   };
   const baseCatalogId = provider ? providerCatalogId(provider) : providerId;
   // API-key connections (both pay-as-you-go presets and API-key subscriptions) can carry
   // account-local IDs. Resolve their public tariff from the selected engine/model's preset,
   // never from another account.
-  if (provider?.auth.method === 'apiKey') {
-    const models = agent
-      ? provider.models[agent] ?? []
-      : Object.values(provider.models).flat();
-    const presetIds = new Set(models
-      .filter(model => model.id === modelId && model.catalogPresetId)
-      .map(model => model.catalogPresetId!));
-    if (presetIds.size === 1) {
-      const presetId = [...presetIds][0]!;
+  if (provider?.source === 'user' && provider.auth.method === 'apiKey') {
+    const presetId = verifiedPresets(provider).get(agent ? agent + '\0' + modelId : modelId);
+    if (presetId) {
       add(presetId);
       add(DIRECT_API_PRESET_REGISTRY_IDS.get(presetId));
     }
+    return ids;
   }
   add(baseCatalogId);
   add(DIRECT_API_PRESET_REGISTRY_IDS.get(baseCatalogId));
@@ -82,7 +129,7 @@ export function providerRegistryTariffEndedAt(
   if (!registry) return false;
   const day = calendarDate(at);
   const registryAgent = agent === 'pi' ? undefined : agent;
-  for (const catalogId of candidateCatalogIds(provider, providerId, modelId, agent)) {
+  for (const catalogId of candidateCatalogIds(provider, providerId, modelId, registry, agent)) {
     for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
       const matched = findModelRegistryRoute(registry, catalogId, candidateModelId, registryAgent);
       if (!matched) continue;
@@ -107,7 +154,7 @@ export const accountReferencePriceQuote: typeof providerReferencePriceQuote = (
   providerId, modelId, registry, options,
 ) => {
   const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
-  for (const catalogId of candidateCatalogIds(provider, providerId, modelId, options?.agent)) {
+  for (const catalogId of candidateCatalogIds(provider, providerId, modelId, registry, options?.agent)) {
     for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
       const quote = providerReferencePriceQuote(catalogId, candidateModelId, registry, options);
       if (quote) {
@@ -127,7 +174,7 @@ export function providerSnapshotReferencePriceQuote(
   registry: ModelRegistry | null | undefined,
   options?: Parameters<typeof providerReferencePriceQuote>[3],
 ) {
-  for (const catalogId of candidateCatalogIds(provider, provider.id, modelId, options?.agent)) {
+  for (const catalogId of candidateCatalogIds(provider, provider.id, modelId, registry, options?.agent)) {
     for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
       const quote = providerReferencePriceQuote(catalogId, candidateModelId, registry, options);
       if (quote) {

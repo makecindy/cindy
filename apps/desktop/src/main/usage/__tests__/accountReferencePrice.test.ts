@@ -22,6 +22,7 @@ const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id, name: 'MiMo', runtimes: Object.fromEntries(
       (['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
         baseUrl: `https://token-plan-cn.xiaomimimo.com/${agent === 'claude-code' ? 'anthropic' : 'v1'}`,
+        wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
         catalogPresetId: 'xiaomi-mimo-token-plan-cn',
         models: [{ id: 'mimo-v2.6-pro', name: 'MiMo' }],
       }]),
@@ -314,6 +315,7 @@ describe('API-key preset reference prices and static cost precedence', () => {
     runtimes: {
       pi: {
         baseUrl: 'https://api.x.ai/v1',
+        wireProtocol: 'openai-responses',
         catalogPresetId: 'xai-api',
         models: [{ id: 'grok-4.7', name: 'Grok 4.7' }],
       },
@@ -329,6 +331,28 @@ describe('API-key preset reference prices and static cost precedence', () => {
         models: [{ id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' }],
       },
     },
+  });
+  it.each([true, false])('keeps relay estimates local when a discovered price is present: %s', hasCost => {
+    const relay = buildUserProvider({ id: 'openai-api', name: 'Relay', runtimes: { pi: {
+      baseUrl: 'https://relay.example/v1', catalogPresetId: 'openai-api',
+      models: [{ id: 'gpt-6.2-sol', name: 'Sol', ...(hasCost ? { discoveredCost: { input: 0.5, output: 1 } } : {}) }],
+    } } });
+    const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [relay] });
+    const quote = getModelPriceQuote(pricing, relay.id, 'gpt-6.2-sol', 'pi');
+    if (hasCost) expect(quote).toMatchObject({ inputPerMtok: 0.5, outputPerMtok: 1 });
+    else expect(quote).toBeUndefined();
+  });
+  it.each([
+    { wireProtocol: 'openai-responses' as const, requestPath: '/custom' },
+    { wireProtocol: 'anthropic-messages' as const },
+  ])('preserves discovered prices on a custom request path or protocol', route => {
+    const account = buildUserProvider({ id: 'custom-openai', name: 'Custom', runtimes: { pi: {
+      baseUrl: 'https://api.openai.com/v1', catalogPresetId: 'openai-api',
+      models: [{ id: 'gpt-6.2-sol', name: 'Sol', api: route.wireProtocol,
+        route: { baseUrl: 'https://api.openai.com/v1', ...route }, discoveredCost: { input: 0.5, output: 1 } }],
+    } } });
+    const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [account] });
+    expect(getModelPriceQuote(pricing, account.id, 'gpt-6.2-sol', 'pi')).toMatchObject({ inputPerMtok: 0.5, outputPerMtok: 1 });
   });
   const constructorIdAccount = buildUserProvider({
     id: 'constructor',

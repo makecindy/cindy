@@ -109,6 +109,9 @@ export function getReferenceModelPricing(
     // deprecation cutoffs. Fall back to connection-local/discovered `model.cost` only
     // when the Registry declares no tariff table for this route (e.g. OpenRouter).
     if (provider.source === 'user') {
+      // A local account can have the same ID as a public route. Rebuild its bucket
+      // from verified engine/model quotes so an unmatched relay cannot inherit the generic price.
+      if (provider.auth.method === 'apiKey') pricing[provider.id] = Object.create(null);
       const nativeOAuth = provider.auth?.method === 'oauth' && Boolean(provider.auth.native);
       for (const [agent, models] of Object.entries(provider.models)) {
         const agentKind = agent as AgentKind;
