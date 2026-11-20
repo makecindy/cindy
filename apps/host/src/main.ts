@@ -1479,8 +1479,8 @@ const serverDeps = {
   // The HTTP logout's first step, before it closes the platform client and drains requests (server.mjs).
   beginOwnerBoundaryStop: () => ownerBoundary.begin(),
   // Coexistence plan A: while a desktop uses this profile, only reads, stops and answers reach the
-  // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD); the rest get this refusal.
-  profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
+  // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD). A failed release reports its write error.
+  profileHold: inputQueue.profileHoldMessage,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1898,7 +1898,7 @@ const serverDeps = {
   },
   chat: createChatHandler({
     readSession: (id: string) => sessionStorage?.get(id),
-    profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
+    profileHold: inputQueue.profileHoldMessage,
     createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
     enqueue: enqueueUserInput,
     inputStatus: (id: string, clientId: string) => inputQueue.inputStatus(id, clientId),
@@ -2239,7 +2239,7 @@ function startDeviceLink(): void {
     },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
-    profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
+    profileHold: inputQueue.profileHoldMessage,
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,

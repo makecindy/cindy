@@ -3782,6 +3782,20 @@ test('model change at send: the context rollover resumes a released Pi task to r
     'the released runtime is resumed to read its window');
 });
 
+// Production entry: the Host's switchAgent handler leaves the task and its pending choice unchanged.
+// Basis: #11629, Host has no ACP runtime. The desktop's tests only reject with the admission port bound.
+// Minimal input (unit): a local Claude task and a valid plugin engine route, using the real Host handler.
+test('switching to a plugin engine is unsupported on the Host', async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('switch-to-acp');
+  await assert.rejects(r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
+    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+  }), { code: 'UNSUPPORTED_CAPABILITY', message: '[UNSUPPORTED_CAPABILITY] plugin engines are not available here' });
+  assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
+  assert.equal(r.selection.projectIntent('switch-to-acp') ?? null, null);
+});
+
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails
 // to land does not stop the send; only a same-engine pick, an Agent's pick or a change of computer
 // throws): the send goes on with the task's current engine, and the pick stays for the next send,
@@ -7266,6 +7280,77 @@ test('profile hold: the desktop answered one queued input meanwhile; reopened, t
   await h.queue.resume('held');
   await waitFor(() => h.maker.sessions.get('held')?.sent.length === 1);
   assert.deepEqual(h.maker.sessions.get('held').sent, ['still waiting']);
+});
+
+// Production entry: enqueue a turn and releaseDesktopHold as the profile monitor does;
+// the saved history must contain the original reply once, with no second provider send.
+// Basis: #11629, a failed dispose discarded the only copy of the reply and its retry.
+// Gap: the manual Resume test never disposes and rebuilds the runtime.
+// Minimal input: one failed assistant write, one failed release, then storage recovers.
+// Tier: unit, with the real queue and executor and an injected history writer; 4.53 s for the targeted file run.
+test('profile hold: a failed release keeps the reply for the next release to save', async t => {
+  const id = 'held-reply';
+  let diskFull = true;
+  const saved = [];
+  const h = createHarness({ persistMessage: async (_id, message) => {
+    if (message.role === 'assistant' && diskFull) throw new Error('disk full');
+    saved.push(message);
+  } });
+  t.after(async () => { diskFull = false; await h.queue.dispose(); });
+
+  await enqueue(h, id, { clientId: 'one', text: 'run once' });
+  const session = h.maker.getSession(id);
+  session.emit({ type: 'text', data: { text: 'the original reply', isFinal: true } });
+  session.emit({ type: 'done' });
+  await waitFor(() => !h.queue.isTurnRunning(id));
+  assert.equal(h.queue.projection(id).error, 'disk full');
+
+  h.queue.holdForDesktop(HELD);
+  await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/);
+  assert.equal(h.queue.isHeldForDesktop(), true);
+  const service = createHostService({ profileHold: h.queue.profileHoldMessage });
+  const writeRefusal = { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] disk full' };
+  await assert.rejects(service('/api/input/enqueue'), writeRefusal);
+  await assert.rejects(h.queue.enqueue(id, { clientId: 'two', text: 'blocked until storage recovers' }), writeRefusal);
+  const paused = await h.queue.getProjection(id);
+  assert.equal(paused.queuePaused, true);
+  assert.equal(paused.error, 'disk full');
+  await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/, 'an unsuccessful retry keeps the queue held');
+  diskFull = false;
+  assert.equal(await h.queue.releaseDesktopHold(), true);
+  assert.equal(h.queue.profileHoldMessage(), null);
+  assert.deepEqual(saved.filter(row => row.role === 'assistant').map(row => row.content), ['the original reply']);
+  assert.deepEqual(session.sent, ['run once']);
+});
+
+// Production entry: enqueue and releaseDesktopHold; the rebuilt queue must show the desktop's snapshot.
+// Basis: the desktop can edit the shared queue while it holds the profile. The reply-replay test
+// does not cover queue snapshot write failures. Minimal input (unit): one rejected enqueue write
+// followed by one input durably queued by the desktop.
+test('profile hold: release retry restores the durable queue after a failed snapshot write', async t => {
+  const id = 'held-snapshot';
+  let saved = [];
+  let fail = true;
+  const h = createHarness({
+    loadQueueSnapshot: async () => saved,
+    persistQueueSnapshot: async (_id, items) => {
+      if (fail) throw new Error('disk full');
+      saved = items;
+    },
+  });
+  t.after(() => h.queue.dispose());
+
+  await assert.rejects(h.queue.enqueue(id, { clientId: 'not-saved', text: 'not saved' }), /disk full/);
+  h.queue.holdForDesktop(HELD);
+  await assert.rejects(h.queue.releaseDesktopHold(), /Failed to drain task persistence/);
+  fail = false;
+  saved = [{ clientId: 'desktop', text: 'from the desktop', persistedContent: 'from the desktop',
+    model: 'stored-model', workingDir: '/tmp', effort: '', permissionMode: 'ask',
+    chatMessage: { clientId: 'desktop', role: 'user', content: 'from the desktop' },
+    createOpts: { agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp' } }];
+  assert.equal(await h.queue.releaseDesktopHold(), true);
+  assert.deepEqual((await h.queue.getProjection(id)).pendingQueue.map(item => item.clientId), ['desktop']);
+  assert.deepEqual(saved.map(item => item.clientId), ['desktop']);
 });
 
 test('profile hold: a durable queue restored while held stays unsent, and resume is refused', async t => {

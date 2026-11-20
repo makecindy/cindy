@@ -205,6 +205,9 @@ export function createInputQueue(deps) {
     }
     function persist(id, snapshot) {
       const state = stateFor(id);
+      // A held runtime being replaced must not publish its old queue over the
+      // desktop's snapshot. Writes already in flight still have to settle.
+      if (closing && profileHold && !ownerStopping) return state.writing;
       state.snapshot = snapshot;
       const writing = state.writing.catch(() => {}).then(() => { assertCurrent(); return deps.persistQueueSnapshot?.(id, snapshot); });
       state.writing = writing;
@@ -375,6 +378,7 @@ export function createInputQueue(deps) {
       const state = stateFor(id);
       const admission = state.admission;
       const result = state.commands.catch(() => {}).then(async () => {
+        if (closing && !ownerStopping) refuseWhileHeld();
         if (closing || state.closed) throw new Error('session is closed');
         assertCurrent();
         await coordinator.ensureQueueRestored(id);
@@ -515,7 +519,14 @@ export function createInputQueue(deps) {
       }),
       enqueueDurableWrite: (id, label, fn) => command(id, () => executor.enqueueDurableWrite(id, label, fn)),
       projection: id => project(coordinator.getProjection(id)),
-      getProjection: id => command(id, () => api.projection(id)),
+      async getProjection(id) {
+        // The held runtime can still show the write failure after disposal has started.
+        if (closing && profileHold && !ownerStopping && states.has(id)) {
+          assertCurrent();
+          return api.projection(id);
+        }
+        return command(id, () => api.projection(id));
+      },
       inputStatus: (id, clientId) => command(id, async () => {
         const projection = api.projection(id);
         // Before the recovery point below: during context recovery the claimed input is the recovery
@@ -673,14 +684,18 @@ export function createInputQueue(deps) {
       },
       settleAndWake, retryTurnSettlement,
       canSettleTurnControls: () => !ownerStopping && !closing && profileHold === null,
-      async dispose() {
+      async dispose(canRetryPersistence) {
+        const retry = closing ? canRetryPersistence : undefined;
         closing = true;
         // No runtime is released while this owner's runtime drains and stops.
         idleRelease?.stop();
         // Recoveries in flight end as failures and write their error rows first (bounded),
         // before their tasks are stopped; a stop would read as the user's and drop the error.
         await executor.drainRecoveriesForShutdown();
-        const settled = await Promise.allSettled([...states.keys()].map(async id => {
+        const settled = await Promise.allSettled([...states].map(async ([id, state]) => {
+          // A failed snapshot was already reported. Wait for it, but do not replay the
+          // old queue over the desktop's durable snapshot when rebuilding after a hold.
+          if (retry) state.writing = state.writing.catch(() => {});
           try { await stop(id); }
           finally {
             coordinator.onSessionClosed(id);
@@ -688,7 +703,7 @@ export function createInputQueue(deps) {
             // runtime. Keep its temporary inputs until a confirmed close or
             // the next process's orphan sweep; a finally cleanup could delete
             // files still held by that runtime.
-            try { await executor.close(id); await attachments?.closeSession(id); }
+            try { await executor.close(id, retry); await attachments?.closeSession(id); }
             finally { await flushed(id); }
           }
         }));
@@ -739,6 +754,7 @@ export function createInputQueue(deps) {
     }
   };
   api.isHeldForDesktop = () => profileHold !== null;
+  api.profileHoldMessage = () => profileHold?.message ?? null;
   api.profileHoldGeneration = () => profileHoldGeneration;
   /**
    * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
@@ -749,17 +765,19 @@ export function createInputQueue(deps) {
   let releasing = null;
   async function release() {
     if (ownerStopping || runtime.hasRunningTurns()) return false;
-    // The hold ends between the two runtimes: no read of the new one is held by mistake. When the
-    // old one cannot be disposed, the new one stays held and the next clean scan tries again.
+    // Keep the old executor and its failed history writes until the next clean scan can drain them.
     const released = profileHold;
-    let disposed = false;
-    try { await runtime.dispose(); disposed = true; }
-    // A desktop that came back meanwhile replaced the hold: that one stays.
-    finally {
-      if (disposed && !ownerStopping && profileHold === released) profileHold = null;
-      runtime = createRuntime();
-      if (ownerStopping) runtime.beginStop();
+    const sameHold = () => !ownerStopping && profileHold === released;
+    try {
+      await runtime.dispose(sameHold);
+    } catch (error) {
+      if (sameHold()) released.message = errorText(error instanceof AggregateError ? error.errors[0] ?? error : error);
+      throw error;
     }
+    // A desktop that came back meanwhile replaced the hold: that one stays.
+    if (sameHold()) profileHold = null;
+    runtime = createRuntime();
+    if (ownerStopping) runtime.beginStop();
     if (profileHold === null) {
       runtime.startIdleRelease();
       for (const id of deps.deferredTurnSettlements?.() ?? []) {

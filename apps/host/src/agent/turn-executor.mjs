@@ -153,6 +153,15 @@ export function createTurnExecutor(deps) {
     return history;
   }
 
+  async function retryHistoryWrites(id, history, turn) {
+    await history.retryFailedWrites();
+    if (turn) turn.persistenceError = null;
+    if (turn?.terminal && !turn.interruptedByShutdown) {
+      deps.assertCurrent();
+      await deps.markEnded?.(id, turn.endedAt);
+    }
+  }
+
   // The Git baseline of one turn, settled as the desktop's event delivery settles it
   // (sessionEventDelivery.ts: a done takes the after-edit savepoint, a terminal error cancels the
   // baseline), each at most once for this turn of this instance. A failed turn that reports its
@@ -1459,17 +1468,24 @@ export function createTurnExecutor(deps) {
       if (!turn) return;
       const history = historyFor(id);
       await history.drain();
-      await history.retryFailedWrites();
-      turn.persistenceError = null;
-      if (turn.terminal && !turn.interruptedByShutdown) { deps.assertCurrent(); await deps.markEnded?.(id, turn.endedAt); }
+      await retryHistoryWrites(id, history, turn);
     },
-    async close(id) {
+    async close(id, canRetryPersistence) {
       deps.interactions?.detach(id);
       const turn = turns.get(id);
       await turn?.settlement;
       const history = histories.get(id);
       await history?.drain();
-      if (history?.hasFailedWrites()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+      if (history && (history.hasFailedWrites() || (canRetryPersistence && turn?.persistenceError))) {
+        if (!canRetryPersistence?.()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+        deps.assertCurrent();
+        try { await retryHistoryWrites(id, history, turn); }
+        catch (error) {
+          if (turn) turn.persistenceError = errorText(error);
+          deps.onPersistenceError(id, error);
+          throw error;
+        }
+      }
       releaseBinding(id);
       bindings.get(id)?.unsubscribe();
       bindings.delete(id);
