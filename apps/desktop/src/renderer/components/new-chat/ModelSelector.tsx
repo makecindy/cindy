@@ -159,6 +159,7 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  displayNameOfStoredModelId,
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
@@ -842,6 +843,8 @@ export interface ModelSelectorBaseProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** A saved draft retains its model trigger while the source is being checked or unavailable. */
+  preserveDraftModel?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
   /** Task whose existing subscription binding should be displayed, when browsing its host. */
@@ -4427,6 +4430,7 @@ export function ModelSelector({
   'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
+  preserveDraftModel = false,
   actualRoute = false,
   subscriptionTaskId,
   taskStarted = false,
@@ -4695,6 +4699,7 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
+      (preserveDraftModel && modelId ? displayNameOfStoredModelId(modelId) : null) ??
       (unconfirmedList ? modelId : null) ??
       (modelId
         ? t(localModelLoading
@@ -4774,6 +4779,7 @@ export function ModelSelector({
     !providersOverride &&
     !sshCodexCurrent &&
     !actualRoute &&
+    !preserveDraftModel &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
     !deviceId &&

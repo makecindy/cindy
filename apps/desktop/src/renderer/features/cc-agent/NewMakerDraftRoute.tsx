@@ -363,7 +363,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
-import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
+import { resolveNewMakerDraftEffort, savedDraftModelIssue } from './newMakerDraftModelPrefs';
 import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
@@ -784,7 +784,28 @@ export function NewMakerDraftRoute() {
 function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: string }) {
   const { t, i18n } = useTranslation();
   const { dataOwnerId, dataOwnerGeneration } = useAuth();
-  const draft = useNewMakerDraft();
+  const savedDraft = useNewMakerDraft();
+  const [alternateModel, setAlternateModel] = useState<{
+    ownerGeneration: number;
+    vendor: MakerVendor;
+    prefs: Pick<VendorPrefs, 'model' | 'providerId' | 'effort'>;
+    fast: boolean | 'ultrafast';
+    favoriteUid: string | null;
+  } | null>(null);
+  const localAlternate = alternateModel?.ownerGeneration === dataOwnerGeneration &&
+    !savedDraft.deviceLinkDeviceId && !savedDraft.remoteHostId && !savedDraft.agentDeviceId
+    ? alternateModel : null;
+  const draft = localAlternate ? {
+    ...savedDraft,
+    vendor: localAlternate.vendor,
+    lastByVendor: {
+      ...savedDraft.lastByVendor,
+      [localAlternate.vendor]: { ...savedDraft.lastByVendor[localAlternate.vendor], ...localAlternate.prefs },
+    },
+  } : savedDraft;
+  useEffect(() => {
+    if (alternateModel && !localAlternate) setAlternateModel(null);
+  }, [alternateModel, localAlternate]);
   const location = useLocation();
   const activeDraftPage = useRef<object | null>(null);
   useLayoutEffect(() => {
@@ -1181,7 +1202,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // null,agent map 无 pi,但模型目录仍投影 Pi → 需按 maker:list-available-agents 过滤,
   // 否则一路创建到 requireAgent 的 not-registered 报错,codex review P2)。远程草稿以被控端
   // 的注册结果为准(hook 传 deviceId 走隧道)。未加载完成时不隐藏任何入口(fail-open)。
-  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents(
+  const { availableVendors, loaded: availableAgentsLoaded, loading: availableAgentsLoading } = useAvailableAgents(
     catalogDeviceId,
   );
   const hiddenSwitcherVendors = useMemo<MakerVendor[]>(() => {
@@ -1213,9 +1234,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       ? {
           models: pluginModels,
           active: activePluginModel,
-          onSelect: (model: GhostPickerModel) => patchDraft({
-            pluginModel: { pluginId: model.pluginId, modelId: model.id }, modelGroup: null, pluginEngine: null,
-          }),
+          onSelect: (model: GhostPickerModel) => {
+            setAlternateModel(null);
+            patchDraft({
+              pluginModel: { pluginId: model.pluginId, modelId: model.id }, modelGroup: null, pluginEngine: null,
+            });
+          },
         }
       : undefined,
     [pluginModelsAllowed, pluginModels, activePluginModel],
@@ -1244,6 +1268,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 换引擎或换模型都保留用户为插件引擎选过的权限档与思考深度(不碰内置 Harness 的记忆)；
           // 新模型不提供那一档时按它自己的默认档(resolvePluginEngineEffort)。
           onSelect: (selection: PluginEngineSelection) => {
+            setAlternateModel(null);
             const leavesAgentDevice = !!getDraft().agentDeviceId;
             if (leavesAgentDevice) {
               // 插件引擎只在本机运行：与模型面板里「回到本机」同一套清理，丢掉那台电脑的目录选择。
@@ -1286,7 +1311,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       ? {
           config: modelGroupsConfig,
           active: activeModelGroup,
-          onSelect: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null }),
+          onSelect: (selection: ModelGroupSelection) => {
+            setAlternateModel(null);
+            patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
+          },
           onManage: () => navigate('/settings?tab=model-groups'),
         }
       : undefined,
@@ -1728,7 +1756,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
    * 选择,给个陈旧清单也好过一个都挑不出来。
    */
   const draftModelChosenByUser =
-    !!sshCodexDraftHostId || draft.modelChosenByVendor[draft.vendor] === true;
+    !!localAlternate ||
+    !!sshCodexDraftHostId ||
+    draft.modelChosenByVendor[draft.vendor] === true ||
+    (!usesDeviceCatalog && !effectiveRemoteHostId && savedDraft.defaultTupleSelectionCustomized);
   const autoCalibrationProviders = useMemo(() => {
     if (draftModelChosenByUser || draftPreferredProviderId) return calibrationProviders;
     const healthy = calibrationProviders.filter((p) => !p.modelDiscoveryFailure);
@@ -2833,13 +2864,30 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       ? draftInitialFastMode
       : false
     : supportsFastMode
-      ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : resolveDraftFast(calibratedDraftModel)
+      ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : localAlternate?.fast ?? resolveDraftFast(calibratedDraftModel)
       : false;
+
+  const localModelIssue = !usesDeviceCatalog && !effectiveRemoteHostId &&
+    !activePluginEngine && !activePluginModel && !activeModelGroup &&
+    (savedDraft.defaultTupleSelectionCustomized || localAlternate)
+    ? savedDraftModelIssue({
+        agent: capabilityAgentKind,
+        engineAvailable: availableVendors.has(persistedAgentKind),
+        enginesLoaded: availableAgentsLoaded,
+        enginesLoading: availableAgentsLoading,
+        model: draftInitialModel,
+        providerId: chatInitialProviderId,
+        providers: draftLocalProviders,
+        providersLoading: draftLocalProvidersLoading,
+        providersLoadFailed: localProvidersLoadFailed,
+      })
+    : null;
+  const localModelIssueText = localModelIssue ? t(`ccAgent.draft.savedModel.${localModelIssue}`) : null;
 
   // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务并预热 Agent,
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。
   const provisionalDraftArgs = useMemo<ProvisionalDraftCreateArgs | null>(() => {
-    if (isDeviceLinkDraft || usesDeviceCatalog) return null;
+    if (isDeviceLinkDraft || usesDeviceCatalog || localModelIssue) return null;
     if (wtEnabled && wtConfirmedIneligible !== true) return null;
     // 选着插件引擎时不提前建任务(也就不预热内置 Harness)：已建出的那条由下方 effect 删掉，
     // 发送时按插件引擎的路径新建(docs/plans/acp-plugin-bridge.md)。
@@ -2865,6 +2913,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   }, [
     isDeviceLinkDraft,
     usesDeviceCatalog,
+    localModelIssue,
     wtEnabled,
     wtConfirmedIneligible,
     activePluginEngine,
@@ -2953,7 +3002,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 不一致就回落模型行。深度 / Fast 直接读实时值，不在锚点里复制第二份快照。
   // 不做「不符就删槽」的 effect：目录 / 远端 seed 未到时的短暂失配不能抹掉历史选择。
   // 收藏修改不会自动覆盖旧草稿；显式选普通模型行时才清掉该锚点。
-  const selectedFavoriteUid = draftFavoriteAnchor?.uid ?? null;
+  const selectedFavoriteUid = localAlternate ? localAlternate.favoriteUid : draftFavoriteAnchor?.uid ?? null;
 
   /**
    * 草稿锚点 → 会话锚点的**延续**(Chris 2026-08-19):草稿里选了收藏第 3 条、发出去建会话,
@@ -2967,7 +3016,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
    * draftInitialModel,如 SSH 分支会另行解析)。
    */
   const draftFavoriteAnchorRef = useRef<DraftFavoriteAnchor | null>(null);
-  draftFavoriteAnchorRef.current = selectedFavoriteUid ? draftFavoriteAnchor : null;
+  draftFavoriteAnchorRef.current = localAlternate
+    ? localAlternate.favoriteUid && localAlternate.prefs.providerId
+      ? { uid: localAlternate.favoriteUid, wireModelId: localAlternate.prefs.model, providerId: localAlternate.prefs.providerId }
+      : null
+    : draftFavoriteAnchor;
   const carryDraftFavoriteAnchorToSession = useCallback(
     (
       newSessionId: string,
@@ -3195,6 +3248,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       return;
     }
     handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
+    setAlternateModel(null);
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
@@ -3234,6 +3288,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const token = `${dataOwnerId}:${location.key}`;
     if (handledGenericDefaultLocationRef.current === token) return;
     handledGenericDefaultLocationRef.current = token;
+    if (location.state?.workspacePrompt === 'generic') setAlternateModel(null);
     if (location.state?.restoreLastCreatedWorkspace === true) {
       const workspace = getLastCreatedTaskWorkspace(dataOwnerId);
       if (workspace) {
@@ -3472,8 +3527,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 只在已加载可用性后收敛;fallback 一定可见,收敛一次即稳定(switchVendor 同值早返,不成环)。
   useEffect(() => {
     if (!availableAgentsLoaded) return;
-    fallbackUnavailableVendor(availableVendors);
-  }, [availableAgentsLoaded, availableVendors]);
+    fallbackUnavailableVendor(availableVendors, {
+      differentCatalog: usesDeviceCatalog || !!effectiveRemoteHostId,
+    });
+  }, [availableAgentsLoaded, availableVendors, usesDeviceCatalog, effectiveRemoteHostId]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
   // 权限 / 计划模式不是默认模型 tuple：按界面 Harness 的槽写，但不改变 storage 中最新
@@ -3485,14 +3542,18 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [draft.vendor],
   );
   const patchActiveTuplePrefs = useCallback(
-    (patch: Partial<VendorPrefs>) => {
+    (patch: Partial<Pick<VendorPrefs, 'model' | 'providerId' | 'effort'>>) => {
+      if (localAlternate) {
+        setAlternateModel({ ...localAlternate, prefs: { ...localAlternate.prefs, ...patch } });
+        return;
+      }
       // draft.vendor 是用户触发控件时眼前的 Harness，必须作为这次操作的明确意图带进
       // store。另一个 renderer 可能已切换持久 tuple；先 rebase 并切回意图 Harness，
       // 再按显式槽写入，避免把 cc 控件的值静默落进 Pi。
       switchVendor(draft.vendor);
       patchVendorPrefs(draft.vendor, patch);
     },
-    [draft.vendor],
+    [draft.vendor, localAlternate],
   );
 
   const handleModelDidChange = useCallback(
@@ -3527,7 +3588,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }));
         return;
       }
-      markDefaultTupleCustomized();
+      if (!localAlternate) markDefaultTupleCustomized();
       patchActiveTuplePrefs({ model: newModelId });
       // 本地草稿的 Fast 直接由「新 model + 全局预设 + 来源能力」派生,patch 后同步收敛,
       // 不再维护一份可能与其它对话更新脱节的本地 state。
@@ -3539,6 +3600,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       capabilities,
       deviceDraftDefaults,
       patchActiveTuplePrefs,
+      localAlternate,
       capabilityAgentKind,
       agentCatalogProviders,
     ],
@@ -3556,6 +3618,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         return;
       }
       if (!supportsFastMode) {
+        return;
+      }
+      if (localAlternate) {
+        setAlternateModel({ ...localAlternate, fast: enabled });
         return;
       }
       markDefaultTupleCustomized(false);
@@ -3580,6 +3646,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       draft.vendor,
       calibratedDraftModel,
       supportsFastMode,
+      localAlternate,
       effectiveSourceId,
       capabilityAgentKind,
       pushActiveDraftPref,
@@ -3597,10 +3664,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
       }
-      markDefaultTupleCustomized(false);
+      if (!localAlternate) markDefaultTupleCustomized(false);
       patchActiveTuplePrefs({ effort: newEffort });
     },
-    [sshCodexDraftHostId, patchSshDraftSelection, usesDeviceCatalog, patchActiveTuplePrefs, pushActiveDraftPref],
+    [sshCodexDraftHostId, patchSshDraftSelection, usesDeviceCatalog, localAlternate, patchActiveTuplePrefs, pushActiveDraftPref],
   );
   // ChatInput 内部决策完 newEffort 时回写这里, 让"每个 modelId 上次的 effort"
   // 跨 ChatInput 实例 / 跨重启保留 (修复: New Maker 先选 Haiku 发完, 再 New Maker
@@ -3657,10 +3724,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
         return;
       }
-      markDefaultTupleCustomized();
+      if (!localAlternate) markDefaultTupleCustomized();
       patchActiveTuplePrefs({ providerId: newProviderId });
     },
-    [sshCodexDraftHostId, usesDeviceCatalog, patchActiveTuplePrefs],
+    [sshCodexDraftHostId, usesDeviceCatalog, localAlternate, patchActiveTuplePrefs],
   );
 
   // ─── 统一模型选择器:一次选中 = 一次完整写入 ─────────────────────────────
@@ -3690,6 +3757,22 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       /** 远程 Agent:这一行属于哪台电脑(null = 本机);未带 = 面板没有远程 Agent 入口。 */
       agentDevice?: { deviceId: string; name: string } | null;
     }) => {
+      if (!usesDeviceCatalog && !effectiveRemoteHostId && !selection.agentDevice &&
+          (localAlternate || localModelIssue)) {
+        setAlternateModel({
+          ownerGeneration: dataOwnerGeneration,
+          vendor: selection.vendor,
+          prefs: {
+            model: selection.modelId,
+            providerId: selection.providerId,
+            effort: selection.effort ?? savedDraft.lastByVendor[selection.vendor].effort,
+          },
+          fast: selection.fast,
+          favoriteUid: selection.favoriteUid,
+        });
+        return;
+      }
+      setAlternateModel(null);
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
       // 换账号 / 换设备不必在这里补清理 —— 槽本身按 dataOwnerId 分区,面板侧另有一道兜底:
@@ -3897,6 +3980,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     },
     [
       draft.vendor,
+      localAlternate,
+      localModelIssue,
+      dataOwnerGeneration,
+      savedDraft.lastByVendor,
       usesDeviceCatalog,
       catalogDeviceId,
       controlledModelRoute.catalogHostDeviceId,
@@ -4679,6 +4766,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return false;
+      if (localModelIssueText) {
+        toast.warning(localModelIssueText);
+        return false;
+      }
       // 选着插件引擎：走它自己的精简路径(见 sendWithPluginEngine)，下面的内置引擎链路不经过。
       if (activePluginEngine) {
         return sendWithPluginEngine(activePluginEngine, message, permissionMode, files, mentions, opts);
@@ -6062,6 +6153,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [
       NEW_MAKER_DRAFT_KEY,
       activePluginEngine,
+      localModelIssueText,
       sendWithPluginEngine,
       activePluginModel,
       activeModelGroup,
@@ -6143,6 +6235,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) {
         throw new Error(t('goal.newGoalDialog.busy'));
       }
+      if (localModelIssueText) throw new Error(localModelIssueText);
       // 「让插件选」对目标任务同样生效：下面的 const 会遮蔽这些外层值，基准要在 try 之外先取。
       const goalBaseRoute = {
         persistedAgentKind,
@@ -6820,6 +6913,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       agentCatalogProviders,
       deviceProvidersLoading,
       vendorAuthGate,
+      localModelIssueText,
       activePluginModel,
       activeModelGroup,
       providers,
@@ -7362,7 +7456,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     // 几次隧道往返。锁定态即时告诉用户「已发出、处理中」,也免得这段时间补写的
                     // 内容在交接成功清空草稿时被一并丢掉;失败解锁后原文仍在。
                     disabled={sendInFlight}
-                    sendBlocked={directoryRecoverySelecting || wtCheckoutBusy}
+                    sendBlocked={directoryRecoverySelecting || wtCheckoutBusy || !!localModelIssueText}
+                    preserveDraftModel={!!localModelIssue}
                     settingsLocked={directoryRecoverySelecting}
                     onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                     externalDragOver={pageDragOver}
@@ -7510,6 +7605,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                       usesDeviceCatalog ? undefined : handleRememberedEffortChange
                     }
                   />
+                  {!newGoalOpen && (localModelIssueText || localAlternate) && (
+                    <p role="status" className="mt-2 px-3 text-12 text-[var(--text-secondary)]">
+                      {localModelIssueText ?? t('ccAgent.draft.savedModel.thisTaskOnly')}
+                    </p>
+                  )}
                   {!newGoalOpen && directoryRecoveryNotice}
                   {!newGoalOpen && wtCreatingInfo ? (
                     <div className="mt-3 w-full">

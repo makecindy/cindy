@@ -16389,6 +16389,14 @@
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
+      "savedModel": {
+        "loading": "Connecting to the selected model…",
+        "checkFailed": "Could not check the selected model",
+        "engine": "The selected engine is unavailable. Choose a model for this task.",
+        "source": "The selected source is unavailable. Choose a model for this task.",
+        "model": "The selected model is unavailable. Choose a model for this task.",
+        "thisTaskOnly": "Model selected for this task only"
+      },
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
       "branchChanged": "The project is now on {{branch}}. Check it, then send again.",

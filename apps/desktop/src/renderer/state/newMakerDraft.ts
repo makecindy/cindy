@@ -1104,10 +1104,14 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
  *
  * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续
  * 使用 React 上一轮 closure 的 cc/currentPrefs,会把 xAI→Pi 又覆盖成 Codex。系统回退不标记
- * defaultTupleCustomized,因为它不是用户选择。
+ * defaultTupleCustomized,因为它不是用户选择。本机手动选定的引擎在可用列表短暂缺失时继续保留。
  */
-export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+export function fallbackUnavailableVendor(
+  availableVendors: ReadonlySet<MakerVendor>,
+  options?: { differentCatalog?: boolean },
+): boolean {
   rebaseStoredDefaultTuplePreference();
+  if (currentDraft.defaultTupleSelectionCustomized && !options?.differentCatalog) return false;
   const currentVendor = currentDraft.vendor;
   if (availableVendors.has(currentVendor)) return false;
   const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>

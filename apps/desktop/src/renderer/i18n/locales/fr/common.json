@@ -16544,6 +16544,14 @@
       "remoteProviderUnsupported": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes : choisissez une autre source",
       "remoteNativeOauthUnavailable": "Les tâches distantes ne peuvent pas utiliser d'abonnement Claude : choisissez une passerelle ou un modèle avec clé API",
       "claudeSubscriptionWorkspaceOverride": "Les paramètres .claude de ce dossier modifient la destination des requêtes de Claude ou sa méthode de connexion : l'abonnement Claude ne peut donc pas être utilisé ici. Supprimez ces paramètres, ou choisissez une passerelle ou un modèle avec clé API",
+      "savedModel": {
+        "loading": "Connexion au modèle sélectionné…",
+        "checkFailed": "Impossible de vérifier le modèle sélectionné",
+        "engine": "Le moteur sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "source": "La source sélectionnée est indisponible. Choisissez un modèle pour cette tâche.",
+        "model": "Le modèle sélectionné est indisponible. Choisissez un modèle pour cette tâche.",
+        "thisTaskOnly": "Le modèle sélectionné s’applique uniquement à cette tâche"
+      },
       "deviceStillLoading": "L'appareil distant est encore en cours de chargement, veuillez patienter",
       "remoteDefaultsLoadFailed": "Impossible de charger les paramètres de l'appareil distant. Vérifiez la connexion ; Cindy réessaie.",
       "branchChanged": "Le projet est maintenant sur {{branch}}. Vérifiez, puis envoyez à nouveau.",

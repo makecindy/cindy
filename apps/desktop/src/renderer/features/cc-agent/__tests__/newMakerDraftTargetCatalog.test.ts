@@ -306,6 +306,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
     const dlRuntimeTouchedRef = { current: false };
     const patchDraft = vi.fn();
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+      localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(), usesDeviceCatalog: true,
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
@@ -1412,7 +1413,8 @@ describe('the remote draft holder follows the displayed model', () => {
       effectiveAgentDeviceId: returningToTaskComputer ? 'other-computer' : undefined,
     };
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
-      ...bindings, setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
+      ...bindings, localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(),
+      setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
       catalogDeviceId: 'target-device', usesDeviceCatalog: true,
       dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
@@ -1696,4 +1698,24 @@ describe('the seed keeps a restored explicit choice', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]?.[3]).toBe(true);
   });
+});
+
+it('applies a replacement for an unavailable saved model only to the current local draft', () => {
+  const setAlternateModel = vi.fn();
+  const switchVendor = vi.fn();
+  const patchVendorPrefs = vi.fn();
+  const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12,
+    switchVendor, patchVendorPrefs,
+  });
+  select({
+    vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high', fast: false, favoriteUid: null,
+  });
+  expect(setAlternateModel).toHaveBeenCalledWith({
+    ownerGeneration: 12, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
+    fast: false, favoriteUid: null,
+  });
+  expect(switchVendor).not.toHaveBeenCalled();
+  expect(patchVendorPrefs).not.toHaveBeenCalled();
 });
