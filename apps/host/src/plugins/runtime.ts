@@ -127,10 +127,13 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   let enableChanges: Promise<unknown> = Promise.resolve();
   const current = () => !closed && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
-  const profileHoldMessage = () => desktopPause ? holdRefusal(desktopPause.reason).message : null;
   // Keep external tool admission closed while reconcile restores resident runtimes.
   let restoring: Pause | null = null;
   const pausedReason = () => desktopPause?.reason ?? restoring?.reason;
+  const profileHoldMessage = () => {
+    const held = pausedReason();
+    return held ? holdRefusal(held).message : null;
+  };
   const pluginPauseFailure = () => {
     const reason = pausedReason();
     if (!reason) return null;
@@ -473,6 +476,14 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   const dispatcher = new HostGhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
+  function startResident(ghost: InstalledGhost) {
+    spawnResidentGhost(ghost, {
+      isAvailable: () => !pausedReason() && isCurrent(ghost),
+      startNode: item => track(node.startResident(item)),
+      spawnBrowser: item => track(runtime.spawn(item)),
+      warn: (message, fields) => log.warn(message, fields),
+    });
+  }
   async function reconcileInstalled() {
     assertCurrent();
     if (desktopPause) return;
@@ -496,8 +507,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (desktopPause) return;
       if (!known.has(id)) await authorization.reconcile(ghost);
       assertCurrent(); known.set(id, revision(ghost));
-      spawnResidentGhost(ghost, { isAvailable: () => !desktopPause && isCurrent(ghost), startNode: item => track(node.startResident(item)),
-        spawnBrowser: item => track(runtime.spawn(item)), warn: (message, fields) => log.warn(message, fields) });
+      if (!restoring) startResident(ghost);
     }
   }
   function reconcile() {
@@ -573,7 +583,12 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
           pauseForDesktop(pause.reason);
           return false;
         }
+        // Residents can use their approved services as soon as their entry runs.
+        // Finish recovery before starting them, just as on an ordinary startup.
         restoring = null;
+        for (const ghost of ghosts) {
+          if (known.get(installedGhostStoragePart(ghost)) === revision(ghost)) startResident(ghost);
+        }
         publish('ghosts:changed', { ghosts });
         publish('ghosts:runtime-changed', { states: runtime.listStates() });
         return true;

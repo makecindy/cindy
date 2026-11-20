@@ -7,12 +7,15 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-import { beginAppSessionBoundary, commitVolatileAppSession, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession, getActiveDataOwnerPushStamp, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { createHostToolService } from '../agent/host-tools.ts';
+import { createHostConfirmations } from '../host-confirmations.ts';
 import { configureHostOwner } from '../agent/claude-auth.mjs';
 import { createHostProfileCoexistenceMonitor } from '../agent/profile-coexistence.ts';
 import { hostOutbound } from '../outbound.mjs';
@@ -49,7 +52,7 @@ const logic = `
     let result;
     if (message.args.request) result = await cindy.send({ ...message.args.request, callId: message.callId });
     else if (message.args.node) result = await cindy.node.request({
-      method: message.args.node === 'pending' ? 'pending' : 'echo',
+      method: typeof message.args.node === 'string' ? message.args.node : 'echo',
       params: message.args.marker,
     });
     else result = true;
@@ -61,17 +64,26 @@ const logic = `
   });
 `;
 const nodeWorker = String.raw`
-  require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  require('node:readline').createInterface({ input: process.stdin }).on('line', async line => {
     const request = JSON.parse(line);
     if (request.method === 'pending') {
       require('node:fs').writeFileSync(request.params, 'started');
       return;
     }
-    if (request.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: process.pid }) + '\n');
+    if (request.id === undefined) return;
+    let result = process.pid;
+    if (request.method === 'approved-services') {
+      const tools = await cindy.host.call('cindy_helper', 'terminal_list', {});
+      const denied = await cindy.host.call('cindy_helper', 'storage_request', { op: 'targets' });
+      const response = await cindy.fetch({ url: 'https://example.invalid/account' });
+      result = { jobs: JSON.parse(tools.content[0].text).jobs,
+        denied: JSON.parse(denied.content[0].text).errorCode, response };
+    }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
   });
 `;
 
-async function fixture(t, { executable, resident = true, node = false } = {}) {
+async function fixture(t, { executable, resident = true, node = false, services = false } = {}) {
   const cleanup = lifoCleanup(t);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-plugin-pause-'));
   cleanup.after(() => fs.rm(profile, { recursive: true, force: true }));
@@ -90,7 +102,9 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
     settingsHtml: 'panel.html', ...(resident ? { launch: 'resident' } : {}),
     subscribe: { hooks: ['will-tool-call', 'did-tool-result'], topics: ['session'] },
     tools: [{ name: 'echo', description: 'synthetic tool', parameters: { type: 'object' } }],
-    network: { hosts: ['example.invalid'] }, library: true, notify: true,
+    ...(services ? { agent: { hostTools: ['terminal'] } } : {}),
+    network: { hosts: ['example.invalid'], ...(services ? { secrets: [{ key: 'fixture', label: 'Fixture',
+      inject: { header: 'Authorization', format: 'Bearer {value}' } }] } : {}) }, library: true, notify: true,
     ...(node ? { node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', lifecycle: 'resident' } } : {}),
   }));
   zip.file('main.js', logic);
@@ -108,9 +122,23 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
   const warnings = [];
   const terminalCleanup = [];
   const log = { trace() {}, debug() {}, info() {}, warn(message) { warnings.push(message); }, error() {}, fatal() {}, child() { return this; } };
+  let hostTools;
+  if (services) {
+    const db = { drizzle: {} };
+    setCurrentDbClient(db, ownerId);
+    cleanup.after(() => clearCurrentDbClient(db));
+    const confirmations = createHostConfirmations({ current: () => true });
+    cleanup.after(() => confirmations.close());
+    hostTools = createHostToolService({ profileDir: profile, ownerId, current: () => true,
+      owner: getActiveDataOwnerPushStamp, getGhost: key => manager.findInstalledInstance(key),
+      getSession: () => undefined, confirmations, t: key => key });
+    cleanup.after(() => hostTools.close());
+  }
+  const secrets = new Map();
   const runtime = await createHostPluginRuntime({
     profileDir: profile, ownerId, manager, assets, log,
-    credentials: { read: () => null, write() {}, remove() {} },
+    credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => secrets.set(key, value),
+      remove: key => secrets.delete(key) }, hostToolRequest: hostTools?.request,
     getLoginEmail: () => null, getSession: () => undefined, requestFileConfirmation: async () => false,
     modelRouteSources: () => ({ localViews: async () => [], localAgents: () => [] }),
     appContext: () => ({ ok: true, context: { region: 'global', locale: 'en' } }),
@@ -470,7 +498,7 @@ test('Host reports an interrupted external write as uncertain and never resends 
 });
 
 test('resident logic and Node resume in the old partition without a replacement approval', realPage, async t => {
-  const f = await fixture(t, { executable: executablePath, node: true });
+  const f = await fixture(t, { executable: executablePath, node: true, services: true });
   await f.runtime.reconcile();
   assert.equal((await f.call()).ok, true);
   const panel = await f.runtime.openPage(f.id, 'panel.html');
@@ -481,13 +509,45 @@ test('resident logic and Node resume in the old partition without a replacement 
   f.hold();
   assert.equal(f.runtime.node.stateOf(f.id), 'off');
   assert.deepEqual(await f.call({ node: true }), held);
+  // Integration: suspend the final inventory read until any already-started resident has loaded.
+  // A running resident must be able to load its own entry without a tool call restarting it.
+  const spawn = GhostRuntime.prototype.spawn;
+  let loading;
+  t.mock.method(GhostRuntime.prototype, 'spawn', function (...args) {
+    loading = spawn.apply(this, args);
+    return loading;
+  });
+  const list = f.manager.listAsync.bind(f.manager);
+  t.mock.method(f.manager, 'listAsync', async (...args) => {
+    if (loading) await loading;
+    return list(...args);
+  });
   await f.runtime.resumeAfterDesktop();
+  assert.equal((await loading)?.ok, true, 'resident loaded before any external tool call');
   const after = await f.call({ node: true });
   assert.equal(after.ok, true, JSON.stringify(after));
   assert.equal(before.result.ok, true, JSON.stringify(before.result));
   assert.equal(after.result.ok, true, JSON.stringify(after.result));
   assert.notEqual(before.result.result, after.result.result);
   assert.deepEqual(await panel.evaluate(() => [localStorage.getItem('saved'), document.cookie]), ['before', 'fixture=old']);
+  f.runtime.secret.storeGhostSecret(f.id, 'fixture', 'synthetic-test-value');
+  const requests = [];
+  t.mock.method(hostOutbound, 'outboundFetch', async (url, init) => {
+    requests.push(String(url));
+    return Response.json({ authorized: new Headers(init.headers).get('authorization') === 'Bearer synthetic-test-value' });
+  });
+  const check = await f.call({ node: 'approved-services' });
+  assert.equal(check.result?.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.result.result.jobs, []);
+  assert.equal(check.result.result.denied, 'PERMISSION_DENIED');
+  assert.equal(JSON.parse(check.result.result.response.body).authorized, true);
+  assert.doesNotMatch(JSON.stringify(check), /synthetic-test-value/);
+  assert.equal(await panel.evaluate(async () => (await fetch('/kv', { method: 'PUT',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ restored: true }) })).status), 204);
+  assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { restored: true });
+  f.hold();
+  assert.deepEqual(await f.call({ node: 'approved-services' }), held);
+  assert.deepEqual(requests, ['https://example.invalid/account']);
   assert.deepEqual(await filesIn(f.root('ghost-install-state')), receipts);
 });
 
