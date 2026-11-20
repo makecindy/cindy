@@ -2,10 +2,11 @@ import { usePreviewFocusReturn } from './PreviewChrome';
 /**
  * ImageLightbox
  * ---------------------------------------------------------------------------
- * 通过 React Portal 渲染的全屏图片 lightbox。
+ * 通过 React Portal 渲染的非模态图片预览浮窗。
  *
- * - 遮罩：使用 `--overlay-lightbox` 主题 token，保持 lightbox 遮罩语义一致。
- * - 图片：`object-fit: contain`，四周保留 40px 安全边距。
+ * - 外壳：默认贴右的可拖动浮窗,可调尺寸,也能贴左或居中展开;背景对话保持可见、
+ *   可滚动、可选中、可复制。共享 PreviewChrome 的其它查看器仍用原来的模态外壳。
+ * - 图片：按浮窗可用宽高 `object-fit: contain`,不再固定四边 40px 全屏铺满。
  * - 缩放/平移(手势数学共用 `lightboxGestures`,与 MermaidLightbox 同一套):
  *   - 各平台一致:触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
  *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 / 鼠标滚轮 → 以光标为焦点缩放;
@@ -15,8 +16,8 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   - 放大后左键拖拽平移;松手时若拖动超过阈值,该次 click 不触发关闭。
  *   - 键盘 +/- 步进缩放,0 重置。翻页(←/→ 或箭头按钮)时视口自动重置。
  *   - 缩放范围 1x(适配窗口)~ 8x,图片不缩到比适配尺寸更小。
- * - 关闭：点击黑色背景或按 Escape 关闭。点击图片本身**不再**关闭(为双击缩放
- *   让路,也符合常见图片查看器习惯;旧行为是点图片也关闭)。
+ * - 关闭：关闭按钮或 Esc。点击预览窗内空白背景仍关闭;点击背景对话不会关闭,
+ *   以便选中/复制消息。点击图片本身**不再**关闭(为双击缩放让路)。
  * - 媒体动作(对齐手机版 lightbox 的功能集,底部胶囊操作栏 + 右键菜单双入口):
  *   复制图片 / 打开所在目录(右键) / 用默认应用打开 / 另存为 / 发送到对话。
  *   可用性按 src scheme 分层,见 `mediaActionCapabilities`:本地源
@@ -33,9 +34,9 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   或中键拖拽平移;Esc / X 放弃——笔迹偏离基线时先经统一确认框确认。
  * - 右键：菜单关闭后的同一次背景点击不能顺带关闭 lightbox,见 `lastMenuCloseAt`。
  * - 动画：200ms 透明度淡入淡出。
- * - 焦点：FocusScope 打开时把焦点移入 overlay 并圈禁 Tab;卸载时还给打开前的焦点元素。
- * - 滚动锁定：打开期间给 `[data-scroll-container]` 设置 `overflowY: hidden`。
- * - 关闭按钮：按设计不显示 X 关闭按钮。
+ * - 焦点：打开时把焦点移入浮窗,但不圈禁 Tab;卸载时还给打开前的焦点元素。
+ * - 背景滚动：不锁定 `[data-scroll-container]`,预览窗之外的聊天仍可滚动。
+ * - 关闭按钮：标题栏常驻关闭按钮,避免非模态浮窗只能靠 Esc 退出。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
  *   “n / 总数”计数。列表优先来自 `ImageGalleryContext`(MessageStream 下发的全量
  *   会话图片)，否则退回扫描 DOM 中的 `[data-gallery-src]`。起始下标由被点击元素的
@@ -44,13 +45,26 @@ import { usePreviewFocusReturn } from './PreviewChrome';
 
 import { saveImageAs } from './DownloadImageMenuItem';
 import { useImageClipboard } from './useImageClipboard';
+import {
+  useImagePreviewWindow,
+  type PreviewDockMode,
+  type PreviewResizeDirection,
+  type PreviewWindowMode,
+} from './imagePreviewWindow';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
   Minus,
   Plus,
   Maximize,
+  Maximize2,
+  Grip,
+  PanelLeft,
+  PanelRight,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -123,12 +137,9 @@ import {
 } from './AttachmentCollection';
 import {
   PREVIEW_PANEL_CLASS,
-  PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
   PreviewButton as LightboxToolbarButton,
-  PreviewScrim,
-  previewPanelSize,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
@@ -142,6 +153,113 @@ const DRAG_CLICK_SUPPRESS_PX = 4;
 const FIT_VIEWPORT: LightboxViewport = { scale: 1, tx: 0, ty: 0 };
 
 const log = createLogger('ImageLightbox');
+
+/** 新文案用稳定 key + 内联默认值,多语由 LQA 后续补齐。 */
+const DOCK_ACTIONS = [
+  {
+    mode: 'left',
+    key: 'chat.lightbox.dockLeft',
+    defaultValue: 'Dock preview left',
+    Icon: PanelLeft,
+  },
+  {
+    mode: 'right',
+    key: 'chat.lightbox.dockRight',
+    defaultValue: 'Dock preview right',
+    Icon: PanelRight,
+  },
+  {
+    mode: 'center',
+    key: 'chat.lightbox.expandPreview',
+    defaultValue: 'Expand preview',
+    Icon: Maximize2,
+  },
+] as const satisfies ReadonlyArray<{
+  mode: PreviewDockMode;
+  key: string;
+  defaultValue: string;
+  Icon: typeof PanelLeft;
+}>;
+
+function ImagePreviewWindowActions({
+  mode,
+  onDock,
+}: {
+  mode: PreviewWindowMode;
+  onDock: (mode: PreviewDockMode) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {DOCK_ACTIONS.map(({ mode: actionMode, key, defaultValue, Icon }) => {
+        const label = t(key, { defaultValue });
+        const active = mode === actionMode;
+        return (
+          <Tip key={key} text={label} contentClassName="z-[10003]">
+            <Button
+              type="button"
+              size="md"
+              variant={active ? 'primary' : 'secondary'}
+              tone={active ? 'default' : 'quiet'}
+              aria-label={label}
+              aria-pressed={active}
+              data-preview-dock={actionMode}
+              className="w-8 px-0"
+              style={WINDOW_NO_DRAG_STYLE}
+              onClick={() => onDock(actionMode)}
+            >
+              <Icon className="h-4 w-4" />
+            </Button>
+          </Tip>
+        );
+      })}
+    </>
+  );
+}
+
+function ImagePreviewResizeHandle({
+  onResizeStart,
+}: {
+  onResizeStart: (
+    clientX: number,
+    clientY: number,
+    pointerId: number,
+    direction: PreviewResizeDirection,
+  ) => void;
+}) {
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 仅承接调整浮窗尺寸的指针手势;键盘用户用停靠按钮。
+    <div
+      aria-hidden
+      data-preview-resize-handle="se"
+      style={{
+        position: 'absolute',
+        right: 0,
+        bottom: 0,
+        zIndex: 20,
+        width: 20,
+        height: 20,
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
+        padding: 2,
+        color: 'var(--text-tertiary)',
+        cursor: 'nwse-resize',
+        touchAction: 'none',
+        ...WINDOW_NO_DRAG_STYLE,
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onResizeStart(event.clientX, event.clientY, event.pointerId, 'se');
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Grip className="h-3 w-3" />
+    </div>
+  );
+}
 
 /** 标注层与图片盒严格同尺寸;事件由 transform 容器接管。 */
 const ANNOTATION_OVERLAY_STYLE: React.CSSProperties = {
@@ -177,6 +295,26 @@ function isSpacePanExemptTarget(target: EventTarget | null): boolean {
     target.closest('button, a[href], [role="button"], [role="menuitem"], [role="checkbox"]') !==
       null
   );
+}
+
+/** 标题栏的按钮、菜单与文件名区域:只有非交互区才启动"拖整个预览窗"。 */
+function isPreviewHeaderInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      'button, a[href], input, textarea, select, [role="button"], [role="menuitem"], [data-preview-drag-handle-ignore]',
+    ) !== null
+  );
+}
+
+/**
+ * 非模态浮窗不能抢背景对话的快捷键。只有焦点在浮窗内或没有具体焦点(如 body)
+ * 时,+/-/0、Space 平移、撤销/重做、方向翻页才归预览窗;Esc 仍全局关闭。
+ */
+function lightboxOwnsShortcutTarget(target: EventTarget | null, panel: HTMLElement | null): boolean {
+  if (!panel) return false;
+  if (target === document.body || target === document.documentElement) return true;
+  return target instanceof Node && panel.contains(target);
 }
 
 function isMacPlatform(): boolean {
@@ -434,6 +572,28 @@ function ImageLightboxContent({
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // 本次按下-抬起手势是否发生过超阈值位移;为真时抑制随后的 overlay click 关闭。
   const dragMovedRef = useRef(false);
+  // 拖/调整浮窗松手后的 click 可能落在空白背景上;复用同一标记避免误关。
+  const suppressPanelGestureClick = useCallback(() => {
+    dragMovedRef.current = true;
+    setTimeout(() => {
+      dragMovedRef.current = false;
+    }, 0);
+  }, []);
+  const {
+    rect: panelRect,
+    mode: panelMode,
+    dock,
+    startDrag,
+    startResize,
+  } = useImagePreviewWindow({ onGestureEnd: suppressPanelGestureClick });
+  const handleHeaderPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || isPreviewHeaderInteractiveTarget(event.target)) return;
+      event.preventDefault();
+      startDrag(event.clientX, event.clientY, event.pointerId);
+    },
+    [startDrag],
+  );
   const isWheelingRef = useRef(false);
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -477,9 +637,8 @@ function ImageLightboxContent({
   const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
     null,
   );
-  const [viewportSize, setViewportSize] = useState(() =>
-    previewPanelSize({ width: window.innerWidth, height: window.innerHeight }),
-  );
+  // 图片适配尺寸跟随浮窗实际矩形;拖动、调整尺寸、贴边、窗口缩放都会重算。
+  const viewportSize = { width: panelRect.width, height: panelRect.height };
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
@@ -493,14 +652,6 @@ function ImageLightboxContent({
     spaceHeldRef.current = false;
     setSpaceHeld(false);
   }, [isAnnotating]);
-
-  useEffect(() => {
-    const updateViewportSize = () => {
-      setViewportSize(previewPanelSize({ width: window.innerWidth, height: window.innerHeight }));
-    };
-    window.addEventListener('resize', updateViewportSize);
-    return () => window.removeEventListener('resize', updateViewportSize);
-  }, []);
 
   // index 变化后的 effect 会在 commit 后清空状态；渲染阶段先按 src 校验，
   // 避免新图首帧沿用上一张图的宽高比（标注坐标也必须遵守同一约束）。
@@ -1049,6 +1200,8 @@ function ImageLightboxContent({
         handleClose();
         return;
       }
+      // 非模态:焦点已经移到背景对话时,缩放/翻页/标注快捷键不能抢走键盘。
+      if (!lightboxOwnsShortcutTarget(e.target, overlayRef.current)) return;
       // 标注模式按住 Space = 平移修饰键(焦点在输入 / 按钮类控件上时让位)。
       if (e.code === 'Space' || e.key === ' ') {
         if (isAnnotatingRef.current && !isSpacePanExemptTarget(e.target)) {
@@ -1137,15 +1290,6 @@ function ImageLightboxContent({
     // handleClose / gallery 都在组件生命周期内稳定(onClose 是调用方传的稳定
     // setState dispatch;gallery 由 useState 初始化后不再变)。只在挂载/卸载
     // 订阅一次是有意为之——每次渲染重订阅会带来无谓的 DOM listener 抖动。
-  }, []);
-
-  // 打开期间锁住聊天滚动容器。
-  useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
-    if (container) container.style.overflowY = 'hidden';
-    return () => {
-      if (container) container.style.overflowY = '';
-    };
   }, []);
 
   function handleClose() {
@@ -1404,7 +1548,7 @@ function ImageLightboxContent({
     }
   }
 
-  // 点预览窗外的遮罩与点窗内空白背景同一套守卫:菜单刚关、标注中、拖拽平移松手都不关。
+  // 只点预览窗内空白背景才关闭;菜单刚关、标注中、图片/浮窗拖拽松手都不关。
   const closeFromBackdrop = () => {
     if (performance.now() - lastMenuCloseAt.current < 150) return;
     if (isAnnotating) return;
@@ -1415,41 +1559,46 @@ function ImageLightboxContent({
     handleClose();
   };
 
-  // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
+  const panelStyle = {
+    position: 'fixed',
+    left: panelRect.x,
+    top: panelRect.y,
+    width: panelRect.width,
+    height: panelRect.height,
+    overflow: 'hidden',
+    zIndex: 9999,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'opacity 200ms ease',
+    opacity: isVisible ? 1 : 0,
+    cursor: 'default',
+    '--preview-width': `${panelRect.width}px`,
+    '--preview-height': `${panelRect.height}px`,
+    ...WINDOW_NO_DRAG_STYLE,
+  } as React.CSSProperties;
+
   const overlay = (
-    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
-    // 穿过被遮挡的聊天控件。挂载焦点给 overlay 根(tabIndex=-1 由 FocusScope
-    // 合入,全局 outline:none 保证不闪全屏焦点框):Enter 不触发任何动作,
-    // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
-    // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
-    // 指向同一元素)。
-    <>
-    <PreviewScrim onClose={closeFromBackdrop} />
+    // FocusScope 只负责打开时把焦点移入浮窗、卸载时还给触发器;trapped=false
+    // 让 Tab 能穿过非模态浮窗进入背景对话。
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
-      trapped
-      loop
       onMountAutoFocus={(event) => {
         event.preventDefault();
         overlayRef.current?.focus();
       }}
     >
-    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。 */}
+    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 非模态浮窗的键盘关闭由全局 Escape 处理；点击空白背景关闭是 lightbox 本身的交互。 */}
     <div
       ref={overlayRef}
       data-lightbox-layer
+      data-preview-window-mode={panelMode}
+      role="dialog"
+      aria-modal={false}
+      aria-label={filename ?? t('attachmentPreview.image')}
       className={PREVIEW_PANEL_CLASS}
-      style={{
-        ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transition: 'opacity 200ms ease',
-        opacity: isVisible ? 1 : 0,
-        cursor: 'default',
-      }}
+      style={panelStyle}
       onClick={(e) => {
         // 右键菜单刚关闭、标注模式(防误触丢笔迹)、拖拽平移松手时都不关闭;
         // 只有点在空白背景上才关闭,点在图片(或其它子元素)上不关,给双击缩放让路。
@@ -1466,6 +1615,9 @@ function ImageLightboxContent({
             void requestClose();
           }}
           onSave={canSaveAs ? handleSaveAs : undefined}
+          actions={<ImagePreviewWindowActions mode={panelMode} onDock={dock} />}
+          isDraggable
+          onPointerDown={handleHeaderPointerDown}
           onMenuClose={() => {
             lastMenuCloseAt.current = performance.now();
           }}
@@ -1858,9 +2010,9 @@ function ImageLightboxContent({
         </>
       ) : null}
         </PreviewFooter>
+        <ImagePreviewResizeHandle onResizeStart={startResize} />
       </div>
     </FocusScope>
-    </>
   );
 
   return createPortal(overlay, document.body);

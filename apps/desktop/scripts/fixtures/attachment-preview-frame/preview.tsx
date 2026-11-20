@@ -33,14 +33,20 @@ function sampleImage() {
   return canvas.toDataURL('image/png');
 }
 
-/** 被预览窗盖住的对话,只用来看清遮罩后面还露出原界面。 */
+/** 被预览窗盖住的对话,只用来看清浮窗旁边仍露出原界面,并验证可选中/可滚动。 */
 function Conversation() {
   const bubble = 'rounded-2xl bg-[var(--surface-chip)] px-4 py-3 text-14 leading-relaxed';
   return (
-    <main className="flex h-screen flex-col gap-4 overflow-hidden bg-[var(--surface)] px-10 pt-14 text-[var(--text-primary)]">
+    <main
+      data-scroll-container=""
+      className="flex h-screen flex-col gap-4 overflow-y-auto bg-[var(--surface)] px-10 pt-14 text-[var(--text-primary)]"
+    >
       <div className="text-13 text-[var(--text-secondary)]">信用卡发票整理</div>
       <div className={`${bubble} self-end`}>把这八张信用卡的发票整理一下，做个核对清单。</div>
-      <div className="max-w-[640px] text-14 leading-relaxed">
+      <div
+        data-conversation-copy=""
+        className="max-w-[640px] text-14 leading-relaxed"
+      >
         已整理完成：八张发票按卡片分组，金额不一致的两条单独标出，核对清单和原始发票一起打包。
       </div>
       <div className="w-fit rounded-xl border border-[var(--border-default)] px-4 py-3 text-13">
@@ -49,6 +55,11 @@ function Conversation() {
       <div className="max-w-[640px] text-14 leading-relaxed text-[var(--text-secondary)]">
         需要的话，我可以再按月份拆分成单独的表格。
       </div>
+      {Array.from({ length: 12 }, (_, i) => (
+        <div key={i} className="max-w-[640px] text-14 leading-relaxed text-[var(--text-tertiary)]">
+          第 {i + 1} 条上下文：图片浮窗打开时，这里仍应能滚动、选中并复制。
+        </div>
+      ))}
     </main>
   );
 }
@@ -89,7 +100,13 @@ mountPage({
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={
+        ctx.case === 'image' || ctx.case === 'image-narrow'
+          ? 'image'
+          : ctx.case === 'markdown'
+            ? 'markdown'
+            : 'zip'
+      }
     />
   ),
 });

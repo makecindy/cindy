@@ -4,7 +4,7 @@
 
 ## 打开与返回
 
-Desktop 预览浮在原界面之上、点窗外关闭，打不开的文件用小窗；手机（含 iPad）全屏，按钮与内置浏览器一致浮在页面上。视觉见[附件预览视觉与交互](../design-rules/attachment-preview.md#呈现方式用户定稿-2026-11-03)。所有查看器都有固定的文件名、关闭和文件操作入口。关闭在加载、失败、播放、放大时可达；关闭仅结束查看，不能删除附件、撤回消息或离开来源任务。桌面保留 Esc、焦点归还；手机保留系统返回、安全区和原生播放器。未保存标注由原标注流程询问保存、放弃或继续；不能通过切换附件绕过。
+Desktop 预览浮在原界面之上、点窗外关闭，打不开的文件用小窗；手机（含 iPad）全屏，按钮与内置浏览器一致浮在页面上。**图片查看器例外（2026-11-20）**：Desktop 图片预览为贴右的非模态浮窗，可拖动、调整尺寸、贴左/贴右/居中展开；不点窗外关闭，背景消息保持可读/可滚动/可选中/可复制，关闭走标题栏按钮、Esc 或浮窗内空白背景。视觉见[附件预览视觉与交互](../design-rules/attachment-preview.md#呈现方式用户定稿-2026-11-03)。所有查看器都有固定的文件名、关闭和文件操作入口。关闭在加载、失败、播放、放大时可达；关闭仅结束查看，不能删除附件、撤回消息或离开来源任务。桌面保留 Esc、焦点归还；图片预览不圈禁 Tab，文档等其它查看器仍把 Tab 留在预览窗内。手机保留系统返回、安全区和原生播放器。未保存标注由原标注流程询问保存、放弃或继续；不能通过切换附件绕过。
 
 同一条消息、待发托盘或文件列表可提供明确集合。进入时固定其身份与顺序，不扫描整页 DOM、不将新到消息插入当前集合。Desktop 显示上一项 / 计数 / 下一项，到边界禁用，计数可打开文件列表。手机不显示集合导航（不放上一项 / 下一项，也不显示「3 / 7」计数，用户定稿 2026-11-07）：图片、视频在看图器里左右滑动切换，文件浏览里能横滑的文件照旧横滑；PDF、3D 模型、流程图等不能横滑的附件，关掉预览再点下一个。只有一项时不显示无意义导航。纯图片消息原有图库和缩略图行为继续保留。
 
@@ -39,7 +39,7 @@ Desktop 文档预览的 Tab 焦点留在预览窗内。Esc 先交给当前菜单
 
 ## 实现入口
 
-共享类型判定在 `packages/maker-shared/src/attachmentPreview.ts`。Desktop 使用 `PreviewChrome`、`AttachmentCollection`，经 `TextLightbox` / `FileLightbox` 分派既有内容渲染器。Mobile 使用 `PreviewChrome`、`RemoteAttachmentPreview`、`DocumentPreviewChrome` 和类型阅读器；任务、群附件、草稿、插件媒体与伙伴成果接入同一合同。
+共享类型判定在 `packages/maker-shared/src/attachmentPreview.ts`。Desktop 使用 `PreviewChrome`、`AttachmentCollection`，经 `TextLightbox` / `FileLightbox` 分派既有内容渲染器；`ImageLightbox` 额外用 `imagePreviewWindow.ts` 承载非模态浮窗几何与拖动/停靠/调整尺寸手势，其它查看器的模态外壳不变。Mobile 使用 `PreviewChrome`、`RemoteAttachmentPreview`、`DocumentPreviewChrome` 和类型阅读器；任务、群附件、草稿、插件媒体与伙伴成果接入同一合同。
 
 移动端离线资源由 `node apps/mobile/scripts/sync-document-preview-assets.mjs` 从现有依赖和 Desktop draw.io vendor 生成；更新依赖后重新生成，禁止手改生成文件。没有新增 native dependency、协议字段或授权记录迁移。
 

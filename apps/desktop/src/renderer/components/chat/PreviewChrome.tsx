@@ -1,5 +1,10 @@
-import { useContext, type CSSProperties, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Download, MoreHorizontal, X } from 'lucide-react';
+import {
+  useContext,
+  type CSSProperties,
+  type PointerEventHandler,
+  type ReactNode,
+} from 'react';
+import { ChevronLeft, ChevronRight, Download, GripVertical, MoreHorizontal, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -113,6 +118,8 @@ export function PreviewHeader({
   actions,
   menu,
   onMenuClose,
+  isDraggable = false,
+  onPointerDown,
 }: {
   name: string;
   detail?: ReactNode;
@@ -121,19 +128,36 @@ export function PreviewHeader({
   actions?: ReactNode;
   menu?: ReactNode;
   onMenuClose?: () => void;
+  /** 图片预览用:整条标题栏作为移动浮窗的手势区域;其它查看器保持原状。 */
+  isDraggable?: boolean;
+  onPointerDown?: PointerEventHandler<HTMLElement>;
 }) {
   const { t } = useTranslation();
   return (
     <header
-      className="absolute inset-x-0 top-0 z-10 flex h-16 min-w-0 items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 text-[var(--text-primary)]"
+      data-preview-drag-handle={isDraggable ? '' : undefined}
+      className={cn(
+        'absolute inset-x-0 top-0 z-10 flex h-16 min-w-0 items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 text-[var(--text-primary)]',
+        isDraggable && 'cursor-grab select-none',
+      )}
+      style={isDraggable ? { touchAction: 'none', ...WINDOW_NO_DRAG_STYLE } : undefined}
+      onPointerDown={onPointerDown}
       onClick={(event) => event.stopPropagation()}
     >
+      {isDraggable ? (
+        <GripVertical aria-hidden className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+      ) : null}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium" title={name}>
           {name}
         </div>
         {detail ? (
-          <div className="truncate text-xs text-[var(--text-secondary)]">{detail}</div>
+          <div
+            className="truncate text-xs text-[var(--text-secondary)]"
+            title={typeof detail === 'string' ? detail : undefined}
+          >
+            {detail}
+          </div>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1">
