@@ -84,6 +84,7 @@ import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
   snapshotManualProjectOrder,
+  sidebarContentFilterCount,
   loadDeviceGroupCollapsedKeys,
   persistDeviceGroupCollapsedKeys,
   loadDialogueGroupCollapsedKeys,
@@ -124,7 +125,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInbox } from '../TaskInbox';
+import { TaskInboxWithTeammates } from '../TaskInboxWithTeammates';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -1303,7 +1304,7 @@ export function ProjectsSection({
                     <SectionCollapse collapsed={sectionCollapsed}>
                       <div
                         className={cn(
-                          'flex flex-col gap-1 pl-2',
+                          'flex flex-col gap-1',
                           section.entries.length > 0 && 'pt-1',
                         )}
                       >
@@ -1399,8 +1400,9 @@ export function ProjectsSection({
         </div>
       ) : null}
       {taskListMode === 'inbox' && inboxSessions && (
-        <TaskInbox
+        <TaskInboxWithTeammates
           sessions={inboxSessions}
+          contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
           priorityContext={priorityContext}
           activeSessionId={activeSessionId}
@@ -1613,15 +1615,10 @@ export function SessionGroupNode({
           </div>
         )}
       </div>
-      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt、list 缩进)
+      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt)
           与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={sessions}
             activeSessionId={activeSessionId}
@@ -1637,7 +1634,6 @@ export function SessionGroupNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}

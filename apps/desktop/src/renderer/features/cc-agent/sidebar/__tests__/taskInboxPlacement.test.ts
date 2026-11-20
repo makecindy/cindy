@@ -1,9 +1,8 @@
 /**
  * 测试价值
- * - 生产入口与可观察结果：freezeInboxLayout / snapshotInboxLayout（TaskInbox 在鼠标位于列表上时
+ * - 生产入口与可观察结果：freezeInboxLayout / snapshotInboxLayout（TaskInbox 在鼠标位于完成按钮上时
  *   调用）。行保持原分区与位置，显式移入或移出稍后处理／已处理立即生效并补位，新任务暂缓。
- * - 规则依据：task-inbox.md「分区与动作」（2026-11-18 用户要求：「完成」单击生效，但鼠标在任务栏
- *   里时任务不能跳动）。
+ * - 规则依据：task-inbox.md「分区与动作」（「完成」单击生效，鼠标停在完成按钮时行保持原位）。
  * - 现有覆盖缺口：此前没有悬停冻结，单击「完成」可能落在刚移动过来的行上。
  * - 最小失败输入：悬停期间一行被完成、一行开始运行、一行新到达。
  * - tier：unit（纯函数）。
@@ -17,7 +16,6 @@ const groups = (inbox: string[], working: string[], snoozed: string[] = []) =>
   new Map<TaskInboxSection, string[]>([['inbox', inbox], ['working', working], ['snoozed', snoozed], ['archived', []]]);
 const id = (value: string) => value;
 
-// 2026-11-18 用户要求：「完成」单击生效，但鼠标在任务栏里时任务不能跳动。
 it('keeps rows in place while hovered, closes the gap for settled rows and holds new arrivals', () => {
   const frozen = snapshotInboxLayout(groups(['a', 'b', 'c'], ['w']), id);
   // Meanwhile: b was completed (archived), a started running, c stays, n newly arrived.

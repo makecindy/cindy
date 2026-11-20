@@ -4,6 +4,17 @@ import {
   type DiscoveredModel,
 } from "./modelMetadataLayers.js";
 
+/** The official Copilot account endpoints share one models discovery contract. */
+export function copilotModelsUrl(value: string): URL | undefined {
+  let url: URL;
+  try { url = new URL(value); } catch { return undefined; }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password
+    || !/^api\.(?:(?:individual|business|enterprise)\.)?githubcopilot\.com$/.test(url.hostname)
+    || !/^\/(?:v1\/?|(?:v1\/)?models\/?)?$/.test(url.pathname)) return undefined;
+  url.pathname = '/models';
+  return url;
+}
+
 /** OpenRouter exposes one unpaginated catalog; Anthropic headers select a rewritten CLI view. */
 export function isOpenRouterModelsUrl(value: string): boolean {
   try {
@@ -20,6 +31,34 @@ export function isOpenHubsModelsUrl(value: string): boolean {
       && url.pathname.replace(/\/+$/, '') === '/v1/models'
       && !url.search && !url.hash && !url.username && !url.password;
   } catch { return false; }
+}
+
+/** OpenCode Go documents MIME entries as accepted types, unlike generic relays
+ * which can list formats even when image input is disabled (#11446).
+ */
+function isOpenCodeGoModelsUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://opencode.ai' &&
+      ['/zen/go/v1/models', '/inference/go/v1/models'].includes(url.pathname.replace(/\/+$/, ''));
+  } catch { return false; }
+}
+
+/** Keep internal coarse modalities; document MIME types do not imply vision. */
+function openCodeModalities(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const normalize = (list: unknown) => {
+    if (!Array.isArray(list) || list.length > 16 || !list.every(item => typeof item === 'string')) return list;
+    return [...new Set(list.flatMap((item: string) => {
+      const mime = /^(image|audio|video)\/[a-z0-9.+-]+$/.exec(item);
+      if (mime) return [mime[1]];
+      // Non-media MIME (e.g. application/pdf) has no internal modality.
+      return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(item) ? [] : [item];
+    }))];
+  };
+  const record = value as Record<string, unknown>;
+  return { ...record, input: normalize(record.input), output: normalize(record.output) };
 }
 
 /** Token strings are decimal counts, not abbreviations, units or JS numeric expressions. */
@@ -80,7 +119,9 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
+  const openCodeGo = isOpenCodeGoModelsUrl(sourceUrl);
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -174,9 +215,10 @@ export function parseModelsListResponse(
             : record.default_reasoning_level !== undefined
               ? record.default_reasoning_level
               : record.reasoningEffort;
-    const modalities = record.modalities ??
+    const rawModalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
+    const modalities = openCodeGo ? openCodeModalities(rawModalities) : rawModalities;
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
     const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;
@@ -203,8 +245,12 @@ export function parseModelsListResponse(
     const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
       && Array.isArray(architecture?.output_modalities)
       && architecture.output_modalities.includes('speech');
+    const endpoints = record.supported_endpoints;
+    const copilotApi = copilot && Array.isArray(endpoints)
+      ? (endpoints.includes('/responses') ? 'openai-responses' : null) : undefined;
     const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
-      nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
+      nativeApi: record.nativeApi !== undefined ? record.nativeApi
+        : record.native_api !== undefined ? record.native_api : copilotApi,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
       )

@@ -4748,6 +4748,25 @@
       "checkCase": false
     },
     {
+      "id": "task-snooze-indefinite",
+      "status": "proposed",
+      "en": "Indefinitely",
+      "translations": {
+        "zh-CN": "无限期",
+        "zh-TW": "無限期",
+        "ja": "無期限",
+        "ko": "무기한",
+        "fr": "Indéfiniment",
+        "es": "Indefinidamente",
+        "de": "Unbefristet",
+        "pt-PT": "Indefinidamente",
+        "pt-BR": "Indefinidamente",
+        "zh-Hant-x-lzh": "無期",
+        "zh-Hans-x-lzh": "无期"
+      },
+      "note": "稍后处理的无限期选项。没有到期时间，手动取回或新输入（含自动化触发）提前唤回。"
+    },
+    {
       "id": "task-snoozed",
       "status": "proposed",
       "en": "Snoozed",

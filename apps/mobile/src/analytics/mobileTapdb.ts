@@ -82,7 +82,12 @@ function startInit(): Promise<MobileTapdbInitStatus> {
       xdt_app_version: getMobileTapdbVersion(),
     },
   })
-    .then((available) => available ? { ok: true as const } : { ok: false as const, reason: 'native_unavailable' as const })
+    .then(async (available) => {
+      if (!available) return { ok: false as const, reason: 'native_unavailable' as const };
+      // An upgrade can reuse the SDK state from a build that set the raw account ID.
+      await clearNativeTapdbUser();
+      return { ok: true as const };
+    })
     .catch(() => ({ ok: false as const, reason: 'native_error' as const }));
 
   return initPromise;
@@ -99,15 +104,41 @@ async function ensureReportingAllowed(): Promise<boolean> {
   await hydrateAnalyticsConsent();
   if (!isAnalyticsAllowed()) return false;
   const status = await initMobileTapdb();
-  return status.ok;
+  return status.ok && isAnalyticsAllowed();
 }
 
-export async function setTapdbUser(userId: string): Promise<void> {
-  if (!(await ensureReportingAllowed())) return;
-  await setTapdbUserId(userId).catch(() => undefined);
+let identityRevision = 0;
+let identityWrite: Promise<void> = Promise.resolve();
+
+export function setTapdbUser(chargeAlias?: string, usageAlias?: string): Promise<void> {
+  const revision = ++identityRevision;
+  identityWrite = identityWrite.catch(() => undefined).then(() => applyIdentity(revision, chargeAlias, usageAlias));
+  return identityWrite;
+}
+
+async function applyIdentity(revision: number, chargeAlias?: string, usageAlias?: string): Promise<void> {
+  if (!(await ensureReportingAllowed()) || identityRevision !== revision) return;
+  if (chargeAlias && /^pay1_[a-f0-9]{48}$/.test(chargeAlias)) {
+    try {
+      await setTapdbUserId(chargeAlias);
+    } catch {
+      // SDK failure must not block login.
+    }
+  }
+  await clearNativeTapdbUser().catch(() => undefined);
+  if (usageAlias && /^use1_[a-f0-9]{48}$/.test(usageAlias) && isAnalyticsAllowed() && identityRevision === revision) {
+    try {
+      await setTapdbUserId(usageAlias);
+    } catch {
+      // Registration can be retried on the next login.
+    }
+  }
 }
 
 export async function clearTapdbUser(): Promise<void> {
+  const revision = ++identityRevision;
+  await identityWrite.catch(() => undefined);
+  if (revision !== identityRevision) return;
   // 只对已经 init 的实例有意义;没 init 过就没什么可解绑的,更不该为了一次登出
   // 把 SDK 拉起来。这里不用 ensureReportingAllowed:解绑是"减少"而非"开始"采集,
   // 撤销同意后仍然应该允许执行。
@@ -124,11 +155,8 @@ export async function clearTapdbUser(): Promise<void> {
  * 冷启动生效(那时 isAnalyticsAllowed() 已经是 false)。这也是设置页文案不承诺
  * "立即抹除"的原因。
  */
-export async function stopMobileTapdbReporting(): Promise<void> {
-  if (!initPromise) return;
-  const status = await initPromise;
-  if (!status.ok) return;
-  await clearNativeTapdbUser().catch(() => undefined);
+export function stopMobileTapdbReporting(): Promise<void> {
+  return clearTapdbUser();
 }
 
 export function resolveTapdbChannel(value: string | undefined, platform = Platform.OS): string {

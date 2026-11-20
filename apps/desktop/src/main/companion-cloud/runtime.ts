@@ -3,6 +3,7 @@
  * endpoint). Started only when the server announces companion homes; background
  * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
+import type { DeliverToCanonical } from './directRoom.js';
 import { randomUUID } from 'node:crypto';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
@@ -51,7 +52,7 @@ export interface CompanionCloudHost {
   rowsAfter: (sessionId: string, cursor: CompanionMirrorCursor, limit: number) => Promise<CompanionMirrorRow[]>;
   latestRows: (sessionId: string, limit: number, options?: { excludeClientIdPrefix?: string }) => Promise<CompanionMirrorRow[]>;
   /** Hand a room message to the companion's canonical Session as an ordinary user message. */
-  deliverToCanonical: (botId: string, text: string, clientId: string) => Promise<{ ok: true } | { ok: false; errorCode: string }>;
+  deliverToCanonical: DeliverToCanonical;
   /** Local profile, memory, skill or canonical message change of a companion. */
   onLocalChange?: (listener: (botId: string) => void) => () => void;
   /** Local side of taking a companion over; absent disables take-over and auto-materialize. */

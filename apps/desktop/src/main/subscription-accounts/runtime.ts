@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { clearCodexModelSnapshot, restoreCodexModelSnapshot, saveCodexModelSnapshot } from './codexModelSnapshot.js';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -112,6 +113,24 @@ const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
  * 缩短失败窗口不会反复 spawn CLI。
  */
 const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
+/**
+ * 选号时是否等 Codex 额度读完(2026-11-19 用户裁决)。ChatGPT 的请求准入属于上游，额度只用来给
+ * 新分配排序(subscription-account-pools.md「ChatGPT credits 准入修复」)，所以启动任务只等登录读完，
+ * 额度照常在同一次读取里接着读、读完写回缓存：
+ * - `read`：照旧等完整读取(设置页、用量卡、分享与组查询、额度摘要等所有非选号调用)；
+ * - `recent`：多账号新分配。同一登录的额度在 `CODEX_SELECTION_RECENT_QUOTA_MS` 内读到过，就先按它排序；
+ * - `known`：额度改变不了结果(已绑定账号、只剩一个可选账号、启动认证)，登录读完即可。
+ * 先放行的快照带 `quotaPending`；`read` 调用方不采用它，继续等这次读取的最终结果，所以它们看到的额度与
+ * 改动前一致。只影响 OpenAI：Anthropic 的窗口仍决定能否启动。登录与模型检查不受影响。
+ */
+type CodexSelectionQuota = 'read' | 'recent' | 'known';
+/**
+ * 多账号新分配可先用来排序的额度的最长年龄。排序本身只信 10 分钟内的额度
+ * (PROVIDER_GROUP_USAGE_MAX_AGE_MS)，这里留出余量；更旧时照旧在 2 秒窗口内等新读取。
+ */
+const CODEX_SELECTION_RECENT_QUOTA_MS = 5 * 60_000;
+/** 选号本身超过这个耗时才记一条诊断日志(每次运行时启动最多一条，不记身份与目录)。 */
+const SLOW_ACCOUNT_SELECTION_LOG_MS = 500;
 // A broken CLI must not keep a provider read spawning fresh RPC processes.
 const CODEX_MODEL_MAX_PAGES = 10;
 const CODEX_MODEL_MAX_ITEMS = 1_000;
@@ -132,11 +151,36 @@ interface AccountSnapshot {
   unreachable?: boolean;
   at: number;
   usageAt?: number;
+  /**
+   * Published once the login was read while this read still fetches Codex quota.
+   * Selection and runtime authentication can use it before the final snapshot replaces it.
+   */
+  quotaPending?: true;
 }
+interface CodexModelSnapshot {
+  auth: AccountSnapshot['auth'];
+  accountKey?: string;
+  models: CatalogModel[];
+  confirmedAt?: number;
+  pendingMembership?: string;
+  failedAt?: number;
+  needsSave?: true;
+}
+interface CodexModelFlight {
+  promise: Promise<void>;
+  forced: boolean;
+  saving?: Promise<void>;
+}
+function sameCodexModelAccount(snapshot: CodexModelSnapshot | undefined, info: AccountSnapshot): boolean {
+  return !!snapshot && (info.accountKey || snapshot.accountKey
+    ? !!info.accountKey && snapshot.accountKey === info.accountKey : snapshot.auth === info.auth);
+}
+
 interface OwnerRuntime {
   owner: string;
   cache: Map<string, AccountSnapshot>;
-  flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean }>;
+  /** `early` resolves with the selection snapshot once published, or null if the read has none. */
+  flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean; early?: Promise<AccountSnapshot | null> }>;
   running: Map<string, Set<string>>;
   /** Pending reassignments still require admission after an abandoned reservation expires. */
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
@@ -146,10 +190,10 @@ interface OwnerRuntime {
   invalidated: Map<string, { token: string; reason: string }>;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
-  codexModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
-  codexModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
+  codexModels: Map<string, CodexModelSnapshot>;
+  codexModelFlights: Map<string, CodexModelFlight>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedCodexCatalog?: Record<string, readonly CatalogModel[] | null> | null;
+  publishedCodexCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
   defaultCodexAuthEpoch: number;
   claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
   claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
@@ -191,13 +235,22 @@ export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () =
   codexModelListeners.add(listener);
   return () => { codexModelListeners.delete(listener); };
 }
-function publishCodexCatalogChange(state: OwnerRuntime): void {
+function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): void {
   if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, readSubscriptionPoolCodexModels(providerId)])) : null;
+    [providerId, { models: readSubscriptionPoolCodexModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
+  if (refreshId && models) {
+    for (const [providerId, next] of Object.entries(models)) {
+      const previous = state.publishedCodexCatalog?.[providerId];
+      if (!isDeepStrictEqual(previous, next)) log.debug('subscription provider model list published', {
+        refreshId, providerId, previousCount: previous?.models?.length, modelCount: next.models?.length,
+        status: next.unavailable ? 'unconfirmed' : 'ready',
+      });
+    }
+  }
   state.publishedCodexCatalog = models;
   for (const listener of codexModelListeners) {
     try { listener(); } catch { /* A view cannot invalidate a completed model read. */ }
@@ -409,6 +462,34 @@ function directoryFor(provider: SubscriptionProvider, id: string): string {
     : accountDirectory(provider, id);
 }
 
+export async function refreshCodexSubscriptionAccountAfterReset(scope = 'openai'): Promise<void> {
+  const target = pooledCodexResetTarget(scope);
+  if (target) return target.refresh();
+
+  const resolveAccountId = () => scope === 'openai' ? 'default' : readLegacyCodexAccountId(scope);
+  const id = resolveAccountId();
+  if (!id) return;
+  const state = currentRuntime();
+  if (!accountStillPresent(state, 'openai', id)) return;
+  const directory = directoryFor('openai', id);
+  await refreshCodexPoolQuotaAfterReset(state, id, () => {
+    if (!accountStillPresent(state, 'openai', id) || resolveAccountId() !== id
+      || directoryFor('openai', id) !== directory || (id === 'default' && !defaultAccountBound('openai'))
+      || [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id))
+      throw new Error('PRECONDITION_FAILED: Subscription account unavailable');
+  });
+}
+
+async function refreshCodexPoolQuotaAfterReset(state: OwnerRuntime, id: string, assertCurrent: () => void): Promise<void> {
+  assertCurrent();
+  // A forced read already in progress may still have observed the pre-reset quota.
+  await state.flights.get(keyOf('openai', id))?.promise.catch(() => {});
+  assertCurrent();
+  await snapshot(state, 'openai', id, true, true);
+  assertCurrent();
+  changed('openai', id);
+}
+
 /** Resolve only a saved account of this owner. Default/legacy connections retain their adapters. */
 export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServiceDeps & { refresh(): Promise<void> }) | null {
   if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
@@ -464,12 +545,7 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
       // The reset service projects only the default bucket. The pool retains its
       // full model table, refreshed once after redemption rather than on every read.
     },
-    refresh: async () => {
-      assertCurrent();
-      await snapshot(state, 'openai', id, true, true);
-      assertCurrent();
-      changed('openai', id);
-    },
+    refresh: () => refreshCodexPoolQuotaAfterReset(state, id, assertCurrent),
   };
 }
 
@@ -620,11 +696,24 @@ export function observeSubscriptionAccountUsage(
   // The event updates usage, not the last account/endpoint read. Renewing `at`
   // here lets a stream of SDK events postpone authoritative polling indefinitely.
   const next = { ...cached, usage,
-    ...(usage.codexPlan ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
+    // A pending read owns the auth object used by model discovery and applies the final
+    // plan. The event's quota is still merged into the pending read.
+    ...(usage.codexPlan && !cached.quotaPending
+      ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
   };
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider, undefined, 'usage');
+}
+/** Whether account selection may start on a snapshot whose Codex quota is still being read. */
+function selectionMayUseSnapshot(entry: AccountSnapshot, quota: CodexSelectionQuota, now: number): boolean {
+  return quota === 'known' || (quota === 'recent' && !!entry.usage?.codexUsage
+    && entry.usageAt !== undefined && now - entry.usageAt < CODEX_SELECTION_RECENT_QUOTA_MS);
+}
+function deferredSnapshot() {
+  let resolve!: (value: AccountSnapshot | null) => void;
+  const promise = new Promise<AccountSnapshot | null>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 async function snapshot(
   state: OwnerRuntime,
@@ -632,12 +721,16 @@ async function snapshot(
   id: string,
   force = false,
   forceUsage = false,
+  /** Only account selection and runtime authentication can proceed with pending quota. */
+  quota: CodexSelectionQuota = 'read',
 ): Promise<AccountSnapshot> {
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
   const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  // Quota consumers join the read for its full result.
   if (!force && cached && Date.now() - cached.at < ttl
+    && (!cached.quotaPending || selectionMayUseSnapshot(cached, quota, Date.now()))
     && (id !== 'default' || defaultAccountBound(provider))) return cached;
   const readCurrent = async (reading: Promise<AccountSnapshot>): Promise<AccountSnapshot> => {
     const result = await reading;
@@ -649,17 +742,32 @@ async function snapshot(
       return state.cache.get(key) ?? snapshot(state, provider, id, false, forceUsage);
     return result;
   };
+  const usableEarly = (entry: AccountSnapshot | null): entry is AccountSnapshot => {
+    assertOwner(state);
+    return !!entry && state.cache.get(key)?.auth === entry.auth
+      && (id !== 'default' || defaultAccountBound(provider))
+      && selectionMayUseSnapshot(entry, quota, Date.now());
+  };
   const pending = state.flights.get(key);
   if (pending) {
+    if (pending.early && quota !== 'read' && !force && !forceUsage) {
+      const early = await pending.early;
+      if (usableEarly(early)) return early;
+    }
     if (!forceUsage || pending.forceUsage) return readCurrent(pending.promise);
     // A normal read may reuse its cached quota. A manual refresh waits for it,
     // then starts one fresh read shared by any other concurrent refreshes.
     await pending.promise;
-    return snapshot(state, provider, id, force, forceUsage);
+    return snapshot(state, provider, id, force, forceUsage, quota);
   }
   const directory = directoryFor(provider, id);
   const defaultCodexAuthEpoch = state.defaultCodexAuthEpoch;
   const defaultClaudeAuthEpoch = state.defaultClaudeAuthEpoch;
+  // Ordinary Codex reads may publish the login before their quota read (CodexSelectionQuota).
+  // Forced reads (login confirmation, manual refresh) keep publishing only their final result.
+  const early = provider === 'openai' && !force && !forceUsage ? deferredSnapshot() : undefined;
+  let earlySnapshot: AccountSnapshot | undefined;
+  let beforeEarly: AccountSnapshot | undefined;
   const flight = (async (): Promise<AccountSnapshot> => {
     const startedAt = Date.now();
     let result: AccountSnapshot;
@@ -739,6 +847,25 @@ async function snapshot(
           sameAccount(current) &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS;
+        // The login is settled; only the Codex quota read remains. Let account selection start on
+        // the login now while this read continues. A legacy login has no plan metadata until
+        // quota arrives. Keep its auth object stable for the model read started with this login.
+        if (early && auth.authenticated && !reuseUsage
+          && !(id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)) {
+          assertOwner(state);
+          const known = sameAccount(current) ? current : undefined;
+          beforeEarly = state.cache.get(key);
+          earlySnapshot = {
+            ...(accountKey ? { accountKey } : {}),
+            auth: { ...auth, planType: auth.planType ?? auth.plan },
+            ...(known?.usage ? { usage: known.usage } : {}),
+            at: Date.now(),
+            ...(known?.usageAt !== undefined ? { usageAt: known.usageAt } : {}),
+            quotaPending: true,
+          };
+          state.cache.set(key, earlySnapshot);
+          early.resolve(earlySnapshot);
+        }
         let readSucceeded = false;
         let usage = auth.authenticated
           ? reuseUsage
@@ -754,6 +881,12 @@ async function snapshot(
               })
           : undefined;
         const latest = state.cache.get(key);
+        // Startup can invalidate this login while quota is in flight. A late quota reply
+        // cannot restore that login, and must not leave quota readers on an unfinished entry.
+        if (earlySnapshot && latest?.auth !== earlySnapshot.auth) {
+          assertOwner(state);
+          return latest ?? { auth: { authenticated: false }, at: 0 };
+        }
         const eventDuringRead = auth.authenticated && sameAccount(latest)
           && latest?.usage !== current?.usage;
         // A successful read owns the full snapshot; overlay only concurrent
@@ -786,11 +919,17 @@ async function snapshot(
             }) };
           }
         }
+        const plan = auth.plan ?? usage?.codexPlan
+          ?? (earlySnapshot && eventDuringRead ? latest?.usage?.codexPlan : undefined);
+        const planType = auth.planType ?? plan;
+        if (earlySnapshot) {
+          earlySnapshot.auth.plan = plan;
+          earlySnapshot.auth.planType = planType;
+        }
         result = {
           ...(accountKey ? { accountKey } : {}),
-          auth: { ...auth, plan: auth.plan ?? usage?.codexPlan,
-            ...(provider === 'openai' ? { planType: auth.planType ?? auth.plan ?? usage?.codexPlan } : {}) },
-          usage: provider === 'openai' && usage ? { ...usage, codexPlan: auth.planType ?? auth.plan ?? usage.codexPlan } : usage,
+          auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
+          usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
           at: Date.now(),
           usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
@@ -835,7 +974,11 @@ async function snapshot(
       planTier: result.auth.planTier, planDisplayName: result.auth.planDisplayName,
       accountFingerprint: usageFingerprint(provider, result),
     } } };
-    const previous = state.cache.get(key);
+    // The early snapshot (or a quota event applied to it) is this read's own intermediate state:
+    // announcements compare against what was cached before the read, exactly as without it.
+    const latestEntry = state.cache.get(key);
+    const previous = earlySnapshot && latestEntry?.quotaPending && latestEntry.auth === earlySnapshot.auth
+      ? beforeEarly : latestEntry;
     state.cache.set(key, result);
     if (!result.auth.authenticated && !result.unavailable && (!previous || previous.auth.authenticated)) {
       await writeStoredAccountUsage(provider, id, null, () => accountStillPresent(state, provider, id)
@@ -851,12 +994,17 @@ async function snapshot(
     noteSignInEvidence(state, provider, previous, result);
     return result;
   })();
-  state.flights.set(key, { promise: flight, forceUsage });
+  state.flights.set(key, { promise: flight, forceUsage, ...(early ? { early: early.promise } : {}) });
   void flight
     .finally(() => {
       state.flights.delete(key);
+      early?.resolve(null);
     })
     .catch(() => {});
+  if (early && quota !== 'read') {
+    const value = await early.promise;
+    if (usableEarly(value)) return value;
+  }
   return readCurrent(flight);
 }
 
@@ -1096,10 +1244,12 @@ export async function refreshSubscriptionPoolCodexModels(
   const found = providerId ? poolFor(providerId) : null;
   if (providerId && (!found || found.kind !== 'openai')) return;
   const serving = found ? new Set(servingAccounts(found).map(account => account.id)) : null;
+  let refreshId: string | undefined;
   const refreshAccount = async (id: string): Promise<void> => {
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
-    const auth = state.cache.get(keyOf('openai', id))?.auth;
-    if (!auth?.authenticated || loggingIn()) { state.codexModels.delete(id); return; }
+    const info = state.cache.get(keyOf('openai', id));
+    if (!info?.auth.authenticated || loggingIn()) { state.codexModels.delete(id); return; }
+    const { auth } = info;
     const previous = state.codexModels.get(id);
     if (!force && previous?.auth === auth && (previous.failedAt === undefined
       || Date.now() - previous.failedAt < ACCOUNT_SNAPSHOT_FAILURE_TTL_MS)) return;
@@ -1111,13 +1261,27 @@ export async function refreshSubscriptionPoolCodexModels(
       return;
     }
     const directory = directoryFor('openai', id);
-    const isCurrent = () => state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
-      && !disconnectedFor(readPool('openai'), 'openai', id)
-      && readPool('openai')?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
-      && !loggingIn()
-      && state.cache.get(keyOf('openai', id))?.auth === auth
-      && directoryFor('openai', id) === directory;
-    const flight = (async () => {
+    const isCurrent = () => {
+      if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+      const currentPool = readPool('openai');
+      return currentPool?.accounts.some(a => a.id === id && (!a.paused || historical.has(id))) === true
+        && !disconnectedFor(currentPool, 'openai', id)
+        && !loggingIn()
+        && state.cache.get(keyOf('openai', id))?.auth === auth
+        && directoryFor('openai', id) === directory;
+    };
+    refreshId ??= randomUUID();
+    const startedAt = Date.now();
+    const sameAccount = sameCodexModelAccount(previous, info);
+    const lastVerified = async () => {
+      if (sameAccount && previous?.confirmedAt !== undefined) return previous;
+      if (info.accountKey) {
+        try { return await restoreCodexModelSnapshot(id, info.accountKey); }
+        catch { log.warn('could not restore Codex model snapshot', { refreshId }); }
+      }
+      return undefined;
+    };
+    const readModels = async () => {
       try {
         const models: CodexModelListItem[] = [];
         const cursors = new Set<string>();
@@ -1126,7 +1290,7 @@ export async function refreshSubscriptionPoolCodexModels(
         do {
           if (!isCurrent()) return;
           if (pages >= CODEX_MODEL_MAX_PAGES) throw new Error('Codex model page budget exceeded');
-          const page = await codexAccountRpc(directory, 'model/list', { cursor, limit: 100, includeHidden: false }, isCurrent) as {
+          const page = await codexAccountRpc(directory, 'model/list', { cursor, limit: 100, includeHidden: false }, isCurrent, refreshId) as {
             data: CodexModelListItem[]; nextCursor?: string | null;
           };
           if (!Array.isArray(page?.data)) throw new Error('Invalid Codex model list');
@@ -1140,11 +1304,11 @@ export async function refreshSubscriptionPoolCodexModels(
         } while (cursor !== null);
         // model/list owns membership/tiers; only this same profile's cache can
         // supply windows and image inputs that the live protocol does not report.
-        const cached = await readFile(path.join(directory, 'models_cache.json'), 'utf8')
-          .then(raw => new Map(mapCodexModelsToCatalog(JSON.parse(raw)).map(model => [model.id, model])))
-          .catch(() => new Map<string, CatalogModel>());
+        const nativeCache = await readFile(path.join(directory, 'models_cache.json'), 'utf8')
+          .then(raw => JSON.parse(raw)).catch(() => null);
+        const cached = new Map(mapCodexModelsToCatalog(nativeCache).map(model => [model.id, model]));
         if (!isCurrent()) return;
-        state.codexModels.set(id, { auth, models: mapCodexAppServerModelsToCatalog(models).map(model => {
+        const mapped = mapCodexAppServerModelsToCatalog(models).map(model => {
           const known = cached.get(model.id);
           if (!known) return model;
           return { ...model,
@@ -1157,28 +1321,70 @@ export async function refreshSubscriptionPoolCodexModels(
               ...(known.supportsImageInput !== undefined ? { supportsImageInput: known.supportsImageInput } : {}),
             },
           };
-        }) });
+        });
+        const confirmedAt = Date.now();
+        // The CLI can answer model/list from its fallback directory after an upstream
+        // timeout. If models still in the native cache vanished from a verified list,
+        // corroborate a nonempty contraction once. Disk-only ids never grant access.
+        const reported = new Set(mapped.map(model => model.id));
+        const differsFromDisk = mapped.length > 0 && [...cached.keys()].some(model => !reported.has(model));
+        const verified = differsFromDisk ? await lastVerified() : undefined;
+        if (differsFromDisk && !isCurrent()) return;
+        // With no verified list (first launch after upgrade), the native file is only
+        // a reason to recheck. Expose solely what this authenticated RPC actually returned.
+        const needsConfirmation = verified
+          ? verified.models.some(model => cached.has(model.id) && !reported.has(model.id))
+          : differsFromDisk && Number.isFinite(Date.parse(nativeCache?.fetched_at));
+        if (needsConfirmation) {
+          const membership = JSON.stringify([...reported].sort());
+          if (!sameAccount || previous?.pendingMembership !== membership) {
+            const visible = verified?.models ?? mapped;
+            state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
+              confirmedAt: verified?.confirmedAt, pendingMembership: membership, failedAt: confirmedAt });
+            log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
+              reportedCount: mapped.length, publishedCount: visible.length, confirmedAt: verified?.confirmedAt });
+            return;
+          }
+        }
+        const snapshot: CodexModelSnapshot = { auth, accountKey: info.accountKey, models: mapped, confirmedAt };
+        state.codexModels.set(id, snapshot);
+        if (info.accountKey && (!sameAccount || !isDeepStrictEqual(previous?.models, mapped)
+          || previous?.confirmedAt === undefined || previous.failedAt !== undefined || previous.needsSave)) {
+          // A live success and a durable save have separate outcomes. Retry only on an existing refresh.
+          snapshot.needsSave = true;
+          flight.saving = saveCodexModelSnapshot(id, info.accountKey, mapped, confirmedAt, isCurrent)
+            .then(saved => { if (saved) delete snapshot.needsSave; })
+            .catch(() => { log.warn('could not save Codex model snapshot', { refreshId }); });
+          await flight.saving;
+        }
+        log.debug('subscription model discovery finished', { refreshId, source: 'model/list', force, pages,
+          previousCount: sameAccount ? previous?.models.length : undefined, publishedCount: mapped.length,
+          cachedCount: cached.size, elapsedMs: confirmedAt - startedAt });
       } catch (error) {
         // Failure is retryable evidence, not an authoritative empty list. Only
-        // this same login may retain its last complete list while recovery runs.
-        if (isCurrent()) {
-          const sameLogin = previous?.auth === auth || (auth.identity && previous?.auth.identity === auth.identity);
-          state.codexModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now() });
-          log.warn('subscription account model read failed', {
-            accountId: id, error: error instanceof Error ? error.name : typeof error,
-          });
-        }
+        // this same login may retain its verified list or its last live report.
+        if (!isCurrent()) return;
+        const retained = await lastVerified() ?? (sameAccount ? previous : undefined);
+        if (!isCurrent()) return;
+        const source = !retained ? 'unconfirmed' : retained === previous ? 'memory' : 'disk';
+        state.codexModels.set(id, { auth, accountKey: info.accountKey, models: retained?.models ?? [],
+          confirmedAt: retained?.confirmedAt, failedAt: Date.now() });
+        log.warn('subscription account model read failed', {
+          refreshId, source, publishedCount: retained?.models.length ?? 0, confirmedAt: retained?.confirmedAt,
+          elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.name : typeof error,
+        });
       }
-    })();
-    state.codexModelFlights.set(id, { promise: flight, forced: force });
-    try { await flight; } finally { if (state.codexModelFlights.get(id)?.promise === flight) state.codexModelFlights.delete(id); }
+    };
+    const flight: CodexModelFlight = { promise: readModels(), forced: force };
+    state.codexModelFlights.set(id, flight);
+    try { await flight.promise; } finally { if (state.codexModelFlights.get(id) === flight) state.codexModelFlights.delete(id); }
   };
   await Promise.all(pool.accounts.filter(account => (!serving || serving.has(account.id))
     && (!accountIds || accountIds.has(account.id))
     && (!account.paused || historical.has(account.id)) && !disconnectedFor(pool, 'openai', account.id)
     && !readLegacyCodexProviderId(account.id))
     .map(account => refreshAccount(account.id)));
-  publishCodexCatalogChange(state);
+  publishCodexCatalogChange(state, refreshId);
 }
 
 /** null preserves pre-pool discovery; [] is authoritative empty membership.
@@ -1198,10 +1404,9 @@ export function readSubscriptionPoolCodexModels(
     if (disconnectedFor(found.pool, 'openai', account.id)) continue;
     if ((account.paused && !historical.has(account.id)) || readLegacyCodexProviderId(account.id)) continue;
     if ([...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)) continue;
-    const auth = state.cache.get(keyOf('openai', account.id))?.auth;
+    const info = state.cache.get(keyOf('openai', account.id));
     const snapshot = state.codexModels.get(account.id);
-    if (!auth?.authenticated || !snapshot || !(snapshot.auth === auth
-      || (!!auth.identity && snapshot.auth.identity === auth.identity))) continue;
+    if (!info?.auth.authenticated || !snapshot || !sameCodexModelAccount(snapshot, info)) continue;
     for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
   }
   const next = [...models.values()];
@@ -1212,15 +1417,35 @@ export function readSubscriptionPoolCodexModels(
   catalogs.set(cacheKey, next);
   return next;
 }
+/** Oldest confirmed list still contributing to a partial provider snapshot. */
+export function lastConfirmedSubscriptionModelsAt(providerId: string): number | undefined {
+  const found = poolFor(providerId);
+  if (found?.kind !== 'openai' || found.off) return;
+  const state = currentRuntime();
+  const times: number[] = [];
+  for (const account of servingAccounts(found)) {
+    const info = state.cache.get(keyOf('openai', account.id));
+    const models = state.codexModels.get(account.id);
+    if (!account.paused && info?.auth.authenticated && models?.failedAt !== undefined
+      && models.confirmedAt !== undefined && sameCodexModelAccount(models, info)) times.push(models.confirmedAt);
+  }
+  return times.length ? Math.min(...times) : undefined;
+}
+
 /** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
 export function hasUnavailableSubscriptionPoolAccount(providerId: string): boolean {
   const found = poolFor(providerId);
   if (!found || found.off) return false;
   const state = currentRuntime();
-  return servingAccounts(found).some(account => !account.paused
-    && (state.cache.get(keyOf(found.kind, account.id))?.unavailable === true
-      || (state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated
-        && (found.kind === 'openai' ? state.codexModels : state.claudeModels).get(account.id)?.failedAt !== undefined)));
+  return servingAccounts(found).some(account => {
+    if (account.paused || disconnectedFor(found.pool, found.kind, account.id)) return false;
+    const info = state.cache.get(keyOf(found.kind, account.id));
+    if (!info?.auth.authenticated) return info?.unavailable === true;
+    if (found.kind === 'anthropic') return state.claudeModels.get(account.id)?.failedAt !== undefined;
+    if (readLegacyCodexProviderId(account.id)) return false;
+    const models = state.codexModels.get(account.id);
+    return !sameCodexModelAccount(models, info) || models?.failedAt !== undefined;
+  });
 }
 
 /** Native account membership is independent of the supplier's union. Imported
@@ -1231,9 +1456,20 @@ function codexAccountSupportsModel(state: OwnerRuntime, id: string, model: strin
   const info = state.cache.get(keyOf('openai', id));
   const catalog = state.codexModels.get(id);
   return !!info?.auth.authenticated && !!catalog
-    && (catalog.auth === info.auth || (!!info.auth.identity && catalog.auth.identity === info.auth.identity))
+    && sameCodexModelAccount(catalog, info)
     && catalog.models.some(entry => entry.id === model.replace(/^chatgpt\//, ''));
 }
+async function discardRemovedAccountModels(state: OwnerRuntime, provider: SubscriptionProvider, id: string): Promise<void> {
+  if (provider !== 'openai') return;
+  state.codexModels.delete(id);
+  // Wait for an already-started rename before removing its destination.
+  await state.codexModelFlights.get(id)?.saving;
+  assertOwner(state);
+  if (readPool('openai')?.accounts.some(account => account.id === id)) return;
+  try { await clearCodexModelSnapshot(id); }
+  catch { log.warn('could not clear removed Codex account model snapshot'); }
+}
+
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);
   if (!pool || pool.disconnected) return;
@@ -2048,7 +2284,7 @@ export interface SubscriptionAccountLease {
  * binding or advancing either cursor. Quota previews deliberately remain separate. */
 export async function readSubscriptionPoolScheduling(
   providerId: string, model: string,
-  options: { remote?: boolean; ownComputer?: boolean } = {},
+  options: { remote?: boolean; ownComputer?: boolean; capability?: 'image.generate' } = {},
 ): Promise<SubscriptionPoolScheduling | null> {
   let summary: SubscriptionPoolScheduling | null = null;
   await acquireSubscriptionAccount(providerId, model, [], false, {
@@ -2066,6 +2302,8 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
+    /** Images use the media catalog, but still require an exact model ID for remote grants. */
+    capability?: 'image.generate';
     /** 远程调用来自自己的其他电脑(不是受邀者)。 */
     ownComputer?: boolean;
     accountId?: string;
@@ -2113,31 +2351,48 @@ export async function acquireSubscriptionAccount(
   const selectionProvider = pinnedTarget ? accountProviderId(provider, pinnedTarget) : ref.providerId;
   if (pool.disconnected && selectionProvider === provider) throw new Error('Subscription provider was disconnected');
   const scoped = providerAccounts(provider, pool.accounts, selectionProvider);
-  const needsModelMembership = provider === 'openai' && !control && !!model && options.resuming !== true;
+  const needsModelMembership = provider === 'openai' && !control && !!model
+    && options.resuming !== true && options.capability !== 'image.generate';
   // A task resumes only its own home. For fresh assignment each profile completes its own
   // auth + model discovery; one slow sibling must not put a barrier in front of healthy peers.
   const snapshots = new Map<string, AccountSnapshot>();
   const pendingReads = new Set<Promise<void>>();
-  const prepareAccount = async (id: string) => {
-    const info = await snapshot(state, provider, id);
-    if (needsModelMembership) await refreshSubscriptionPoolCodexModels(false, undefined, new Set([id]));
+  // Diagnostics only: the slowest account (login) read and model read of this selection.
+  const selectionStartedAt = performance.now();
+  let accountReadMs = 0;
+  let modelReadMs = 0;
+  const prepareAccount = async (id: string, quota: CodexSelectionQuota) => {
+    const readStartedAt = performance.now();
+    // Read-only previews (anonymous group summaries, switch probes) keep waiting for quota: an
+    // outer group ranks computers by the urgency they report.
+    const info = await snapshot(state, provider, id, false, false, options.dryRun ? 'read' : quota);
+    const modelsStartedAt = performance.now();
+    accountReadMs = Math.max(accountReadMs, modelsStartedAt - readStartedAt);
+    if (needsModelMembership) {
+      await refreshSubscriptionPoolCodexModels(false, undefined, new Set([id]));
+      modelReadMs = Math.max(modelReadMs, performance.now() - modelsStartedAt);
+    }
     assertOwner(state);
     snapshots.set(id, info);
   };
   const boundConfig = binding && pool.accounts.find(account => account.id === binding.accountId);
   const pausedBinding = options.resuming === false && !options.accountId && !!binding
     && (!boundConfig || boundConfig.paused);
-  if (pinnedTarget && !pausedBinding) await prepareAccount(pinnedTarget);
+  // The task's own account is chosen without comparing quota (a blocked binding falls back to it
+  // only when no other account can take the task), so a known quota is never re-read for its start.
+  if (pinnedTarget && !pausedBinding) await prepareAccount(pinnedTarget, 'known');
   const currentBoundConfig = binding && readPool(provider)?.accounts.find(account => account.id === binding.accountId);
   const rebind = options.resuming === false && !options.accountId && !!binding
     && (!currentBoundConfig || currentBoundConfig.paused
       || (!control && readSubscriptionAccountBlocked(provider, binding.accountId, model)));
   if (!pinnedTarget || rebind) {
-    for (const account of scoped) {
-      if (snapshots.has(account.id) || (!control && account.paused) || [...state.logins].some(
-        ([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id,
-      )) continue;
-      const read = prepareAccount(account.id);
+    const reads = scoped.filter(account => !snapshots.has(account.id) && (control || !account.paused)
+      && ![...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id));
+    // Quota only orders a choice between at least two accounts that may still take this task;
+    // accounts already tried this round are read for identity, never ranked.
+    const ranked = reads.filter(account => !options.exclude?.has(account.id)).length > 1;
+    for (const account of reads) {
+      const read = prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known');
       pendingReads.add(read);
       void read.finally(() => pendingReads.delete(read)).catch(() => {});
     }
@@ -2292,6 +2547,18 @@ export async function acquireSubscriptionAccount(
     await Promise.race(pendingReads);
     selection = selectAccount();
   }
+  const selectionMs = performance.now() - selectionStartedAt;
+  // One line per slow runtime start, so a reported pause can be attributed to login or model reads.
+  if (!control && !options.dryRun && selectionMs >= SLOW_ACCOUNT_SELECTION_LOG_MS) {
+    log.info('subscription account selection was slow', {
+      provider,
+      pinned: !!pinnedTarget && !rebind,
+      accounts: snapshots.size,
+      elapsedMs: Math.round(selectionMs),
+      accountReadMs: Math.round(accountReadMs),
+      modelReadMs: Math.round(modelReadMs),
+    });
+  }
   if ('scheduling' in selection) return null;
   const { selected, pinned, pending, pendingKey } = selection;
   if (options.dryRun) return null;
@@ -2375,7 +2642,9 @@ export async function acquireSubscriptionAccount(
       assertCurrent,
       readState: async () => {
         assertCurrent();
-        const result = await snapshot(state, provider, selected);
+        // The native host checks the login after acquiring this lease. Quota is only
+        // needed by account ranking and quota views, not by Codex authentication.
+        const result = await snapshot(state, provider, selected, false, false, 'known');
         assertCurrent();
         // Preserve read failure evidence for request-time auth checks. A failed
         // CLI read is not proof of logout and must not cool this account as auth.
@@ -2392,6 +2661,7 @@ export async function acquireSubscriptionAccount(
             ...cached,
             auth: { ...cached.auth, authenticated: false, errorReason: reason },
             at: Date.now(),
+            quotaPending: undefined,
           });
         changed(provider);
       },
@@ -2553,6 +2823,8 @@ export async function runSubscriptionAccountCommand(
     for (const id of managed) {
       assertOwner(state);
       state.cache.delete(keyOf(provider, id));
+      await discardRemovedAccountModels(state, provider, id);
+      assertOwner(state);
       await writeStoredAccountUsage(provider, id, null);
       assertOwner(state);
       state.quotaCooling.delete(keyOf(provider, id));
@@ -2860,6 +3132,8 @@ async function changeAccountPlacement(
   for (const id of removed) {
     assertOwner(state);
     state.cache.delete(keyOf(kind, id));
+    await discardRemovedAccountModels(state, kind, id);
+    assertOwner(state);
     await writeStoredAccountUsage(kind, id, null);
     assertOwner(state);
     state.quotaCooling.delete(keyOf(kind, id));

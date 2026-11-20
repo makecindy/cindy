@@ -25,6 +25,8 @@ import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
 import { isGiftCardLinkPath, receiveGiftCardLink } from '@/gift-card/giftCardIntent';
+import { parseSharedTaskPeer } from '@cindy/device-link';
+import { parseSessionDeepLinkUrl } from '@/session/sessionLinks';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
@@ -49,6 +51,11 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     if (receiveRelayJoinIntent(path)) return RELAY_JOIN_ROUTE;
     const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
     if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
+    const task = parseSessionDeepLinkUrl(path.startsWith('/session/') ? `cindy:/${path}` : path);
+    if (task?.deviceId && parseSharedTaskPeer(task.deviceId)?.role === 'host' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(task.sessionId)) {
+      const anchor = task.messageClientId ? `&focusClientId=${encodeURIComponent(task.messageClientId)}` : '';
+      return `/sessions/${encodeURIComponent(task.sessionId)}?deviceId=${encodeURIComponent(task.deviceId)}${anchor}`;
+    }
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';

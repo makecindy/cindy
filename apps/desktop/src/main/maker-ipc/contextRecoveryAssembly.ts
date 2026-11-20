@@ -208,7 +208,8 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         .from(ports.sessions)
         .where(ports.eq(ports.sessions.id, sessionId))
         .limit(1);
-      if (!row?.workingDir) return { accepted: false };
+      // Plugin engines manage their own context; Cindy does not replay into a new native session.
+      if (!row?.workingDir || row.agentKind === 'acp') return { accepted: false };
       if (recovery?.signal?.aborted) return { accepted: false };
       const createOpts = ports.buildCreateOptsWithStderr({
         id: sessionId,

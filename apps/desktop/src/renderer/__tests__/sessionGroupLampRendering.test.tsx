@@ -21,6 +21,8 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+// The teammate data adapter owns auth/presence. This fixture exercises task mode switching.
+vi.mock('@/features/bots/useTeammateInboxEntries', () => ({ useTeammateInboxEntries: () => [] }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => 'all' }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -62,6 +64,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
+      hideAutomations: false, setHideAutomations: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupAutomation: false, groupDevice, sortBy: 'recency',
       pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,

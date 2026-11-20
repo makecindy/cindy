@@ -49,6 +49,7 @@ export function GiftCardSheet({ visible, code, invalidLink, onClose, onClosed, o
   const problemText = !problem ? null
     : problem.reason === 'WRONG_REGION'
       ? t((problem.code ? giftCardCodeRegion(problem.code) : null) === 'cn' ? 'giftCard.errors.wrongRegionCn' : 'giftCard.errors.wrongRegionGlobal')
+      : problem.reason === 'VOIDED' && problem.purchased ? t('giftCard.errors.voidedPurchased')
       : t(PROBLEM_KEYS[problem.reason]);
 
   const title = step.kind === 'confirm' || step.kind === 'redeeming' ? t('giftCard.confirmTitle')
@@ -56,9 +57,13 @@ export function GiftCardSheet({ visible, code, invalidLink, onClose, onClosed, o
     : step.credit?.state === 'APPLIED' ? t('giftCard.doneTitle', { amount: amountOf(step.credit.amount) })
     : t('giftCard.pendingTitle');
 
+  // 用户自己买的卡进充值余额、永久有效；后台发的卡进赠送余额、到期失效。
+  const purchased = step.kind === 'done' && step.card.destination === 'PURCHASED';
   const doneDescription = step.kind !== 'done' ? null
     : step.credit === null ? t('giftCard.alreadyYours')
-    : step.credit.state === 'PENDING' ? t('giftCard.pendingDescription', { amount: amountOf(step.credit.amount) })
+    : step.credit.state === 'PENDING'
+      ? t(purchased ? 'giftCard.pendingDescriptionPurchased' : 'giftCard.pendingDescription', { amount: amountOf(step.credit.amount) })
+    : purchased ? t('giftCard.doneDescriptionPurchased')
     : step.credit.expiresAt ? t('giftCard.doneDescription', { date: dateOf(step.credit.expiresAt) })
     : t('giftCard.doneDescriptionNoDate');
 
@@ -98,11 +103,14 @@ export function GiftCardSheet({ visible, code, invalidLink, onClose, onClosed, o
       </> : null}
       {step.kind === 'confirm' || step.kind === 'redeeming' ? <>
         {card(step.card)}
-        <View style={styles.box}>
-          <TermRow label={t('giftCard.fields.validity')} value={t('giftCard.fields.validityValue', { count: step.card.validityDays })} />
-          <TermRow separated label={t('giftCard.fields.claimBy')} value={dateOf(step.card.claimDeadline)} />
+        {step.card.destination === 'PURCHASED' ? <View style={styles.box}>
+          <TermRow label={t('giftCard.fields.destination')} value={t('giftCard.fields.destinationPurchased')} />
+          <TermRow separated label={t('giftCard.fields.validity')} value={t('giftCard.fields.validityPermanent')} />
+        </View> : <View style={styles.box}>
+          {step.card.validityDays !== null ? <TermRow label={t('giftCard.fields.validity')} value={t('giftCard.fields.validityValue', { count: step.card.validityDays })} /> : null}
+          {step.card.claimDeadline !== null ? <TermRow separated={step.card.validityDays !== null} label={t('giftCard.fields.claimBy')} value={dateOf(step.card.claimDeadline)} /> : null}
           <TermRow separated label={t('giftCard.fields.destination')} value={t('giftCard.fields.destinationValue')} />
-        </View>
+        </View>}
       </> : null}
       {step.kind === 'done' ? <>
         {card(step.card)}

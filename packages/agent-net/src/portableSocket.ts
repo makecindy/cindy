@@ -326,8 +326,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       return target && this.authorized(target.relayId) ? target : null;
     }
     for (const [id, delegation] of this.delegations) {
-      const target = this.authorized(id) && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && this.authorized(id)) return target;
     }
     return null;
   }

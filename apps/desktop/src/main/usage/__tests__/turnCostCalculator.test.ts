@@ -1089,8 +1089,8 @@ describe('subscription value and usage details', () => {
       deltas,
       'fallback',
       [
-        resolvedModel('claude-opus-4-8', {}, usdMoney(0.94)),
-        resolvedModel('claude-haiku-4-5', {}, usdMoney(0.8)),
+        resolvedModel('claude-opus-4-8', { inputTokens: 100, outputTokens: 800, cacheReadTokens: 1_000 }, usdMoney(0.94)),
+        resolvedModel('claude-haiku-4-5', { inputTokens: 33, outputTokens: 9_099, cacheCreateTokens: 250 }),
       ],
     );
     expect(details).toMatchObject({
@@ -1102,7 +1102,10 @@ describe('subscription value and usage details', () => {
     });
     expect(details?.perModelCost).toEqual([
       { model: 'claude-opus-4-8', money: usdMoney(0.94), billingSource: 'subscription' },
-      { model: 'claude-haiku-4-5', money: usdMoney(0.8), billingSource: 'subscription' },
+    ]);
+    expect(details?.perModelTokens).toEqual([
+      expect.objectContaining({ model: 'claude-opus-4-8', outputTokens: 800, cacheReadTokens: 1000 }),
+      expect.objectContaining({ model: 'claude-haiku-4-5', outputTokens: 9099, cacheCreateTokens: 250 }),
     ]);
   });
 

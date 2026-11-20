@@ -61,8 +61,10 @@ async function readRemoteCollabCapabilities(
   supportsDeferredOrcaUiAssignment?: boolean;
 }> {
   // Worker 的 Agent 在另一台电脑运行时，那个 Agent 不一定装在被控电脑上；这些是整台电脑的协议位，
-  // 改用被控电脑一定注册的 Claude Code 读。
-  const probeAgent = typeof options.agentDeviceId === 'string' ? 'claude-code' : options.workerAgent;
+  // 改用被控电脑一定注册的 Claude Code 读。插件引擎不是内置 Agent，同样按 Claude Code 读。
+  const probeAgent = typeof options.agentDeviceId === 'string' || options.workerAgent === 'acp'
+    ? 'claude-code'
+    : options.workerAgent;
   const raw = await agentCapabilitiesForDevice(deviceId, probeAgent);
   if (
     !raw

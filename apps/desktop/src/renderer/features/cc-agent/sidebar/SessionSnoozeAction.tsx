@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,17 +46,18 @@ export function useSessionSnooze(session: Session) {
       setSaving(false);
     }
   };
-  return { snooze, saving };
+  return session.pinnedAt == null ? { snooze, saving } : undefined;
 }
 
-export type SnoozeAction = ReturnType<typeof useSessionSnooze>;
+export type SnoozeAction = NonNullable<ReturnType<typeof useSessionSnooze>>;
 
 function SnoozeOptions({
   session,
   snooze,
   onCustom,
 }: {
-  session: Session;
+  /** The snooze fields only: a task, or a teammate's main conversation. */
+  session: TaskInboxState;
   snooze: (until: string | null) => Promise<void>;
   onCustom: () => void;
 }) {
@@ -96,6 +97,9 @@ function SnoozeOptions({
           </time>
         </DropdownMenuItem>
       ))}
+      <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => void snooze(INDEFINITE_SNOOZE_UNTIL)}>
+        {t('ccAgent.sidebar.inbox.indefinite')}
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={onCustom}>
         {t('ccAgent.sidebar.inbox.custom')}
@@ -109,7 +113,7 @@ export function SessionSnoozeCustomDialog({
   action: { snooze, saving },
   onDismiss,
 }: {
-  session: Session;
+  session: TaskInboxState;
   action: SnoozeAction;
   onDismiss: () => void;
 }) {
@@ -117,7 +121,7 @@ export function SessionSnoozeCustomDialog({
   const [customValue, setCustomValue] = useState(() => {
     const until = taskSnoozeUntil(session);
     const initial =
-      until > Date.now()
+      Number.isFinite(until) && until > Date.now()
         ? new Date(until)
         : taskSnoozeOptions(new Date()).find((option) => option.id === 'tomorrow')!.until;
     return toLocalDateTimeValue(initial);
@@ -181,7 +185,7 @@ export function SessionSnoozeSubmenu({
   action: { snooze, saving },
   onCustom,
 }: {
-  session: Session;
+  session: TaskInboxState;
   action: SnoozeAction;
   onCustom: () => void;
 }) {
@@ -210,7 +214,7 @@ export function SessionSnoozeAction({
   isActive,
   onOpenChange,
 }: {
-  session: Session;
+  session: TaskInboxState;
   action: SnoozeAction;
   isActive: boolean;
   onOpenChange: (open: boolean) => void;

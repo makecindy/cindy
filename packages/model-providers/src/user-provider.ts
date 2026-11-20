@@ -1,3 +1,4 @@
+import { copilotModelsUrl } from './modelDiscovery.js';
 import { previousModelGenerations, generationCapabilities } from './modelGeneration.js';
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
@@ -498,8 +499,14 @@ export function buildUserProvider(
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
       (rt.requestPath ?? "") === (presetRuntime.requestPath ?? "");
+    if (followsPreset && preset && rt.models.every(model => !model.route?.baseUrl ||
+        withoutTrailingSlashes(model.route.baseUrl) === withoutTrailingSlashes(resolvedBaseUrl))) {
+      routing[agent]!.usagePresetId = preset.id;
+    }
     // A bound single-API cloud connection keeps its language for new deployment IDs too.
     // This lends only the endpoint protocol, never another model's window or capabilities.
+    const discoverCopilotRoute = rt.catalogPresetId === 'github-copilot' && !rt.requestPath
+      && !!copilotModelsUrl(resolvedBaseUrl);
     const presetApis = new Set<ProviderRuntimeModelConfig['api']>(followsPreset ? presetRuntime.models.map(model => model.api ?? model.piApi) : []);
     const presetApi = presetApis.size === 1 ? [...presetApis][0] : undefined;
     const registrySources = [BUNDLED_CATALOG.modelRegistry, options.modelRegistry].filter(
@@ -577,7 +584,10 @@ export function buildUserProvider(
       // Existing catalog identities keep their established execution path. A
       // predecessor supplies parameters, not permission to switch their adapter.
       const keepExistingApi = imported?.inheritedFrom && registrySources.some(source => findBaseModel(source, m.id));
-      const importedApi = imported && !keepExistingApi &&
+      const copilotResponses = discoverCopilotRoute && !m.api && !m.piApi && !m.route
+        && !presetModel && (!imported || imported.inheritedFrom)
+        && m.discoveredMetadata?.nativeApi === 'openai-responses';
+      const importedApi = copilotResponses ? 'openai-responses' : imported && !keepExistingApi &&
         PI_MODEL_APIS.some(api => api === imported.execution.pi.api)
           ? imported.execution.pi.api as NonNullable<ProviderRuntimeModelConfig['piApi']>
           : !m.route && presetApi ? presetApi

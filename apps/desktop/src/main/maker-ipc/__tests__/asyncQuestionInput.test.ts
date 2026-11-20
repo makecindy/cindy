@@ -1,3 +1,5 @@
+import { hasTelegramQuestionRoute, stampTelegramQuestionAnswer, telegramQuestionOrigin, telegramQuestionAnswerOrigin } from '../telegramQuestionReply';
+import type { SendOrigin } from '@cindy/maker-core';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
@@ -22,7 +24,7 @@ function harness() {
   let held = false;
   let uncertain = false;
   const inputBoundary = new AbortController();
-  const session = { id: 'task', getTurnGeneration: () => 3 };
+  const session = { id: 'task', getTurnGeneration: () => 3, getCurrentTurnOrigin: () => null };
   const coordinator = {
     ensureQueueRestored: vi.fn(async () => {}),
     isExecutionPaused: () => held,
@@ -34,14 +36,14 @@ function harness() {
     enqueue: vi.fn(), resume: vi.fn(),
   };
   const build = vi.fn(async (params: unknown) => params);
-  const identityDeps = { getDeviceLinkInvokeContext: () => undefined, stampSharedTaskInput: (item: unknown) => item,
+  const identityDeps = { hasTelegramQuestionRoute, stampTelegramQuestionAnswer, getDeviceLinkInvokeContext: () => undefined, stampSharedTaskInput: (item: unknown) => item,
     stampTrustedDeviceLinkQueuedOrigin: (item: unknown) => item, stampTrustedDesktopQueuedOrigin: (item: unknown) => item,
     stampMobileClientOrigin: (item: unknown) => item, isMobileControllerInvoke: () => false, isDeviceLinkInvoke: () => false,
     readDeviceLinkInvokeSourceDevice: () => undefined };
   const run = new Function('maker', 'inputCoordinator', 'buildSessionControlInputItem', 'createHash', 'ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX', ...Object.keys(identityDeps), compiled)(
     { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, ...Object.values(identityDeps),
-  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
-  return { coordinator, build, run: (text = 'Answer') => run(session, text, new AbortController().signal, 'q1', '> Q?\n\nAnswer'),
+  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string, displayText: string, origin?: SendOrigin) => Promise<void>;
+  return { coordinator, build, run: (text = 'Answer', origin?: SendOrigin) => run(session, text, new AbortController().signal, 'q1', '> Q?\n\nAnswer', origin),
     pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; }, uncertainPause: () => { paused = true; uncertain = true; } };
 }
 
@@ -106,4 +108,17 @@ it.each(['rejected', 'error', 'held'])('leaves %s admission unconsumed', async (
   await expect(h.run()).rejects.toThrow();
   expect(h.coordinator.enqueue).not.toHaveBeenCalled();
   expect(h.coordinator.resume).not.toHaveBeenCalled();
+});
+
+// Unit regression: an answer after the originating Telegram turn ended starts its own
+// queued turn, even when another input now occupies the session.
+it('queues late Telegram answers with host-only provenance and rejects edited copies', async () => {
+  const h = harness();
+  const origin = telegramQuestionOrigin(() => {});
+  await h.run('Answer', origin);
+  expect(h.coordinator.steerControlInput).not.toHaveBeenCalled();
+  const item = h.coordinator.enqueue.mock.calls[0][1];
+  expect(hasTelegramQuestionRoute(telegramQuestionAnswerOrigin(item))).toBe(true);
+  expect(telegramQuestionAnswerOrigin({ ...item, text: 'unrelated' })).toBeUndefined();
+  expect(telegramQuestionAnswerOrigin(JSON.parse(JSON.stringify(item)))).toBeUndefined();
 });

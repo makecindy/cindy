@@ -415,7 +415,7 @@ export class MobilePluginPages {
         if (
           url.origin !== 'https://plugin.invalid' ||
           url.hash ||
-          !/^\/(?:kv|models|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+          !/^\/(?:kv|models|harnesses|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
             url.pathname,
           )
         )

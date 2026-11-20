@@ -16,6 +16,7 @@ import {
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
   type AgentKind,
+  type EngineKind,
   type MainOwnedSendContext,
   type SessionSendOptions,
   type Session,
@@ -61,6 +62,7 @@ import {
   turnClassicalStyleFromSendOpts,
   turnUiLanguageFromSendOpts,
 } from './uiLanguageErrorNote.js';
+import { prependPrivateChatContext, type PrivateChatContext } from './privateChatContext.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -71,6 +73,7 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { TELEGRAM_QUESTION_ORIGIN, activateTelegramQuestionReply, withTelegramQuestionPolicy } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
@@ -140,6 +143,7 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  readonly [TELEGRAM_QUESTION_ORIGIN]?: import('@cindy/maker-core').SendOrigin;
   /** Main-only observation: preparation may have side effects even if selection later changes. */
   onRuntimePreparation?: () => void;
   readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
@@ -260,7 +264,7 @@ export interface MakerSendTransactionSession {
   id: string;
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
   instanceId: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
@@ -304,13 +308,13 @@ export interface MakerSendTransactionDeps {
   /** Scheduler-only final route check, after asynchronous send preparation. */
   assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
   ensureRemoteReadyForSessionStart(params: {
-    session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
+    session?: { agentKind: EngineKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
   }): Promise<void>;
   checkWorkDirExists(
     sessionId: string,
     workingDir: string | undefined | null,
-    agentKind: AgentKind | undefined,
+    agentKind: EngineKind | undefined,
     remoteHostId?: string | null,
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
@@ -499,12 +503,12 @@ export interface MakerSendTransactionDeps {
    * 伙伴私聊引用回复的 `[引用说明]`:按落库内容里的 `replyQuote` 从库里重读原消息;没有引用时为 null。
    * 逐条都要带(陈述的是「本条」引用了什么),不进 wireNoteMemory 去重。
    */
-  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<string | null>;
+  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<PrivateChatContext | null>;
   /**
    * 私聊话题的 `[话题说明]`(话题开在主对话的哪条消息上);不是私聊话题时为 null。
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
-  readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readBotThreadNote?(sessionId: string): Promise<PrivateChatContext | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -838,7 +842,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function isUsablePersistedWorkingDir(
     sessionId: string,
     workingDir: string,
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     remoteHostId: string | null | undefined,
   ): Promise<boolean> {
     const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
@@ -1581,7 +1585,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
         : null;
       const withReplyQuoteNote = replyQuoteNote
-        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)
+        ? await prependPrivateChatContext(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote, sessionId, deps.prepareSendUserMessage)
         : withGoalInactiveNote;
       const withSourceNote = messageSourceNote
         ? prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)
@@ -1625,7 +1629,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const repeatableNotes: RepeatableWireNotes = {
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
-        'bot-thread': botThreadNote,
+        // Use both text and image identity to detect edits to a topic root.
+        'bot-thread': botThreadNote ? JSON.stringify([botThreadNote.text, botThreadNote.imageUrls]) : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
       };
@@ -1646,8 +1651,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
       }
-      if (plannedNotes['bot-thread']) {
-        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
+      if (plannedNotes['bot-thread'] && botThreadNote) {
+        outgoing = await prependPrivateChatContext(outgoing as HandoffWireMessage, botThreadNote, sessionId, deps.prepareSendUserMessage);
       }
       // The note belongs to the message that closed the card. A native command (a slash input) keeps its
       // first characters, so it carries no note and the note is dropped rather than left for the next message.
@@ -1892,11 +1897,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               await assertAppCurrent?.();
             }
           : assertAppCurrent;
-        // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
+        // Cross-task mail uses the session binding; question answers carry their own scoped route.
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
-        ), () => sess.send(outgoing as never, {
+        ), () => withTelegramQuestionPolicy(so[TELEGRAM_QUESTION_ORIGIN], sess, questionOptions => sess.send(outgoing as never, {
+          ...questionOptions,
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent || deps.assertQuotaContinuation
@@ -1949,7 +1955,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
-          ...(so.origin ? { origin: so.origin } : {}),
+          origin: so.origin ?? so[TELEGRAM_QUESTION_ORIGIN],
           ...(mainOwnedSendContext
             ? { [MAIN_OWNED_SEND_CONTEXT]: mainOwnedSendContext }
             : {}),
@@ -2088,6 +2094,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             if (persistUserMessage?.clientId) {
               deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
             }
+            activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
@@ -2096,7 +2103,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
           },
-        }));
+        })));
         if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {

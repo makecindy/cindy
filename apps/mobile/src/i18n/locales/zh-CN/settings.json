@@ -264,7 +264,7 @@
     "openUserAgreement": "打开用户协议",
     "appFilingNumber": "App 备案号",
     "analytics": "使用统计",
-    "analyticsHint": "用于了解启动与留存。上报设备型号、系统与应用版本、设备标识符等信息，登录后含账号 ID；不含对话、文件或提示词。",
+    "analyticsHint": "开启后，我们会用匿名代号代替你的账号 ID，结合设备标识了解启动和回访情况，帮助我们优化产品。充值使用单独的代号。你的对话、文件和提示词都不在统计范围内。\n旧版记录里有原始账号 ID。能查看旧记录的人可能通过同一设备标识，把新代号和原账号对上。",
     "analyticsSaveFailed": "设置未能保存，重启后可能恢复原值。",
     "analyticsReset": "恢复默认",
     "analyticsResetAction": "恢复"

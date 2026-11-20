@@ -22,6 +22,8 @@ import {
  */
 
 import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
+import { isPluginEngineEffort, isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
+import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
@@ -212,6 +214,12 @@ export interface NewMakerDraft {
    * 手动选任何模型或插件模型即清除。底下的模型设置保留，组里没有能用的模型时用它们。
    */
   modelGroup: ModelGroupSelection | null;
+  /**
+   * 新任务选中的插件引擎(docs/plans/acp-plugin-bridge.md)：记住为新任务默认，选任何内置模型、插件模型
+   * 或模型组即清除。底下的内置模型设置保留；引擎被停用、卸载或报告不可用时按没选处理，用回它们。
+   * 单独一个字段，不进 vendor / lastByVendor —— 内置 Harness 的类型与记忆保持不变。
+   */
+  pluginEngine: PluginEngineSelection | null;
 }
 
 /**
@@ -290,6 +298,7 @@ function makeDefault(): NewMakerDraft {
     defaultTupleSelectionCustomized: false,
     pluginModel: null,
     modelGroup: null,
+    pluginEngine: null,
   };
 }
 
@@ -322,7 +331,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
   const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
-  const workingDir = normalizeDraftWorkingDir(r.workingDir);
+  // Device-link identity is transient in an unfinished draft. Never reload its path as local.
+  const workingDir = r.deviceLinkDeviceId ? null : normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
       ? r.remoteHostId.trim()
@@ -531,6 +541,25 @@ function sanitize(raw: unknown): NewMakerDraft {
     defaultTupleSelectionCustomized,
     pluginModel: sanitizePluginModel(r.pluginModel),
     modelGroup: sanitizeModelGroupSelection(r.modelGroup),
+    pluginEngine: sanitizePluginEngine(r.pluginEngine),
+  };
+}
+
+/** 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。 */
+function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
+  if (!value || typeof value !== 'object') return null;
+  const { providerId, modelId, permissionMode, effort } = value as {
+    providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown;
+  };
+  if (
+    typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
+    || typeof modelId !== 'string' || !modelId.trim() || modelId.length > 256
+  ) return null;
+  return {
+    providerId,
+    modelId,
+    ...(isPluginEnginePermissionModeId(permissionMode) ? { permissionMode } : {}),
+    ...(isPluginEngineEffort(effort) ? { effort } : {}),
   };
 }
 

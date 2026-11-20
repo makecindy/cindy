@@ -163,7 +163,7 @@ it('uses the new locale for cards published after a locale-only refresh', async 
       currentGhostAppContext: () => ({ context: { region: 'global' } }),
       getResolvedMainLocale: () => 'fr', refreshGhostLocalizationIfChanged, refreshPluginApps,
       findGhostForInstanceId: () => localized, isGhostBoundaryPending: () => false,
-      broadcastGhostsChanged: vi.fn(), sendToGhostLogic: vi.fn(),
+      broadcastGhostsChanged: vi.fn(), sendToGhostLogic: vi.fn(), reconcilePluginHarnesses: vi.fn(),
     });
     refreshGhostLocalization('en');
     await publishPluginAppResult(localized, 'task', 'open', {}, 'done');

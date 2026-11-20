@@ -1,4 +1,4 @@
-import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
+import { groupLaneUsesChatWorkspace } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
@@ -540,7 +540,7 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  const chatOnly = row.role === 'group' && groupLaneUsesChatWorkspace(row.routeKey ?? '');
   const config = normalizeBotToolCapabilities(chatOnly ? {
     toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
     mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',

@@ -264,7 +264,7 @@
     "openUserAgreement": "Abrir o contrato do usuário",
     "appFilingNumber": "Número de registro do app",
     "analytics": "Estatísticas de uso",
-    "analyticsHint": "Ajuda a entender as inicializações e a retenção. Envia informações do dispositivo, como modelo, sistema operacional e versão do app, um identificador do dispositivo e, após o login, o ID da sua conta; nunca conversas, arquivos ou prompts.",
+    "analyticsHint": "Se você ativar esta opção, usaremos um pseudônimo de conta e um identificador do dispositivo para entender as aberturas do aplicativo e as visitas recorrentes. Isso nos ajuda a melhorar o produto. Os pagamentos usam outro pseudônimo. Essas estatísticas não incluem suas conversas, arquivos ou prompts.\nRegistros antigos contêm os IDs originais das contas. Quem tem acesso a eles pode conseguir associar um novo pseudônimo à conta pelo mesmo identificador de dispositivo.",
     "analyticsSaveFailed": "Não foi possível salvar esta configuração; ela pode ser revertida após reiniciar.",
     "analyticsReset": "Restaurar padrão",
     "analyticsResetAction": "Redefinir"

@@ -13,6 +13,12 @@ export type GiftCardRegion = 'cn' | 'global';
  */
 export type GiftCardStatus = 'AVAILABLE' | 'CLAIMED' | 'CLAIMED_BY_YOU' | 'EXPIRED' | 'VOIDED';
 
+/**
+ * 领取后的到账去向。PROMOTIONAL：后台发放的卡，进赠送余额，带领取截止与有效天数；
+ * PURCHASED：用户自己买的卡，进充值余额，永久有效，没有领取截止。
+ */
+export type GiftCardDestination = 'PROMOTIONAL' | 'PURCHASED';
+
 export type GiftCard = {
   status: GiftCardStatus;
   /** 面额，按当前区域的计费币种计量（与余额同口径）。 */
@@ -20,9 +26,11 @@ export type GiftCard = {
   faceCode: string;
   senderName: string;
   message: string | null;
-  claimDeadline: string;
-  /** 到账后的有效天数，从领取时起算。 */
-  validityDays: number;
+  destination: GiftCardDestination;
+  /** 领取截止；PURCHASED 的卡不过期，为 null。 */
+  claimDeadline: string | null;
+  /** 到账后的有效天数，从领取时起算；PURCHASED 的卡永久有效，为 null。 */
+  validityDays: number | null;
   claimedAt: string | null;
 };
 
@@ -151,14 +159,76 @@ function nullableTime(value: unknown): string | null {
   return value === null ? null : time(value);
 }
 
+/**
+ * 去掉字符串末尾的 0。用循环而不是 /0+$/：后者遇到一长串 0 时匹配耗时随长度平方增长
+ * （CodeQL「对不受控数据使用多项式正则」）。
+ */
+function trimTrailingZeros(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 48) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
+ * 礼品卡金额（卡面与到账额度）：大于 0 的十进制，去掉小数末尾的 0 后最多两位小数。服务端发卡也限两位，
+ * 卡面按分印；比分更细的金额卡面与文字会对不上，按坏响应处理。
+ */
 function amount(value: unknown): string {
   if (typeof value !== 'string' || !DECIMAL_PATTERN.test(value)) invalid();
+  if (trimTrailingZeros(value.split('.')[1] ?? '').length > 2) invalid();
+  // 卡面与到账额度必须大于 0：0 元的卡或「成功兑换 0 元」是自相矛盾的响应。
+  if (!/[1-9]/.test(value)) invalid();
   return value;
+}
+
+function validityDaysOf(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_VALIDITY_DAYS
+  ) {
+    invalid();
+  }
+  return value;
+}
+
+/** 卡的来源与它兑换后进哪一种余额一一对应：后台发的进赠送余额，用户买的进充值余额。 */
+const DESTINATION_BY_SOURCE: Record<string, GiftCardDestination> = {
+  PLATFORM: 'PROMOTIONAL',
+  PURCHASE: 'PURCHASED',
+};
+
+/**
+ * 旧服务端不下发 destination，它发出的卡都是后台发放、进赠送余额。用户买的卡
+ * 没有领取截止和有效天数；后台发的卡这两项必须齐全，缺一项就不能告诉用户条款。
+ * 同时给了来源时两者必须对得上：去向决定两端承诺的到账条款，自相矛盾的响应直接拒绝。
+ */
+function destinationOf(value: Record<string, unknown>): GiftCardDestination {
+  const { destination, source } = value;
+  if (source !== undefined && (typeof source !== 'string' || !Object.hasOwn(DESTINATION_BY_SOURCE, source))) invalid();
+  if (destination === undefined) {
+    if (source === 'PURCHASE') invalid();
+    return 'PROMOTIONAL';
+  }
+  if (destination !== 'PROMOTIONAL' && destination !== 'PURCHASED') invalid();
+  if (source !== undefined && DESTINATION_BY_SOURCE[source as string] !== destination) invalid();
+  return destination;
+}
+
+/** 两个十进制金额是否相等（去掉小数末尾的 0 再比，如 100 与 100.000000000）。 */
+function sameAmount(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    if (!value.includes('.')) return value;
+    const trimmed = trimTrailingZeros(value);
+    return trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+  };
+  return normalize(left) === normalize(right);
 }
 
 function projectCard(value: unknown): GiftCard {
   if (!isRecord(value)) invalid();
-  const { status, faceCode, senderName, message, validityDays } = value;
+  const { status, faceCode, senderName, message } = value;
   if (
     typeof status !== 'string' ||
     !STATUSES.has(status as GiftCardStatus) ||
@@ -167,22 +237,24 @@ function projectCard(value: unknown): GiftCard {
     typeof senderName !== 'string' ||
     senderName.length === 0 ||
     senderName.length > MAX_SENDER_LENGTH ||
-    (message !== null && (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH)) ||
-    typeof validityDays !== 'number' ||
-    !Number.isInteger(validityDays) ||
-    validityDays < 1 ||
-    validityDays > MAX_VALIDITY_DAYS
+    (message !== null && (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH))
   ) {
     invalid();
   }
+  const destination = destinationOf(value);
+  const purchased = destination === 'PURCHASED';
+  // 买来的卡永久有效、没有领取截止，两端都直接这样告诉用户：带了截止或有效天数、或状态是
+  // 「已过期」的「买来的卡」是自相矛盾的响应，拒绝，不能悄悄隐去条款或告诉用户永久卡过期了。
+  if (purchased && (status === 'EXPIRED' || value.claimDeadline !== null || value.validityDays !== null)) invalid();
   return {
     status: status as GiftCardStatus,
     amount: amount(value.amount),
     faceCode,
     senderName,
     message: message === null ? null : message,
-    claimDeadline: time(value.claimDeadline),
-    validityDays,
+    destination,
+    claimDeadline: purchased ? null : time(value.claimDeadline),
+    validityDays: purchased ? null : validityDaysOf(value.validityDays),
     claimedAt: nullableTime(value.claimedAt),
   };
 }
@@ -205,5 +277,9 @@ export function projectGiftCardPreview(value: unknown): { card: GiftCard } {
 /** `POST /api/gift-cards/redeem` 的响应；结构不符时抛错，调用方按结果未知处理。 */
 export function projectGiftCardRedemption(value: unknown): { card: GiftCard; credit: GiftCardCredit } {
   if (!isRecord(value)) invalid();
-  return { card: projectCard(value.card), credit: projectCredit(value.credit) };
+  const card = projectCard(value.card);
+  const credit = projectCredit(value.credit);
+  // 买来的卡进充值余额、永久有效，到账额度就是卡面金额：带过期时间或金额对不上同样自相矛盾，拒绝。
+  if (card.destination === 'PURCHASED' && (credit.expiresAt !== null || !sameAmount(card.amount, credit.amount))) invalid();
+  return { card, credit };
 }

@@ -4,7 +4,7 @@
  * 设计要点：
  * - 只静态打包英文（fallback 语言）；其余语言包按需动态 import，每个窗口只解析当前语言及其
  *   回退链，不再把 12 种语言（约 13 MB）都放进首屏。
- * - 当前语言为英文时 init 同步完成；其他语言由 `i18nReady` 表示加载完成。renderer 分发入口
+ * - `i18nReady` 等待语言偏好恢复和语言包加载。renderer 分发入口
  *   （index.tsx）先等它再加载各窗口模块，React 首屏仍直接是目标语言，不闪英文。
  * - 切换语言走 i18n.changeLanguage：先加载目标语言包，加载完才切换并通知 React 重渲染。
  * - 需要在「非当前语言」下读取的少量文案（例如跨语言识别旧标题、模型中文名搜索）不依赖
@@ -24,7 +24,7 @@ import enAiRename from './locales/en/aiRename.json';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE, type SupportedLocale } from '../../shared/locale';
 import { createLogger } from '../lib/logger';
-import { getEffectiveLocale, LOCALE_STORAGE_KEY } from '../lib/localePreference';
+import { getEffectiveLocale, LOCALE_STORAGE_KEY, restoreStoredLocale } from '../lib/localePreference';
 
 const log = createLogger('i18n');
 
@@ -141,7 +141,7 @@ const lazyLocaleBackend: BackendModule = {
   },
 };
 
-const initialized = i18n
+const initialize = () => i18n
   .use(lazyLocaleBackend)
   .use(initReactI18next)
   .init({
@@ -195,10 +195,11 @@ const initialized = i18n
   });
 
 /**
- * 初始语言（含回退链）已加载完成。英文时已同步完成；加载失败也会 resolve，此时回退英文显示。
+ * 初始语言（含回退链）已加载完成。加载失败也会 resolve，此时回退英文显示。
  * 渲染任何窗口之前先等它，避免首屏先出英文再切换。
  */
-export const i18nReady: Promise<void> = initialized.then(
+const restoring = restoreStoredLocale();
+export const i18nReady: Promise<void> = (restoring ? restoring.then(initialize) : initialize()).then(
   () => undefined,
   () => undefined,
 );
@@ -213,7 +214,9 @@ i18n.on('failedLoading', (lng: string, ns: string) => {
 // 立即完成，界面不会先显示旧语言再切换。
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('storage', (event) => {
-    if (event.key === LOCALE_STORAGE_KEY) void i18n.loadLanguages(getEffectiveLocale());
+    if (event.key === LOCALE_STORAGE_KEY && i18n.isInitialized) {
+      void i18n.loadLanguages(getEffectiveLocale());
+    }
   });
 }
 

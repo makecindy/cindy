@@ -264,7 +264,7 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "用於瞭解啟動與留存。會傳送裝置型號、系統與 App 版本、裝置識別碼等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
+    "analyticsHint": "開啟後，我們會用匿名代號取代你的帳號 ID，搭配裝置識別碼了解啟動和回訪情形，幫助我們改善產品。儲值使用另一個代號。你的對話、檔案和提示詞都不在統計範圍內。\n舊版紀錄含有原始帳號 ID。能查看舊紀錄的人可能透過相同的裝置識別碼，將新代號連回原帳號。",
     "analyticsSaveFailed": "設定未能儲存，重新啟動後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"

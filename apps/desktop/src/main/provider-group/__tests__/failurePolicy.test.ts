@@ -32,9 +32,13 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['usage limit (Claude tag)', { sdkError: 'rate_limit' }, switchTo('usage-limit')],
     ['usage limit (Codex tag)', { codexErrorInfo: 'usageLimitExceeded' }, switchTo('usage-limit')],
     ['billing depleted', { sdkError: 'billing_error' }, switchTo('usage-limit')],
+    ['xAI billing rejection', { errorStatus: 403, message: 'You have run out of credits or need a Grok subscription.' }, switchTo('usage-limit')],
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],
+    // #11484 unit: the new explicit account rejection uses the existing account
+    // fallback/cooling policy, never generic transport failure or same-source retry.
+    ['upstream account denied', { reason: 'account_access_denied', message: 'Access denied' }, switchTo('auth')],
     ['signed out (Codex)', { codexErrorInfo: 'unauthorized' }, switchTo('auth')],
     ['invalid API key text', { message: 'Invalid API key provided' }, switchTo('auth')],
     ['agent not authenticated at start', { message: 'Claude Code is not authenticated' }, switchTo('auth')],

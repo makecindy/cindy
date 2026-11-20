@@ -223,6 +223,16 @@ describe('prompt prediction completion revision guard', () => {
     },
   );
 
+  // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：渲染端照常报 claude-code，任务行是 'acp'；
+  // 不能把它的对话交给内置 utility 模型做推荐。
+  it('插件引擎任务不做推荐，也不派发付费请求', async () => {
+    h.rows = [{ ...VALID_ROW, agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh' }];
+    const paidDispatch = vi.fn();
+    h.afterDispatch = paidDispatch;
+    await expect(predict()).resolves.toBeNull();
+    expect(paidDispatch).not.toHaveBeenCalled();
+  });
+
   it('provider 派发紧前两次复核都匹配时允许预测', async () => {
     await expect(predict()).resolves.toBe('继续补测试');
     expect(h.beforeDispatchCalls).toBe(1);

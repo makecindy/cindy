@@ -555,6 +555,20 @@ describe('AgentNetSessionLinks', () => {
     expect([...new Set(controllerLanes)]).toEqual(['background']);
   });
 
+  // 2026-11-19 公网对照（xdt-server 中转，250 KB/s、往返 220 ms）：远程任务启动时上传块一次 2～4 块在途，走普通通道时停止要排在它们后面，
+  // 往返从 0.4 秒涨到 1.3 秒，64 KB/s 时到 5.5 秒。上传块走后台通道，同一任务的其他远程任务调用照旧走普通通道。
+  it('sends remote-agent upload chunks on the background lane and the other remote-agent calls on the normal lane', async () => {
+    const { links, controllerLanes } = pair();
+    answerOnSession(links.host);
+    await links.controller.openLink('a-host', openPayload);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'upload', uploadId: 'u1', index: 0, data: 'AAAA' }] });
+    expect(controllerLanes).toEqual(['background']);
+    controllerLanes.length = 0;
+    await links.controller.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [], waitMs: 0 }] });
+    expect(controllerLanes).toEqual(['normal']);
+  });
+
   // 2026-11-17 排查：会话上的建链总报同一个流标识，共享任务的主人电脑重启后来源代次不前进，界面把新推送当旧的丢掉；会话断开时先清链路
   // 状态再发离线事件，按对端取的代次落回 Device Link 的，它在 Device Link 上建过更多次链路时离线事件被当成过期丢掉（index.ts 比代次）。
   it('reports a new stream per session and keeps the session generation for its offline event', async () => {

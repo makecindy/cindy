@@ -1,7 +1,9 @@
 import { companionLaneRouteKey } from '../shared/imBotBindingRoute';
 import { readBotImConnection } from '../shared/botImConnectionStore';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { IMESSAGE_GROUP_WINDOW, sanitizeGroupWindowName } from '../shared/channelGroupWindow';
+import { receivedHistoryScope, recordReceivedImageMessage } from '../shared/receivedImageHistory';
+import { buildImReplyContextBlock, buildHistoryMediaNote } from '../shared/replyContext';
 import { captureImContext } from '../../../shared/imMessageSource';
 import { createLogger } from '../../logger';
 import fs from 'node:fs';
@@ -20,6 +22,12 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
   const companionLane: NonNullable<ImChannelAdapter['companionLane']> = userId => im.isGroup(userId)
     ? { kind: 'group', chatId: userId, threadId: '' }
     : userId === im.getOwnerUserId() ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
+  function historyScope(event: { contextId: string; chatId: string }) {
+    const origin = im.connectedOrigin;
+    if (!origin) return undefined;
+    const serverId = createHash('sha256').update(origin).digest('hex');
+    return receivedHistoryScope('imessage', `${event.contextId}:${serverId}`, event.chatId);
+  }
   const adapter: ImChannelAdapter = {
     channel: 'imessage', im, config, ui,
     getBotContextId: () => im.botContextId,
@@ -55,6 +63,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     },
     buildVendorOptions: userId => ({ imessageChatId: userId, source: 'imessage' }),
     companionLane,
+    groupHistoryAccessFor: historyScope,
     connectedChatForLane(botId, routeKey) {
       if (botId !== options.companionBotId) return undefined;
       return im.listChats().find(chat => {
@@ -84,24 +93,34 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
         messageId: event.messageId, chatName: sanitizeGroupWindowName(event.interactionSource?.chatName ?? '') || null,
         author: { name: sanitizeGroupWindowName(event.speaker?.name ?? 'user') }, text: event.text,
         fileNames: event.attachments.map(file => file.originalName), sentAt: Date.now() }).catch(() => createLogger('im:imessage').warn('ambient context unavailable'));
+      // Skipped inputs never reach the shared message handler's image index.
+      const scope = historyScope(event);
+      if (scope) await recordReceivedImageMessage({
+        scope, messageId: event.messageId, text: event.text, attachments: event.attachments,
+        author: event.speaker?.name, chatName: event.interactionSource?.chatName,
+      }).catch(() => createLogger('im:imessage').warn('ambient image indexing unavailable'));
       return 'skip';
     },
     prepareAgentTurnText: async event => {
-      if (!im.isGroup(event.chatId)) return null;
-      try {
+      const group = im.isGroup(event.chatId);
+      if (!group && !event.imessageReplyGuid) return null;
+      const context = group ? await (async () => {
         await IMESSAGE_GROUP_WINDOW.record({ botId: event.contextId, chatId: event.chatId, threadId: '',
           messageId: event.messageId, chatName: sanitizeGroupWindowName(event.interactionSource?.chatName ?? '') || null,
           author: { name: sanitizeGroupWindowName(event.speaker?.name ?? 'user') },
           text: event.text, fileNames: event.attachments.map(file => file.originalName), sentAt: Date.now() });
-        const context = await IMESSAGE_GROUP_WINDOW.buildContextPrefix({ botId: event.contextId,
-          chatId: event.chatId, threadId: '', triggerMessageId: event.messageId });
-        return { agentText: context.prefix + event.text,
-          contextSnapshot: captureImContext({ groupPrefix: context.prefix, groupMessageCount: context.messageCount }),
-          commit: async () => { await context.commit(); } };
-      } catch {
-        createLogger('im:imessage').warn('group input context unavailable');
-        return null;
-      }
+        return IMESSAGE_GROUP_WINDOW.buildContextPrefix({ botId: event.contextId,
+          chatId: event.chatId, threadId: '', triggerMessageId: event.messageId, replyMessageId: event.imessageReplyGuid });
+      })().catch(() => { createLogger('im:imessage').warn('group input context unavailable'); return null; }) : null;
+      const media = await im.contextMedia(event, event.ambient ? [] : context?.attachmentMessageIds ?? []);
+      const replyBlock = media.reply ? buildImReplyContextBlock(media.reply) : '';
+      const note = buildHistoryMediaNote({ provided: media.providedBy, unavailable: media.unavailable, directReply: !group });
+      return { agentText: (context?.prefix ?? '') + replyBlock + note.modelText + event.text,
+        contextSnapshot: captureImContext({ groupPrefix: [context?.prefix, note.displayText].filter(Boolean).join('\n'), groupMessageCount: context?.messageCount,
+          replyPrefix: replyBlock, replyMessageCount: media.reply ? 1 : 0 }),
+        ...(media.reply ? { replyContext: media.reply } : {}),
+        contextAttachments: media.attachments,
+        ...(context ? { commit: async () => { await context.commit(); } } : {}) };
     },
     turnPermissionPolicyFor: event => event.speaker?.isOwner ? undefined : {
       origin: { kind: 'im', channel: 'imessage', taskId: event.messageId },

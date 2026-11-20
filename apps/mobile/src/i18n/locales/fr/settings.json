@@ -264,7 +264,7 @@
     "openUserAgreement": "Ouvrir le contrat d'utilisation",
     "appFilingNumber": "Numéro d'enregistrement",
     "analytics": "Statistiques d'utilisation",
-    "analyticsHint": "Nous aide à comprendre les lancements et la fidélisation. Transmet des informations sur l'appareil (modèle, système d'exploitation, version de l'application) et un identifiant d'appareil, ainsi que l'ID de votre compte une fois connecté ; jamais les conversations, les fichiers ni les prompts.",
+    "analyticsHint": "Si vous activez cette option, nous utilisons un pseudonyme de compte et un identifiant d’appareil pour compter les lancements et les visites récurrentes. Cela nous aide à améliorer le produit. Les paiements utilisent un autre pseudonyme. Ces statistiques ne contiennent ni vos conversations, ni vos fichiers, ni vos instructions.\nLes anciens relevés contiennent les identifiants de compte d’origine. Une personne qui y a accès pourrait relier un nouveau pseudonyme au compte grâce au même identifiant d’appareil.",
     "analyticsSaveFailed": "Impossible d'enregistrer ce réglage ; il pourrait être rétabli après un redémarrage.",
     "analyticsReset": "Réinitialiser",
     "analyticsResetAction": "Réinitialiser"

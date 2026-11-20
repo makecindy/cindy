@@ -147,6 +147,7 @@ const SCHEDULER_DDL = [
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
       model_agent_device_id TEXT,
+      inherited_project_dir TEXT,
       model TEXT,
       provider_id TEXT,
       agent_device_id TEXT,
@@ -412,6 +413,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      // DB tier: a PR checkout retains the creator project across insert/get/update.
+      inheritedProjectDir: '/projects/app',
+      workingDir: '/checkouts/pr',
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
@@ -435,6 +439,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'paused',
         updatedAt: 1_700_000_200_000,
       });
+      expect(updated?.inheritedProjectDir).toBe('/projects/app');
+      expect(updated?.workingDir).toBe('/checkouts/pr');
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);
@@ -686,7 +692,11 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
   // The in-task banner reads this projection; without missingPlugin it can only say
   // "checks blocked" when a plugin uninstall removed the check script.
-  it('projects the missing plugin of a blocked check into the sidebar index', async () => {
+  // Unit: the desktop sidebar reads a bounded SQL projection, not the full hook record.
+  it.each([
+    { missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } },
+    { prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', failures: 3, retryAt: 1_800_000, device: 'Build Mac' } },
+  ])('projects the blocked check diagnosis into the sidebar index: %j', async (diagnosis) => {
     const harness = createStorageHarness();
     try {
       harness.sqlite.exec(`
@@ -704,14 +714,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         preRunHookResult: {
           status: 'failed', decision: 'block', exitCode: 1, durationMs: 1, stdout: '', stderr: 'MODULE_NOT_FOUND',
           stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false,
-          missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+          ...diagnosis,
         },
       });
       const [run] = await harness.storage.listSidebarIndexRuns();
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
-        missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+        ...diagnosis,
       });
     } finally {
       harness.close();

@@ -5393,6 +5393,56 @@ describe('liveScreen declaration', () => {
   });
 });
 
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：Desktop validateGhostManifest / validateStoredGhostManifest /
+ *   validateInstalledGhostManifest 对 `harnesses` 的结论与协议正本一致，并投影出独立的 `harnesses` 权限项。
+ * - Bug／规则依据：plugin-security-and-authoring.md §6（两份 validator 同步）、§5 红线（已装快照不因新校验
+ *   失效）、§3.1（独立 key，权限变多可识别）。
+ * - 现有覆盖缺口：新字段；协议侧 manifest.test.ts 只覆盖正本。
+ * - 最小失败输入：entry 指向 node.entry；已装快照里不合新规则的 harnesses。
+ * - tier：unit。实测耗时：随本文件整体约 1–2s。
+ */
+describe('harnesses declaration', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh', name: 'DSH', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js', 'other.js'] } };
+  const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+
+  it.each<[string, unknown, boolean]>([
+    ['valid', [harness], true],
+    ['unknown protocol kept as data', [{ ...harness, protocol: 'acp/2' }], true],
+    ['four engines', ['a', 'b', 'c', 'd'].map(id => ({ ...harness, id })), true],
+    ['five engines', ['a', 'b', 'c', 'd', 'e'].map(id => ({ ...harness, id })), false],
+    ['main node entry', [{ ...harness, entry: 'worker.js' }], false],
+    ['undeclared entry', [{ ...harness, entry: 'missing.js' }], false],
+    ['id with uppercase', [{ ...harness, id: 'Dsh' }], false],
+    ['description over 200', [{ ...harness, description: 'x'.repeat(201) }], false],
+  ])('agrees with the protocol for %s, and installed snapshots never fail on it', (_label, harnesses, ok) => {
+    const raw = { ...base, harnesses };
+    const desktop = validateGhostManifest(raw);
+    expect(desktop.ok).toBe(ok);
+    expect(validateProtocolManifest(raw).ok).toBe(ok);
+    for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+      const lenient = validate(raw);
+      expect(lenient.ok).toBe(true);
+      if (lenient.ok) expect(lenient.manifest.harnesses).toEqual(ok ? harnesses : undefined);
+    }
+  });
+
+  it('lists engines this Host can run as their own permission and diffs added engines as more permissions', () => {
+    const one = validateGhostManifest({ ...base, harnesses: [harness] });
+    const two = validateGhostManifest({ ...base, harnesses: [harness, { ...harness, id: 'fast', name: 'Fast', entry: 'other.js' }] });
+    const inactive = validateGhostManifest({ ...base, harnesses: [{ ...harness, protocol: 'acp/2' }] });
+    if (!one.ok || !two.ok || !inactive.ok) throw new Error('invalid fixture');
+    expect(ghostPermissionItems(one.manifest)).toContainEqual({ key: 'harnesses', kind: 'agent', labelKey: 'harnesses',
+      labelArgs: { names: 'DeepSeek Harness', ids: 'dsh' }, detailKey: 'harnessesDetail' });
+    expect(ghostPermissionItems(inactive.manifest).some(item => item.key === 'harnesses')).toBe(false);
+    expect(diffGhostPermissionItems(one.manifest, two.manifest).added.map(item => item.key)).toEqual(['harnesses']);
+    expect(diffGhostPermissionItems(two.manifest, one.manifest).added.map(item => item.key)).toEqual(['harnesses']);
+    expect(diffGhostPermissionItems(one.manifest, one.manifest).added).toEqual([]);
+  });
+});
+
 describe('ghost · readme 详细介绍声明', () => {
   // protocol-compatibility §3:Desktop 运行时 validator 与协议正本对同一 fixture 结论一致;
   // 两边漂移会让 Forge 能打包、市场或安装却拒收(或反之)。
