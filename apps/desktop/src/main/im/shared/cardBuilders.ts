@@ -97,6 +97,10 @@ export interface ImCardBuilders {
     currentAttachedTitle?: string | null;
     /** thread 模型: 接管锚点卡 messageId — 透传进所有按钮 payload。 */
     anchorMessageId?: string;
+    /** 发卡时的会话类型。飞书单聊 chatId 也是 oc_，不能靠前缀回推。 */
+    chatKind?: 'group' | 'direct';
+    /** enterControl 用的身份。回调 senderId 丢失话题后仍用它解锁。 */
+    controlUserId?: string;
   }): InteractiveCardSpec;
   buildControlSessionPickerCard(args: {
     botAppId: string;
@@ -104,6 +108,8 @@ export interface ImCardBuilders {
     displayName: string;
     sessions: ControlSession[];
     anchorMessageId?: string;
+    chatKind?: 'group' | 'direct';
+    controlUserId?: string;
   }): InteractiveCardSpec;
   /**
    * `/project` 项目切换卡(projectSwitching 渠道专用): 列 desktop 项目工作区,
@@ -119,6 +125,8 @@ export interface ImCardBuilders {
   buildRecentSessionPickerCard(args: {
     botAppId: string;
     sessions: RecentControlSession[];
+    chatKind?: 'group' | 'direct';
+    controlUserId?: string;
   }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
   /** 「群会话不能用完全访问」失败时的私聊修复卡(仅提供 permissionModeFix 文案的渠道)。 */
@@ -193,6 +201,16 @@ export function createCardBuilders(
       payload: { requestId: args.requestId },
     });
     return { title, body: bodyLines.join('\n\n'), buttons, buttonLayout: 'list' };
+  }
+
+  function controlCardContext(args: {
+    chatKind?: 'group' | 'direct';
+    controlUserId?: string;
+  }): { chatKind?: 'group' | 'direct'; controlUserId?: string } {
+    return {
+      ...(args.chatKind ? { chatKind: args.chatKind } : {}),
+      ...(args.controlUserId ? { controlUserId: args.controlUserId } : {}),
+    };
   }
 
   return {
@@ -412,6 +430,7 @@ export function createCardBuilders(
 
     buildControlPickerCard(args) {
       const { botAppId, projects, currentAttachedTitle } = args;
+      const context = controlCardContext(args);
       // thread 模型专用: 锚点卡 messageId 随 payload 走完整个选择流程, 终态时
       // cardActionHandler 用它把锚点卡变身"已接管"。feishu 不传 → payload 不变。
       const anchorPayload = args.anchorMessageId
@@ -428,7 +447,7 @@ export function createCardBuilders(
         id: 'control:exit',
         label: ui.cards.control.btnExit,
         type: 'danger' as const,
-        payload: { requestId: 'control-exit', botAppId, ...anchorPayload },
+        payload: { requestId: 'control-exit', botAppId, ...anchorPayload, ...context },
       };
 
       if (projects.length === 0) {
@@ -456,6 +475,7 @@ export function createCardBuilders(
               workingDir: p.workingDir,
               displayName: p.displayName,
               ...anchorPayload,
+              ...context,
             },
           })),
           exitBtn,
@@ -475,6 +495,7 @@ export function createCardBuilders(
       const anchorPayload = args.anchorMessageId
         ? { anchorMessageId: args.anchorMessageId }
         : {};
+      const context = controlCardContext(args);
       // 控制按钮排序: sessions → New → 后退 → 退出
       // - New 在 sessions 之后、back 之前: 跟 session-pick 同语义 (终态选择),
       //   但是"开新会话"而非接管已有, 所以紧贴 sessions 列表; back 是导航,
@@ -489,19 +510,20 @@ export function createCardBuilders(
           workingDir,
           displayName,
           ...anchorPayload,
+          ...context,
         },
       };
       const backBtn = {
         id: 'control:back',
         label: ui.cards.control.btnBack,
         type: 'default' as const,
-        payload: { requestId: 'control-back', botAppId, ...anchorPayload },
+        payload: { requestId: 'control-back', botAppId, ...anchorPayload, ...context },
       };
       const exitBtn = {
         id: 'control:exit',
         label: ui.cards.control.btnExit,
         type: 'danger' as const,
-        payload: { requestId: 'control-exit', botAppId, ...anchorPayload },
+        payload: { requestId: 'control-exit', botAppId, ...anchorPayload, ...context },
       };
 
       if (sessions.length === 0) {
@@ -530,6 +552,7 @@ export function createCardBuilders(
               workingDir,
               displayName,
               ...anchorPayload,
+              ...context,
             },
           })),
           newBtn,
@@ -549,11 +572,12 @@ export function createCardBuilders(
         throw new Error('buildRecentSessionPickerCard requires ui.cards.control.recentSessions');
       }
       const { botAppId, sessions } = args;
+      const context = controlCardContext(args);
       const exitBtn = {
         id: 'control:exit',
         label: ui.cards.control.btnExit,
         type: 'danger' as const,
-        payload: { requestId: 'control-exit', botAppId },
+        payload: { requestId: 'control-exit', botAppId, ...context },
       };
       if (sessions.length === 0) {
         return { title: recentUi.title, body: recentUi.emptyBody, buttons: [exitBtn] };
@@ -576,6 +600,7 @@ export function createCardBuilders(
               sessionId: s.id,
               sessionTitle: s.title,
               displayName: s.workspaceDisplayName,
+              ...context,
             },
           })),
           exitBtn,

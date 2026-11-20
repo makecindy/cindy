@@ -9,7 +9,7 @@
  * → enterControl(scope = 锚点 ts)。后续选择/接管由 cardActionHandler 驱动。
  */
 
-import type { ChannelIM } from '@cindy/im';
+import { decodeFeishuLaneUserId, type ChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import { listProjectsForControl } from './controlProjects';
@@ -56,6 +56,12 @@ export async function startThreadControlFlow(
     botAppId: args.botContextId,
     projects,
     anchorMessageId,
+    ...(channel === 'feishu'
+      ? {
+          chatKind: decodeFeishuLaneUserId(args.userId) ? 'group' as const : 'direct' as const,
+          controlUserId: args.userId,
+        }
+      : {}),
   });
   try {
     await im.sendInteractiveCard(args.userId, spec, { threadTs: scopeKey });
