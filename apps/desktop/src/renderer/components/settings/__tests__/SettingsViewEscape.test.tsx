@@ -319,6 +319,23 @@ describe('SettingsView Escape', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use English locale' }));
     expect(result()).toBeNull();
   });
+  // Unit through the real provider: a single selection must leave the current
+  // language visible and the window interactive until the host confirms its write.
+  it('applies a language selection only after the profile store confirms it', async () => {
+    let finishSave!: (saved: boolean) => void;
+    window.electronAPI.saveDisplayLanguage = vi.fn(() => new Promise<boolean>(resolve => { finishSave = resolve; }));
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(window.electronAPI.saveDisplayLanguage).toHaveBeenCalledWith('zh-Hans-x-lzh', false);
+    expect(localStorage.getItem('language')).toBeNull();
+    expect(document.documentElement.lang).toBe('en');
+
+    await act(async () => finishSave(true));
+
+    expect(localStorage.getItem('language')).toBe('zh-Hans-x-lzh');
+    expect(document.documentElement.lang).toBe('zh-Hans-x-lzh');
+  });
+
   // Unit regression (#8481): the real preference setter must update search before
   // opening Agent Island, without a native side effect just from searching.
   it('updates mascot search results when Agent Island is enabled and disabled', async () => {

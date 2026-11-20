@@ -1413,6 +1413,7 @@
     "UPSTREAM_ERROR": "업스트림 서버 오류(5xx)입니다. 잠시 후 다시 시도하세요",
     "UPSTREAM_UNREACHABLE": "엔드포인트에 연결할 수 없습니다. 네트워크와 기본 URL을 확인하세요",
     "TIMEOUT": "연결 시간이 초과되었습니다. 네트워크와 기본 URL을 확인하세요",
+    "CERT_ERROR": "인증서 검증에 실패했습니다. 기본 URL의 호스트 이름이 인증서와 일치하는지, 인증서 체인과 조직의 CA 신뢰 설정을 확인하세요.",
     "UNKNOWN": "알 수 없는 오류입니다. 자세한 내용은 로그를 확인하세요",
     "upstreamToast": "제공자 \"{{provider}}\" 요청 실패: {{message}}"
   },
@@ -1424,6 +1425,10 @@
     "details": "오류 정보"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "로컬 데이터베이스 손상",
+      "description": "데이터베이스 손상이 감지되어 데이터를 보호하기 위해 접근을 중단했습니다. 로컬 데이터를 다시 열어 보세요. 계속 실패하면 오류 세부 정보를 복사하여 지원팀에 문의하세요. 데이터베이스 파일을 덮어쓰거나 삭제하지 마세요."
+    },
     "schemaLease": {
       "title": "아직 로컬 데이터를 열 수 없습니다",
       "retry": "로컬 데이터 다시 열기",
@@ -3677,6 +3682,8 @@
           "edit": "편집",
           "editFailed": "URL, 프로토콜과 키를 확인하고 다시 시도하세요.",
           "editNote": "키를 비워 두면 읽은 인증 정보를 유지합니다. URL이나 프로토콜을 바꾸면 새 키가 필요합니다.",
+          "useSavedCredential": "저장된 인증 정보 사용",
+          "confirmDestination": "이 주소에서 저장된 Claude Code 인증 정보를 사용할까요?",
           "name": "표시 이름",
           "baseUrl": "기본 URL",
           "protocol": "API 프로토콜",
@@ -4385,6 +4392,7 @@
         "authorizedToast": "{{name}}에 로그인했습니다",
         "authorizeFailed": "{{name}}에 로그인하지 못했습니다. 다시 시도하세요.",
         "nameLabel": "표시 이름",
+        "geminiImageKeyNote": "저장하면 이 키가 새 연결의 채팅과 이후 Gemini 이미지 생성에 사용됩니다. 이미지만 생성하려면 채팅 모델을 모두 선택 해제하세요.",
         "onlyAgentNote": "이 제공자는 {{agent}}만 지원합니다",
         "endpointLabel": "{{agent}} 기본 URL",
         "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
@@ -15140,6 +15148,11 @@
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
       "text": "실패한 자동 실행이 있습니다.",
+      "prCheck_dns": "{{device}}에서 {{host}}의 주소를 찾을 수 없습니다. 문제가 계속되면 이 기기의 네트워크나 DNS를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
+      "prCheck_timeout": "{{device}}에서 GitHub 연결 시간이 초과되었습니다. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
+      "prCheck_auth": "{{device}}에서 GitHub에 다시 로그인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
+      "prCheck_rate-limit": "GitHub가 {{device}}의 요청 빈도를 제한했습니다. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
+      "prCheck_unknown": "{{device}}에서 PR 확인에 실패했습니다. 실행 세부 정보를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
       "pluginMissing": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
@@ -16978,6 +16991,12 @@
       "unspecifiedDir": "디렉터리 미지정"
     },
     "workdirBrowse": {
+      "previewFile": "미리보기",
+      "filterDirectory": "이 폴더 필터링…",
+      "projectTree": "프로젝트 트리",
+      "systemPreview": "시스템 미리보기",
+      "listView": "목록",
+      "gridView": "미리보기 이미지",
       "backToProjects": "프로젝트로 돌아가기",
       "switchProject": "프로젝트 전환",
       "activeSessionCount_one": "활성 세션 {{count}}개",
@@ -19342,6 +19361,7 @@
       "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
       "savedModelUnavailable": "이전에 선택한 모델 또는 연결 소스를 사용할 수 없습니다.",
+      "pluginEngineNoWorktree": "플러그인 엔진 Worker는 worktree를 사용할 수 없습니다. worktree 옵션을 끄고 Worker를 만드세요.",
       "reselectModel": "모델 다시 선택",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",

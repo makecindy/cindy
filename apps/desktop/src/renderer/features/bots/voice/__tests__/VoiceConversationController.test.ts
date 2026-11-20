@@ -7,6 +7,7 @@ import type {
 import type { SpeechPlayer } from '../PcmSpeechPlayer';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { VoiceConversationController } from '../VoiceConversationController';
+import { VoiceCallContext } from '../../../../../../../../packages/maker-core/src/voice-call';
 import type { VoiceQuestionTarget } from '@/components/new-chat/voiceQuestionSelection';
 
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
@@ -128,6 +129,61 @@ function fixture() {
 describe('independent call transcript and task acceptance', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  // #9049: exercise the real producer and consumer, not an injected failed record.
+  // Unit tier: model output, ASR, TTS and IPC ports are synthetic.
+  it.each(['malformed', 'provider-error', 'valid'] as const)(
+    'keeps the call listening after a %s reply and accepts the next utterance',
+    async (kind) => {
+      const f = fixture();
+      const generate = vi.fn(async () => '{"say":"Hello."}');
+      if (kind === 'malformed') generate.mockResolvedValueOnce('Not an action.');
+      if (kind === 'provider-error') generate.mockRejectedValueOnce(new Error('unavailable'));
+      const call = new VoiceCallContext({
+        callId: 'call-1', identity: 'Synthetic companion', reference: '', generate,
+        handoff: async () => true,
+        changed: record => f.emit({ type: 'call-record', record }),
+      });
+      let completion: Promise<boolean> | undefined;
+      Object.assign(f.api, {
+        submitTurn: vi.fn(async (_callId: string, id: string, text: string) => {
+          completion = call.submit(id, text);
+          return true; // Main accepts ordinary input before generation finishes.
+        }),
+      });
+      try {
+        await f.controller.start(selection);
+        f.utterance('Hello.');
+        await vi.advanceTimersByTimeAsync(0);
+        await completion;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(call.record.turns[0].failed).toBeUndefined();
+        expect(f.controller.getSnapshot()).toMatchObject({ phase: 'listening', error: null, unsent: '' });
+        expect(f.api.end).not.toHaveBeenCalled();
+        expect(f.microphone.stop).not.toHaveBeenCalled();
+        expect(f.api.speak).toHaveBeenCalledTimes(kind === 'valid' ? 1 : 0);
+        if (kind !== 'valid') {
+          expect(call.record.turns.at(-1)).toMatchObject({ role: 'assistant', complete: true, failed: true });
+        }
+        f.utterance('Still there?');
+        await vi.advanceTimersByTimeAsync(0);
+        await completion;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.api.speak).toHaveBeenCalledTimes(kind === 'valid' ? 2 : 1);
+        expect(f.controller.getSnapshot().phase).toBe('listening');
+        expect(f.send).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(f.controller.getSnapshot().exitCountdown?.reason).toBe('idle');
+        expect(f.api.end).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(f.api.end).toHaveBeenCalledOnce();
+        expect(f.onAutoEnd).toHaveBeenCalledOnce();
+      } finally {
+        f.controller.end();
+        call.end();
+      }
+    },
+  );
 
   it('plays the first call sentence without sending an ordinary main-task message', async () => {
     const f = fixture();

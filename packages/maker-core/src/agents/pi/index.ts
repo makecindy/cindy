@@ -571,13 +571,20 @@ function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
   }
 }
 
+function loopbackProviderHosts(providers: readonly PiNativeProviderSpec[]): string[] {
+  return providers.flatMap(provider => [provider.baseUrl,
+    ...provider.models.map(model => model.baseUrl ?? provider.baseUrl)])
+    .filter(isLoopbackOnlyBaseUrl)
+    .map(baseUrl => new URL(baseUrl).hostname.replace(/^\[|\]$/g, ''));
+}
+
 /**
  * NO_PROXY 兜底:pi 的模型请求打的是 Cindy 本地 compat proxy(loopback),bridge 的
  * MCP fetch 也是 localhost —— 用户设了全局 HTTP_PROXY 时这些请求不能进代理隧道。
  * 合并用户已有 NO_PROXY,同时吞并小写 no_proxy 并删除,防止大小写双份互相覆盖
  * (与 codex/env-builder.ts 同一策略)。
  */
-function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
+function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv, providers: readonly PiNativeProviderSpec[] = []): void {
   const existing = [env.NO_PROXY, env.no_proxy]
     .filter((v): v is string => typeof v === 'string')
     .flatMap((s) => s.split(','))
@@ -585,7 +592,11 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .filter(Boolean);
   // NO_PROXY 使用裸 IPv6 地址，避免 [::1] 使 Python httpx 初始化失败（#7632）。
   // Bun 对裸 ::1 的匹配不一致；MCP bridge 对已校验的回环 URL 使用独立直连。
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
+  // The remote probe uses direct HTTP. Keep every configured loopback BYOM
+  // host direct in Pi too, including catalog routes selected later. Do not
+  // bypass an entire subnet or change how non-loopback providers use the proxy.
+  const providerHosts = loopbackProviderHosts(providers);
+  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1', ...providerHosts])).join(',');
   delete env.no_proxy;
 }
 
@@ -912,13 +923,18 @@ function gatewayThinkingLevelMap(
   if (supported.size === 0) {
     return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
   }
-  return Object.fromEntries(
-    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
-      if (!supported.has(level)) return [level, null];
-      const bundledValue = bundled?.[level];
-      return [level, typeof bundledValue === 'string' ? bundledValue : level];
-    }),
-  );
+  return {
+    // Off is a separate capability, not an effort. Pi treats a missing off as
+    // supported, so dropping explicit null can produce an invalid budget=0.
+    ...(bundled?.off !== undefined ? { off: bundled.off } : {}),
+    ...Object.fromEntries(
+      PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+        if (!supported.has(level)) return [level, null];
+        const bundledValue = bundled?.[level];
+        return [level, typeof bundledValue === 'string' ? bundledValue : level];
+      }),
+    ),
+  };
 }
 
 /**
@@ -2900,10 +2916,33 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
-    // 轮 42 P2(codex-connector):远端 Pi 会话 + baseUrl 指向本机 loopback 的 BYOM
-    // provider 必须拒绝 —— 远端 pi 进程在 SSH 主机上连 localhost 连的是**远端
-    // 自己**, 用户本机的 Ollama 等服务不可达, 首回合必然失败/错配(甚至连到远端
-    // 无关服务)。与订阅 provider 拒绝同款 fail-fast, 引导换网关或远端可达的 BYOM。
+    // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
+    // the configured endpoint, so require a host-side probe rather than rejecting its name.
+    // Only hostProxyForward authorizes forwarding to Desktop; never infer that ownership
+    // from probe success or failure. A failed/unsupported probe keeps the old fail-closed gate.
+    const assertRemoteNativeProviderReachable = async (runtimeProviderId: string, model: string): Promise<void> => {
+      if (!opts.remoteHostId) return;
+      const native = nativeProviderById.get(runtimeProviderId);
+      if (!native || native.hostProxyForward) return;
+      // Match the model entry serialized to models.json, including public-id
+      // aliases and per-model endpoints, rather than probing the unused default.
+      const nativeModelId = resolveNativeModelId(runtimeProviderId, model);
+      const baseUrl = native.models.find(candidate => candidate.id === nativeModelId)?.baseUrl ?? native.baseUrl;
+      if (!isLoopbackOnlyBaseUrl(baseUrl)) return;
+      let reachable = false;
+      try {
+        reachable = await this.deps.probeRemotePiProviderEndpoint?.(opts.remoteHostId, baseUrl) === true;
+      } catch {
+        // Probe errors may contain endpoint credentials or remote command output.
+      }
+      if (!reachable) {
+        throw new Error(
+          `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${resolveSourceProvider(runtimeProviderId)}' ` +
+            'loopback endpoint could not be reached from the SSH host; ' +
+            'check the service on that host or use an endpoint reachable from it.',
+        );
+      }
+    };
     // 同时校验显式 providerId 与 legacy/default 路由 resolve 出的 native provider
     // (providerId 未持久化时 resolveProviderForModel 也能选出 BYOM)。
     if (opts.remoteHostId) {
@@ -2916,14 +2955,7 @@ export class PiAgent extends BaseAgent {
         candidateRuntimeIds.add(initialProvider);
       }
       for (const runtimeProviderId of candidateRuntimeIds) {
-        const loopbackNative = nativeProviderById.get(runtimeProviderId);
-        if (loopbackNative && isLoopbackOnlyBaseUrl(loopbackNative.baseUrl) && !loopbackNative.hostProxyForward) {
-          throw new Error(
-            `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${resolveSourceProvider(runtimeProviderId)}' baseUrl ${loopbackNative.baseUrl} is loopback-only — ` +
-              'a remote Pi session runs on the SSH host and cannot reach a service on this machine; ' +
-              'pick the XD gateway or a BYOM endpoint reachable from that host.',
-          );
-        }
+        await assertRemoteNativeProviderReachable(runtimeProviderId, opts.model);
       }
     }
     const initialWireModel = resolveWireModel(initialProvider, opts.model);
@@ -5886,7 +5918,7 @@ export class PiAgent extends BaseAgent {
           spawnEnv.https_proxy = proxy;
         }
       }
-      mergeLoopbackNoProxy(spawnEnv);
+      mergeLoopbackNoProxy(spawnEnv, remote ? nativeProviders : []);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       companionEnvironment?.assertCurrent?.();
@@ -7109,6 +7141,12 @@ export class PiAgent extends BaseAgent {
         budget ?? this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
+    const loopbackProxyRebuildReason = 'Pi must restart to apply the changed loopback provider proxy bypass';
+    const needsLoopbackProxyRestart = (providers: readonly PiNativeProviderSpec[]): boolean => {
+      if (!remote) return false;
+      const bypass = new Set((durableSpawnEnv.NO_PROXY ?? '').split(',').map(host => host.trim()));
+      return !bypass.has('*') && loopbackProviderHosts(providers).some(host => !bypass.has(host));
+    };
     const previewPiModelSwitch = async (
       model: string,
       target?: { providerId?: string | null; contextWindowBudget?: number | null },
@@ -7236,6 +7274,12 @@ export class PiAgent extends BaseAgent {
         }
       }
       const targetContextWindow = configuredWindow ? Math.max(configuredWindow, workingWindow) : null;
+      // Registry refresh cannot update Pi's process-level NO_PROXY. Reuse the
+      // existing rebuild path before publishing a catalog with a new alias.
+      if (needsLoopbackProxyRestart(latestProviders)) {
+        return { action: 'rebuild', targetContextWindow, windowVerified: false,
+          reason: loopbackProxyRebuildReason };
+      }
       // A refresh may change any provider block, so all credentials it references
       // must be synchronised with the running Pi process before it is published.
       // The private refresh bridge owns this update; this preview never handles a key.
@@ -7328,6 +7372,9 @@ export class PiAgent extends BaseAgent {
           }
         }
       }
+      // The resolver can change between preview and refresh. Check again before
+      // any configuration/registry mutation rather than accepting a late alias.
+      if (needsLoopbackProxyRestart(nextProviders)) throw new Error(loopbackProxyRebuildReason);
       const nextDescriptor = this.deps.resolvePiRuntimeModelDescriptor
         ? this.deps.resolvePiRuntimeModelDescriptor(sourceId, model)
         : this.capabilities.availableModels.find((candidate) => candidate.id === model);
@@ -7589,6 +7636,10 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, effectiveProviderId);
       const wireModel = resolveWireModel(provider, model);
+      await assertRemoteNativeProviderReachable(provider, model);
+      if (closed || piProcessExited || proc.isClosed) {
+        throw new Error('pi: session closed while checking provider reachability');
+      }
       if (effectiveProviderId && effectiveProviderId !== PI_PROVIDER_ID &&
           effectiveProviderId !== 'xd' && provider === PI_PROVIDER_ID) {
         throw new Error(`pi: provider '${effectiveProviderId}' cannot serve model '${model}'`);
