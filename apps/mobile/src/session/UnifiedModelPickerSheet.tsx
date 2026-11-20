@@ -369,6 +369,9 @@ export function UnifiedModelPickerSheet(
   }, [p.visible, onPluginEnginesOpen]);
   // 选中的是插件引擎时，内置模型行都不显示选中态(也不列「推荐」)。
   const pluginEngineActive = !!pluginEngineOptions?.active;
+  // 选中的是模型组时同理：只有组那一行打勾，具体模型行不打勾、不列「推荐」，打开时停在顶部(和桌面一致)。
+  const modelGroupActive = !!p.unified.modelGroups?.rows.some((row) => row.selected);
+  const otherChoiceActive = pluginEngineActive || modelGroupActive;
   useEffect(() => {
     if (!p.visible) return;
     if (rememberRemote) void hydrateRemoteAgentModelMemory();
@@ -671,7 +674,7 @@ export function UnifiedModelPickerSheet(
         routing: provider?.routing,
         logoKind: provider?.logoKind,
       },
-      selected: !favorite && selected && !pluginEngineActive,
+      selected: !favorite && selected && !otherChoiceActive,
       disabled:
         !caps[config.agent] ||
         budgetRowDisabled(
@@ -798,7 +801,7 @@ export function UnifiedModelPickerSheet(
         logoKind: provider?.logoKind,
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
-      selected,
+      selected: selected && !modelGroupActive,
       disabled: !entry.capabilities[config.agent],
       // 「收藏」一节没有带电脑名的分段标题,电脑名写进说明行,和本机同名模型的收藏区分开。
       subtitle: favorite
@@ -903,7 +906,7 @@ export function UnifiedModelPickerSheet(
       rows: favoriteRows,
     });
   const recommended =
-    all && p.existingSessionRoute && !pluginEngineActive
+    all && p.existingSessionRoute && !otherChoiceActive
       ? filtered
           .filter((row) => row.selected || row.config.agent === p.agentKind)
           .sort((a, b) => Number(b.selected) - Number(a.selected))

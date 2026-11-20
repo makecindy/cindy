@@ -70,7 +70,7 @@ import {
 } from "@/session/CompanionModelChain";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const route = {
-  harness: "codex",
+  harness: "codex" as const,
   model: "gpt-6",
   providerId: "openai:second",
   effort: "high",
