@@ -1,3 +1,4 @@
+import { useOrcaQuestionRows } from './orcaQuestionRows';
 import { sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
 import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { ProjectSettingsSheet } from './ProjectSettingsSheet';
@@ -598,7 +599,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
-  const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
   const directoryBudgetRef = useRef<{
@@ -2268,23 +2268,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
-  const pendingInteractionIndexRaw = useMemo(() => {
-    const next = new Map<string, number>();
-    const activeIds = new Set<string>();
-    for (const session of sessions) {
-      activeIds.add(session.id);
-      const pending = remoteSessionStore.getPendingInteractions(session.id);
-      const cached = homePendingCacheRef.current.get(session.id);
-      const count = cached?.pending === pending ? cached.count : pending.length;
-      if (!cached || cached.pending !== pending) homePendingCacheRef.current.set(session.id, { pending, count });
-      if (count > 0) next.set(session.id, count);
-    }
-    for (const sessionId of homePendingCacheRef.current.keys()) {
-      if (!activeIds.has(sessionId)) homePendingCacheRef.current.delete(sessionId);
-    }
-    return next;
-  }, [homeStatusVersion, sessions]);
-  const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
+  const { pendingInteractionIndex, visibleWorkerIds, workerTargets } = useOrcaQuestionRows(sessions, homeStatusVersion);
   const liveActivityIndexRaw = useMemo(() => {
     const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
@@ -2306,8 +2290,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return next;
   }, [homeStatusVersion, sessions]);
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
-  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
-  const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
+  // 已知归属的问题在 Lead 行提示，缺少归属时保留提问的 Worker。
+  const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions, visibleWorkerIds), [sessions, visibleWorkerIds]);
   const pluginIconDevices = useMemo(() => {
     const ids = new Set<string>();
     for (const session of homeSessions) {
@@ -2746,6 +2730,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     advanceViewedPriorityHold(homeViewedPriorityHold, item.session.id, priorityContextRef.current, Date.now());
     leftHomeForSessionRef.current = true;
     setPriorityHoldEpoch((epoch) => epoch + 1);
+    const worker = workerTargets.current.get(item.session.id);
+    if (worker && !('searchFocusClientId' in item) && !('searchLocallyCached' in item)) {
+      item = { ...item, session: worker };
+    }
     if (navigationHost.current.onSelectSession) {
       navigationHost.current.onSelectSession(item);
       return;
@@ -2758,7 +2746,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const href = { pathname: '/sessions/[sessionId]', params: { ...target } } as const;
     rememberTask(href);
     guardedPush(href);
-  }, [guardedPush, rememberTask, swipeRegistry, t]);
+  }, [guardedPush, rememberTask, swipeRegistry, t, workerTargets]);
 
   // Every visible row receives this callback, and the list presentation is rebuilt on each
   // task update. Read the latest target on tap so updates do not re-render every row.

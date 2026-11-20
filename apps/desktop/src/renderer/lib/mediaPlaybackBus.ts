@@ -51,6 +51,9 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   registered.add(el);
   el.addEventListener('play', onPlay);
   return () => {
+    // Stop playback (including a pending play()) while we still own the player.
+    // Keep its source so React can register the same element again.
+    el.pause();
     el.removeEventListener('play', onPlay);
     registered.delete(el);
   };

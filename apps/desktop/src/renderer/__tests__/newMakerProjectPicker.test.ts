@@ -581,7 +581,7 @@ describe('Shared create project picker', () => {
     // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
     expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
     expect(chatInputSource).toContain(
-      'kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
+      '(!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
     );
   });
 
@@ -1794,9 +1794,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
     // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
-    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 四条都用 selection.modelId(wire id),
+    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 上述路径和本次替代模型都用 selection.modelId(wire id),
     // 一处都不能换成行 id，否则目标引擎无法解析首条请求。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(4);
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(6);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

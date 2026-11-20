@@ -48,6 +48,7 @@ function readGroupSwitch(value: unknown): MobileAutoResumeGroupSwitch | undefine
 export interface MobileAutoResumeInfo {
   /** 账号用量上限重置后自动继续(不是重连:不展示重试次数)。 */
   usageLimitReset?: boolean;
+  geminiInputRetry?: true;
   /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
   agentSwitch?: MobileAutoResumeAgentSwitch;
   /** 供应商组等原电脑恢复后在原电脑继续(与 usageLimitReset 同时出现)。 */
@@ -85,6 +86,7 @@ export function readMobileAutoResumeInfo(data?: Record<string, unknown>): Mobile
   const groupSwitch = readGroupSwitch(data?.groupSwitch);
   const groupSwitchPending = readGroupSwitch(data?.groupSwitchPending);
   return {
+    ...(data?.geminiInputRetry === true ? { geminiInputRetry: true as const } : {}),
     ...(usageLimitReset ? { usageLimitReset: true } : {}),
     ...(agentSwitch ? { agentSwitch } : {}),
     ...(agentReconnect ? { agentReconnect } : {}),

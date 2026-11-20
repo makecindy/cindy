@@ -75,7 +75,7 @@ function deferred<T>() {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { seconds?: number }) => options?.seconds === undefined ? key : key + ' ' + options.seconds,
     i18n: { language: 'en', exists: (key: string) => [
       'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT',
       'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE',
@@ -1279,6 +1279,23 @@ describe('ErrorBanner OpenAI connection recovery', () => {
 
     expect(screen.getByText('logic.errors.toolUseLoopDetectedPingPongWithCount')).toBeTruthy();
     expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
+  });
+
+  it('counts down a Gemini minute limit from the host deadline and clears the countdown on cancellation', () => {
+    vi.useFakeTimers();
+    try {
+      const error = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+      const props = { error, agentKind: 'pi' as const, retryText: 'hello', onRetry: vi.fn(), onCancelUsageLimitWait: vi.fn() };
+      const { rerender } = render(<ErrorBanner {...props} usageLimitWait={{ resumeAt: Date.now() + 56_599 }} />);
+      expect(screen.getByText('chat.geminiRateLimit.title')).toBeTruthy();
+      expect(screen.getByText('chat.geminiRateLimit.retryIn 57')).toBeTruthy();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.getByText('chat.geminiRateLimit.retryIn 56')).toBeTruthy();
+      rerender(<ErrorBanner {...props} usageLimitWait={null} errorReason="gemini-input-retry-exhausted" />);
+      expect(screen.queryByText(/chat.geminiRateLimit.retryIn/)).toBeNull();
+      expect(screen.getByText('chat.geminiRateLimit.exhausted')).toBeTruthy();
+    } finally { vi.useRealTimers(); }
   });
 
   it('shows the automatic continuation time and a cancel action only while waiting', () => {

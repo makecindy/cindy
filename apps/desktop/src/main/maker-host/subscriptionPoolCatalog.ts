@@ -41,11 +41,12 @@ export function publishSubscriptionPoolProviders(ports: SubscriptionPoolPublishe
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: SubscriptionPoolCatalogPorts, routingCatalog = false): Catalog {
+export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: SubscriptionPoolCatalogPorts, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
   const pool = ports.readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
   const originalProviders = catalog.providers;
-  catalog = { ...catalog, providers: catalog.providers.map(provider => {
+  const selected = include ? originalProviders.filter(include) : originalProviders;
+  catalog = { ...catalog, providers: selected.map(provider => {
     if (provider.id === 'anthropic' || provider.subscriptionPool === 'anthropic') {
       const models = ports.readSubscriptionPoolClaudeModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
       if (models === null) return provider;
@@ -83,6 +84,7 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
   if (!aliases) return catalog;
   // A merged legacy connection lends its model membership to the provider its account belongs to
   // now (OpenAI or another provider of the user's choice), while that provider can use it.
+  const selectedIds = include && new Set(selected.map(p => p.id));
   const lenders = new Map<string, Catalog['providers']>();
   const historicalAccounts = routingCatalog ? new Map(catalog.providers
     .filter(provider => provider.id === 'openai' || provider.subscriptionPool === 'openai' || Object.hasOwn(aliases, provider.id))
@@ -92,6 +94,7 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
     const account = accountId ? pool.accounts.find(entry => entry.id === accountId) : undefined;
     if (!account) continue;
     const owner = ports.accountProviderId('openai', account.id);
+    if (selectedIds && !selectedIds.has(owner)) continue;
     if (owner === 'openai' && pool.disconnected) continue;
     if (!ports.codexAccountState(provider.id).authenticated) continue;
     if (!account.paused && owner !== provider.id) lenders.set(owner, [...(lenders.get(owner) ?? []), provider]);

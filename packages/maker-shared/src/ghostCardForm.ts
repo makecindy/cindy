@@ -117,6 +117,7 @@ export interface MailCardData {
   fromLabel: string;
   continueLabel?: string;
   deleteLabel?: string;
+  addQuoteLabel?: string;
   supersededBy?: string;
   pendingSend?: { deadline: number; label: string; cancelLabel: string; sendNowLabel: string };
 }
@@ -136,6 +137,7 @@ export function parseMailCard(value: unknown): MailCardData | null {
       !Array.isArray(p.attachments) || p.attachments.length > 100 ||
       p.attachments.some(a => typeof a !== 'string' || a.length > 1024) ||
       (p.continueLabel !== undefined && (typeof p.continueLabel !== 'string' || p.continueLabel.length > 128)) ||
+      (p.addQuoteLabel !== undefined && (typeof p.addQuoteLabel !== 'string' || p.addQuoteLabel.length > 128)) ||
       (p.deleteLabel !== undefined && (typeof p.deleteLabel !== 'string' || p.deleteLabel.length > 128)) ||
       (p.supersededBy !== undefined && (typeof p.supersededBy !== 'string' || p.supersededBy.length > 128))) return null;
   const pending = p.pendingSend as MailCardData['pendingSend'];
@@ -150,6 +152,7 @@ export function parseMailCard(value: unknown): MailCardData | null {
     status: p.status as string, sendLabel: p.sendLabel as string, fromLabel: p.fromLabel as string,
     ...(images ? { images: images.map(i => ({ cid: i.cid, url: i.url })) } : {}),
     ...(p.continueLabel ? { continueLabel: p.continueLabel as string } : {}),
+    ...(p.addQuoteLabel ? { addQuoteLabel: p.addQuoteLabel as string } : {}),
     ...(p.deleteLabel ? { deleteLabel: p.deleteLabel as string } : {}),
     ...(pending ? { pendingSend: { deadline: pending.deadline, label: pending.label, cancelLabel: pending.cancelLabel, sendNowLabel: pending.sendNowLabel } } : {}),
     ...(p.supersededBy ? { supersededBy: p.supersededBy as string } : {}) };

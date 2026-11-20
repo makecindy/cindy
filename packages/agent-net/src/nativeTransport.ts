@@ -34,6 +34,16 @@ const LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LAN
 /** Per poll and outgoing stream, at most this many native writes of `WRITE_CHUNK` bytes. */
 const WRITES_PER_STREAM = 8;
 const WRITE_CHUNK = 65_536;
+/**
+ * The engine is polled every FAST_POLL_MS while anything moves (stream data or events, bytes waiting here, in the core or
+ * unacknowledged, a handshake or a dial) and every IDLE_POLL_MS once nothing has for ACTIVE_WINDOW_MS; writing, a dial, a
+ * relayed datagram or a network change polls at once. A poll is a bridge round trip with every connection's state as
+ * JSON on the phone's JS thread: with nothing to move, polls every 8 ms still took a quarter of it, 7–18% every 50 ms,
+ * 0–4% without polls (2026-11-20 A/B on a phone, with the admission lookups of `AgentNetSocket.keys`).
+ */
+const FAST_POLL_MS = 8;
+const IDLE_POLL_MS = 50;
+const ACTIVE_WINDOW_MS = 1_000;
 const now = () => performance.now();
 
 /**
@@ -52,6 +62,10 @@ export class NativeTransport implements Transport {
   readonly dial: { udp?: Address };
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** The delay the pending poll was scheduled with. */
+  private timerDelay = 0;
+  /** Poll fast until then (a new transport starts out connecting). */
+  private activeUntil = now() + ACTIVE_WINDOW_MS;
   private channels = new Map<number, NativeChannel>();
   private waiting = new Map<number, Waiting>();
   private links = new Map<string, number>();
@@ -87,6 +101,7 @@ export class NativeTransport implements Transport {
       const link = this.links.get(deviceId);
       if (!link) return;
       void this.call({ op: 'datagram', from: { link }, data: toBase64Url(bytes) }).catch(() => undefined);
+      this.wake();
     });
   }
   static async create(engine: NativeEnginePort, options: TransportOptions, addresses: NativeAddresses = [], enhanced = true): Promise<NativeTransport> {
@@ -185,6 +200,7 @@ export class NativeTransport implements Transport {
     return new Promise((resolve, reject) => {
       if (this.closed) { reject(new Error('NATIVE_TRANSPORT_CLOSED')); return; }
       this.waiting.set(id, { resolve, reject, deadline: now() + 3_000 });
+      this.wake();
     });
   }
   /**
@@ -194,6 +210,8 @@ export class NativeTransport implements Transport {
   networkChanged(): void {
     if (this.closed || !this.enhanced) return;
     void this.call({ op: 'migrate' }).catch(() => undefined);
+    // Everything in flight goes again from the new address: poll for it now.
+    this.wake();
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
     void this.readAddresses().then(addresses => {
@@ -207,11 +225,23 @@ export class NativeTransport implements Transport {
     this.pendingBytes += bytes;
   }
   release(bytes: number): void { this.pendingBytes = Math.max(0, this.pendingBytes - bytes); }
-  private schedule(): void {
-    if (!this.closed && !this.timer) this.timer = setTimeout(() => {
+  private schedule(delay = now() < this.activeUntil ? FAST_POLL_MS : IDLE_POLL_MS): void {
+    if (this.closed || this.timer) return;
+    this.timerDelay = delay;
+    this.timer = setTimeout(() => {
       this.timer = null;
       void this.poll().then(() => this.schedule(), () => this.close());
-    }, 8);
+    }, delay);
+  }
+  /**
+   * Something to move: poll fast for a while, and at once if the next poll was an idle one. A poll under way is left alone;
+   * the next follows FAST_POLL_MS after it, as it always did.
+   */
+  wake(): void {
+    this.activeUntil = now() + ACTIVE_WINDOW_MS;
+    if (this.closed || !this.timer || this.timerDelay <= FAST_POLL_MS) return;
+    clearTimeout(this.timer); this.timer = null;
+    this.schedule(0);
   }
   private async poll(): Promise<void> {
     await this.synchronizeAdmission();
@@ -268,6 +298,10 @@ export class NativeTransport implements Transport {
       this.waiting.delete(id); waiting.reject(new Error('NATIVE_CONNECT_TIMEOUT'));
       void this.call({ op: 'close', id }).catch(() => undefined);
     }
+    // Keepalives and acknowledgements of nothing do not count: they need no fast reply.
+    if (this.waiting.size > 0 || [...this.channels.values()].some(channel => channel.moving)
+      || result.connections.some(state => !state.established || state.unacked || state.data.length > 0 || state.events.length > 0
+        || state.buffered?.some(([, bytes]) => bytes > 0))) this.activeUntil = now() + ACTIVE_WINDOW_MS;
   }
   detach(id: number): void {
     this.channels.delete(id);
@@ -340,13 +374,20 @@ class NativeChannel implements PeerChannel {
   announceCandidates(): void {
     if (this.events.closed || !this.owner.candidates().length) return;
     this.control.push(utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n'));
+    this.owner.wake();
   }
   send(bytes: Uint8Array): void {
     if (this.events.closed) throw new Error('NATIVE_CONNECTION_CLOSED');
     this.owner.reserve(bytes.length);
     this.data.push(bytes.slice());
+    this.owner.wake();
   }
   get bufferedAmount(): number { return this.data.queued + this.control.queued; }
+  /** Bytes still waiting here for the engine, or a close still draining: the transport keeps polling fast. */
+  get moving(): boolean {
+    return !this.disposed && (this.closeDeadline > 0 || this.data.queued > 0 || this.control.queued > 0
+      || (this.lanes !== null && (this.lanes.control.queued > 0 || this.lanes.normal.queued > 0 || this.lanes.background.queued > 0)));
+  }
   onDrain(handler: () => void): void { this.drainHandlers.push(handler); }
 
   /** See CoreChannel.declareSessions (transport.ts): once per connection, on the control stream older nodes read only for candidates. */
@@ -354,6 +395,7 @@ class NativeChannel implements PeerChannel {
     if (!this.owner.enhanced || this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
     this.control.push(utf8(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
+    this.owner.wake();
   }
   sessionFeatures(): readonly string[] { return this.peerSessionFeatures; }
   onSessionCapable(handler: () => void): void { if (this.sessionCapable) handler(); else this.sessionCapableHandlers.push(handler); }
@@ -369,7 +411,7 @@ class NativeChannel implements PeerChannel {
     }
     const lanes = this.lanes;
     return {
-      write: (lane, bytes) => { if (!this.events.closed) lanes[lane].push(bytes); },
+      write: (lane, bytes) => { if (!this.events.closed) { lanes[lane].push(bytes); this.owner.wake(); } },
       // As the Desktop (transport.ts): control and normal lanes count what the core still buffers, so a slow line pushes
       // back before a megabyte of pushes queues ahead of interactive replies; the background lane (file blocks) counts
       // only what waits here, so a download does not hold back task text.
@@ -492,7 +534,7 @@ class NativeChannel implements PeerChannel {
   close(options?: { drain?: boolean }): void {
     if (this.disposed) return;
     this.events.close();
-    if (options?.drain !== false) { this.closeDeadline ||= now() + 2_000; return; }
+    if (options?.drain !== false) { this.closeDeadline ||= now() + 2_000; this.owner.wake(); return; }
     this.dispose();
   }
   private dispose(): void {

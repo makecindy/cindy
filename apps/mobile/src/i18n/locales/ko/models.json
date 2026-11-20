@@ -110,6 +110,16 @@
     "quotaAverageHint": "주간 할당량 · 계정별 동일 가중 평균",
     "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
   },
+  "modelGroups": {
+    "title": "모델 그룹",
+    "sourceCount_other": "소스 {{count}}개",
+    "strategy": {
+      "expiring": "곧 만료되는 것 먼저",
+      "order": "순서대로",
+      "rotate": "번갈아",
+      "cheapest": "가장 저렴하게"
+    }
+  },
   "pluginEngines": {
     "genericName": "플러그인 엔진",
     "defaultModel": "기본 모델",

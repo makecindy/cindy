@@ -16090,9 +16090,15 @@
       "toggle": "展開或收起「{{title}}」的回信",
       "openTask": "開啟任務"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建議的時間自動重試",
+      "title": "Gemini 每分鐘輸入量已達上限",
+      "exhausted": "已自動重試一次，Gemini 仍受限。稍後可手動重試。",
+      "retryIn": "{{seconds}} 秒後自動重試"
+    },
     "subscriptionAccountError": {
-      "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
-      "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+      "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。",
+      "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。",
       "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
       "signingIn": "此任務使用的訂閱帳號正在登入，請完成登入後重試。",
       "unavailable": "此任務繫結的訂閱帳號無法用於本次請求。請在執行任務的電腦上檢查模型供應商中的帳號設定，或選擇其他模型來源。",
@@ -16326,6 +16332,14 @@
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
+      "savedModel": {
+        "loading": "正在連線至所選模型…",
+        "checkFailed": "無法檢查所選模型",
+        "engine": "所選引擎無法使用，請為本次任務選擇模型",
+        "source": "所選來源無法使用，請為本次任務選擇模型",
+        "model": "所選模型無法使用，請為本次任務選擇模型",
+        "thisTaskOnly": "所選模型僅用於本次任務"
+      },
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
       "branchChanged": "專案目前分支已變成 {{branch}}，請確認後再傳送",
@@ -22100,7 +22114,8 @@
       "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
       "manage": "管理模型組",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
-      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。"
+      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
