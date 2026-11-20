@@ -97,7 +97,12 @@ import {
   isDeepLinkProtocol,
   isDeepLinkUrl,
 } from '../../../shared/deepLinkSchemes';
-import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import {
+  isRewritableMediaUrl,
+  isSshRewritableMediaUrl,
+  rewriteToRemoteMediaOrigin,
+  type RemoteMediaOrigin,
+} from '../../../shared/remoteMediaUrl';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
@@ -892,6 +897,23 @@ function markdownMediaOrigin(
   workingDir: string,
 ): RemoteMediaOrigin | undefined {
   return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
+}
+
+function rewriteMarkdownMediaForOrigin(
+  url: string,
+  origin: RemoteMediaOrigin | undefined,
+): string | undefined {
+  if (
+    origin?.kind === 'ssh' &&
+    isRewritableMediaUrl(url) &&
+    !isSshRewritableMediaUrl(url, origin.workdir)
+  ) {
+    // SSH file-service intentionally exposes only workdir paths. Do not let
+    // an unsupported hostless media URL fall back to the controller's local
+    // file protocol and read a same-path local file.
+    return undefined;
+  }
+  return rewriteToRemoteMediaOrigin(url, origin);
 }
 
 /**
@@ -1943,9 +1965,11 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
+                const rewritten = rewriteMarkdownMediaForOrigin(normalized, mediaOrigin);
+                if (!rewritten) return null;
                 return (
                   <ChatVideoView
-                    src={rewriteToRemoteMediaOrigin(normalized, mediaOrigin)}
+                    src={rewritten}
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
@@ -1955,7 +1979,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               return (
                 <LightboxImage
                   streaming={isStreaming}
-                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
+                  src={normalized ? rewriteMarkdownMediaForOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
                   onZoom={setLightboxSrc}
                   {...imageProps}

@@ -91,6 +91,11 @@ export function localTaskImagePath(url: string): string | null {
   return !value.includes('\0') && path.isAbsolute(value) ? value : null;
 }
 
+/** Network and device namespaces must never be touched by failure diagnostics. */
+export function isUnsafeLocalTaskImagePath(value: string): boolean {
+  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(value);
+}
+
 export function hasLocalTaskImages(text: unknown): text is string {
   return (
     typeof text === 'string' && taskImageReferences(text).some((ref) => localTaskImagePath(ref.url))

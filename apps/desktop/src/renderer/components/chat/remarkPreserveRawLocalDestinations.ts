@@ -25,7 +25,7 @@
  * scheme check below skips regardless of order.
  */
 
-import type { Image, Link, Root } from 'mdast';
+import type { Definition, Image, ImageReference, Link, Root } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
@@ -45,18 +45,28 @@ function isLocalDestination(url: string): boolean {
 
 const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
   return (tree) => {
-    visit(tree, ['image', 'link'], (node) => {
-      const typed = node as Image | Link;
-      const hostlessImage = node.type === 'image' &&
-        (typed.url.startsWith('xdt-image:///') || typed.url.startsWith('xdt-file:///'));
-      if (!hostlessImage && !isLocalDestination(typed.url)) return;
+    const definitions = new Map<string, Definition>();
+    visit(tree, 'definition', (node) => {
+      if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
+    });
+    visit(tree, ['image', 'imageReference', 'link'], (node) => {
+      const typed = node as Image | ImageReference | Link;
+      const target: Definition | Image | Link | undefined =
+        node.type === 'imageReference' ? definitions.get(node.identifier) : (typed as Image | Link);
+      if (!target) return;
+      const hostlessImage =
+        (node.type === 'image' || node.type === 'imageReference') &&
+        (target.url.startsWith('xdt-image:///') || target.url.startsWith('xdt-file:///'));
+      if (!hostlessImage && !isLocalDestination(target.url)) return;
 
-      const prop = node.type === 'image' ? RAW_LOCAL_IMAGE_SRC_PROP : RAW_LOCAL_LINK_HREF_PROP;
+      const prop = node.type === 'image' || node.type === 'imageReference'
+        ? RAW_LOCAL_IMAGE_SRC_PROP
+        : RAW_LOCAL_LINK_HREF_PROP;
       typed.data = {
         ...typed.data,
         hProperties: {
           ...(typed.data?.hProperties ?? {}),
-          [prop]: typed.url,
+          [prop]: target.url,
         },
       };
     });

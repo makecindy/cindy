@@ -36,6 +36,8 @@ import {
   materializeTaskImageMarkdown,
   rewriteTaskImageReferences,
   taskImageReferences,
+  isUnsafeLocalTaskImagePath,
+  localTaskImagePath,
 } from '../taskImageMarkdown';
 
 const state = vi.hoisted(() => ({
@@ -788,6 +790,18 @@ describe('Markdown image contract', () => {
     const shared = `[download][p]\n${source}`;
     expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: <cindy-media://blobs/test.png>');
     expect(rewriteTaskImageReferences(shared, replacements)).not.toContain('/tmp/a.png');
+  });
+
+  it('rejects network and device paths before failure diagnostics can stat them', () => {
+    for (const url of [
+      'xdt-image:////attacker/share/100%.png',
+      'xdt-image:///%5C%5Cattacker%5Cshare%5C100%25.png',
+      'xdt-image:///%3F%3F/C:/secret.png',
+    ]) {
+      const resolved = localTaskImagePath(url);
+      expect(resolved).toBeTruthy();
+      expect(isUnsafeLocalTaskImagePath(resolved!)).toBe(true);
+    }
   });
 
   it('recovers bare-space local destinations only from plain text, with original offsets', () => {

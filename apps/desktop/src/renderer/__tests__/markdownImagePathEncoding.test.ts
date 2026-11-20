@@ -101,6 +101,13 @@ describe('Markdown local image path encoding', () => {
     );
   });
 
+  it('preserves the original destination for reference-style hostless images', () => {
+    const path = '/tmp/My%20Pictures/100%.png';
+    expect(normalizedImageSrc(`![hostless][p]\n\n[p]: <xdt-image://${path}>`)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
   it('loads the reported bare-space hostless image without angle brackets', () => {
     const path = 'C:/My Pictures/shot (100%).png';
     expect(normalizedImageSrc(`![hostless](xdt-image:///${path})`)).toBe(
