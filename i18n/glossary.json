@@ -4101,7 +4101,7 @@
         "zh-Hant-x-lzh": ["同僚"],
         "zh-Hans-x-lzh": ["同僚"]
       },
-      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。豁免理由（同形异义，逐组）：① desktop:sharedTask. 与 mobile/sharedTask 四键——邀请对象是用自己的 Cindy 账号加入的真人协作者（docs/product-rules/shared-task-mode.md）；② desktop:imBot.conflictDialog. 与 desktop:logic.toasts.feishuBotConflict——共用同一个 App ID 的真人同事；③ desktop:issueTracker.——仓库/组织里的真人成员；④ desktop:settings.agentIsland.skins.boli/muffin.description——桌宠角色的修辞用法。",
       "alsoAllowed": {
         "fr": [
           {
@@ -4149,6 +4149,7 @@
         "desktop:logic.toasts.feishuBotConflict",
         "desktop:settings.agentIsland.skins.boli.description",
         "desktop:settings.agentIsland.skins.muffin.description",
+        "desktop:settings.agentIsland.skins.chaku.description",
         "desktop:issueTracker.",
         "desktop:sharedTask.",
         "mobile/sharedTask:invitationCopied",
