@@ -6612,6 +6612,7 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
+          ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
           ...(toolName === 'update_plan'
             ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
             : {}),
@@ -6633,6 +6634,7 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
@@ -20019,6 +20021,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
+    const replyToFields = typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
+      ? { replyToClientId: m.agentMeta.replyToClientId } : {};
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
@@ -20064,6 +20068,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
@@ -20215,6 +20220,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           role: m.role,
           content: m.content,
           isStreaming: false,
+          ...replyToFields,
         };
       }
       const c = (m.content && typeof m.content === 'object' ? m.content : {}) as Record<
@@ -20232,6 +20238,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         role: m.role,
         content: message,
         isStreaming: false,
+        ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
