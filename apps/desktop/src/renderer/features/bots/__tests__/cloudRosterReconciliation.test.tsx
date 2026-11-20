@@ -23,7 +23,7 @@ vi.mock('../../../../main/clientEndpointsService', () => ({ getClientEndpoint: (
 import { useRemoteBotSync, useRemoteBots, readRemoteBots } from '../useRemoteBots';
 import { resetCompanionCloudStoreForTests, useCompanionCloud, refreshCompanionCloudSettled } from '../companionCloudStore';
 import { cloudRemoteBots } from '../companionCloudPresentation';
-import { companionSnapshot } from '../../../../main/companion-cloud/homes';
+import { companionHomes, companionSnapshot } from '../../../../main/companion-cloud/homes';
 import { accessChatDisplayCache } from '../../../../main/maker-ipc/chatDisplayCache';
 const row = { id: 'mia', deviceId: 'laptop', deviceName: 'Laptop', name: 'Mia', avatar: '', avatarColor: 'violet',
   description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true };
@@ -46,7 +46,7 @@ beforeEach(() => {
       onRemotePush: () => () => undefined, invoke: vi.fn() } } as never;
   resetCompanionCloudStoreForTests();
 });
-afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks();
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); companionHomes.reset();
   if (h.cacheRoot) { rmSync(h.cacheRoot, { recursive: true, force: true }); h.cacheRoot = ''; } });
 // #9760 upgrade: old clients have already saved an empty cloud roster, so only
 // the real Main projection's disabled identity can distinguish Mia from a device-only bot.
@@ -304,3 +304,53 @@ it.each([true, false])('reconfirms a rejected deletion against a fresh roster (a
   expect(reads).toBe(2);
   expect(saved).toMatchObject({ actors: fresh.actors, newlyRetiredBotIds: active ? [] : ['mia'], retirementRevision: 2 });
 });
+
+// #11303 / discussion_r4643468709: unit tier, real registry + cache + renderer.
+// Earlier late-ACK tests commit the first deletion before revival and let one
+// renderer observe both. A hydrating window instead coalesces those pushes,
+// while a second window can close with its earlier deletion still in transit.
+// Minimal failure: same disk fence, delete -> register -> delayed old write.
+it.each(['before registration', 'before live write', 'after live write'])(
+  'keeps a coalesced re-registration durable with deletion committed %s', async order => {
+    h.cacheRoot = mkdtempSync(path.join(tmpdir(), 'cindy-9760-precommit-'));
+    const request = { owner: h.owner, key: 'cloud-homes' };
+    companionHomes.update(old);
+    const seed = accessChatDisplayCache({ ...request, action: 'read' }) as { retirementRevision: number };
+    accessChatDisplayCache({ ...request, action: 'write', value: { ...old, ...seed } });
+    let finishRead!: () => void;
+    let push!: (next: CompanionCloudSnapshot) => void;
+    let reads = 0;
+    let liveWrites = 0;
+    window.electronAPI.maker.getCompanionCloudState = async () => companionHomes.snapshot();
+    window.electronAPI.maker.onCompanionCloudChanged = ((fn: typeof push) => { push = fn; return () => undefined; }) as never;
+    window.electronAPI.maker.chatDisplayCache = (async (input: { action: string }) => {
+      if (input.action === 'read' && ++reads === 1) {
+        const cached = accessChatDisplayCache(input);
+        return new Promise(resolve => { finishRead = () => resolve(cached); });
+      }
+      const result = accessChatDisplayCache(input);
+      if (input.action === 'write') liveWrites += 1;
+      return result;
+    }) as never;
+    const probe = renderHook(() => useCompanionCloud());
+    await waitFor(() => expect(reads).toBe(1));
+    const deleted = { ...old, actors: [], disabledBotIds: ['mia'] };
+    const delayedDeletion = () => accessChatDisplayCache({ ...request, action: 'write',
+      value: { ...deleted, newlyRetiredBotIds: ['mia'], retirementRevision: seed.retirementRevision } });
+    act(() => { companionHomes.update(deleted); push(deleted); });
+    if (order === 'before registration') delayedDeletion();
+    act(() => { companionHomes.update(old); push(old); });
+    // Re-registration is now Main's current source decision. A closed window's
+    // earlier deletion must be rejected even if the disk fence has not changed.
+    if (order === 'before live write') expect(delayedDeletion).toThrow('PRECONDITION_FAILED');
+    await act(async () => finishRead());
+    await waitFor(() => expect(liveWrites).toBe(1));
+    if (order === 'after live write') expect(delayedDeletion).toThrow('PRECONDITION_FAILED');
+    expect(accessChatDisplayCache({ ...request, action: 'read' })).toMatchObject({ actors: old.actors, retiredBotIds: [] });
+    expect(probe.result.current.actors).toEqual(old.actors);
+    probe.unmount();
+    resetCompanionCloudStoreForTests();
+    window.electronAPI.maker.getCompanionCloudState = async () => { throw new Error('offline after restart'); };
+    const restarted = renderHook(() => useCompanionCloud());
+    await waitFor(() => expect(restarted.result.current.actors).toEqual(old.actors));
+  });

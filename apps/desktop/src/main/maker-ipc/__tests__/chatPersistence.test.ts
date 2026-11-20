@@ -18,6 +18,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBl
 import { chatSendJournal } from '../chatSendJournal.js';
 import { accessBotGroupOutbox } from '../botGroupOutboxStorage.js';
 import { accessChatDisplayCache } from '../chatDisplayCache.js';
+import { companionHomes } from '../../companion-cloud/homes.js';
 import { extractIpcError } from '../../../shared/ipcError.js';
 
 beforeEach(() => {
@@ -25,7 +26,7 @@ beforeEach(() => {
   state.owner = { dataOwnerId: 'a', generation: 1 };
   state.pin.mockReset().mockResolvedValue(undefined); state.add.mockReset().mockResolvedValue('ref'); state.remove.mockReset().mockResolvedValue(1);
 });
-afterEach(() => rmSync(state.root, { recursive: true, force: true }));
+afterEach(() => { companionHomes.reset(); rmSync(state.root, { recursive: true, force: true }); });
 
 it('restores display snapshots, removes them durably and rejects late writes from another login', () => {
   const owner = state.owner;
@@ -208,4 +209,21 @@ it('rejects a delayed deletion derived before another window revived the identit
     .toThrow('PRECONDITION_FAILED');
   expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
     .toMatchObject({ actors: [{ externalId: 'mia' }], retiredBotIds: [] });
+});
+
+// #11303 pre-commit revival fix: Main's live corroboration must not let an old
+// active renderer undo a newer deletion, even with the current disk fence.
+// Existing multi-window tests only covered the stale-disk-revision case.
+// Unit tier, same real cache handler and unique temporary directory as above.
+it('retains the latest authoritative deletion against an explicitly revived stale actor', () => {
+  const owner = state.owner;
+  const request = { key: 'cloud-homes', owner };
+  companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human',
+    actors: [], demotedBotIds: [], disabledBotIds: ['mia'] });
+  const seed = accessChatDisplayCache({ ...request, action: 'read' }) as { retirementRevision: number };
+  const retired = accessChatDisplayCache({ ...request, action: 'write',
+    value: { actors: [], newlyRetiredBotIds: ['mia'], ...seed } }) as { retirementRevision: number };
+  accessChatDisplayCache({ ...request, action: 'write', value: {
+    actors: [{ externalId: 'mia' }], revivedBotIds: ['mia'], ...retired } });
+  expect(accessChatDisplayCache({ ...request, action: 'read' })).toMatchObject({ retiredBotIds: ['mia'] });
 });

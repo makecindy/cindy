@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
+import { companionHomes } from '../companion-cloud/homes.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
@@ -52,14 +53,25 @@ export function accessChatDisplayCache(input: unknown): unknown {
     const newlyRetired = stringIds(newlyRetiredBotIds);
     if (newlyRetired.length && retirementRevision !== cloudHomes.revision)
       throwIpcError('PRECONDITION_FAILED', 'Cloud display cache changed before this deletion; reload and confirm the roster');
+    // Disk revisions only order committed writes. A re-registration may already
+    // be authoritative while another window's first deletion is still in IPC.
+    // Consult Main's existing owner-scoped registry, never a renderer's ordering.
+    const live = companionHomes.snapshot();
+    const liveIds = new Set(live.actors.map(actor => actor.externalId));
+    if (live.enabled && newlyRetired.some(id => liveIds.has(id)))
+      throwIpcError('PRECONDITION_FAILED', 'Companion was re-registered before this deletion; reload and confirm the roster');
     hasNewRetirements = newlyRetired.length > 0;
     const retired = new Set([...cloudHomes.retiredBotIds, ...newlyRetired]);
     const active = new Set(Array.isArray(incoming.actors) ? incoming.actors.flatMap(actor =>
       actor && typeof actor.externalId === 'string' ? [actor.externalId] : []) : []);
-    // Presence alone may come from a stale renderer. Only a renderer that observed
-    // retirement then a fresh active actor can explicitly revive that identity.
+    // A hydrating renderer can coalesce delete/register pushes and never see a
+    // tombstone. Presence corroborated by Main is still an authoritative revival.
+    if (live.enabled) for (const id of active) if (liveIds.has(id)) retired.delete(id);
+    // Without a live registry, preserve the existing explicit-revival fence.
+    // With one, a stale renderer cannot revive an identity Main now knows deleted.
     if (retirementRevision === cloudHomes.revision) {
-      for (const id of stringIds(revivedBotIds)) if (active.has(id) && !newlyRetired.includes(id)) retired.delete(id);
+      for (const id of stringIds(revivedBotIds)) if (active.has(id) && !newlyRetired.includes(id)
+        && (!live.enabled || liveIds.has(id))) retired.delete(id);
     }
     retiredBotIds = [...retired];
     // A stale historical snapshot may have an empty/older roster, but it may
