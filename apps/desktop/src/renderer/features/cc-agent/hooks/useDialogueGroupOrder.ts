@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { readSidebarOwnerStorage, sidebarOwnerStorageKey, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 import type { MainListEntry } from '../lib/mainListModel';
+import { affectsSidebarProjectOrder, DIALOGUE_GROUP_ORDER_KEY } from './helpers/sidebarFilterCore';
 
-const STORAGE_KEY = 'cc-agent.sidebar.dialogueGroupOrder';
 export const DIALOGUE_SORT_ID = 'dialogue-group';
 type Position = { previous: string | null; next: string | null; dragRevision?: number };
 type Positions = ReadonlyMap<string, Position>;
@@ -20,7 +20,7 @@ export function entrySortId(entry: SortableEntry): string {
 }
 
 function readPositions(owner: string | null): Positions {
-  const raw = readSidebarOwnerStorage(STORAGE_KEY, owner);
+  const raw = readSidebarOwnerStorage(DIALOGUE_GROUP_ORDER_KEY, owner);
   const result = new Map<string, Position>();
   if (!raw) return result;
   try {
@@ -42,12 +42,12 @@ export function useDialogueGroupOrder(enabled: boolean) {
   const owner = getDataOwnerGeneration().dataOwnerId;
   const [revision, setRevision] = useState(0);
   const positions = useMemo(() => enabled ? readPositions(owner) : new Map<string, Position>(), [enabled, owner, revision]);
-  const storageKey = owner && sidebarOwnerStorageKey(STORAGE_KEY, owner);
+  const storageKey = owner && sidebarOwnerStorageKey(DIALOGUE_GROUP_ORDER_KEY, owner);
   useEffect(() => {
     if (!enabled || !storageKey) return;
     const refresh = () => setRevision(value => value + 1);
     const onStorage = (event: StorageEvent) => {
-      if (event.key === storageKey || event.key === null) refresh();
+      if (affectsSidebarProjectOrder(event.key, owner)) refresh();
     };
     window.addEventListener(storageKey, refresh);
     window.addEventListener('storage', onStorage);
@@ -56,7 +56,7 @@ export function useDialogueGroupOrder(enabled: boolean) {
       window.removeEventListener(storageKey, refresh);
       window.removeEventListener('storage', onStorage);
     };
-  }, [enabled, storageKey]);
+  }, [enabled, owner, storageKey]);
   function preparePlacement(
     scope: string, before: readonly string[], after: readonly string[],
     comparisonKey: (key: string) => string, groupOnly: boolean,
@@ -91,7 +91,7 @@ export function useDialogueGroupOrder(enabled: boolean) {
       if (!groupOnly && current?.dragRevision !== saved?.dragRevision) return;
       if (!groupOnly && position.previous === current?.previous && position.next === current?.next) return;
       next.set(scope, { ...position, dragRevision: groupOnly ? (current?.dragRevision ?? 0) + 1 : saved?.dragRevision });
-      if (writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
+      if (writeSidebarOwnerStorage(DIALOGUE_GROUP_ORDER_KEY, owner, JSON.stringify(Object.fromEntries(next)))) {
         window.dispatchEvent(new Event(storageKey));
       }
     };

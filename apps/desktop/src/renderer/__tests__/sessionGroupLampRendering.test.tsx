@@ -10,6 +10,7 @@ import * as sidebarOwnerStorage from '@/lib/sidebarOwnerStorage';
 import { __testing as ownerStorage } from '@/lib/sidebarOwnerStorage';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
+import { useSidebarFilter, MANUAL_PROJECT_ORDER_KEY, PROJECT_ORDER_KEY } from '@/features/cc-agent/hooks/useSidebarFilter';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import {
   applyRemoteSessionActivity,
@@ -456,6 +457,64 @@ describe('Manual project sorting', () => {
         .toBe(p.allProjectKeysForOrder[1]);
     } finally {
       ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
+  // Unit: a second renderer receives storage events after a completed viewer reorder.
+  // Either key may wake it first; its next drag must operate on the same layout as a fresh mount.
+  it.each(['projects', 'dialogue'])('refreshes the complete viewer order on the first %s storage event', first => {
+    const owner = 'cross-window-sort';
+    setDataOwnerGeneration(owner, 1);
+    const snapshot = {
+      dataOwnerId: owner,
+      ownerGeneration: 1,
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
+    };
+    Object.assign(window.electronAPI, {
+      sidebarSettings: {
+        loadSnapshot: () => snapshot,
+        onPinnedOrderChanged: () => () => {},
+        claimLegacyRendererOwner: () => ({
+          ...snapshot, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+        }),
+      },
+    });
+    const p = groupProps(false);
+    p.projects = manualProjects(['A', 'B', 'C']);
+    p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+    const [a, b, c] = p.allProjectKeysForOrder;
+    const projectKey = sidebarOwnerStorage.sidebarOwnerStorageKey(MANUAL_PROJECT_ORDER_KEY, owner);
+    const dialogueKey = sidebarOwnerStorage.sidebarOwnerStorageKey('cc-agent.sidebar.dialogueGroupOrder', owner);
+    localStorage.setItem(PROJECT_ORDER_KEY, 'custom');
+    localStorage.setItem(projectKey, JSON.stringify([a, b, c]));
+    const hidden = new Set<string>();
+    function Sidebar() {
+      const filter = useSidebarFilter(hidden, snapshot);
+      return <ProjectsSection {...p} filter={{ ...filter, groupDevice: false, groupDialogue: true }} />;
+    }
+    try {
+      const view = render(<Sidebar />);
+      dropBefore(view.container, 'dialogue-group', b);
+      const order = (container: HTMLElement) => Array.from(container.querySelectorAll('[data-sortable-id]'),
+        row => row.getAttribute('data-sortable-id'));
+      expect(order(view.container)).toEqual([a, 'dialogue-group', b, c]);
+      // Simulate the other renderer committing B/C, preserving the dialogue slot.
+      const positions = JSON.parse(localStorage.getItem(dialogueKey)!);
+      positions[Object.keys(positions)[0]].next = c;
+      localStorage.setItem(projectKey, JSON.stringify([a, c, b]));
+      localStorage.setItem(dialogueKey, JSON.stringify(positions));
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: first === 'projects' ? projectKey : dialogueKey })));
+      expect(order(view.container)).toEqual([a, 'dialogue-group', c, b]);
+      dropBefore(view.container, b, a);
+      const expected = order(view.container);
+      expect(expected).toEqual([b, a, 'dialogue-group', c]);
+      view.unmount();
+      expect(order(render(<Sidebar />).container)).toEqual(expected);
+    } finally {
       setDataOwnerGeneration(null);
     }
   });
