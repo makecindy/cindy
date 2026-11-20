@@ -1372,7 +1372,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 一次,让订阅方重新读事实(#9537 的 Codex review P1)。拓扑页自己 2s 轮询,不需要这个信号。
   const routeOwnerClient = routedClient;
   routeOwnerClient.onPeerRouteOwnerChanged((deviceId) => {
-    if (client !== routeOwnerClient) return;
+    // client 是 routeSessionPeers 分路面层,与底层 routedClient 恒为两个对象
+    // (sessionRouting.ts),拿它们比永远不等、处理器一次都不会执行。失效判定和
+    // 旁边 primaryFacade / dataPathClient 一致:只在本次初始化交出的门面仍是
+    // 全局 client 时生效(codex P1 on #9959)。
+    if (client !== primaryFacade) return;
     const path = deviceLinkPeerDataPath(deviceId);
     if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });

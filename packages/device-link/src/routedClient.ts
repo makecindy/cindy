@@ -129,17 +129,35 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     const connection = options === 'primary' ? this : options === 'blocked' ? this.retiredScopedConnection
       : options instanceof DeviceLinkClient ? options : new DeviceLinkClient({ ...options, scopedPeersOnly: true });
     const entry = { connection, live: options !== 'blocked' };
+    // 作用域内已有传输记录的对端要在 map 变更**前**取好:聚合快照按当前归属过滤,即将被
+    // 替换/退役的连接再按裸快照补一次(停止后记录就没了)。安装与退役都换承载人,通知走
+    // onPeerRouteOwnerChanged(桌面端 #9537 的 Codex review P1)。
+    const ownerChanged = !previous || previous.connection !== connection || previous.live !== entry.live;
+    const scopePeers = this.peersOnScope(key, previous?.connection !== connection ? previous?.connection : undefined);
     this.scopedConnections.set(key, entry);
     if (previous?.connection !== connection) this.releaseScopedConnection(previous?.connection);
     if (connection !== this && entry.live) {
       for (const observer of this.scopedObservers) if (!observer.off.has(connection)) observer.off.set(connection, observer.subscribe(connection));
       if (this.started) connection.start();
     }
+    if (ownerChanged) for (const peer of scopePeers) this.noteRouteOwnerChanged(peer);
     return () => {
       if (this.scopedConnections.get(key) !== entry || !entry.live) return;
+      const peers = this.peersOnScope(key, connection);
       entry.live = false;
       this.releaseScopedConnection(connection);
+      for (const peer of peers) this.noteRouteOwnerChanged(peer);
     };
+  }
+
+  /** 一个资源作用域下有传输记录的对端;`retiring` 是即将停掉的连接,其记录按裸快照补齐。 */
+  private peersOnScope(key: string, ...retiring: (DeviceLinkClient | undefined)[]): string[] {
+    const peers = new Set(this.getPeerLinkSnapshots().filter((s) => scopedKey(s.deviceId) === key).map((s) => s.deviceId));
+    for (const connection of retiring) {
+      if (!connection || connection === this) continue;
+      for (const s of connection.getPeerLinkSnapshots()) if (scopedKey(s.deviceId) === key) peers.add(s.deviceId);
+    }
+    return [...peers];
   }
 
   private extraScopedConnections(): DeviceLinkClient[] {
@@ -472,8 +490,9 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
    * 目录刷新),而归属切换常常是往更好的连接搬,发过去会让它们按相反的语义行动。
    *
    * 覆盖边界:只在路由层**记下**归属决定的地方发 —— legacy 探测结果、inbound link-open
-   * 的判定、legacy 兜底整体退役。靠静态谓词(`useForPeer`)路由的对端没有 per-peer 记录
-   * 可枚举,scoped pin 的注册/退役影响的是一整个资源作用域,这两类不在此列。
+   * 的判定、legacy 兜底整体退役,以及 scoped pin 的注册/退役(换承载人的对端以传输记录
+   * 为准,`peersOnScope` 在 map 变更前枚举)。靠静态谓词(`useForPeer`)路由的对端没有
+   * per-peer 记录可枚举,不在此列。
    */
   onPeerRouteOwnerChanged(cb: (deviceId: string) => void): () => void {
     this.routeOwnerObservers.add(cb);

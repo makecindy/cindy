@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceLinkClient, DeviceLinkClientOptions, WsLike } from '../client.js';
 import { RoutedDeviceLinkClient } from '../routedClient.js';
 import { PROTOCOL_VERSION, SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer, type Envelope } from '../protocol.js';
+import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT } from '../transport.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -678,6 +679,57 @@ describe('RoutedDeviceLinkClient', () => {
     emitPathChange(client, 'known-peer', 'direct');
     expect(changes).toEqual([{ deviceId: 'known-peer', path: 'direct' }]);
     await opened; client.stop();
+  });
+
+  // 桌面端 #9537 的 Codex review P1(第三轮):scoped pin 的安装/退役换掉整个资源作用域的
+  // 承载人,path 表同样没动 —— 与 legacy 归属切换同一条不变量。钉在旧连接上的代理判定
+  // 不失效,main 的 directDataPeers、远程拓扑快照同理。最小失败输入:作用域对端已有可靠
+  // 传输记录,pin 装上与退役都要通知;别的资源作用域的 pin 不得误伤。tier:unit,fake socket。
+  it('notifies route-owner changes when a scoped pin is installed and retired', async () => {
+    const h = await onlineSelfHosted();
+    const owners: string[] = [];
+    const off = h.client.onPeerRouteOwnerChanged(deviceId => owners.push(deviceId));
+    // 作用域对端的可靠传输记录走生产路径建立:link-open / link-accept(reliable-transport-v1)。
+    // 线上形态:作用域帧带短设备 id + sharedTask 路由作用域,本地 129 字符的 scoped key
+    // 只在两端内部使用(encode/decodeSharedTaskEnvelope 在 socket 边界转换)。
+    const accept = async (peer: string, url: string) => {
+      const opened = h.client.openLink(peer, { controllerName: 'Test', protocolVersion: 1, appVersion: '1' });
+      await h.tick();
+      const socket = h.socketTo(url);
+      const request = socket.sent.filter((e) => e.kind === 'link-open').at(-1)!;
+      socket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: request.id, src: 'host-device', dst: 'dev-self',
+        sharedTask: { sharedTaskId: 'task-a', source: { role: 'host' }, target: { role: 'guest', memberId: 'member-a' } },
+        payload: {
+          appVersion: '1', allowlistHash: 'hash', capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT], transportStreamId: 's1',
+        } });
+      await opened;
+    };
+    await accept(SHARED_PEER, OFFICIAL); // pin 之前:作用域对端由官方兼容连接承载。
+    expect(h.client.getPeerLinkSnapshots().map((s) => s.deviceId)).toContain(SHARED_PEER);
+    expect(owners).toEqual([]); // 建链不是归属切换。
+
+    const resource = (task: string, address: string) => h.client.registerScopedConnection({ kind: 'shared-task', resourceId: task }, {
+      getWsUrl: () => address, getToken: async () => 'resource-proof',
+      getHello: () => ({ deviceName: 'Guest', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false }),
+      createWebSocket: (url, headers) => { const socket = new FakeWs(url, headers); h.sockets.push(socket); return socket; },
+    });
+    // 安装:作用域对端的承载人换成 pin 连接,通知一次;在新连接上重建链路不再是归属切换。
+    const retire = resource('task-a', 'wss://private-a.example/ws'); await h.tick();
+    expect(owners).toEqual([SHARED_PEER]);
+    h.socketTo('wss://private-a.example/ws').ack([SHARED_TASK_RELAY_CAPABILITY]); await h.tick();
+    await accept(SHARED_PEER, 'wss://private-a.example/ws');
+    expect(owners).toEqual([SHARED_PEER]);
+
+    // 别的资源作用域装 pin:不影响本作用域,不通知。
+    const retireB = resource('task-b', 'wss://private-b.example/ws'); await h.tick();
+    expect(owners).toEqual([SHARED_PEER]);
+
+    // 退役:承载人回到 retired 记录(retiredScopedConnection),再通知一次;
+    // 记录在连接 stop 之前取好,否则退役后裸连接上已无快照。
+    retire();
+    expect(owners).toEqual([SHARED_PEER, SHARED_PEER]);
+    expect(h.client.connectionFor(SHARED_PEER).getStatus()).toBe('stopped');
+    retireB(); off(); h.client.stop();
   });
 
 });
