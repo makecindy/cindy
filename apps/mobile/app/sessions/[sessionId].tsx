@@ -12195,7 +12195,7 @@ function SessionHeaderBar({
       onPress={onOpenSessionList} floatingFallback={listOnly} testID="session.sessionListButton">
       {listOnly ? (
         <Svg width={iconSize.action} height={iconSize.action} viewBox="0 0 24 24" fill="none"
-          stroke={colors.textPrimary} strokeWidth={1.6} strokeLinecap="round">
+          stroke={colors.textPrimary} strokeWidth={iconStroke.thin} strokeLinecap="round">
           <Rect x={1} y={3.5} width={22} height={17} rx={3} />
           <Path d="M9 4v16 M4 8h2 M4 10.5h2 M4 13h2" />
         </Svg>
