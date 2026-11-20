@@ -369,6 +369,18 @@ for (const losesAgain of [false, true]) test('a confirmed save that drops the qu
   assert.equal(f.cards.some(c => c.statusOnly?.pendingSend), !losesAgain);
 });
 
+test('a provider that keeps reintroducing intentionally removed history cannot send it', async () => {
+  const f = fixture({ richText: true, write: request => {
+    if (!request.send) return { ok: true, data: { readBack: f.current() } };
+  } });
+  f.externalEdit({ quote: 'Prior text', quoteHtml: '<blockquote>Prior text</blockquote>' });
+  await f.present();
+  await f.card('change', { ...f.values(), quote: '', quoteHtml: '' });
+  assert.equal((await f.tool('send')).ok, false);
+  assert.deepEqual(f.writes.map(w => w.send), [false, false]);
+  assert.ok(!f.cards.some(c => c.statusOnly?.pendingSend));
+});
+
 test('an adapter can return a custom quote inside the verified body without duplicating it on send', async () => {
   const f = fixture({ richText: true, write: request => {
     if (request.send) return;

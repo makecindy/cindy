@@ -810,6 +810,7 @@ var cindyMail = (function () {
             return result;
           }
           const previousParent = quoteParent(edit.readBack);
+          const clearingQuote = hasQuote(edit.readBack.editor) && !hasQuote(fields);
           edit.readBack = result.data.readBack;
           edit.conflictBase = undefined;
           const sameParent = previousParent === quoteParent(edit.readBack);
@@ -824,7 +825,8 @@ var cindyMail = (function () {
           const observed = draftValues(edit.readBack);
           // Competing user edits are handled by the revision loop. Repair only
           // a confirmed save that dropped the quote from otherwise intact bodies.
-          if (hasQuote(fields) && (!sameParent || (fields.quote && !observed.quote) || (fields.quoteHtml && !observed.quoteHtml))) {
+          const lostQuote = hasQuote(fields) && (!sameParent || (fields.quote && !observed.quote) || (fields.quoteHtml && !observed.quoteHtml));
+          if (lostQuote || (clearingQuote && hasQuote(observed))) {
             record.fingerprint = edit.readBack.fingerprint;
             record.locator = edit.readBack.locator;
             record.state = 'draft';
@@ -837,7 +839,7 @@ var cindyMail = (function () {
               continue;
             }
             if (edit.revision === revision) {
-              edit.lastQuote = sameParent ? { parent: previousParent, quote: fields.quote, quoteHtml: fields.quoteHtml } : undefined;
+              if (lostQuote) edit.lastQuote = sameParent ? { parent: previousParent, quote: fields.quote, quoteHtml: fields.quoteHtml } : undefined;
               edit.fields = observed;
               edit.savedRevision = revision;
             }
