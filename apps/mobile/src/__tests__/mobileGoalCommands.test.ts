@@ -193,8 +193,9 @@ describe('existing task /goal send boundary', () => {
     }
   });
 
-  it('preserves a normal draft before and after the pending execution computer returns a hidden model', async () => {
+  it.each([false, true])('preserves a normal draft while checking a pending hidden model (connection blocked: %s)', async blocked => {
     const h = existingHarness();
+    h.bindings.outboxConnectionBlockedNow = () => blocked;
     const intent = { targetAgentKind: 'codex', model: 'next', providerId: 'off', agentDeviceId: 'executor' };
     Object.assign(h.bindings.currentSession, { agentSwitchIntent: intent });
     const draft = textComposerDocument('next message');

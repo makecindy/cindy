@@ -269,6 +269,10 @@ describe('createProviderService', () => {
     expect(bound[0]).toMatchObject({ id: 'off', connected: true, suspended: true });
     expect(bound[0].models.codex?.map(m => m.id)).toEqual(['current']);
     expect(reads.splice(0)).toEqual(['off']);
+    const removed = { agent: 'codex' as const, providerId: 'off', modelId: 'no-longer-discovered' };
+    expect(await svc.listProviders({ picker: { scope: removed, describe } })).toEqual([]);
+    expect(describe).toHaveBeenLastCalledWith([], ['off']);
+    expect(reads).toEqual([]);
     expect(builtin).not.toHaveBeenCalled();
     expect(media).not.toHaveBeenCalled();
     expect((await svc.listProviders()).map(p => p.id)).toEqual(['on', 'off', 'other']);

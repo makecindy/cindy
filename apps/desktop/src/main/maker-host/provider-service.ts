@@ -185,9 +185,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const include = (p: Provider) => scope === 'available'
         ? !isProviderDisabled(access, p.id)
         : isProviderDisabled(access, p.id) && (scope.providerId === null || scope.providerId === p.id);
+      const deferred = scope === 'available' ? base.providers.filter(p => !include(p)) : base.providers.filter(include);
+      picker.describe?.(scope === 'available' ? base.providers.map(p => p.id) : [], deferred.map(p => p.id));
       if (scope === 'available') {
-        const deferred = base.providers.filter(p => !include(p));
-        picker.describe?.(base.providers.map(p => p.id), deferred.map(p => p.id));
         for (const p of deferred) {
           // Saved Auto choices can move between Cindy-distributed sources. Preserve just
           // their membership for relocation, without reading credentials or publishing routes.

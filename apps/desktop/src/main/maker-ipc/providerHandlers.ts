@@ -1,5 +1,6 @@
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import type { ProviderListOptions } from '../maker-host/provider-service.js';
+import type { ProviderPickerVisibilityScope } from '../maker-host/model-visibility-mirror.js';
 import { isGeminiChatEndpoint } from '../../shared/geminiApiConnection.js';
 import { bindGeminiImageConnection, geminiImageConnectionId } from '../maker-host/gemini-image-connection.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -333,7 +334,7 @@ export interface ProviderHandlerDeps {
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
    * key = `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
    */
-  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean, pickerScope?: readonly string[] | 'retained'): Record<string, boolean> | Promise<Record<string, boolean>>;
+  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean, pickerScope?: ProviderPickerVisibilityScope): Record<string, boolean> | Promise<Record<string, boolean>>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
   /**
@@ -1311,7 +1312,7 @@ export function registerProviderHandlers(
       let modelVisibilityOverrides: Record<string, boolean>;
       try {
         modelVisibilityOverrides = scope
-          ? await deps.getModelVisibilityOverrides(providers, trusted, scope === 'available' ? deferredProviderIds : 'retained')
+          ? await deps.getModelVisibilityOverrides(providers, trusted, { deferredProviderIds, retainedModel: scope === 'available' ? undefined : scope })
           : await deps.getModelVisibilityOverrides(providers, trusted);
       } catch (error) {
         if (isIpcError(error) && error.code === 'MODEL_VISIBILITY_NOT_READY') {

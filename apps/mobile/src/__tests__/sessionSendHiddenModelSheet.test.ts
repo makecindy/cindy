@@ -12,7 +12,7 @@ const readTextLf = (path: string): string =>
 const screen = readTextLf("app/sessions/[sessionId].tsx");
 
 function hiddenModelSendBlock(): string {
-  const start = screen.indexOf("if (blockedModel &&");
+  const start = screen.indexOf("if (blockedModel) {");
   expect(start).toBeGreaterThan(0);
   const end = screen.indexOf("return;\n    }", start);
   expect(end).toBeGreaterThan(start);

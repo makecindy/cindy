@@ -26,10 +26,14 @@ describe('model-visibility-mirror', () => {
   // A bulk mobile reply must omit a suspended source's model IDs even when every model
   // has an explicit preference. Missing enabled models still need their saved hidden flag.
   it('scopes picker preferences while preserving the complete settings snapshot', () => {
-    const prefs = { 'codex:off:many:models': true, 'codex:on:old:model': false };
+    const prefs = { 'codex:off:many:models': true, 'codex:off:old:model': false, 'codex:on:old:model': false };
     setModelVisibilityMirror(prefs);
-    expect(getModelVisibilityMirrorSnapshot([], false, ['off'])).toEqual({ 'codex:on:old:model': false });
-    expect(getModelVisibilityMirrorSnapshot([], false, 'retained')).toEqual({});
+    const deferredProviderIds = ['off'];
+    const route = { agent: 'codex' as const, providerId: 'off', modelId: 'old:model' };
+    expect(getModelVisibilityMirrorSnapshot([], false, { deferredProviderIds })).toEqual({ 'codex:on:old:model': false });
+    expect(getModelVisibilityMirrorSnapshot([], false, { deferredProviderIds, retainedModel: route })).toEqual({ 'codex:off:old:model': false });
+    expect(getModelVisibilityMirrorSnapshot([], false, { deferredProviderIds, retainedModel: { ...route, providerId: null } })).toEqual({ 'codex:off:old:model': false });
+    expect(getModelVisibilityMirrorSnapshot([], false, { deferredProviderIds, retainedModel: { ...route, modelId: 'unknown' } })).toEqual({});
     expect(getModelVisibilityMirrorSnapshot()).toEqual(prefs);
   });
 

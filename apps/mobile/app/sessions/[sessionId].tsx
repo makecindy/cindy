@@ -6842,7 +6842,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const blockedModel = !earlyLocalCommand && !earlyDesktopCommand
       && blockedSessionModelAtSend(sessionAtSend, deviceId, composerDeviceProviders.retainedCatalog, composerDeviceProviders.pendingCatalog,
         remoteRetainedCatalog, remotePendingCatalog);
-    if (blockedModel && (blockedModel.reason === 'hidden' || !connectionDispatchBlockedAtSend)) {
+    if (blockedModel) {
       setError(blockedModel.reason === 'hidden'
         ? t('session.common.modelHiddenReselect', { model: blockedModel.modelId }) : t('models.picker.loadingDefault'));
       // 与手动打开入口一致：面板按「待切换目标 / 当前任务引擎」浏览，才能把已关闭的
