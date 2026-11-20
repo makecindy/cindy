@@ -1628,7 +1628,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             },
           )
         : null;
-      const replyQuoteNote = isOrdinaryUserTurn
+      // 引用说明同样排在用户消息前面:命令那一轮不能带它,否则命令又被挤到中间。
+      const replyQuoteNote = isOrdinaryUserTurn && allowsEnvironmentNotes
         ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
         : null;
       const withReplyQuoteNote = replyQuoteNote

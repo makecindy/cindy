@@ -3711,6 +3711,49 @@ describe('mobile client prompt note', () => {
     }
   });
 
+  it('sends an installed Claude Code Skill without a reply quote note', async () => {
+    // Greptile P1:手机消息的信封里 slashCommandRanges 为空数组(Composer 写"没有指令"),
+    // 于是 isOrdinaryUserTurn 仍为真,引用说明会被插到命令前面 —— 命令又被挤走。
+    const projectDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-session-'));
+    const skillDir = path.join(projectDir, '.claude', 'skills', 'subtask-fork');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: subtask-fork\ndescription: 测试用命令\ndisable-model-invocation: true\n---\n\n正文\n',
+      'utf8',
+    );
+    try {
+      const session = createSession({ agentKind: 'claude-code', workDir: projectDir });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => session),
+        isMobileClientInvoke: vi.fn(() => true),
+        readReplyQuoteNote: vi.fn(async () => ({
+          text: '[引用说明] 被引用的原文',
+          imageUrls: [] as string[],
+          sourceSessionId: 'other-session',
+          owner: { dataOwnerId: 'owner-1', dataOwnerGeneration: 1 } as never,
+        })),
+      });
+      const transaction = createMakerSendTransaction(deps);
+
+      await transaction.sendToAgentAccepted(
+        'session-1',
+        '/subtask-fork ping',
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'mobile-1',
+            content: JSON.stringify({ text: '/subtask-fork ping', slashCommandRanges: [] }),
+          },
+        } as never,
+      );
+
+      expect(session.send).toHaveBeenCalledWith('/subtask-fork ping', expect.anything());
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the mobile note for a slash command that is not installed', async () => {
     const projectDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-session-'));
     try {
