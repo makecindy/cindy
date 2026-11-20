@@ -448,7 +448,7 @@ export function useOrcaWorkerSelection({
           } else if (status !== 'done') {
             clearWorkerAttention(workerId);
           }
-          if (isVisibleIntent()) waitingForProjection = (await refresh('authoritative'))?.status !== 'applied';
+          if (isVisibleIntent()) waitingForProjection = (await refresh())?.status !== 'applied';
         } catch (err: unknown) {
           if (isVisibleIntent()) {
             if (focusApplied) waitingForProjection = true;

@@ -189,7 +189,7 @@ describe('useOrcaWorkerSelection', () => {
     await act(async () => result.current.handleSwitchFocus('worker-b'));
     expect(result.current.workerSessionId).toBe('session-b');
     expect(result.current.focusWritePending).toBe(false);
-    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith('authoritative');
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith();
 
     mocks.workers = [makeWorker('worker-a', 'session-a', true), makeWorker('worker-b', 'session-b')];
     rerender();
