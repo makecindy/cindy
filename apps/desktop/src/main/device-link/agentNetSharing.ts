@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
-import WebSocket from 'ws';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { DeviceLinkClient, parseSharedTaskPeer, parseProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, type DeviceLinkClientOptions, type RoutedDeviceLinkClient, type SharedTaskApi } from '@cindy/device-link';
 import { AgentNetSharingClient, AgentNetSharingTransport, buildAgentNetSharingInvitation,
   parseAgentNetSharingInvitation,
@@ -14,7 +14,7 @@ import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getCurrentUserId, getDeviceId, getAuthState, getActiveAuthRealm } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket,
   outgoingAgentNetClient, outgoingAgentNetClientForRelay, setAgentNetScopedSessionRoute } from './agentNetRuntime.js';
@@ -768,7 +768,7 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
           if (lease && identity) {
             const delegation = await lease.acquire(); guard();
             api = new AgentNetClient(route.server, identity, delegation.issuerCertificate, route.rootPublicKey, delegation, { fetch: outboundFetch,
-              createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }) });
+              createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options) });
           }
           if (!api) throw new Error('AGENT_NET_SHARING_HOST_UNAVAILABLE');
           const socket = await openScopedAgentNetAppSocket(api, guard); guard();

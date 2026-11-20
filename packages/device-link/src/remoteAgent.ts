@@ -19,6 +19,16 @@ export const REMOTE_AGENT_VERSION = 1;
 
 export const REMOTE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export type RemoteAgentKind = (typeof REMOTE_AGENT_KINDS)[number];
+/**
+ * A plugin-provided engine of the computer that runs the agent (`open.payload.options.providerId`
+ * names it as `acp-plugin:<plugin>:<engine>`). Only `open` accepts it, and only from a computer
+ * of the same account talking to a host that declared `caps.pluginEngines`: group routing, shared
+ * users, fork and standby stay on the built-in kinds. A host that does not know the kind rejects
+ * the request as invalid; it never falls back to a built-in engine.
+ */
+export const REMOTE_AGENT_PLUGIN_ENGINE_KIND = 'acp';
+export const REMOTE_AGENT_ENGINE_KINDS = [...REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND] as const;
+export type RemoteAgentEngineKind = (typeof REMOTE_AGENT_ENGINE_KINDS)[number];
 
 /** 每段上传的原始字节(gzip 之后)。base64 后约 683KB，远低于单条逻辑消息 4MB 上限。 */
 export const REMOTE_AGENT_UPLOAD_CHUNK_BYTES = 512 * 1024;
@@ -32,6 +42,21 @@ export const REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS = 1024 * 1024;
 export const REMOTE_AGENT_READ_MAX_BYTES = 512 * 1024;
 /** 一次 poll 所有任务合计最多返回的字节(base64 后仍远低于单条逻辑消息 4MB)。 */
 export const REMOTE_AGENT_POLL_MAX_BYTES = 1536 * 1024;
+/**
+ * poll 可选 `maxBytes`（2026-11-19）：控制端按实测的回程速度要求这次最多回多少，被控端在
+ * [REMOTE_AGENT_POLL_MIN_BYTES, REMOTE_AGENT_POLL_MAX_BYTES] 里取。慢线路上一次回 1.5MB 在请求时限内传不完，
+ * 超时后按同一游标重拉同样大小，会一直卡住。旧被控端忽略这个字段，照旧按上限回。
+ */
+export const REMOTE_AGENT_POLL_MIN_BYTES = 64 * 1024;
+/**
+ * 远程任务的上传块（op: 'upload'，2026-11-19）：只是按 (uploadId, index) 暂存字节，引用它们的 open／reply／call 等全部回执后才发，
+ * 块和其他调用之间不需要先后。Agent-Net 会话据此把它们放后台通道，停止等交互请求不排在在途的块后面（会话的跨通道顺序只等普通通道上
+ * 更早的请求）。Device Link 不看这个：它的后台优先级在检查中转连通时会直接拒收，块会失败。
+ */
+export function isRemoteAgentUploadChunk(payload: { channel?: unknown; args?: unknown }): boolean {
+  const request = Array.isArray(payload.args) ? payload.args[0] as { op?: unknown } | null | undefined : undefined;
+  return payload.channel === REMOTE_AGENT_CHANNEL && request?.op === 'upload';
+}
 /** 没有新数据时被控端最多挂起 poll 的时长；远低于通道超时，留出回程余量。 */
 export const REMOTE_AGENT_READ_WAIT_MS = 10_000;
 /** 一次 poll 最多带的任务数。 */
@@ -183,12 +208,18 @@ export type RemoteAgentRequest =
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
+  | { op: 'shared-image'; action: 'start'; requestId: string; providerId: string; model: string;
+      prompt: string; size?: string; aspectRatio?: string; quality?: string; resolution?: string;
+      nativeParameters?: Record<string, unknown>;
+      relay?: string; reshareKey?: string }
+  | { op: 'shared-image'; action: 'read'; requestId: string; offset: number }
+  | { op: 'shared-image'; action: 'release'; requestId: string }
   /** Native image recovery is scoped to the caller's task; never accepts file paths. */
   | { op: 'images'; sessionId: string; relay?: string; action: 'list'; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'release'; imageId: string }
   | { op: 'upload'; uploadId: string; index: number; data: string }
-  | { op: 'open'; runId: string; agentKind: RemoteAgentKind; payload: RemoteAgentPayload }
+  | { op: 'open'; runId: string; agentKind: RemoteAgentEngineKind; payload: RemoteAgentPayload }
   | { op: 'call'; runId: string; callId: string; method: RemoteAgentMethod; payload: RemoteAgentPayload }
   /**
    * waitMs：没有新数据时最多挂起多久(缺省 READ_WAIT_MS)。控制端在已有一个长等待在途时，
@@ -197,7 +228,7 @@ export type RemoteAgentRequest =
    * hold：控制端这边还有这个任务的工作在进行、被控端看不到(如 Codex 经执行环境在控制端起的后台进程)，
    * 被控端按有活动处理，不按闲置收回。旧被控端忽略。
    */
-  | { op: 'poll'; runs: Array<{ runId: string; cursor: number; hold?: true }>; waitMs?: number }
+  | { op: 'poll'; runs: Array<{ runId: string; cursor: number; hold?: true }>; waitMs?: number; maxBytes?: number }
   | { op: 'reply'; runId: string; requestId: string; payload: RemoteAgentPayload }
   /** hold: local work has started; protect it with the startup reply before the next poll batch. */
   | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[]; hold?: true }
@@ -317,6 +348,14 @@ export interface RemoteAgentCaps {
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
+  sharedImageGeneration?: boolean;
+  /** The image executor recognizes the built-in OpenAI subscription identity. */
+  sharedBuiltinOpenAiImage?: true;
+  /**
+   * This computer can run its plugin-provided engines for a task of another computer of the
+   * same account (`open` with the plugin engine kind). Never declared to shared users.
+   */
+  pluginEngines?: true;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
@@ -421,6 +460,11 @@ function record(value: unknown): Record<string, unknown> {
 
 function id(value: unknown): string {
   if (typeof value !== 'string' || !ID.test(value)) invalid();
+  return value;
+}
+
+function text(value: unknown, max = 4096): string {
+  if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
   return value;
 }
 
@@ -654,10 +698,6 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         revision: count(v.revision, Number.MAX_SAFE_INTEGER), ...(binding ? { binding } : {}) };
     }
     case 'fork': {
-      const text = (value: unknown, max = 4096): string => {
-        if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
-        return value as string;
-      };
       const sessionId = (value: unknown): string => {
         const valueText = text(value, 128);
         if (!/^[A-Za-z0-9_-]+$/.test(valueText)) invalid();
@@ -687,6 +727,34 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (result.sourceSessionId === result.newSessionId) invalid();
       return { op: 'fork', ...result };
     }
+    case 'shared-image': {
+      const requestId = id(v.requestId);
+      const action = oneOf(v.action, ['start', 'read', 'release'] as const);
+      if (action === 'release') return { op: 'shared-image', action, requestId };
+      if (action === 'read') {
+        return { op: 'shared-image', action, requestId, offset: count(v.offset, Number.MAX_SAFE_INTEGER) };
+      }
+      const result: Extract<RemoteAgentRequest, { op: 'shared-image'; action: 'start' }> = {
+        op: 'shared-image', action, requestId, providerId: text(v.providerId, 512),
+        model: text(v.model, 512), prompt: text(v.prompt, 32768),
+      };
+      for (const field of ['size', 'aspectRatio', 'quality', 'resolution'] as const) {
+        if (v[field] !== undefined) result[field] = text(v[field], 64);
+      }
+      if (v.nativeParameters !== undefined) {
+        const parameters = record(v.nativeParameters);
+        if (JSON.stringify(parameters).length > 65_536) invalid();
+        result.nativeParameters = parameters;
+      }
+      for (const field of ['relay', 'reshareKey'] as const) {
+        if (v[field] === undefined) continue;
+        const key = text(v[field], 64);
+        if (!REMOTE_AGENT_RELAY_KEY_PATTERN.test(key)) invalid();
+        result[field] = key;
+      }
+      if (result.reshareKey && !result.relay) invalid();
+      return result;
+    }
     case 'images': {
       // Same task-id contract as the open payload, including non-UUID internal tasks.
       const sessionId = v.sessionId;
@@ -710,7 +778,7 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       return {
         op: 'open',
         runId: id(v.runId),
-        agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS),
+        agentKind: oneOf(v.agentKind, REMOTE_AGENT_ENGINE_KINDS),
         payload: payload(v.payload),
       };
     case 'call':
@@ -736,6 +804,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         op: 'poll',
         runs,
         ...(v.waitMs !== undefined ? { waitMs: count(v.waitMs, REMOTE_AGENT_READ_WAIT_MS) } : {}),
+        // 超出范围的按范围取，不拒绝整个 poll：拒绝会让任务拉不到事件。
+        ...(v.maxBytes !== undefined ? {
+          maxBytes: Math.min(REMOTE_AGENT_POLL_MAX_BYTES, Math.max(REMOTE_AGENT_POLL_MIN_BYTES, count(v.maxBytes, Number.MAX_SAFE_INTEGER))),
+        } : {}),
       };
     }
     case 'reply':
@@ -884,6 +956,9 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.nativeHistoryBackup === true ? { nativeHistoryBackup: true } : {}),
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
+    ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
+    ...(v.sharedBuiltinOpenAiImage === true ? { sharedBuiltinOpenAiImage: true as const } : {}),
+    ...(v.pluginEngines === true ? { pluginEngines: true as const } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.directGuestStandby === true ? { directGuestStandby: true as const } : {}),

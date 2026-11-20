@@ -724,9 +724,29 @@ html:lang(ko) {
     opacity: 1;
   }
 }
-/* The same 1.1s wave on the composer dictation button's recording bars
-   (HTML spans in ChatInput VoiceInputButton): composited transform / opacity,
-   so the SVG paint-box concern above does not apply there. */
+.composer-recording-bar {
+  width: 2.5px;
+  height: 14px;
+  background: var(--settings-badge-error);
+  transition: transform var(--motion-instant) var(--motion-ease-out);
+}
+
+/* A single ripple acknowledges recording before the microphone delivers sound. */
+@media (prefers-reduced-motion: no-preference) {
+  .composer-recording-bar[data-starting] {
+    animation: composer-recording-start calc(3 * var(--motion-enter)) var(--motion-ease-out) 1;
+  }
+  .composer-recording-bar[data-starting]:nth-child(2) {
+    animation-delay: var(--motion-instant);
+  }
+  .composer-recording-bar[data-starting]:nth-child(3) {
+    animation-delay: calc(2 * var(--motion-instant));
+  }
+}
+@keyframes composer-recording-start {
+  0%, 100% { transform: scaleY(0.143); }
+  45% { transform: scaleY(0.85); }
+}
 
 /* ── Desktop composer send / stop (DESIGN.md §14.4「Desktop composer send / stop」,
    owner-approved Design Lab send-button v5, 2026-11-18). SendButton only sets
@@ -1356,6 +1376,7 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .composer-recording-bar[data-starting],
   [data-voice-mic-active='true'] [data-voice-mic-bar],
   .composer-send [data-send-icon],
   .composer-send-slot,

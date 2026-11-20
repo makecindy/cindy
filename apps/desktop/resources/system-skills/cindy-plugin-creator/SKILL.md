@@ -82,6 +82,7 @@ Use when the plugin listens for events, screens automation runs or interacts wit
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化运行前、新任务选模型时先问插件（§4.6.2）](references/plugin-control-points.md)
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
+- [提供任务执行引擎 harnesses（ACP Agent，§4.6.4）](references/plugin-harnesses.md)
 - [插件发起 Agent 任务、请求自动化与查看伙伴（§4.11）](references/plugin-agent-tasks.md)
 - [插件调用与 Agent 共用的宿主工具 cindy.host.call](references/plugin-host-tools.md)
 - [插件管理所有来源的输入队列与共享运行控制](references/plugin-queue-control.md)

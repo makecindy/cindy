@@ -265,12 +265,12 @@ it('keeps restore and delete last for archived tasks and does not expose sharing
   expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'export', 'unarchive', 'delete']);
 });
 
-it('shows only leave sharing for guests without disabled actions or separators', () => {
+it('offers guests the task link and leave action without owner controls or separators', () => {
   render(
     <Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />,
   );
   openMenu();
-  expect(labels()).toEqual(['leaveShort']);
+  expect(labels()).toEqual(['copy', 'leaveShort']);
   expect(screen.queryByRole('separator')).toBeNull();
   expect(screen.getByRole('menuitem', { name: 'leaveShort' }).getAttribute('aria-disabled')).not.toBe('true');
 });

@@ -109,5 +109,22 @@
     "quotaResetIn": "{{duration}}後にリセット",
     "quotaAverageHint": "週間クォータ · アカウントごとの単純平均",
     "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
+  },
+  "modelGroups": {
+    "title": "モデルグループ",
+    "sourceCount_other": "ソース {{count}} 件",
+    "strategy": {
+      "expiring": "失効が近いものを先に",
+      "order": "順番どおり",
+      "rotate": "交代で",
+      "cheapest": "最も安く"
+    }
+  },
+  "pluginEngines": {
+    "genericName": "プラグインエンジン",
+    "defaultModel": "デフォルトモデル",
+    "unavailable": "{{engine}} は利用できません",
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
+    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
   }
 }

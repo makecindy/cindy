@@ -3,8 +3,8 @@ export default {
   name: 'task-inbox',
   entry: './fixture.tsx',
   viewport: { width: 320, height: 640 },
-  real: 'TaskInbox, SessionEntryRows, SessionItem, shared inbox classifier',
-  notCovered: 'Persistence, remote devices, mobile native sheets and full sidebar filtering',
+  real: 'TaskInbox, SessionEntryRows, SessionItem, TeammateInboxRow, shared inbox classifier',
+  notCovered: 'Persistence, remote devices, mobile native sheets, full sidebar filtering, and how a teammate row is resolved from the roster stores (teammateInbox.test.ts)',
   stubs: {
     'src/renderer/contexts/AuthContext': {
       partial: 'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});',
@@ -12,7 +12,9 @@ export default {
   },
   cases: {
     structure: {
-      about: 'Task list and inbox switch exclusively from sidebar settings',
+      about: 'Switch modes and filter automation tasks from the inbox menu',
+      // Leave room next to the sidebar for its cascading desktop menus.
+      viewport: { width: 880, height: 560 },
     },
     list: { about: 'Default list-row presentation with inbox actions at narrow width' },
     default: {
@@ -20,6 +22,9 @@ export default {
     },
     reply: {
       about: 'Replying to the open task moves it to Working at once without scrolling the sidebar',
+    },
+    teammates: {
+      about: 'Each teammate conversation is one row by whose turn it is; idle ones are left out; Done only where reading settles it',
     },
     intro: {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
@@ -33,13 +38,62 @@ export default {
       await working.locator('> button').click();
       await page.locator('[data-session-id="ready"]').click();
       await scroller.evaluate((node) => { node.scrollTop = 0; });
-      // Move the pointer off the list so the hover freeze does not hold the row.
-      await page.mouse.move(310, 630);
+      // Reading a row inside the list must allow it to change sections.
+      await page.locator('[data-session-id="ready"]').hover({ position: { x: 30, y: 10 } });
       await page.evaluate(() => window.__replyToReady());
       await working.locator('[data-session-id="ready"]').waitFor();
       await page.waitForTimeout(400);
       assert.equal(await scroller.evaluate((node) => node.scrollTop), 0, 'The sidebar does not scroll after the moved row');
       await ui.capture('replied');
+      return;
+    }
+    if (ui.case === 'teammates') {
+      const section = async (key) => page.locator('section > button')
+        .filter({ hasText: await ui.t(`ccAgent.sidebar.inbox.${key}`) }).locator('..');
+      const row = (id) => page.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`);
+      for (const key of ['working', 'snoozed']) await (await section(key)).locator('> button').click();
+      const pending = await section('inbox');
+      // Teammates lead their section; the idle one is not in the inbox at all.
+      for (const id of ['pm', 'qa', 'older']) await pending.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`).waitFor();
+      await (await section('working')).locator('[data-teammate-inbox-row="teammate:local:momo"]').waitFor();
+      await (await section('snoozed')).locator('[data-teammate-inbox-row="teammate:local:lulu"]').waitFor();
+      assert.equal(await row('idle').count(), 0, 'An idle, read teammate is not listed');
+      const header = await page.locator('section > button').first().boundingBox();
+      const task = await page.locator('[data-session-id="ready"]').boundingBox();
+      const first = await row('pm').boundingBox();
+      assert.ok(header && task && first);
+      assert.ok(Math.abs(first.width - task.width) <= 1 && Math.abs(first.height - task.height) <= 1,
+        `A teammate row uses the task row geometry: ${first.width}x${first.height} / ${task.width}x${task.height}`);
+      await page.mouse.move(1, 639);
+      await ui.capture('teammate-rows');
+      const done = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snooze = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const actions = async (id) => {
+        await row(id).hover();
+        return [await row(id).getByRole('button', { name: snooze, exact: true }).count(),
+          await row(id).getByRole('button', { name: done, exact: true }).count()];
+      };
+      // A pending request cannot be completed; a running one has nothing to complete;
+      // a computer that does not mirror the snooze offers none.
+      assert.deepEqual(await actions('pm'), [1, 0]);
+      assert.deepEqual(await actions('momo'), [1, 0]);
+      assert.deepEqual(await actions('older'), [0, 1]);
+      assert.deepEqual(await actions('qa'), [1, 1]);
+      const hovered = await row('qa').boundingBox();
+      assert.ok(hovered && Math.abs(hovered.width - first.width) <= 1, 'Hover actions do not change the row width');
+      await ui.capture('teammate-actions');
+      await row('qa').getByRole('button', { name: snooze, exact: true }).click();
+      const tomorrow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.tomorrow') });
+      const until = await tomorrow.locator('time').getAttribute('datetime');
+      await ui.capture('teammate-snooze-menu');
+      await tomorrow.click();
+      // The snooze is written to the conversation's own Session.
+      await page.waitForFunction((expected) => document.documentElement.dataset.snoozedUntil === expected
+        && document.documentElement.dataset.snoozedSession === 'chat-qa', until);
+      await row('lulu').hover();
+      await row('lulu').getByRole('button', { name: snooze, exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.wake'), exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       return;
     }
     if (ui.case === 'intro') {
@@ -69,7 +123,14 @@ export default {
       // The toggle at the right end of the top chrome row switches modes and shows pressed in the inbox.
       const toggle = page.locator('[data-task-list-mode-toggle]');
       assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      assert.ok(await toggle.getAttribute('aria-description'), 'Unread inbox result in task list mode');
       await ui.capture('mode-toggle');
+      await toggle.click();
+      await inbox.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Entering the inbox hides the unread indicator');
+      await toggle.click();
+      await project.waitFor();
+      assert.ok(await toggle.getAttribute('aria-description'), 'Leaving with unread results restores the indicator');
       await toggle.click();
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
@@ -83,6 +144,53 @@ export default {
       // The project icon is enough: no project name beside inbox titles (2026-11-18 user decision).
       assert.equal(await page.locator('[data-project-source]').count(), 0, 'No project name beside inbox titles');
       await ui.capture('inbox-mode');
+      const pending = page.locator('section > button').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') });
+      const report = page.locator('[data-session-id="report"]');
+      await report.waitFor();
+      const count = Number(await pending.locator('span').last().innerText());
+      const settings = page.getByRole('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') });
+      async function openFilters(inboxMode = true) {
+        await settings.focus();
+        await settings.press('Enter');
+        assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading')) }).count(), inboxMode ? 0 : 1);
+        await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterHeading')) }).press('ArrowRight');
+      }
+      await openFilters();
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true });
+      assert.equal(await hide.getAttribute('aria-checked'), 'false');
+      await hide.click();
+      await report.waitFor({ state: 'detached' });
+      assert.equal(await hide.getAttribute('aria-checked'), 'true');
+      assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
+      await ui.capture('inbox-filter');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await project.waitFor();
+      await report.waitFor();
+      const teammate = page.locator('[data-session-id="teammate"]');
+      await teammate.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
+      await openFilters(false);
+      assert.equal(await hide.getAttribute('aria-checked'), 'false');
+      await hide.click();
+      await report.waitFor({ state: 'detached' });
+      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterCreatorsHeading')) }).press('ArrowRight');
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).press('Enter');
+      await teammate.waitFor({ state: 'detached' });
+      await page.locator('[data-session-id="ready"]').waitFor();
+      await page.keyboard.press('ArrowLeft');
+      await ui.capture('task-list-filters');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await pending.waitFor();
+      assert.equal(await report.count(), 0);
+      await openFilters();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
+      await report.waitFor();
+      assert.equal(Number(await pending.locator('span').last().innerText()), count);
       return;
     }
 
@@ -121,6 +229,10 @@ export default {
     await ready.hover();
     // Inbox shows a one-click Done instead of the two-step archive.
     const archiveLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    const pinned = page.locator('[data-session-id="waiting"]');
+    assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -129,7 +241,6 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
-    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');

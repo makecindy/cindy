@@ -16,6 +16,7 @@
  */
 
 import type { CreateSessionOptions } from '@cindy/maker-core';
+import { requireBuiltinAgentKind } from '../../../desktop/src/main/maker-host/engineKind.js';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
@@ -102,17 +103,19 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     // The desktop refreshes these lists on every catalog change; the Host at least
     // before each start, against the catalog it just applied.
     ports.refreshModels?.();
+    // Plugin engines (docs/plans/acp-plugin-bridge.md) run in the Desktop app only.
+    const agentKind = requireBuiltinAgentKind(opts.agentKind, 'Plugin engines in the Node Host');
     // The dispatch boundary every creation path shares; providerId is final here.
     freezeSessionProviderAtStart(sessionId, opts.providerId);
     const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
-    const interfaceModel = interfaceProvider?.models[opts.agentKind]?.find(m => m.id === opts.model);
-    if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, opts.agentKind,
+    const interfaceModel = interfaceProvider?.models[agentKind]?.find(m => m.id === opts.model);
+    if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, agentKind,
       interfaceModel, getActiveCatalog().modelRegistry,
-      opts.resumeSessionId ? interfaceProvider.routing[opts.agentKind]?.wireProtocol : undefined);
+      opts.resumeSessionId ? interfaceProvider.routing[agentKind]?.wireProtocol : undefined);
 
     if (!opts.remoteHostId && !opts.agentDeviceId && ports.fastPolicies) {
       opts.fastModePolicy = ports.fastPolicies.createSubscriptionFastPolicy(sessionId, () => getSessionProvider(sessionId)
-        ?? ports.modelContext.resolveContextProviderId(ports.modelContext.getSelectableCatalog(), opts.agentKind, null, opts.model));
+        ?? ports.modelContext.resolveContextProviderId(ports.modelContext.getSelectableCatalog(), agentKind, null, opts.model));
     }
     // The task's working context budget, settled against the catalog and model limits.
     await budget.applySessionContextWindowBudgetToCreateOpts(sessionId, opts, getActiveCatalog());
@@ -178,6 +181,8 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     resolveConfiguredContextWindow: budget.resolveConfiguredContextWindow,
     /** The task's window budget the user set (null: the route's default). */
     readStoredSessionContextWindowBudget: budget.readStoredSessionContextWindowBudget,
+    /** Whether a budget change changes a route's effective window (the budget core, as the desktop's). */
+    contextWindowBudgetChangesEffectiveWindow: budget.contextWindowBudgetChangesEffectiveWindow,
     prepareStartOptions,
     onBeforeStart,
     async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {

@@ -13,6 +13,7 @@ import {
   redactSensitiveTextDeep,
   parseAgentErrorCode,
   requiresAgentErrorConfigurationChange,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from './errorRedaction.js';
 
@@ -545,5 +546,26 @@ describe('remote native resume rejection', () => {
   ])('does not reinterpret a different rejection: %s', message => {
     expect(parseAgentErrorCode(message)?.code).not.toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
     expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
+  });
+});
+
+describe('Gemini minute-limit retry advice', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}. Generate content input tokens per minute limit exceeded on Tier 1.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  it('accepts the structured Google delay and excludes undated, billing and mixed quota responses', () => {
+    const parse = (fields: object) => parseGeminiInputRateLimit(JSON.stringify({ error: { ...error, ...fields } }));
+    expect(parse({})).toEqual({ retryDelayMs: 56_000 });
+    expect(parse({ details: [] })).toEqual({ retryDelayMs: null });
+    expect(parse({ message: 'Quota exceeded.', details: [...error.details, {
+      '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{
+        quotaMetric: metric, quotaId: 'GenerateContentPaidTierInputTokensPerModelPerMinute',
+      }],
+    }] })).toEqual({ retryDelayMs: 56_000 });
+    expect(parse({ code: 402 })).toBeNull();
+    expect(parse({ message: 'Prepaid balance exhausted' })).toBeNull();
+    expect(parse({ details: [...error.details, { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+      violations: [{ quotaMetric: metric, quotaId: 'InputTokensPerDay' }] }] })).toBeNull();
   });
 });

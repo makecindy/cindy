@@ -325,6 +325,11 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   );
 }
 
+/** 只含协议、主机与非默认端口;不含 basePath / query(可能带密钥),用于失败日志。 */
+function formatUpstreamOrigin(t: UpstreamTarget): string {
+  return `${t.protocol}//${formatHostHeader(t.hostname, t.port, t.protocol)}`;
+}
+
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -1058,6 +1063,7 @@ function forward(
     }
   }
   const upstreamReq = reqFn(upstreamOptions);
+  const upstreamStartedAt = Date.now();
   if (forwardLifecycle?.onStart) {
     notifyForwardLifecycle(() => forwardLifecycle.onStart?.());
   }
@@ -2013,11 +2019,22 @@ function forward(
         ),
       );
     }
+    // 只凭错误文案(如 write EPIPE)分不清原因:上游嫌请求太大而断开、复用了上游已关闭的
+    // 空闲连接、还是超时。补上请求体字节数、耗时与连接是否复用("写完"只代表进了本机缓冲,
+    // 不代表上游收到,故不记)。上游地址只记协议/主机/端口,query 可能带用户配置的密钥,
+    // 不进日志。
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code;
     logger.error?.('upstream request failed', {
       reqId,
       err: String(err),
+      ...(typeof errorCode === 'string' ? { errorCode } : {}),
       method,
       path: upstreamPathname,
+      upstreamOrigin: formatUpstreamOrigin(actualTarget),
+      bodyBytes: body.length,
+      reusedSocket: upstreamReq.reusedSocket,
+      elapsedMs: Date.now() - upstreamStartedAt,
+      ...(requestTimedOut ? { timedOut: true } : {}),
       ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
     });
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';

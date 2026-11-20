@@ -2,6 +2,7 @@ import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRe
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
+  EngineKind,
   Effort,
   PermissionMode,
   SessionGracefulStopResult,
@@ -87,7 +88,7 @@ export type SessionRuntimeSetResult =
   | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   capabilities: {
     sameTurnSteer: { supported: boolean };
     permissionModes?: readonly { id: PermissionMode }[];

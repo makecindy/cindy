@@ -1,3 +1,5 @@
+export { parseGeminiInputRateLimit } from './geminiInputRateLimit.js';
+
 export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
 
 /**
@@ -289,6 +291,8 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'PLUGIN_ENGINE_RESUME_UNAVAILABLE',
+  'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED',
   'SUBSCRIPTION_ACCOUNT_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',

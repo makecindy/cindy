@@ -866,8 +866,7 @@
         "loading": "方读限额…",
         "unavailable": "此机之限额暂读不得",
         "none": "此供方无限额信息",
-        "offline": "此机不在线，读不得限额",
-        "share": "他人分享之机不示限额"
+        "offline": "此机不在线，读不得限额"
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之并行上限",
@@ -970,8 +969,8 @@
       "loading": "方载图…"
     },
     "moveToolbar": "左右拖移工具列",
-    "hint": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键全屏幕 · C 录颜色 · Esc 终",
-    "hintWithLast": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键全屏幕 · R 前次区域 · C 录颜色 · Esc 终",
+    "hint": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键择全窗 · C 录颜色 · Esc 终",
+    "hintWithLast": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键择全窗 · R 前次区域 · C 录颜色 · Esc 终",
     "copy": "录之",
     "cancel": "终截屏",
     "captureFailed": "不能截取屏幕",
@@ -1413,6 +1412,7 @@
     "UPSTREAM_ERROR": "上游服务谬误（5xx），请稍后再试",
     "UPSTREAM_UNREACHABLE": "不能连端点，请察网络与基础 URL",
     "TIMEOUT": "连接逾时，请察网络与基础 URL",
+    "CERT_ERROR": "凭证验证失败，请核基础 URL 主机名与凭证是否相符，并查凭证链及企业 CA 信任设置",
     "UNKNOWN": "未详之谬，请察日志以知其详",
     "upstreamToast": "供方「{{provider}}」请求未成：{{message}}"
   },
@@ -1424,6 +1424,10 @@
     "details": "谬误详情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本地数据库损坏",
+      "description": "检测到本地数据库损坏，已停止访问以保护数据。可重新打开本地数据；若仍失败，请复制技术细节并联系支持人员。请勿覆盖或删除数据库文件。"
+    },
     "schemaLease": {
       "title": "此机数据暂不能启",
       "retry": "重启此机数据",
@@ -2772,7 +2776,7 @@
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
       "analyticsLabel": "使用统计",
-      "analyticsDescription": "助吾等知 Cindy 之启动与留存。所报者为设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登门后兼含君之名籍 ID；不含任何言谈内容、卷或提示词。阖之则即止上报。",
+      "analyticsDescription": "启此项，则以匿名代号代账号与设备 ID，察回访之况，汇各模型之用量，以改进本品。君之言谈、卷册与提示词皆不在所报之列。",
       "analyticsEnabledToast": "已启使用统计",
       "analyticsDisabledToast": "已阖使用统计",
       "analyticsSaveFailed": "使用统计之设未能存",
@@ -3675,6 +3679,8 @@
           "edit": "修",
           "editFailed": "请核地址、协议与密钥，再试。",
           "editNote": "密钥留空则沿用已读凭据；改地址或协议，须另填密钥。",
+          "useSavedCredential": "用所存凭证",
+          "confirmDestination": "于此地址用所存 Claude Code 凭证乎？",
           "name": "显示名称",
           "baseUrl": "基础 URL",
           "protocol": "接口协议",
@@ -4076,6 +4082,25 @@
         "refreshFailed": "模型清单重整未成，请稍后再试",
         "refreshReconnect": "模型清单重整未成。请重连此供方，再试。",
         "refreshFetchDisabled": "模型目录远程获取未启，已略重整",
+        "withdrawn": {
+          "refreshFound": "上游已不复供 {{count}} 个模型",
+          "refreshAdded": "新得 {{added}} 个模型，另有 {{count}} 个上游已不复供",
+          "refreshSuspicious": "此番 {{count}} 个模型未见回传，或上游一时未全",
+          "refreshAddedSuspicious": "新得 {{added}} 个模型，另有 {{count}} 个未见回传，或上游一时未全",
+          "review": "观其模型",
+          "heading": "上游不复供之模型",
+          "intro": "重整「{{provider}}」时，上游未再回传下列模型。择所欲除者；仍回传之引擎不受影响。",
+          "suspicious": "此番未回传之模型甚多，恐上游一时所传未全。宜稍后再重整以核之，或仅择确已下架者。",
+          "selectAll": "尽选",
+          "selected": "已择 {{count}} 个，共 {{total}} 个",
+          "consequence": "除之，则此等模型不复见于模型之选，已用之处将示为不可用。上游若复供之，再重整即可增回。",
+          "confirm": "除 {{count}} 个模型",
+          "cancel": "姑且不除",
+          "removed": "已除 {{count}} 个模型",
+          "cleanupIncomplete": "已除 {{count}} 个模型，然部分显示或停用之设未能清除",
+          "stale": "连线之设已易，无可除之模型。请重整后再观",
+          "removeFailed": "除模型未成"
+        },
         "disableModel": "停此模型",
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
@@ -4364,6 +4389,7 @@
         "authorizedToast": "已登 {{name}}",
         "authorizeFailed": "{{name}} 登录未成，请再试",
         "nameLabel": "显名",
+        "geminiImageKeyNote": "存之，此钥通新连之问答，亦供其后 Gemini 绘图。惟欲绘图，可不择问答模型。",
         "onlyAgentNote": "此供方唯支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无须客户端密钥；Cindy 转发前将除 CLI 之订阅凭证。",
@@ -6757,9 +6783,23 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本机连线流量",
+          "range": "计量时段",
+          "last5m": "近 5 分钟",
+          "lastHour": "近 1 小时",
+          "lastDay": "近 24 小时",
+          "sent": "所发",
+          "received": "所收",
+          "total": "共计",
+          "scope": "直连、中继之收发量皆为估值，文件直传亦计。寻机广播、另循他途之音像及 HTTP 传输不计。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
@@ -7903,6 +7943,7 @@
           "accessDenied": "此法器操作不被允许，或已取消。",
           "notConfigured": "此环境未设法器坊。",
           "invalidPackage": "法器安装包有异，不可纳，请联系发布者。",
+          "downloadAuthorizationExpired": "法器下载授权已过期，无法续装。请核对系统日期与时间后重新安装",
           "downloadTimeout": "法器取下逾时，请稍后再试。",
           "downloadFailed": "法器取下未成，请查网络后再试。",
           "brokerRedirectPortRequired": "此法器声明授权 broker，然同一 OAuth 设置缺 redirectPort，故不能自法器坊纳之。请联系发布者补此字段并重新发布。",
@@ -8206,10 +8247,12 @@
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentModelPreferences": "可读改君之模型珍藏，并读君近用之模型",
         "agentModelPreferencesDetail": "可读此机之模型珍藏与近用之模型（含思之深浅与 Fast），并可增、改、去珍藏，所改亦见于 Cindy 之择模。于法器中所择之模型不记入近用。不含君他机之模型与人所分享者，亦不予凭证。",
+        "harnesses": "供执行引擎：{{names}}",
+        "harnessesDetail": "得于君之差事中读写工作目录、行命令，并用与内置 Pi 同范之 Cindy 工具。",
         "agentErrand": "可立差事、行事并读结果",
         "agentErrandDetail": "所立差事现于 Cindy 差事录中，可观其历程并续言谈。",
         "agentSchedule": "可请君新立自运",
-        "agentScheduleDetail": "其仅能为君启新立自运之面板并填妥内容；立与不立，由君于面板择定模型后亲手存之而决。立后由 Cindy 依君所设之时运行，或生模型费用。",
+        "agentScheduleDetail": "其仅能为君启新立自运之面板并填妥内容；立与不立，由君于面板择定模型后亲手存之而决。立后由 Cindy 依君所设之时运行，或生模型费用。法器通诸机者，亦可请君定一机行之。",
         "nodeRuntime": "可于此机运行法器所附之 Node 程序",
         "nodeMcp": "可于此机运行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高风险：其与君本人无异，可读写君名籍所能及之本机文件、访问网络并启动他程序。Cindy 不能以浏览器沙箱约束之。",
@@ -8453,6 +8496,13 @@
         "openInSidebar": "于侧栏启之",
         "panelPageHosted": "自法器页启之 · 离法器页即自阖",
         "panelNone": "此法器无面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：许远程调用",
+          "description": "启之，则君之他机可用此引擎行差事；Agent 行于此机，用此机之登门与限额；文件与指令仍留于差事所在之机。",
+          "unsupported": "此法器尚未许他机用其引擎。",
+          "remoteControlOff": "此机尚未许同名籍之设备远程控制，他机不可用此引擎。",
+          "ariaLabel": "许君之他机用 {{engine}}"
+        },
         "githubRelease": {
           "title": "法器更新",
           "installed": "当前版本 {{version}}",
@@ -8521,6 +8571,8 @@
         "browserUse": "用此浏览器扩展",
         "browserActivated": "已择此扩展",
         "browserActivationFailed": "未能择此扩展，请启扩展并确认切换。",
+        "automationHostSelect": "以此机独掌「{{name}}」之自动事务乎？",
+        "automationHostClear": "撤此机所掌「{{name}}」之自动事务乎？",
         "browserSwitchTitle": "切换浏览器扩展连接？",
         "browserSwitchMessage": "以「{{name}}」承此连接？",
         "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n将替今之注册，扩展转连此法器。",
@@ -9459,6 +9511,31 @@
     "preparing": "方连登录服务",
     "preparingSubtitle": "将为君载当前区域可用之登录方式",
     "unavailable": "暂不能登录",
+    "hostUnavailable": {
+      "title": "Cindy 后台服务没有启动",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "这份数据属于另一个账号，和 Cindy 后台服务保存的登录不一致。",
+          "action": "请用原来的账号运行 cindy-host login，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一个 Cindy 程序正在使用这份数据。",
+          "action": "请先关掉它，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "这个账号的数据打不开。",
+          "action": "如果最近用过更新版本的 Cindy，请先把这台电脑上的 Cindy 更新到最新版本，再重新启动 Cindy 后台服务，然后重新打开 Cindy；否则运行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 后台服务启动时连不上登录服务。",
+          "action": "请检查网络，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 后台服务启动时出错。",
+          "action": "请重新启动 Cindy 后台服务，然后重新打开 Cindy。如果还是出错，运行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "再试",
     "browserWaiting": "请于浏览器中完成验证",
     "browserCallback": {
@@ -9729,6 +9806,10 @@
     "cacheLine": "缓存分项：读 {{read}} · 写 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存分项：读 {{read}} · 写 {{create}}",
     "stepsLine": "本轮共请 {{steps}} 次 · 每请约 {{context}} 上下文",
+    "traceChartLabel": "本轮生成之速与每请所思",
+    "traceRequests": "本轮共请 {{requests}} 次",
+    "traceThinkingShare": "思占所出 {{share}}",
+    "traceThinkingTokens": "思耗 {{thinking}} tokens",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 个模型",
     "costBreakdownHeader": "依模型分之：",
@@ -12970,6 +13051,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
+        "audioInputUnavailable": "今所接模型未能直辨其声。可请 Cindy 先录为文字，再续其事。",
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
           "consecutive": "模型连呼同一工具 {{n}} 次，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
@@ -13526,6 +13608,8 @@
         },
         "reply": {
           "unsupportedMedia": "今版尚不能理此类微信媒体。",
+          "delayedReply": "此复迟至，成于 {{createdAt}}，答 {{receivedAt}} 所收旧讯，所述或已过时。",
+          "delayedReplyQuestion": "原讯：{{question}}",
           "stillProcessing": "差事犹在理中…",
           "ownerOnlyCommands": "唯主人可用机器人之令。",
           "companionManagedCommand": "请于 Cindy 开此同僚：模型于同僚之设中调之，权柄于言谈输入框下易之。",
@@ -14005,6 +14089,8 @@
         "fastBadge": "疾"
       },
       "source": {
+        "lastConfirmed": "上次重整：{{time}}",
+        "unconfirmed": "模型录未新",
         "unavailable": "模型不可用",
         "reconnect": "重连",
         "manage": "理来源",
@@ -14114,6 +14200,32 @@
           "bypassPermissions": {
             "label": "完全访问",
             "description": "常规操作径许，可访问工作区外之卷，亦可联网执行命令。"
+          }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐项确认",
+            "description": "Agent 求权时由君裁可；Agent 未求确认之举，Cindy 无从拦阻。"
+          },
+          "default": {
+            "label": "常法",
+            "description": "依 Agent 之常法行事；其请权限，由君定之。"
+          },
+          "acceptEdits": {
+            "label": "许修改",
+            "description": "Agent 径改文件；他事请权限，由君定之。"
+          },
+          "auto": {
+            "label": "自断",
+            "description": "Agent 自断何事须确认；其请权限，由君定之。"
+          },
+          "plan": {
+            "label": "但谋划",
+            "description": "Agent 唯析事谋划，不改文件。"
+          },
+          "bypassPermissions": {
+            "label": "尽许",
+            "description": "Agent 所求之权，一概自许。"
           }
         }
       }
@@ -14576,6 +14688,16 @@
       "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
       "switchToQueue": "默改排队"
+    },
+    "pluginEngines": {
+      "group": "法器引擎",
+      "genericName": "法器引擎",
+      "defaultModel": "预设模型",
+      "defaultModelHint": "从引擎自身之预设",
+      "unavailable": "暂不可用",
+      "engineMissing": "供此引擎之法器已停用或卸除",
+      "worktreeUnsupported": "法器引擎尚不能于 worktree 中新建差事，请先取消勾选 worktree 再发",
+      "modelChangeFailed": "未能易模型"
     }
   },
   "onboarding": {
@@ -14888,11 +15010,14 @@
     },
     "runningStatus": {
       "currentRate": "近速",
+      "lastRequestRate": "前请均速",
+      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方采样",
       "averageRate": "本轮均速",
       "rateHistory": "生成速率史",
       "outputTotal": "累出",
       "observedPeak": "至高",
+      "thinkingShare": "思占所出",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "近一段生成之速，不计器具运行与等候。",
@@ -15039,6 +15164,11 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
+      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
       "precheck": "自动查验暂受阻。",
       "rateLimited": "自动查验暂受阻：请求限流。",
       "pluginMissing": "自动查验暂受阻：「{{name}}」法器未装，装毕自复。",
@@ -15749,6 +15879,9 @@
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 于彼机不可用。请于彼机安装或登门后再试，或易一 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "此机不能复差事旧态。请选择他机或供方之模型，交接上下文以续行；旧讯皆存。",
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能复前话。消息犹存。可择他引擎续之，或新建任务。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "此法器引擎不能用差事所在之机之工具，暂不可自他机行此差事。请易他引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "此法器引擎唯行本机之差事，尚不可为他机所用。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机为此供方开「许远程调用」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
@@ -15960,9 +16093,15 @@
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所请，已自试",
+      "title": "Gemini 每分钟所入已达其限",
+      "exhausted": "已自试一次，仍受限。可稍后再试。",
+      "retryIn": "{{seconds}} 秒后自试"
+    },
     "subscriptionAccountError": {
-      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
-      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。",
+      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。",
       "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
       "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
@@ -16196,6 +16335,14 @@
       "remoteProviderUnsupported": "此供方不支持 SSH 远程会话，请易来源",
       "remoteNativeOauthUnavailable": "远程差事不可用 Claude 订阅，请择网关或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "此工作目录之 .claude 设置改易 Claude 之上游地址或验证方式，故此处不可用 Claude 订阅。请除此诸设置，或择网关或 API Key 模型",
+      "savedModel": {
+        "loading": "方连所择模型…",
+        "checkFailed": "未能察所择模型",
+        "engine": "所择引擎不可用，请为此务另择模型",
+        "source": "所择来源不可用，请为此务另择模型",
+        "model": "所择模型不可用，请为此务另择模型",
+        "thisTaskOnly": "所择模型仅用于此务"
+      },
       "deviceStillLoading": "远程设备犹方载，请稍候",
       "remoteDefaultsLoadFailed": "不能读远程设备之配置。请察连接，Cindy 方再试。",
       "branchChanged": "项目分支已为 {{branch}}，请核实后再发",
@@ -16335,6 +16482,7 @@
       },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
+      "filterHideAutomations": "隐自动之务",
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已择 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -16884,6 +17032,12 @@
       "unspecifiedDir": "未定目录"
     },
     "workdirBrowse": {
+      "previewFile": "预览",
+      "filterDirectory": "筛此目录…",
+      "projectTree": "项目树",
+      "systemPreview": "系统预览",
+      "listView": "列表",
+      "gridView": "缩图",
       "backToProjects": "返诸案",
       "switchProject": "易案",
       "activeSessionCount_one": "{{count}} 个活跃差事",
@@ -17250,6 +17404,7 @@
       "promote": {
         "menu": "升为案之自运",
         "noWorkingDir": "无 workingDir 之差事，不可升",
+        "pluginEngine": "法器引擎唯行于此机，不可升为项目之差事",
         "success": "已升为案之自运"
       },
       "editProject": {
@@ -17507,6 +17662,7 @@
         "selectThread": "请择所向差事",
         "selectProject": "请择案之目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请另择",
+        "pluginEngineUnavailable": "所择法器引擎今不可用，请另择模型",
         "reasoningInvalid": "Reasoning 须为 {{values}} 之一",
         "preRunHookCommandRequired": "请填预检脚本命令",
         "templateParamRequired": "请填{{label}}",
@@ -19123,6 +19279,9 @@
     },
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
+      "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
+      "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
       "openFileFailed": "无从于系统中启此卷",
       "emptyResponse": "模型无所答。请再试；上下文甚长者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未报谬误详情），请再试。",
@@ -19243,6 +19402,7 @@
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
       "savedModelUnavailable": "前选模型或其来源今不可用。",
+      "pluginEngineNoWorktree": "法器引擎之 Worker 不可用 worktree，去其勾选而后建之。",
       "reselectModel": "重选模型",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",
@@ -19711,7 +19871,8 @@
         "validity": "有效期",
         "validityValue_other": "领取后 {{count}} 天",
         "claimBy": "领取截止",
-        "destination": "存入"
+        "destination": "存入",
+        "validityPermanent": "永久有效"
       },
       "doneTitle": "{{amount}} 已到账",
       "doneDescription": "已存入赠予余资，{{date}} 前有效。",
@@ -19727,10 +19888,13 @@
         "alreadyClaimed": "这张礼品卡已被领取。",
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
+        "voidedPurchased": "这张礼品卡目前不能领取。",
         "rateLimited": "尝试次数过多，请稍后再试。",
         "failed": "暂时无法兑换，请稍后重试。",
         "personalRequired": "礼品卡仅限个人用户领取。"
-      }
+      },
+      "doneDescriptionPurchased": "已存入储值余资，永久有效。",
+      "pendingDescriptionPurchased": "{{amount}} 正在入账，稍后会出现在储值余资中，无需再次领取。"
     },
     "usage": {
       "title": "余资耗用",
@@ -19776,7 +19940,8 @@
         "noPayment": "无需付款",
         "page": "第 {{page}} 页",
         "previous": "上一页",
-        "next": "下一页"
+        "next": "下一页",
+        "giftCard_other": "礼品卡 × {{count}}"
       },
       "count": "{{count}} 笔",
       "orderId": "NO. {{id}}",
@@ -20005,6 +20170,115 @@
         "MONTH": "每月含 {{amount}}",
         "YEAR": "每年含 {{amount}}",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "购买礼品卡",
+      "title": "购买礼品卡",
+      "subtitle": "送给朋友，或者留给自己。兑换后存入储值余资，永久有效。",
+      "previewLabel": "对方收到的样子",
+      "sameCards_other": "共 {{count}} 张，卡面、面额、留言相同，每张一个兑换码",
+      "fields": {
+        "face": "卡面",
+        "amount": "面额",
+        "quantity": "数量",
+        "sender": "署名",
+        "senderHint": "显示为「来自 {{sender}}」",
+        "senderPlaceholder": "你的名字",
+        "message": "留言（可选）",
+        "messagePlaceholder": "写一句给对方的话",
+        "tooLong": "最多 {{max}} 个字",
+        "paymentMethod": "支付方式"
+      },
+      "decrease": "少一张",
+      "increase": "多一张",
+      "quantityHint": "{{hours}} 小时内最多买 {{limit}} 张，现在还能买 {{remaining}} 张",
+      "quantityLimitReached": "{{hours}} 小时内最多买 {{limit}} 张，已经买满，请稍后再来",
+      "orderAmountCap": "单笔订单最多 {{amount}}",
+      "totalDetail_other": "{{count}} 张 × {{amount}}",
+      "pay": "去支付",
+      "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持人员。",
+      "cancel": "取消",
+      "loadFailed": "暂时无法读取购买限制，请稍后重试。",
+      "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
+      "faces": {
+        "cindy": "Cindy · 品牌红",
+        "cat": "黑猫 · 夜色",
+        "bell": "铃铛 · 节日",
+        "leap": "跃 · 象牙白"
+      },
+      "errors": {
+        "limitReached": "购买的礼品卡已达上限，请稍后再试。",
+        "amountTooLarge": "这笔订单超过单笔支付上限，请减少张数后再试。"
+      },
+      "done": {
+        "title_other": "{{count}} 张礼品卡已备好",
+        "pendingTitle": "礼品卡已付款",
+        "loading": "正在取回这一单的礼品卡…",
+        "description": "把领取链接发给朋友，对方打开就能领取；也可以留一张兑换给自己。",
+        "missing": "付款已完成，礼品卡稍后会出现在「我买的礼品卡」里。",
+        "cardTitle": "第 {{index}} 张 · {{amount}}",
+        "cardMeta": "尾号 {{tail}} · {{status}}",
+        "linkHint": "领取链接就是这张卡：谁先打开领取就归谁，请只发给要送的人。",
+        "viewAll": "查看我买的礼品卡",
+        "finish": "完成"
+      },
+      "list": {
+        "title": "我买的礼品卡",
+        "description": "把领取链接发给朋友，对方打开就能领取；没送出去的卡不会过期，也可以兑换给自己。兑换后存入储值余资。",
+        "count_other": "{{count}} 张",
+        "loadMore": "加载更多",
+        "loadFailed": "礼品卡列表未能加载",
+        "retry": "重新加载",
+        "status": {
+          "unclaimed": "未领取",
+          "claimedBy": "{{name}} 已领取",
+          "claimed": "已被领取",
+          "redeemedByYou": "已兑换给自己",
+          "refunded": "已退款",
+          "onHold": "处理中，暂不可用"
+        },
+        "meta": {
+          "purchased": "{{date}} 购买 · 尾号 {{tail}}",
+          "claimed": "{{date}} 领取 · 尾号 {{tail}}",
+          "redeemed": "{{date}} 兑换 · 尾号 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "复制领取链接",
+        "copied": "已复制",
+        "more": "更多操作",
+        "copyCode": "复制兑换码",
+        "redeemSelf": "兑换给自己",
+        "sendEmail": "发送到邮箱"
+      },
+      "toasts": {
+        "linkCopied": "领取链接已复制",
+        "codeCopied": "兑换码已复制",
+        "copyFailed": "复制失败，请重试",
+        "unavailable": "这张卡已被领取或已退款",
+        "revealFailed": "暂时无法取回兑换码，请稍后重试",
+        "emailQueued": "正在发送到 {{email}}"
+      },
+      "email": {
+        "title": "发送到邮箱",
+        "description": "把这张卡的领取链接发到对方邮箱，邮件里会带上你的署名和留言。",
+        "previewLabel": "对方会收到",
+        "previewWithMessage": "「{{message}}」，附领取链接和兑换码",
+        "previewLinkOnly": "附领取链接和兑换码",
+        "recipient": "收件邮箱",
+        "placeholder": "name@example.com",
+        "hint": "可以发到任何邮箱；领取链接谁先打开就归谁。",
+        "cooldown": "{{seconds}} 秒后可以再发送",
+        "invalid": "邮箱格式不正确",
+        "failed": "暂时无法发送，请稍后重试",
+        "send": "发送",
+        "status": {
+          "sending": "正在发送到 {{email}}",
+          "sent": "已发送到 {{email}}",
+          "failed": "发送到 {{email}} 失败",
+          "failedRetry": "发送到 {{email}} 失败，可以重新发送"
+        }
       }
     }
   },
@@ -21793,14 +22067,14 @@
     "openFailed": "未能开启 GitHub"
   },
   "hostConnection": {
-    "connecting": "正连 Cindy 后台…",
+    "connecting": "正连 Cindy 后台服务…",
     "restoring": "正复差事之态…",
     "retrying": "差事之态未同步，正重试…",
     "pairing": "连接须再授权",
-    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "pairingHelp": "请留此页。于启动 Cindy 后台服务之终端重行打开网页之命令，于新页配对毕，再返此页。",
     "keepDraft": "草稿仍存。连接复通，差事之态将自同步。",
     "retry": "重试连接",
-    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
+    "desktopAuthHelp": "请于启动终端更新 Cindy 后台服务之连接设置，再启此实验客户端。"
   },
   "remoteControlConsent": {
     "title": "许远控此机乎？",
@@ -21843,7 +22117,8 @@
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
-      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。"
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",

@@ -4,11 +4,16 @@
  */
 
 import { groupUsageCostRows, normalizeUsageBillingSource, type UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
+import { normalizeGenerationTrace, type GenerationTrace } from '@cindy/maker-shared/usage-format';
 import {
   legacyUsdMoney,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from './regionalMoney.js';
+
+type TokenCounts = Pick<TurnUsageDetails, 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreateTokens'>;
+type ModelTokenUsage = TokenCounts & UsageBillingSource & { model: string };
+const tokenFields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens'] as const;
 
 export interface TurnUsageDetails extends UsageBillingSource {
   /** Snapshot for this user round; not an incremental segment charge. */
@@ -46,6 +51,8 @@ export interface TurnUsageDetails extends UsageBillingSource {
   firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
+  /** Exact per-model, per-source token counters, independent of pricing. */
+  perModelTokens?: ModelTokenUsage[];
   /** 本轮涉及多个模型时的分桶列表。 */
   models?: string[];
   /**
@@ -54,6 +61,11 @@ export interface TurnUsageDetails extends UsageBillingSource {
    * 跑的 Haiku) —— tooltip 据此展示「按模型成本明细」。老消息无此字段。
    */
   perModelCost?: Array<{ model: string; money: RegionalMoney } & UsageBillingSource>;
+  /**
+   * 本轮的生成速度与逐次模型请求的推理用量，用来在结束后重现运行时的速度图；仅展示用。
+   * 由各引擎的测速器在轮末给出（已限长），老消息与测速不可靠的轮次无此字段。
+   */
+  trace?: GenerationTrace;
 }
 
 export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
@@ -66,6 +78,7 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   stepContextTokens?: number;
   model?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
+  perModelTokens?: readonly ModelTokenUsage[];
   perModelCost?: ReadonlyArray<
     | (UsageBillingSource & {
         model?: string | null;
@@ -79,6 +92,8 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   durationMs?: number;
   turnDurationMs?: number;
   firstUserRound?: boolean;
+  /** 引擎轮末事件或已落库的原始值；格式不对整体丢弃。 */
+  trace?: unknown;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -126,6 +141,29 @@ function sanitizePerModelCost(
   }
   return rows.length ? groupUsageCostRows(rows.map(row => ({ ...row, category: 'conversation' })))
     .map(row => ({ model: row.model, money: row.money, ...normalizeUsageBillingSource(row) })) : undefined;
+}
+
+/** Only publish a breakdown when all four columns reconcile with the same receipt.
+ * Include zero-price models and keep one model on different routes separate. */
+function normalizeModelTokenRows(value: unknown, totals: TokenCounts): ModelTokenUsage[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const grouped = new Map<string, ModelTokenUsage>();
+  const sum = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+  for (const row of value) {
+    if (!row || typeof row !== 'object') return undefined;
+    const model = sanitizeModel(row.model);
+    if (!model || !tokenFields.every(key => Number.isSafeInteger(row[key]) && row[key] >= 0)) return undefined;
+    const source = normalizeUsageBillingSource(row);
+    const key = JSON.stringify([model, source.providerId, source.billingSource, source.providerName]);
+    const entry = grouped.get(key) ?? { model, ...source, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+    for (const field of tokenFields) {
+      entry[field] += row[field];
+      sum[field] += row[field];
+    }
+    grouped.set(key, entry);
+  }
+  return tokenFields.every(key => Number.isSafeInteger(sum[key]) && sum[key] === totals[key])
+    ? [...grouped.values()] : undefined;
 }
 
 /**
@@ -196,9 +234,12 @@ export function aggregateTurnUsageDetails(
     stepContextTokens,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
+    perModelTokens: details.flatMap(item => item.perModelTokens ?? []),
     perModelCost: perModel,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
     firstUserRound: details.some((detail) => detail.firstUserRound === true),
+    // 各段各有自己的时间轴，无法拼接：保留最近一段的图。
+    trace: [...details].reverse().find(detail => detail.trace)?.trace,
   });
 }
 
@@ -249,6 +290,8 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const perModelTokens = normalizeModelTokenRows(input.perModelTokens, { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens });
+  const trace = normalizeGenerationTrace(input.trace);
 
   return {
     ...normalizeUsageBillingSource(input),
@@ -265,7 +308,9 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(perModelTokens ? { perModelTokens } : {}),
     ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
+    ...(trace ? { trace } : {}),
   };
 }
 
@@ -292,6 +337,8 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
       stepContextTokens:
         typeof raw.stepContextTokens === 'number' ? raw.stepContextTokens : undefined,
       firstUserRound: raw.firstUserRound === true,
+      perModelTokens: Array.isArray(raw.perModelTokens) ? raw.perModelTokens : undefined,
+      trace: raw.trace,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'

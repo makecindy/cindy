@@ -37,6 +37,7 @@ import {
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
   isRemoteAgentResumeRejectedError,
@@ -322,7 +323,8 @@ export function ErrorBanner({
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
   // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
   // 充值入口；余额摘要仍可使用供应商通用提示。
-  const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
+  const geminiLimit = parseGeminiInputRateLimit(error);
+  const isQuotaExhausted = geminiLimit === null && isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
@@ -546,6 +548,8 @@ export function ErrorBanner({
     : undefined;
   if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
+  } else if (geminiLimit !== null) {
+    displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   } else if (subscriptionGuidance) {
     displayError = subscriptionGuidance;
     hasSpecialGuidance = false;
@@ -997,10 +1001,12 @@ export function ErrorBanner({
             // 额度重置后自动继续:只是告知,不是按钮;用户仍可重试、换模型或发新消息接手。
             <span
               className="shrink-0 flex select-none items-center gap-1 text-xs text-[var(--text-secondary)]"
-              title={t('chat.errorBanner.usageLimitAutoContinueTitle')}
+              title={geminiLimit === null ? t('chat.errorBanner.usageLimitAutoContinueTitle') : undefined}
             >
               <Timer size={12} />
-              {t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
+              {geminiLimit !== null && usageLimitWait
+                ? <GeminiRetryCountdown resumeAt={usageLimitWait.resumeAt} />
+                : t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
             </span>
           )}
           {(manualReset.canReset || manualReset.canRetry) && (
@@ -1078,4 +1084,14 @@ export function ErrorBanner({
       }
     />
   );
+}
+
+function GeminiRetryCountdown({ resumeAt }: { resumeAt: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [resumeAt]);
+  return <>{t('chat.geminiRateLimit.retryIn', { seconds: Math.max(0, Math.ceil((resumeAt - now) / 1000)) })}</>;
 }

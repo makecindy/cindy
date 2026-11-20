@@ -15,7 +15,7 @@ describe('turn model attribution', () => {
   function fixture() {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER, im_default_route TEXT);
       CREATE TABLE messages (
         id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL,
         content TEXT NOT NULL, agent_meta TEXT, created_at INTEGER NOT NULL, rewind_at INTEGER
@@ -27,11 +27,13 @@ describe('turn model attribution', () => {
     insert.run('m2', 'second', 's1', 'user', 'again', null, 2);
     state.db = drizzle(sqlite, { schema: { messages, sessions } });
     let current = true;
+    const choices: { model: string; automatic: boolean }[] = [];
     const patches: unknown[] = [];
     const cards: unknown[] = [];
     const writes: Promise<void>[] = [];
     const attribute = createTurnModelAttribution({
       maker: { getSession: () => ({ agentKind: 'codex', model: 'gpt-b' }) },
+      captureModelChoice: model => async (automatic = false) => { choices.push({ model, automatic }); },
       getSessionProvider: () => 'p',
       captureDataOwnerBroadcastScope: () => 'owner',
       isDataOwnerBroadcastScopeCurrent: () => current,
@@ -40,18 +42,31 @@ describe('turn model attribution', () => {
       createDbMessage: async (_sessionId, body) => { cards.push(body); },
       log: { warn: vi.fn() },
     });
-    return { attribute, patches, cards, settle: () => Promise.all(writes), changeOwner: () => { current = false; } };
+    return { attribute, patches, cards, choices, sqlite, settle: () => Promise.all(writes), changeOwner: () => { current = false; } };
   }
 
   it('records the model and publishes one change card when the model changed', async () => {
     const f = fixture();
     f.attribute('s1', 'second');
     await f.settle();
+    expect(f.choices).toEqual([{ model: 'gpt-b', automatic: false }]);
     expect(f.patches).toEqual([{ clientId: 'second', executionModel: { agentKind: 'codex', model: 'gpt-b', providerId: 'p' } }]);
     expect(f.cards).toEqual([expect.objectContaining({
       clientId: 'model-change:second', role: 'assistant', agentKind: 'codex',
       agentMeta: { modelChange: { fromModel: 'gpt-a', toModel: 'gpt-b', modelOnly: true } },
     })]);
+  });
+
+  it('reports an automatically resolved channel choice separately from the served model', async () => {
+    const f = fixture();
+    const route = { agentKind: 'codex', model: 'gpt-b', providerId: 'p', effort: null };
+    f.sqlite.prepare('UPDATE sessions SET im_default_route=?').run(JSON.stringify({
+      v: 1, fp: JSON.stringify(['["channel-settings"]', 'codex', 'gpt-b', 'p', null]), route,
+    }));
+    f.attribute('s1', 'second');
+    await f.settle();
+    expect(f.choices).toEqual([{ model: 'gpt-b', automatic: true }]);
+    f.sqlite.close();
   });
 
   it('records nothing once the data owner changed', async () => {

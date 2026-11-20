@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -1035,7 +1035,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           continue;
         }
         try {
-          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
+          const epoch = botGroupStopRunEpoch(execution);
+          const query = epoch === undefined ? '' : `?runEpoch=${epoch}`;
+          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control${query}`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
             undefined);
           stopped = true;

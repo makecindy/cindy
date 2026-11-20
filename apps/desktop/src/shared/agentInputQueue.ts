@@ -11,6 +11,7 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
@@ -196,6 +197,8 @@ export interface AgentInputClearBoundaryOpts {
  * 而不是让 renderer 引用 main 的常量——这样以后调整上限，旧记录仍显示当时的值。
  */
 export interface AutoResumeInfo {
+  /** One retry after the Gemini per-minute input limit, independent of subscription reset. */
+  geminiInputRetry?: true;
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
   /**
@@ -906,6 +909,9 @@ export function reconcileSessionRefsForText(
         // Invalid parameter: treat it as absent.
       }
     }
+    // The Agent reads a guest task link with get_shared_task_progress under the
+    // active caller's authority. Do not request an account-history snapshot on paste.
+    if (!messageClientId && isSharedTaskPeer(linkDeviceId)) continue;
     const key = `${sessionId}\u0000${messageClientId ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);

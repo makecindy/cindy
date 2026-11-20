@@ -442,7 +442,7 @@ it('localizes bound-account exhaustion and old ambiguous startup errors', async 
   const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
   const text = localizeUnclassifiedAgentError(error);
   expect(text).toContain('用量已达上限');
-  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('不会自动换号');
   expect(text).not.toContain('需要重新登录');
   expect(text).not.toContain('resetAtMs=');
   const [normalized] = normalizeRemoteMessages([row(error)]);

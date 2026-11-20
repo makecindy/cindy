@@ -114,6 +114,12 @@ const SPARSE_BACKLOG_SEGMENTS: u64 = 64;
 const MAX_UNREAD_WINDOWS: usize = 4;
 /// 所有流加起来的发送缓冲上限，是每条流上限的这么多倍。一条流写满缓冲时别的流还能写。
 const MAX_SEND_BUFFERS: usize = 2;
+/// 共用发送缓冲里给高一档的流留出的份额，是每条流上限的这么多分之一：比这条流优先级低的流占着的字节，最多算到
+/// 「共用上限减去这一份」，这条流至少总有这一份能写。
+/// 没有它时两条大流（比如普通和后台各一条）就能写满共用上限，交互流一个字节都写不进去，要等大流被确认才轮到，慢线路上是好几秒；
+/// 大流在窗口大时写进来的字节在窗口变小以后还超出新的上限，一条大流也能挡住（2026-11-19）。
+/// 低档的流没把共用上限占到只剩这一份时一切照旧；每高一档最多多占这一份，三档加起来最多多出一条流的上限。
+const PRIORITY_BUFFER_RESERVE_DIVISOR: usize = 2;
 /// 每条流的发送缓冲跟着拥塞窗口走：在途的要留着等确认，后面还要排着一个窗口才不断流，所以是窗口的这么多倍。
 const SEND_BUFFER_CWNDS: usize = 2;
 /// 跟着拥塞窗口走时最少给这么多，和 `Config::default()` 的 `send_buffer_bytes` 一样：配置不超过它的，行为不变。
@@ -337,6 +343,8 @@ struct SentPacket {
     /// 发送时是第几个探测周期。
     cycle: u32,
     app_idle: bool,
+    /// 应用没数据了、在途却还超过一个初始窗口：这是一阵数据的尾巴，不是零星消息。见发包处的说明。
+    tail: bool,
     // 发送时的送达进度，确认到达时用来计算实际送达速率。
     delivered: u64,
     delivered_at: u64,
@@ -759,6 +767,20 @@ impl Connection {
         (self.congestion.cwnd() as usize).saturating_mul(SEND_BUFFER_CWNDS).clamp(cap.min(SEND_BUFFER_FLOOR), cap)
     }
 
+    /// 这个优先级的流写入时，共用发送缓冲算作已经用掉多少：同档和更高档的流占着的全算，比它低档的流占着的最多算到
+    /// 共用上限减去 [`PRIORITY_BUFFER_RESERVE_DIVISOR`] 留出的那一份。
+    fn shared_buffer_used(&self, priority: Priority, per_stream: usize) -> usize {
+        if priority.is_lowest() {
+            return self.send_buffered;
+        }
+        let lower: usize = self.send_streams.values()
+            .filter(|state| state.priority.is_lower_than(priority))
+            .map(|state| state.pending.len() + state.unacked)
+            .sum();
+        let lower_limit = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(per_stream / PRIORITY_BUFFER_RESERVE_DIVISOR);
+        self.send_buffered.saturating_sub(lower) + lower.min(lower_limit)
+    }
+
     /// 写入一条流，返回接受的字节数。流不存在或已经结束时返回 0。
     pub fn send_stream(&mut self, now_us: u64, stream: u32, data: &[u8]) -> usize {
         if self.dead || data.is_empty() {
@@ -768,9 +790,15 @@ impl Connection {
             self.last_heard = now_us;
         }
         let per_stream = self.stream_send_buffer();
-        let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.send_buffered);
-        let Some(state) = self.send_streams.get_mut(&stream).filter(|state| !state.finishing) else { return 0 };
-        let room = per_stream.saturating_sub(state.pending.len() + state.unacked).min(total_room);
+        let Some(priority) = self.send_streams.get(&stream).filter(|state| !state.finishing).map(|state| state.priority) else { return 0 };
+        let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.shared_buffer_used(priority, per_stream));
+        let max_segment = self.max_segment;
+        let Some(state) = self.send_streams.get_mut(&stream) else { return 0 };
+        let own = state.pending.len() + state.unacked;
+        // 自己一个字节都没缓冲的流总能写进一个分片：高档的流一直写满共用缓冲时，调度器给低档留的那一份才有东西可发，
+        // 不会被饿死。多占的最多是每条流一个分片。
+        let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };
+        let room = per_stream.saturating_sub(own).min(total_room);
         let accepted = data.len().min(room);
         state.pending.extend(&data[..accepted]);
         self.send_buffered += accepted;
@@ -1407,7 +1435,7 @@ impl Connection {
                 rtt_us,
                 prior_delivered: packet.delivered,
                 app_limited: packet.app_limited,
-                app_idle: packet.app_idle,
+                app_idle: packet.app_idle && !packet.tail,
                 send_span_us: send_elapsed,
                 train: packet.train,
             };
@@ -1876,8 +1904,7 @@ impl Connection {
         let (next_seq, priority) = (state.next_seq, state.priority);
         self.send_buffered += size - count;
         self.tail_stream = (id, next_seq);
-        let lower_waiting = self.send_streams.values().any(|stream| stream.has_data() && stream.priority.is_lower_than(priority));
-        self.scheduler.record(id, priority, lower_waiting);
+        self.scheduler.record(id, priority, &self.send_streams);
         let urgent = priority == Priority::Interactive;
         *(if urgent { &mut self.last_interactive_at } else { &mut self.last_other_at }) = Some(now_us);
         self.update_mixed_traffic(now_us);
@@ -2414,6 +2441,14 @@ impl Connection {
             let app_limited = self.retransmit.is_empty() && self.next_stream().is_none();
             let app_idle = self.retransmit.is_empty() && !self.send_streams.values().any(SendStream::has_data);
             let below_capacity = app_idle || self.congestion.sends_below_capacity();
+            // 拥塞控制按「应用空闲」把一段的送达速率当成应用的速度：判限速的那一段整段作废，带宽和排队统计也跳过。
+            // 这只该是零星消息，在途不超过一个初始窗口。一阵数据的尾巴和紧跟着的重传发完也是「没数据了」，但那时在途还有
+            // 一整个窗口、按带宽估计的速率在发，送达速率就是路径的速率。令牌桶放行的突发把带宽估计抬高以后，小文件几乎全程
+            // 都是这样的尾巴，算成空闲的话限速一直认不出来，一直按估计超发（2026-11-19 xdt-server：往返 10 毫秒、出口约
+            // 0.7 MB/s；模拟器里往返 90 毫秒、64 KB 令牌的限速器上 1 MiB 在线路上发了 11 倍）。
+            // 尾巴照样当随机丢包样本：长往返有随机丢包的线路上，尾巴的重传是测随机丢包率的好样本，
+            // 不算的话「高延迟 300ms 丢包 5%」大窗口慢 16%。被限速器挡下的尾巴见 `Bbr::update_random_loss` 的封顶。
+            let tail = app_idle && self.bytes_in_flight > self.congestion.initial_window_bytes();
             self.sent.push_back(SentPacket {
                 number,
                 sent_at: now_us,
@@ -2430,6 +2465,7 @@ impl Connection {
                 cruising: self.congestion.is_cruising(),
                 cycle: self.congestion.phase_cycle(),
                 app_idle,
+                tail,
                 delivered: self.delivered,
                 delivered_at: self.delivered_at,
                 first_sent_at: self.first_sent_at,

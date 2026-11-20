@@ -1,5 +1,5 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isAccountUsageLimitReachedText, isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { isAccountUsageLimitReachedText, parseGeminiInputRateLimit, isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError, isCodexSharedAuthLinkUnavailableError } from '@/device-link/remoteStatus';
@@ -83,6 +83,8 @@ export function localizeAgentError(
   if (isCodexSharedAuthLinkUnavailableError(message)) {
     return describeAgentAuthError(message);
   }
+  if (parseGeminiInputRateLimit(message) !== null) return i18n.t(reason === 'gemini-input-retry-exhausted'
+    ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');

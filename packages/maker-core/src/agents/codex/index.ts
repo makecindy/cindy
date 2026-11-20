@@ -4682,7 +4682,15 @@ assertRouteCurrent();
      * 每个 per-request 的事实都住在自己的条目里, 请求 settle 时整条删掉, 天然不串味;
      * "有没有 start 在飞"一律由 `inFlightStarts.size` 派生, 不再有第二份真相。
      */
+    type UsageRoute = { providerId: string | null; credentialMode: AgentCredentialMode | null };
+    const activeUsageRoute = (): UsageRoute => ({
+      providerId: activeTurnProviderId ?? null,
+      credentialMode: (activeTurnProviderId === opts.providerId ? sessionCredentialMode :
+        this.deps.isCodexAccountProvider?.(activeTurnProviderId) ? 'oauth-bearer' :
+          resolveAgentCredentialMode({ agentKind: 'codex', providerId: activeTurnProviderId, model: activeTurnModel }) ?? sessionCredentialMode) ?? null,
+    });
     const inFlightStarts = new Map<number, {
+      usageRoute: UsageRoute;
       quarantined: boolean;
       terminalSettled: boolean;
       capabilitySelectionText: string;
@@ -4713,6 +4721,7 @@ assertRouteCurrent();
     ): number => {
       const seq = ++turnStartSeq;
       inFlightStarts.set(seq, {
+        usageRoute: activeUsageRoute(),
         quarantined: false,
         terminalSettled: false,
         capabilitySelectionText,
@@ -4764,6 +4773,7 @@ assertRouteCurrent();
      * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
      */
     const turnOriginByTurnId = new Map<string, {
+      usageRoute: UsageRoute;
       startSeq: number | null;
       sendGen: number;
       startedAtMs: number;
@@ -7393,12 +7403,13 @@ assertRouteCurrent();
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;
       if (reportedHelperState === state) return;
-      reportedHelperState = state;
-      const message = state === 'unverified'
-        ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
-        : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
       log.warn('Codex expected helper readiness check failed', { threadId: checkedThreadId, state });
-      const code = state === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
+      // The helper can be usable even if the status query times out. Keep
+      // the last confirmed warning until an ordinary send can check again.
+      if (state === 'unverified') return;
+      reportedHelperState = state;
+      const message = 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
+      const code = 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
       eventQueue.push({ type: 'error', data: { code, message, isTerminal: false }, source: 'codex' });
       // Recoverable error banners disappear on the next event. The existing
       // independent notice channel keeps this diagnostic in task history without
@@ -11757,9 +11768,18 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
+      // Display only: lets the finished message show the chart the turn ran with.
+      const codexGenerationTrace = translatorRt.generationTimingReliable
+        ? translatorRt.tokenSpeed.trace() : undefined;
       const generationDurationMs = translatorRt.generationSegmentComplete
         ? codexGenerationDurationMs(translatorRt) : undefined;
+      // The desktop can host several app-servers with different credentials at
+      // once. Preserve this runtime's dispatch context when settling its usage.
       const codexDoneUsage = {
+        ...(!opts.remoteHostId ? { execution: {
+          ...(turnOriginByTurnId.get(turn.id)?.usageRoute ?? activeUsageRoute()),
+          model: turnOriginByTurnId.get(turn.id)?.model ?? activeTurnModel,
+        } } : {}),
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
         reasoningTokens: realTurnUsageSegments.reduce(
@@ -11779,6 +11799,7 @@ assertRouteCurrent();
         ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
           ? { turnDurationMs: turn.durationMs }
           : {}),
+        ...(codexGenerationTrace ? { generationTrace: codexGenerationTrace } : {}),
       };
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,
@@ -12931,6 +12952,7 @@ assertRouteCurrent();
           ? startedServiceTier
           : existingTurnOrigin?.serviceTier;
         turnOriginByTurnId.set(params.turn.id, {
+          usageRoute: startedOwner?.[1].usageRoute ?? existingTurnOrigin?.usageRoute ?? activeUsageRoute(),
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
           startedAtMs:
@@ -13039,6 +13061,12 @@ assertRouteCurrent();
             generation: usageExecutionGeneration,
             total: { ...cumulativeTotal },
           });
+          const observed = opts.resolveUsagePriceVariant?.({
+            threadId: params.threadId,
+            inputTokens: totalInput,
+            outputTokens: last.outputTokens ?? 0,
+            cacheReadTokens: cached,
+          });
           usageTracker.ingestApiCallUsage({
             inputTokens: uncachedInput,
             // outputTokens already includes the reasoning subset. Adding
@@ -13047,13 +13075,10 @@ assertRouteCurrent();
             cacheReadTokens: cached,
             cacheCreateTokens: cacheWrite,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
-            model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
-            priceVariant: opts.resolveUsagePriceVariant?.({
-              threadId: params.threadId,
-              inputTokens: totalInput,
-              outputTokens: last.outputTokens ?? 0,
-              cacheReadTokens: cached,
-            }) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
+            model: (typeof observed === 'object' ? observed.model : undefined)
+              ?? turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            modelConfirmed: typeof observed === 'object' && Boolean(observed.model?.trim()),
+            priceVariant: (typeof observed === 'object' ? observed.priceVariant : observed) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
               : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)
                 ? 'priority'
@@ -14231,6 +14256,7 @@ assertRouteCurrent();
               // completed 已经把该 turn 记为终态，下面不会重新激活；这里仅补权威
               // 归属，供 start finally flush completed 后的一次 HTTP 重投校验。
               turnOriginByTurnId.set(resp.turn.id, {
+                usageRoute: startEntry.usageRoute,
                 startSeq: ownerSeq,
                 sendGen: startEntry.sendGen,
                 startedAtMs: startEntry.startedAtMs,
@@ -14342,6 +14368,7 @@ assertRouteCurrent();
                 ? startEntry.serviceTier
                 : turnOriginByTurnId.get(resp.turn.id)?.serviceTier;
               turnOriginByTurnId.set(resp.turn.id, {
+                usageRoute: startEntry?.usageRoute ?? turnOriginByTurnId.get(resp.turn.id)?.usageRoute ?? activeUsageRoute(),
                 startSeq: ownerSeq,
                 sendGen: mySendGen,
                 startedAtMs:

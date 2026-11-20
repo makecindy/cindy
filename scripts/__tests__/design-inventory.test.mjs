@@ -158,11 +158,11 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
   ]);
 
   assert.deepEqual(layouts.map((row) => `${row.path} ${row.component}`), [
+    '/ CCAgentFeatureLayout',
     '/ LocalDbGate',
     '/ MainLayout',
     '/ ProtectedRoute',
     '/bots BotsFeatureLayout',
-    '/cc-agent CCAgentFeatureLayout',
     '/login GuestRoute',
     '/skillhub SkillhubFeatureLayout',
   ]);
@@ -323,7 +323,7 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
   const layoutPaths = new Set(listLayoutExclusions(routerSource).map((row) => row.path));
   assert.ok(layoutPaths.has('/'));
   assert.ok(layoutPaths.has('/login'));
-  assert.ok(layoutPaths.has('/cc-agent'));
+  assert.ok(layoutPaths.has('/bots'));
   assert.ok(layoutPaths.has('/skillhub'));
 
   const redirects = listRedirectExclusions(routerSource);
