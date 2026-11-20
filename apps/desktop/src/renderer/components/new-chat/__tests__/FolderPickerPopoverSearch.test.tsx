@@ -150,6 +150,70 @@ describe('FolderPickerPopover project search', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  // 测试价值（engineering-conventions.md §3.2）
+  // - 生产入口与可观察结果：真实渲染 FolderPickerPopover 并驱动搜索框键盘事件,
+  //   断言 onSelect 收到的项目 —— 用户可观察到的是「回车选中了哪一个项目」。
+  // - Bug／规则依据：#11653。方向键此前完全未绑定,回车写死取过滤结果首项,
+  //   目标不排第一时只能改用鼠标点击。
+  // - 现有覆盖缺口：原有用例只覆盖「回车取第一个匹配」,没有多结果下的选择路径。
+  // - 最小失败输入：搜索 'cindy' 命中三项后按 ArrowDown 再按 Enter,修复前仍选中第一项。
+  // - tier：unit（jsdom + testing-library,进程内组件入口,无真实资源）。
+  it('moves the highlight with ArrowDown and picks it on Enter', () => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // 'cindy' 命中 cindy / cindy-server / cindy-official-plugins,下移一项后应选第二个。
+    expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+  });
+
+  it('moves the highlight back up with ArrowUp', () => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+  });
+
+  it.each([
+    // 'cindy' 命中 3 项;越界按键不应把高亮推出可见范围。
+    { name: 'stops above the first result', key: 'ArrowUp', presses: 1, expected: 0 },
+    { name: 'stops at the last filtered result', key: 'ArrowDown', presses: 5, expected: 2 },
+  ])('$name', ({ key, presses, expected }) => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    for (let i = 0; i < presses; i += 1) {
+      fireEvent.keyDown(input, { key });
+    }
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    const target = manyProjects[expected];
+    expect(onSelect).toHaveBeenCalledWith(target.path, 'project', target);
+  });
+
+  it('resets the highlight to the first result when the query changes', () => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.change(input, { target: { value: 'c' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // 换查询后高亮回到第一项,不应延续上一次的位置。
+    expect(onSelect).toHaveBeenCalledWith(manyProjects[0].path, 'project', manyProjects[0]);
+  });
 });
 
 // #9695: exercise the real portal and DOM event cancellation, which the old

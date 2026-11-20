@@ -209,6 +209,8 @@ export function FolderPickerPopover({
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
+  // 搜索结果的键盘高亮位置。方向键移动它,回车选中它;输入变化时归零。
+  const [activeProjectIndex, setActiveProjectIndex] = useState(0);
   const [browseFailed, setBrowseFailed] = useState(false);
   const projectSearchRef = useRef<HTMLInputElement>(null);
   const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
@@ -230,12 +232,18 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
+  // 结果集可能在按键之间变短(远程项目异步到达、删除等),高亮不能停在列表外。
+  const activeProjectOptionIndex = Math.min(
+    activeProjectIndex,
+    Math.max(0, visibleProjectOptions.length - 1),
+  );
 
-  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  // 每次打开都从完整列表开始,不残留上次的搜索词和高亮位置。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
       setBrowseFailed(false);
+      setActiveProjectIndex(0);
     }
   }, [open]);
 
@@ -271,6 +279,15 @@ export function FolderPickerPopover({
     updateScrollFade();
   }, [visibleProjectOptions, deviceScope?.status, updateScrollFade]);
 
+  // 方向键移动到可视区之外的高亮项时把它带回来。jsdom 没有 scrollIntoView,跳过即可。
+  useEffect(() => {
+    if (!activeProjectQuery || !projectScrollEl) return;
+    const row = projectScrollEl.querySelector<HTMLElement>(
+      `[data-folder-picker-index="${activeProjectOptionIndex}"]`,
+    );
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeProjectOptionIndex, activeProjectQuery, projectScrollEl]);
+
   const handleSelectPath = async (
     folderPath: string,
     source: FolderPickerSelectSource,
@@ -304,8 +321,8 @@ export function FolderPickerPopover({
 
   const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
-    // 有搜索词时首个结果常亮:回车选中的就是它。
-    const isEnterTarget = activeProjectQuery !== '' && index === 0;
+    // 有搜索词时高亮跟随方向键,回车选中的就是它。
+    const isActiveTarget = activeProjectQuery !== '' && index === activeProjectOptionIndex;
     return (
       /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
          之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
@@ -315,11 +332,12 @@ export function FolderPickerPopover({
          语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
       <div
         key={project.key ?? project.path}
+        data-folder-picker-index={index}
         className={cn(
           'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
           'transition-colors',
           'hover:bg-[var(--folder-item-hover)]',
-          isEnterTarget && 'bg-[var(--folder-item-hover)]',
+          isActiveTarget && 'bg-[var(--folder-item-hover)]',
         )}
       >
         <button
@@ -495,16 +513,34 @@ export function FolderPickerPopover({
                     value={projectQuery}
                     onChange={(e) => {
                       setProjectQuery(e.target.value);
+                      // 换查询后高亮回到第一项,不延续上一次的位置。
+                      setActiveProjectIndex(0);
                       if (projectScrollEl) projectScrollEl.scrollTop = 0;
                     }}
                     onKeyDown={(e) => {
                       // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
                       e.stopPropagation();
-                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
-                      if (!first) return;
+                      // 输入法组合中的按键属于候选词,既不移动高亮也不选中。
+                      if (e.nativeEvent.isComposing || !activeProjectQuery) return;
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        if (visibleProjectOptions.length === 0) return;
+                        e.preventDefault();
+                        setActiveProjectIndex((prev) => {
+                          // 以当前**显示中**的高亮项为基准:结果集中途变短时原始值可能已越界。
+                          const base = Math.min(
+                            prev,
+                            Math.max(0, visibleProjectOptions.length - 1),
+                          );
+                          const next = e.key === 'ArrowDown' ? base + 1 : base - 1;
+                          return Math.max(0, Math.min(next, visibleProjectOptions.length - 1));
+                        });
+                        return;
+                      }
+                      if (e.key !== 'Enter') return;
+                      const target = visibleProjectOptions[activeProjectOptionIndex];
+                      if (!target) return;
                       e.preventDefault();
-                      void handleSelectPath(first.path, 'project', first);
+                      void handleSelectPath(target.path, 'project', target);
                     }}
                     placeholder={t('newChat.folderPicker.searchProjects')}
                     aria-label={t('newChat.folderPicker.searchProjects')}
