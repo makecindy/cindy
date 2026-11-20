@@ -1,3 +1,4 @@
+import { resolveTurnCost } from '../turnCostCalculator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
@@ -331,6 +332,26 @@ describe('API-key preset reference prices and static cost precedence', () => {
         models: [{ id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' }],
       },
     },
+  });
+  it.each([
+    ['https://api.deepseek.com/v1', undefined],
+    ['https://api.deepseek.com', '/chat/completions'],
+    ['https://api.deepseek.com/v1/', '/chat/completions'],
+  ] as const)('estimates cached DeepSeek tokens on the official route %s %s', (baseUrl, requestPath) => {
+    for (const currentModel of ['deepseek-v4-pro', 'deepseek-flash']) {
+      const provider = buildUserProvider({ id: 'deepseek', name: 'DeepSeek', runtimes: { pi: {
+        baseUrl, wireProtocol: 'openai-chat', requestPath, catalogPresetId: 'deepseek',
+        models: [{ id: currentModel, name: currentModel }],
+      } } });
+      const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [provider] });
+      for (const sdkCostDelta of [1.32, undefined]) {
+        expect(resolveTurnCost({
+          agent: 'pi', rawModel: 'deepseek-v4-pro', sdkCostDelta, pricing,
+          tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000, cacheCreateTokens: 0 },
+          context: { providerId: 'deepseek', billingRoute: 'provider-api', region: 'global' },
+        })).toMatchObject({ source: 'reference', money: { amount: 0.044, currency: 'USD', kind: 'value-estimate' } });
+      }
+    }
   });
   it('prices removed DeepSeek models only on an official historical route', () => {
     const runtime = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,

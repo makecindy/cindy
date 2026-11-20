@@ -8,6 +8,7 @@ import {
   type AgentKind,
   type ModelRegistry,
   type Provider,
+  type ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { providerReferencePriceQuote } from '../../shared/modelPriceQuote.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -32,6 +33,29 @@ function candidateRegistryModelIds(catalogId: string, modelId: string): string[]
     return [modelId, `xai/${modelId}`];
   }
   return [modelId];
+}
+
+type TariffEndpoint = { baseUrl: string; wireProtocol: ProviderWireProtocol; requestPath?: string };
+
+const defaultRequestPaths: Partial<Record<ProviderWireProtocol, string>> = {
+  'openai-chat': '/chat/completions',
+  'openai-responses': '/responses',
+  'anthropic-messages': '/v1/messages',
+};
+
+function tariffBaseUrl({ baseUrl, wireProtocol }: TariffEndpoint): string {
+  // DeepSeek publishes both spellings for its OpenAI-compatible endpoint. Do not
+  // strip a version from arbitrary routes: another path can identify a different channel.
+  if ((wireProtocol === 'openai-chat' || wireProtocol === 'openai-responses') &&
+      baseUrl.replace(/\/+$/, '') === 'https://api.deepseek.com/v1') return 'https://api.deepseek.com';
+  return baseUrl;
+}
+
+export function matchesTariffEndpoint(actual: TariffEndpoint, declared: TariffEndpoint): boolean {
+  if (actual.wireProtocol !== declared.wireProtocol) return false;
+  const defaultPath = defaultRequestPaths[actual.wireProtocol];
+  return (actual.requestPath || defaultPath) === (declared.requestPath || defaultPath) &&
+    providerEndpointBindings(tariffBaseUrl(declared), tariffBaseUrl(actual)) !== null;
 }
 
 // A projection is reused for every historical day; a catalog refresh replaces its snapshot.
@@ -60,10 +84,14 @@ function verifiedPresets(provider: Provider) {
       const actualWire = model.route?.wireProtocol ?? providerWireProtocolForApi(model.api ?? model.piApi) ?? routing.wireProtocol ?? defaultWire;
       const actualPath = model.route?.requestPath ?? routing.requestPath ?? '';
       const expected = model.selectedInterface?.providerId === presetId ? model.selectedInterface.route : declared?.route;
-      const matches = runtime && !model.interfaceUnavailable &&
-        providerEndpointBindings(expected?.baseUrl ?? runtime.baseUrl, actualUrl) !== null &&
-        actualPath === (expected?.requestPath ?? runtime.requestPath ?? '') &&
-        actualWire === (expected?.wireProtocol ?? providerWireProtocolForApi(declared?.api ?? declared?.piApi) ?? runtime.wireProtocol ?? defaultWire);
+      const matches = runtime && !model.interfaceUnavailable && matchesTariffEndpoint(
+        { baseUrl: actualUrl, wireProtocol: actualWire, requestPath: actualPath },
+        {
+          baseUrl: expected?.baseUrl ?? runtime.baseUrl,
+          wireProtocol: expected?.wireProtocol ?? providerWireProtocolForApi(declared?.api ?? declared?.piApi) ?? runtime.wireProtocol ?? defaultWire,
+          requestPath: expected?.requestPath ?? runtime.requestPath,
+        },
+      );
       const id = matches ? presetId : null;
       index.set(agent + '\0' + model.id, id);
       // An agent-independent lookup must agree across every engine exposing this model.

@@ -8,7 +8,7 @@
  * the Desktop window broadcast (broadcastReferenceModelPricing) and re-exports this module.
  */
 
-import { providerEndpointBindings, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
+import type { AgentKind, Catalog, CatalogModel, Provider } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
@@ -22,6 +22,7 @@ import { getByokPricing } from '../model-access/byokPricing.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   accountReferencePriceQuote as providerReferencePriceQuote,
+  matchesTariffEndpoint,
   providerRegistryTariffEndedAt,
   providerSnapshotReferencePriceQuote,
 } from './accountReferencePrice.js';
@@ -102,9 +103,10 @@ function historicalAccountPrices(
     if (!runtime || routing.disabled) return [];
     const defaultWire = agent === 'pi' ? 'openai-chat' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
     const matches = (url: string, wire = runtime.wireProtocol, path = runtime.requestPath) =>
-      (routing.wireProtocol ?? defaultWire) === (wire ?? defaultWire) &&
-      (routing.requestPath ?? '') === (path ?? '') &&
-      providerEndpointBindings(url, routing.upstream) !== null;
+      matchesTariffEndpoint(
+        { baseUrl: routing.upstream, wireProtocol: routing.wireProtocol ?? defaultWire, requestPath: routing.requestPath },
+        { baseUrl: url, wireProtocol: wire ?? defaultWire, requestPath: path },
+      );
     const defaultRoute = matches(runtime.baseUrl);
     // A preset can also declare a separate native endpoint for individual models (e.g. Gemini).
     const nativeModels = defaultRoute ? undefined : new Set(runtime.models
