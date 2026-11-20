@@ -180,11 +180,14 @@ export function createCardActionHandler(
   function releaseLostLaneControl(event: IMCardActionEvent): void {
     const botAppId = String(event.payload.botAppId ?? '');
     if (!botAppId) return;
-    exitControl(botAppId, event.senderId);
+    // 群卡回调的 senderId 在重启后会落成点击人的 open_id。若卡片自己记录了
+    // 被锁身份，只释放那一个，避免清掉同时进行的私聊 /ctr。
     const locked = event.payload.controlUserId;
-    if (typeof locked === 'string' && locked && locked !== event.senderId) {
+    if (typeof locked === 'string' && locked) {
       exitControl(botAppId, locked);
+      return;
     }
+    exitControl(botAppId, event.senderId);
   }
 
   /** 认不出话题的群卡: 原地收口成「重发 /ctr」提示, 不建任何绑定。 */

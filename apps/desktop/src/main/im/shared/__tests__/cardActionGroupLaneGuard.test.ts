@@ -287,8 +287,8 @@ describe('飞书群卡片 lane 丢失时的 /ctr fail-closed', () => {
     });
 
     expect(mocks.bindingAttach).not.toHaveBeenCalled();
-    expect(isInControl('cli_abc', 'ou_owner')).toBe(false);
     expect(isInControl('cli_abc', 'g/oc_chat1/omt_t1')).toBe(false);
+    expect(isInControl('cli_abc', 'ou_owner')).toBe(true);
   });
 });
 
