@@ -1,3 +1,5 @@
+import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
+import { projectHandoffPreview } from '../maker-ipc/agentHandoff.js';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
@@ -106,7 +108,7 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
-type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
@@ -296,6 +298,8 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
+    snoozedUntil: msToIso(row.snoozedUntil),
+    snoozedAt: msToIso(row.snoozedAt),
     hiddenAt: msToIso(row.hiddenAt),
     notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
@@ -383,12 +387,19 @@ export function messageToCamel(row: MessageRow): Message {
       agentMeta = null;
     }
   }
+  const rebuild = (agentMeta as (AgentMeta & { contextRebuild?: unknown }) | null)?.contextRebuild;
+  if (rebuild) {
+    const contextRebuild = projectHandoffPreview(rebuild);
+    if (contextRebuild !== rebuild) agentMeta = { ...agentMeta, contextRebuild } as AgentMeta;
+  }
   return {
     id: row.id,
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
+    content: row.role === 'agent_switch'
+      ? projectHandoffPreview(content)
+      : projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -523,6 +534,7 @@ export function sessionPatchToRow(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
@@ -554,8 +566,16 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.snoozedUntil !== undefined) {
+    out.snoozedUntil = isoToMs(patch.snoozedUntil);
+    out.snoozedAt = patch.snoozedUntil === null ? null : Date.now();
+  }
   if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
-  if (patch.status !== undefined) out.status = patch.status;
+  if (patch.status !== undefined) {
+    out.status = patch.status;
+    out.snoozedUntil = null;
+    out.snoozedAt = null;
+  }
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
   if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);
@@ -573,7 +593,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   now: number,
@@ -750,6 +770,16 @@ function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'sourc
   }
 }
 
+function parsePrTrigger(raw: string): Schedule['prTrigger'] {
+  try {
+    const value = JSON.parse(raw);
+    return value === null ? null : normalizePrTrigger(value);
+  } catch {
+    // A damaged or unknown explicit rule never falls back to matching a shell command.
+    return null;
+  }
+}
+
 function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
   if (!raw) return undefined;
   try {
@@ -778,6 +808,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    ...(row.prTrigger ? { prTrigger: parsePrTrigger(row.prTrigger) } : {}),
     webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
@@ -796,6 +827,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     effort: row.effort ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
+    inheritedProjectDir: row.inheritedProjectDir ?? undefined,
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
     targetSessionId: row.targetSessionId ?? undefined,
@@ -839,6 +871,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    prTrigger: s.prTrigger === undefined ? null : JSON.stringify(s.prTrigger),
     webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
@@ -857,6 +890,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
+    inheritedProjectDir: s.inheritedProjectDir ?? null,
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
     targetSessionId: s.targetSessionId ?? null,
@@ -898,6 +932,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'prTrigger')) out.prTrigger = patch.prTrigger === undefined ? null : JSON.stringify(patch.prTrigger);
   if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
@@ -917,6 +952,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
+  if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
@@ -1034,7 +1070,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
-    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
+    triggerSource: row.triggerSource === 'webhook' || row.triggerSource === 'pr-status' || row.triggerSource === 'pr-check' ? row.triggerSource : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };

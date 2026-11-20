@@ -1,6 +1,7 @@
 import type { SessionSendResult } from '@cindy/maker-core';
 import {
   assertSendDispatched,
+  SESSION_UNAVAILABLE_CODES,
   toSessionDispatchOutcome,
   type SessionDispatchOutcome,
 } from '@cindy/maker-core';
@@ -37,6 +38,8 @@ export type HostSendOutcome = {
   message: string;
   /** CREDENTIAL_SWITCH_BUSY 专用:挡路的本地会话 ids(coordinator 用于事件驱动唤醒 + renderer 展示)。 */
   busySessionIds?: string[];
+  /** Main-only proof of stopped subscription admission, not an opaque adapter failure. */
+  startupAdmission?: 'subscription-account-limited';
 };
 
 export type DesktopSessionDispatchSuccess = {
@@ -84,13 +87,14 @@ export interface SanitizedSendOutcomeError {
 export function createHostSendFailure(
   code: HostSendFailureCode,
   message: string,
-  extra?: { busySessionIds?: string[] },
+  extra?: Pick<HostSendOutcome, 'busySessionIds' | 'startupAdmission'>,
 ): HostSendOutcome {
   return {
     kind: 'host-send',
     accepted: false,
     code,
     message,
+    ...(extra?.startupAdmission ? { startupAdmission: extra.startupAdmission } : {}),
     ...(extra?.busySessionIds ? { busySessionIds: [...extra.busySessionIds] } : {}),
   };
 }
@@ -135,7 +139,14 @@ export function toCompatibleMakerSendResult(
 }
 
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
-const HOST_SEND_FAILURE_CODE_SET: ReadonlySet<string> = new Set(HOST_SEND_FAILURE_CODES);
+const HOST_SEND_FAILURE_CODE_SET: ReadonlySet<string> = new Set([
+  ...HOST_SEND_FAILURE_CODES,
+  ...SESSION_UNAVAILABLE_CODES,
+  // Stable IPC category only; the associated free text is never exposed.
+  'PRECONDITION_FAILED',
+  // Maker has not confirmed release of the previous runtime's resources.
+  'SESSION_CLEANUP_PENDING',
+]);
 
 export function sanitizeSendOutcomeError(err: unknown): SanitizedSendOutcomeError {
   if (!(err instanceof Error)) {

@@ -3,7 +3,7 @@ import type { ApiFetchOptions } from '@/api/client';
 import { ApiError } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { isMobileAgentNetActive } from './agentNetRuntime';
+import { isMobileAgentNetActive, noteMobileAgentNetDeviceList } from './agentNetRuntime';
 import { ensureMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
 import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
 import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, normalizeSelfHostedRelayBase } from './selfHostedRelayRouting';
@@ -44,7 +44,16 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
       };
       if (mobileAgentNetRequiresEncryption()) result = await readEncrypted();
       else {
-        const [legacy, encrypted] = await Promise.allSettled([readLegacy(), readEncrypted()]); guard();
+        const startedAt = Date.now();
+        const legacyDirectory = readLegacy().then(value => {
+          guard();
+          const list = value as { devices: DeviceView[] };
+          if (!getActiveSelfHostedRelay() && Array.isArray(list.devices)) {
+            noteMobileAgentNetDeviceList(list.devices.map(device => device.deviceId), startedAt);
+          }
+          return value;
+        });
+        const [legacy, encrypted] = await Promise.allSettled([legacyDirectory, readEncrypted()]); guard();
         // Only a transient directory outage can use the other live result;
         // invalid membership, certificates and owner changes stay terminal.
         for (const response of [legacy, encrypted]) {

@@ -191,6 +191,8 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Verified public connection preset for aggregate usage reporting. */
+  usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
@@ -347,6 +349,10 @@ export interface CatalogModel {
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
+  /** Local Pi Chat compatibility override; not inherited public model metadata. */
+  supportsStore?: boolean;
+  /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
+  maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
@@ -556,6 +562,8 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** All actual runtime connections; sourceAgent is set only for a unique preferred route. */
+  sourceAgents?: AgentKind[];
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
@@ -633,6 +641,8 @@ export interface Provider {
   videoModels?: ProviderMediaModel[];
   /** Speech, transcription and realtime audio; each entry retains its explicit mode. */
   audioModels?: ProviderMediaModel[];
+  /** Non-chat decision and reranking endpoints. */
+  evaluationModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
@@ -670,6 +680,18 @@ export interface Provider {
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
   opaqueModelId?: true;
+  /**
+   * Set only when a manual Settings refresh found this ID in the runtime's own catalog.
+   * Only such models may later be offered as withdrawn (#11298); manual, preset, import
+   * and pre-upgrade rows stay unmarked and are never offered for removal.
+   */
+  listedUpstream?: true;
+  /**
+   * Current-absence receipt (#11298): the latest complete Settings refresh did not list
+   * this marked model. A later refresh that lists it again clears it, and it is never
+   * inherited across saves, so only a still-current absence can be confirmed for removal.
+   */
+  missingUpstream?: true;
   /** Transient discovery receipt; normalization excludes it from persistent configuration. */
   discoverySnapshotId?: string;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { clearAllSessionRuntimeAxes, getSessionEffort, setSessionEffort } from '../../maker-host/session-effort-store.js';
 import { buildDeferredRuntimeSelectionProfile } from '../../../shared/runtimeModelSwitchGate';
+import { getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 
 import {
   acceptSessionRuntimeAxisMutation,
@@ -9,6 +10,7 @@ import {
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
+  clearOwnerScopedSessionRuntimeSelection,
   clearSessionRuntimeControlState,
   deferSessionRuntimeAxisMutation,
   getSessionRuntimeControlSnapshot,
@@ -42,6 +44,25 @@ const current: SessionRuntimeProfile = {
   effort: 'high',
   fastMode: true,
 };
+
+// Rule: a committed account change drops every task's owner-scoped runtime selection (the desktop's
+// app session commit boundary; the Node Host's boundary hook calls the same step). Gap: the three
+// clears were inline in bootstrap-electron.ts and the Host had none, so an override survived a
+// sign-out. Minimal failing input: a provider, an effort and an accepted override, then the clear.
+describe('clearOwnerScopedSessionRuntimeSelection', () => {
+  it('drops the task provider, its runtime axes and its runtime control, and moves the owner epoch', () => {
+    const epoch = captureSessionRuntimeControlOwnerEpoch();
+    setSessionProvider('owner-task', 'prov-a');
+    setSessionEffort('owner-task', 'high');
+    acceptSessionRuntimeMutation({ sessionId: 'owner-task', source: 'fallback', profile: { ...current, providerId: 'prov-b' }, deferred: false });
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).not.toBeNull();
+    clearOwnerScopedSessionRuntimeSelection();
+    expect(getSessionProvider('owner-task')).toBeNull();
+    expect(getSessionEffort('owner-task')).toBeNull();
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).toBeNull();
+    expect(sessionRuntimeControlOwnerEpochMatches(epoch)).toBe(false);
+  });
+});
 
 function provider(
   id: string,

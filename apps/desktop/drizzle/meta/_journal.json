@@ -1051,6 +1051,48 @@
       "when": 1794395052702,
       "tag": "0149_damp_wind_dancer",
       "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "6",
+      "when": 1794475336153,
+      "tag": "0150_broken_supernaut",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "6",
+      "when": 1794981740308,
+      "tag": "0151_opposite_nightcrawler",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "6",
+      "when": 1794990451308,
+      "tag": "0152_schedule_pr_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "6",
+      "when": 1795070787385,
+      "tag": "0153_schedule_inherited_project",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "6",
+      "when": 1795082828685,
+      "tag": "0154_daily_token_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "6",
+      "when": 1795129008697,
+      "tag": "0155_account_usage_first_day",
+      "breakpoints": true
     }
   ]
 }

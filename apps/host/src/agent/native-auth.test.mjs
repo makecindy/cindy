@@ -12,6 +12,8 @@ import { bindNativeProviderAuth, unbindNativeProviderAuth } from '../../../deskt
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { buildClaudeEnv } from '../../../../packages/maker-core/src/agents/claude-code/env-builder.ts';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/claude-gateway-config.ts';
+import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.ts';
+import { writeInvalidatedSystemCodexAuthMarker } from '../../../desktop/src/main/maker-host/codex-auth-invalidation.ts';
 
 test('Codex uses only its isolated home and requires the current account binding', async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-native-auth-'));
@@ -31,6 +33,50 @@ test('Codex uses only its isolated home and requires the current account binding
     assert.equal((await auth.getState({ credentialMode: 'gateway-key' })).authSource, 'api-key');
     configureHostOwner({ userDataDir: profile, ownerId: 'native-auth-owner-b' });
     assert.equal((await auth.getState({ providerId: 'openai' })).authenticated, false);
+  } finally {
+    configureHostOwner({ userDataDir: profile, ownerId: null });
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+// The desktop's provider-oauth branch (auth-adapters.ts readState and getAuthEnv): a task on a
+// third-party source carries the gateway key, or the placeholder the proxy replaces, whatever the
+// default Codex login is; that login being invalidated does not stop it.
+test('a Codex task on a third-party source passes as the desktop does, whatever the default login is', async () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-native-auth-provider-oauth-'));
+  const home = path.join(profile, 'codex-home');
+  try {
+    configureHostOwner({ userDataDir: profile, ownerId: 'native-auth-provider-oauth' });
+    fs.mkdirSync(home, { recursive: true });
+    writeInvalidatedSystemCodexAuthMarker(home, path.join(profile, 'system', 'auth.json'), 'token_revoked', path.join(home, 'auth.json'), 'instance-isolated');
+    const state = { authenticated: true, identity: 'Provider OAuth · Proxy', authSource: 'api-key' };
+    for (const [credential, key] of [[null, CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY], ['fixture-gateway', 'fixture-gateway']]) {
+      const auth = createCodexLocalCliAuth({ credential }, async () => { throw Error('Unexpected route'); }, home);
+      assert.deepEqual(await auth.getState({ credentialMode: 'provider-oauth' }), state);
+      assert.deepEqual(await auth.getAuthEnv({ credentialMode: 'provider-oauth' }), { CODEX_HOME: home, XDT_CODEX_API_KEY: key });
+    }
+  } finally {
+    configureHostOwner({ userDataDir: profile, ownerId: null });
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+// The desktop's getAuthEnv checks for an independent Codex account first: its task runs in the
+// account's own home whichever credential mode it carries, never in the default codex-home.
+test('an independent Codex account task gets its own home in both forms the agent passes', async () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-native-auth-account-'));
+  const home = path.join(profile, 'codex-home');
+  const accountHome = path.join(profile, 'codex-accounts', 'account-fixture');
+  try {
+    configureHostOwner({ userDataDir: profile, ownerId: 'native-auth-account' });
+    const accounts = { isCodexAccountProvider: id => id === 'openai' || id === 'codex-account-fixture',
+      codexAccountState: () => ({ authenticated: true, authSource: 'oauth' }), codexAccountHome: () => accountHome };
+    const auth = createCodexLocalCliAuth({ credential: 'fixture-gateway' }, async () => { throw Error('Unexpected route'); }, home, accounts);
+    assert.deepEqual(await auth.getAuthEnv({ providerId: 'codex-account-fixture', credentialMode: 'oauth-bearer' }), { CODEX_HOME: accountHome });
+    const account = { assertCurrent() {}, configDir: accountHome, readState: async () => ({ authenticated: true }) };
+    assert.deepEqual(await auth.getAuthEnv({ credentialMode: 'oauth-bearer', nativeSubscriptionAccount: account }), { CODEX_HOME: accountHome });
+    // openai is the default login, not an independent account.
+    assert.deepEqual(await auth.getAuthEnv({ providerId: 'openai', credentialMode: 'oauth-bearer' }), { CODEX_HOME: home });
   } finally {
     configureHostOwner({ userDataDir: profile, ownerId: null });
     fs.rmSync(profile, { recursive: true, force: true });

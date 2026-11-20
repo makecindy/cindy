@@ -33,6 +33,8 @@ vi.mock('../modelPricing', () => ({
   getGatewayModelPricing: vi.fn(),
   isModelPricingRefreshInFlight: vi.fn(() => false),
 }));
+// The subscription estimate (usageModelKeys.ts) reads the core the wrapper below re-exports: the same mock.
+vi.mock('../referenceModelPricingCore', async () => await import('../referenceModelPricing'));
 vi.mock('../referenceModelPricing', () => ({
   getReferenceModelPricing: vi.fn(() => ({})),
   readModelPriceOverridesSnapshot: vi.fn(() => ({})),
@@ -909,7 +911,7 @@ describe('readUsageHistoryWith', () => {
 describe('production cache and empty payload', () => {
   // 单测：v5 曾把旧 USD 缓存为 0，升级必须重算；v6 则继续走原有磁盘复用路径。
   // 真实 readUsageHistory 读取临时磁盘文件；旧覆盖只检查写出的版本号，不能发现误复用。
-  it.each([5, 6])('recomputes v5 zero cache and reuses v6 cache (version %i)', async (version) => {
+  it.each([5, 6, 7])('recomputes old caches and reuses v7 cache (version %i)', async (version) => {
     setActiveLedgerCurrency('CNY');
     const usd: RegionalMoney = { amount: 10, currency: 'USD', approximate: false, kind: 'actual-cost' };
     const cached = emptyUsageHistoryPayload();
@@ -922,7 +924,7 @@ describe('production cache and empty payload', () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [usd] }]);
     const result = await readUsageHistory({ days: 30 });
     expect(result.totals.today.amount).toBe(67);
-    expect(result.stale).toBe(version === 6);
+    expect(result.stale).toBe(version === 7);
     // 等待既有后台刷新完成，避免清理临时目录时还有写入。
     await readUsageHistory({ days: 30, forceRefresh: true });
   });
@@ -997,7 +999,7 @@ describe('production cache and empty payload', () => {
       );
       expect(raw).toMatchObject({
         // v6 作废曾丢弃旧 USD 的展示缓存。
-        version: 6,
+        version: 7,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {
@@ -1381,4 +1383,22 @@ todayKey: () => TODAY,
     expect(third.totals.todayTokens).toBe(25);
     expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(aggregations);
   });
+});
+
+it('keeps auxiliary sources across devices while counting their shared model once in totals', async () => {
+  const row = (source: string, tokens: number) => ({
+    ...modelRow(TODAY, 'codex', 'helper', actual(0), { inputTokens: tokens }),
+    agentKind: 'auxiliary', source, providerId: 'gateway-a', requestCount: 1,
+  });
+  const local = { spendDays: [], sessionRows: [], tasks: [], modelRows: [row('title', 10), row('voice-refinement', 20)] };
+  const peer = { ...local, modelRows: [row('title', 5)] };
+  const combined = combineUsageDeviceRows([local, peer]);
+  expect(combined.modelRows).toHaveLength(2);
+  expect(combined.modelRows.find(row => row.source === 'title')).toMatchObject({ inputTokens: 15, requestCount: 2,
+    providerId: 'gateway-a', agentKind: 'auxiliary' });
+  const history = await readUsageHistoryWith(makeDeps({ getModelUsageSince: async () => combined.modelRows }));
+  expect(history.totals.todayTokens).toBe(35);
+  expect(history.models).toEqual([expect.objectContaining({ agentKind: 'auxiliary', inputTokens: 35,
+    estimatedMoney: null, money: expect.objectContaining({ amount: 0 }) })]);
+  expect(history.modelDaily.map(row => row.source).sort()).toEqual(['title', 'voice-refinement']);
 });

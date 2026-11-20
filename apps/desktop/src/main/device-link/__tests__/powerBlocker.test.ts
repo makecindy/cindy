@@ -29,6 +29,21 @@ function makeBackend() {
 }
 
 describe('KeepAwakeController', () => {
+  // docs/product-rules/privacy-screen.md (2026-11-14): 「用隐私屏代替锁屏」 includes keeping
+  // the computer awake; turning it off restores the user's own choice, never overrides it.
+  it.each([false, true])('隐私屏开着时不休眠,关掉后恢复用户自己的选择(用户开着=%s)', (user) => {
+    const { backend } = makeBackend();
+    const c = new KeepAwakeController(backend);
+    c.apply(user);
+    c.setPrivacyScreen(true);
+    expect(c.active).toBe(true);
+    c.apply(false);
+    expect(c.active).toBe(true);
+    c.apply(user);
+    c.setPrivacyScreen(false);
+    expect(c.active).toBe(user);
+    expect(backend.start).toHaveBeenCalledTimes(1);
+  });
   it('apply(true) 启动一个 prevent-app-suspension blocker,重复 apply(true) 幂等', () => {
     const { backend } = makeBackend();
     const c = new KeepAwakeController(backend);

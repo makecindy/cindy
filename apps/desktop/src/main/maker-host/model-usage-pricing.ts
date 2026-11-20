@@ -9,20 +9,33 @@ interface UsageKey {
   outputTokens: number;
   cacheReadTokens: number;
 }
-type Receipt = UsageKey & { priceVariant: PriceVariant };
+type ObservedUsage = { priceVariant: PriceVariant; model?: string };
+type Receipt = UsageKey & ObservedUsage;
 const sessions = new Map<string, Receipt[]>();
 const recordOf = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
 /** Each runtime gets its own receipt list, so delayed responses cannot affect a resumed runtime. */
-export function registerUsagePricing(sessionId: string): (usage: UsageKey) => PriceVariant | undefined {
+export function registerUsagePricing(sessionId: string): (usage: UsageKey) => PriceVariant | undefined;
+export function registerUsagePricing(sessionId: string, includeModel: true): (usage: UsageKey) => ObservedUsage | undefined;
+export function registerUsagePricing(sessionId: string, includeModel = false) {
   const receipts: Receipt[] = [];
   sessions.set(sessionId, receipts);
-  return usage => {
-    const index = receipts.findIndex(receipt => receipt.threadId === usage.threadId
+  return (usage: UsageKey) => {
+    const matches = (receipt: Receipt) => receipt.threadId === usage.threadId
       && receipt.inputTokens === usage.inputTokens && receipt.outputTokens === usage.outputTokens
-      && receipt.cacheReadTokens === usage.cacheReadTokens);
-    return index < 0 ? undefined : receipts.splice(index, 1)[0]?.priceVariant;
+      && receipt.cacheReadTokens === usage.cacheReadTokens;
+    const index = receipts.findIndex(matches);
+    if (index < 0) return undefined;
+    const [receipt] = receipts.splice(index, 1);
+    if (!includeModel) return receipt.priceVariant;
+    const ambiguous = receipts.filter(matches);
+    if (ambiguous.some(other => other.model !== receipt.model)) {
+      // The provider did not supply a request ID in the matching notification.
+      for (const other of ambiguous) other.model = undefined;
+      return { priceVariant: receipt.priceVariant };
+    }
+    return { priceVariant: receipt.priceVariant, model: receipt.model };
   };
 }
 
@@ -49,7 +62,8 @@ export function captureUsagePricing(sessionId: string, priceVariant: PriceVarian
     if (!validCount(inputTokens) || !validCount(outputTokens) || !validCount(cacheReadTokens)) return;
     // Bound unmatched receipts (cancelled requests, compaction, or delayed agent notifications).
     if (receipts.length >= 64) receipts.shift();
-    receipts.push({ threadId, inputTokens, outputTokens, cacheReadTokens, priceVariant });
+    const model = typeof response.model === 'string' && response.model.length <= 256 ? response.model.trim() : undefined;
+    receipts.push({ threadId, inputTokens, outputTokens, cacheReadTokens, priceVariant, model });
   };
 }
 

@@ -17,6 +17,7 @@ import {
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
   HOOK_FEATURE_FEISHU_MULTI_APP,
@@ -733,7 +734,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     expect(hello.payload.workspaces[0]).toBe('chat');
     expect([...hello.payload.workspaces].sort()).toEqual(['blog', 'chat', 'xdmaker']);
     expect(hello.payload.features).toEqual(
-      expect.arrayContaining([HOOK_FEATURE_MULTI_TEAM, HOOK_FEATURE_SESSION_PICKER]),
+      expect.arrayContaining([HOOK_FEATURE_MULTI_TEAM, HOOK_FEATURE_SESSION_PICKER, HOOK_FEATURE_IM_QUESTIONS]),
     );
     expect(hello.payload.features).not.toContain(HOOK_FEATURE_PROVIDER_BIND);
     expect(hello.payload.features).not.toContain(HOOK_FEATURE_PROVIDER_PREFS);
@@ -2051,6 +2052,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_PROVIDER_BIND);
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_SESSION_RESULT);
     expect(telegramHello.payload.features).not.toContain(HOOK_FEATURE_MULTI_TEAM);
+    expect(telegramHello.payload.features).not.toContain(HOOK_FEATURE_IM_QUESTIONS);
     telegram.sock.send(
       serializeHookMessage(
         makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES }),
@@ -3387,6 +3389,7 @@ describe('官方飞书 / Lark provider lane', () => {
       HOOK_FEATURE_MESSAGE_OPS,
       'feishu-progress-ops-v1',
       'feishu-final-ops-v1',
+      HOOK_FEATURE_IM_QUESTIONS,
     ]);
     expect((opts.buildHello().features ?? []).some((feature) => feature.startsWith('telegram-'))).toBe(false);
 

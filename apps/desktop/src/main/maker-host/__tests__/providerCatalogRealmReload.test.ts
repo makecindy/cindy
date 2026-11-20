@@ -8,6 +8,7 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as activeCatalogForHostParity from '../active-catalog.js';
+import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
@@ -44,10 +45,13 @@ const h = vi.hoisted(() => ({
   request: vi.fn(),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
   pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  claudePool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  claudeModelRefresh: vi.fn<() => Promise<boolean>>(async () => false),
   legacyLoggedIn: new Set<string>(),
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  copyAccountOverrides: vi.fn(),
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
@@ -63,7 +67,7 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
   return {
     ...actual,
-    readPool: (id: string) => id === 'openai' ? h.pool : null,
+    readPool: (id: string) => id === 'openai' ? h.pool : id === 'anthropic' ? h.claudePool : null,
     readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
     readProviderBoundAccountIds: (_kind: string, id: string) => new Set(h.boundAccountIdsByProvider[id] ?? []),
   };
@@ -87,6 +91,10 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
       if (h.placementError) throw h.placementError;
       return h.actualPlacement ? actual.readCreatedSubscriptionProviders() : h.created;
     },
+    readCreatedSubscriptionProvidersIfReadable: () => {
+      if (h.placementError) throw h.placementError;
+      return h.actualPlacement ? actual.readCreatedSubscriptionProvidersIfReadable() : h.created;
+    },
   };
 });
 vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
@@ -104,6 +112,8 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
       return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
+    refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
+    readSubscriptionPoolClaudeModels: () => null,
     readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean }) =>
       (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
       ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
@@ -116,6 +126,7 @@ vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
 vi.mock('../model-disable-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../model-disable-store.js')>(),
   readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
+  copyProviderDisableOverrides: h.copyAccountOverrides,
 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
@@ -303,6 +314,8 @@ import {
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { listEvaluationModels } from '../../cindy-evaluate/models.js';
+import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
@@ -326,6 +339,8 @@ import {
   refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
+import { hostedProviderOffersModel } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -350,6 +365,66 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Unit: all task/provider consumers share this reader. A pending Claude SDK query
+  // must not hold Codex/API/remote catalog reads; only explicit discovery waits for it.
+  it('keeps ordinary provider reads responsive while Claude discovery is pending', async () => {
+    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    let finish!: (value: boolean) => void;
+    const discovery = new Promise<boolean>(resolve => { finish = resolve; });
+    h.claudeModelRefresh.mockReturnValue(discovery);
+    let ordinaryDone = false;
+    let explicitDone = false;
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    const ordinary = service.listProviders({ allowSideEffects: false }).then(result => { ordinaryDone = true; return result; });
+    const explicit = service.listProviders({ allowSideEffects: false, waitForDiscovery: true }).then(() => { explicitDone = true; });
+    try {
+      await vi.waitFor(() => expect(ordinaryDone).toBe(true));
+      expect(h.claudeModelRefresh).toHaveBeenCalled();
+      expect(explicitDone).toBe(false);
+      const calls = h.claudeModelRefresh.mock.calls.length;
+      await service.listProviders({ snapshotOnly: true });
+      expect(h.claudeModelRefresh).toHaveBeenCalledTimes(calls);
+    } finally {
+      finish(false);
+      await Promise.all([ordinary, explicit]);
+      h.claudePool = null;
+      h.claudeModelRefresh.mockReset().mockResolvedValue(false);
+    }
+    expect(explicitDone).toBe(true);
+  });
+  // Unit regression: a pool-only model passes remote admission but the first
+  // inference request reads the empty default-account catalog and returns 403.
+  // Earlier coverage stops at admission. Exercise the live outbound guard too,
+  // including revoked permission and removed membership, without real CLI state.
+  it('uses pooled membership for hosted inference after remote admission', async () => {
+    const previous = getActiveCatalog();
+    const model = { id: 'pool-inference-only', name: 'Pool inference only', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.poolModels = [model];
+    let allowed = true;
+    const binding = bindHostedSessionProvider('pool-inference', 'openai', () => allowed);
+    try {
+      setDiscoveredCodexModels([]);
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(guestProviderModelIds(views, 'openai', 'codex')).toContain(model.id);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(true);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', 'not-offered')).toBe(false);
+      allowed = false;
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      allowed = true;
+      h.poolModels = [{ ...model, disabled: true }];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      h.poolModels = [];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+    } finally {
+      binding.release();
+      h.pool = null;
+      h.poolModels = null;
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
+  });
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
   it.each(['healthy', 'origin-signed-out', 'bound-paused', 'builtin-signed-out', 'builtin-disconnected'] as const)(
@@ -660,6 +735,8 @@ describe('provider catalog realm reload', () => {
         readPool: () => h.pool,
         codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }),
         readSubscriptionPoolCodexModels: () => null,
+        readSubscriptionPoolClaudeModels: () => null,
+        getActiveCatalogWithClaudeModels: activeCatalogForHostParity.getActiveCatalogWithClaudeModels,
         getActiveCatalogWithCodexModels: activeCatalogForHostParity.getActiveCatalogWithCodexModels,
         accountProviderId: (_kind: string, id: string) => h.placement[`openai:${id}`] ?? 'openai',
         readMergedProviderAccount: (id: string) => h.pool?.legacyCodexAccounts?.[id],
@@ -732,19 +809,95 @@ describe('provider catalog realm reload', () => {
       await fsp.writeFile(file, '{unreadable-placement');
       publish.mockClear();
       await refreshCustomProvidersIntoCatalog(); await config.list();
-      // The real file reader returns default-empty on malformed JSON; preserve
-      // those existing semantics and the user's bytes in both launchers.
-      expect(publish.mock.calls).toEqual([[[]], [[]]]);
-      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(false);
+      // Publication preserves the current list; other readers keep default-empty semantics.
+      expect(publish).not.toHaveBeenCalled();
+      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
       expect(await fsp.readFile(file, 'utf8')).toBe('{unreadable-placement');
-      await fsp.writeFile(file, contents);
+      expect(readCreatedSubscriptionProviders()).toEqual({});
+      await fsp.writeFile(file, contents.replace('Fixture', 'Renamed'));
       publish.mockClear();
       await refreshCustomProvidersIntoCatalog(); await config.list();
-      expect(publish.mock.calls).toEqual([desktopArgs, desktopArgs]);
-      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
+      const renamed = [[{ id: 'openai-sub-1234abcd', kind: 'openai', name: 'Renamed' }]];
+      expect(publish.mock.calls).toEqual([renamed, renamed]);
+      expect(getActiveCatalog().providers.find(p => p.id === 'openai-sub-1234abcd')?.name).toBe('Renamed');
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: real owner-scoped placement file through both launchers. Publication
+  // must distinguish missing/valid-empty from unreadable without sharing old-owner state.
+  it.each(['valid-empty', 'missing', 'cold-and-new-owner'] as const)('publishes %s placement consistently in both launchers', async state => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-states-'));
+    const previousOwner = h.owner;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    const file = () => path.join(root, h.owner, 'subscription-account-placement.json');
+    const contents = JSON.stringify({ providers: { 'openai-sub-1234abcd': { kind: 'openai', name: 'Fixture',
+      account: 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc' } } });
+    const createConfig = () => createHostProviderConfig({ profileDir: root, ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => { throw Error('no credential IO'); }, read: () => null, write: () => { throw Error('no credential IO'); }, remove: () => {} } });
+    let config = createConfig();
+    const exists = () => getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd');
+    try {
+      h.customProviderRead.mockResolvedValue([]);
+      await fsp.mkdir(path.dirname(file()), { recursive: true });
+      if (state === 'cold-and-new-owner') {
+        setCustomProviders([]);
+        await fsp.writeFile(file(), '{cold-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        await fsp.writeFile(file(), contents);
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(true);
+        await config.close();
+        h.owner = randomUUID(); setCustomProviders([]); config = createConfig();
+        await fsp.mkdir(path.dirname(file()), { recursive: true }); await fsp.writeFile(file(), '{new-owner-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        expect(await fsp.readFile(file(), 'utf8')).toBe('{new-owner-damage');
+      } else {
+        for (const launcher of ['desktop', 'host']) {
+          await fsp.writeFile(file(), contents);
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(true);
+          if (state === 'missing') await fsp.unlink(file()); else await fsp.writeFile(file(), '{}');
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(false);
+        }
+      }
+    } finally {
+      await config.close(); setCustomProviders([]); h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset(); await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-11-18 user decision (subscription-account-pools.md 升级不再自动拆分), unit: the 11-14 split
+  // moved the only usable account out of a built-in provider and broke the provider groups and shares
+  // that named it (2026-11-17 field report). Real catalog refresh + placement file; minimal input:
+  // default + one unplaced account must stay in the built-in provider across refreshes.
+  it('keeps an old pooled account in its built-in provider on catalog refresh', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-pooled-account-restore-'));
+    const previous = getActiveCatalog();
+    const previousOwner = h.owner;
+    const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.customProviderRead.mockResolvedValue([]);
+    h.copyAccountOverrides.mockClear();
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      for (let refresh = 0; refresh < 2; refresh++) {
+        await refreshCustomProvidersIntoCatalog();
+        expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'))).toEqual([]);
+      }
+      expect(h.copyAccountOverrides).not.toHaveBeenCalled();
+      await expect(fsp.access(path.join(root, h.owner, 'subscription-account-placement.json'))).rejects.toThrow();
+    } finally {
+      setCustomProviders([]); setActiveCatalog(previous);
+      h.pool = null; h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
@@ -870,6 +1023,30 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // Unit: real provider-list wiring must retain channel readiness after hiding a
+  // standalone model, otherwise the user's OFF switch becomes impossible to re-enable.
+  it.each(['evaluation', 'rerank'] as const)('keeps hidden %s models manageable but excludes them from calls', async mode => {
+    const previous = getActiveCatalog();
+    const previousModels = activeCatalogForHostParity.getXdGatewayModels();
+    const id = `example-${mode}`;
+    const api = mode === 'evaluation' ? 'decisions' : 'rerank';
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      activeCatalogForHostParity.setXdGatewayModels([{ id, name: 'Standalone', mode, agents: [], availability: 'available' }]);
+      const agent = getActiveCatalog().providers.find(provider => provider.id === 'xd')!.agents[0];
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: false });
+      const listed = await getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(listed.find(provider => provider.id === 'xd')?.availableMediaModelIds).toContain(id);
+      expect(listEvaluationModels(api)).toEqual([]);
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: true });
+      expect(listEvaluationModels(api)).toMatchObject([{ id }]);
+    } finally {
+      clearModelVisibilityMirror();
+      activeCatalogForHostParity.setXdGatewayModels([...previousModels]);
+      setActiveCatalog(previous);
+    }
+  });
+
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.

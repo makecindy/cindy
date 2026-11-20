@@ -12,6 +12,9 @@ export function chatRemoteErrorGuidanceKey(
   sessionSource: unknown,
 ): string | undefined {
   if (!code) return undefined;
+  if (code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED') {
+    return 'settings.remote.startSession.unsupportedCodexSource';
+  }
   const guidanceCode =
     code === 'AUTO_REVIEW_UNAVAILABLE' ? autoReviewUnavailableGuidanceCode(sessionSource) : code;
   return `chat.remoteError.${guidanceCode}`;

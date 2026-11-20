@@ -71,6 +71,23 @@ describe('toast hover pause/resume', () => {
     expect(isVisible(id)).toBe(false);
   });
 
+  // PR #11084: duplicate alerts during hover must refresh the duration without
+  // unpausing. Existing tests only covered pause/resume without a duplicate.
+  // Minimal input: pause with 1s left, repeat the error, then leave; unit tier.
+  it.each(['error', 'warning'] as const)('悬停时重复 %s 保持暂停，移开后重新获得完整时长', variant => {
+    const id = toast[variant]('repeat', { duration: 8000 });
+    vi.advanceTimersByTime(7000);
+    toast.pauseAutoDismiss(id);
+    expect(toast[variant]('repeat')).toBe(id);
+    vi.advanceTimersByTime(60_000);
+    expect(isVisible(id)).toBe(true);
+    toast.resumeAutoDismiss(id);
+    vi.advanceTimersByTime(7999);
+    expect(getToastSnapshot().find(item => item.id === id)?.exiting).toBe(false);
+    vi.advanceTimersByTime(1 + EXIT_MS);
+    expect(isVisible(id)).toBe(false);
+  });
+
   it('永久显示（duration=0）的条目 pause/resume 为 no-op', () => {
     const id = toast.error('sticky', { duration: 0 });
     toast.pauseAutoDismiss(id);

@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { canLinkFile } from '../maker-host/__tests__/codexAuthTestFs';
 
 // Unit boundary for the Windows syscall. The real PowerShell/File.Move path is
 // exercised separately by check-windows-codex-auth-move.mjs in Windows CI.
@@ -23,6 +24,8 @@ vi.mock('../maker-host/codex-auth-file-move', () => ({
     fs.renameSync(from, to);
   },
 }));
+
+import * as authFileMove from '../maker-host/codex-auth-file-move';
 
 import {
   copyCodexAuthSnapshot,
@@ -39,23 +42,6 @@ let myAuth: string;
 
 const SYSTEM_CONTENT = JSON.stringify({ tokens: { access_token: 'system-token' } });
 const MY_CONTENT = JSON.stringify({ tokens: { access_token: 'stale-local-token' } });
-
-/** 探测宿主真实能力，不假设每台 Windows 机器都能创建文件 symlink。 */
-function canCreateFileSymlink(): boolean {
-  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-auth-link-probe-'));
-  try {
-    const target = path.join(probeRoot, 'target');
-    fs.writeFileSync(target, 'probe');
-    fs.symlinkSync(target, path.join(probeRoot, 'link'), 'file');
-    return true;
-  } catch {
-    return false;
-  } finally {
-    fs.rmSync(probeRoot, { recursive: true, force: true });
-  }
-}
-
-const canLinkFile = canCreateFileSymlink();
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-auth-link-test-'));
@@ -276,9 +262,151 @@ describe('relinkSharedCodexAuth', () => {
     expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
   });
+
+  // Unit / Windows CI #10548: the stress test above does not control the
+  // delete→move window. Hold one real relink there, then relink the same entry
+  // through a directory alias. Neither publication nor recovery may overlap;
+  // a different home must still make progress. Only fake fixture bytes are used.
+  it.skipIf(!canLinkFile).each([false, true])(
+    'Windows serializes same-entry relinks through publication/recovery (move fails: %s)',
+    async (failFirstMove) => {
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      fs.writeFileSync(myAuth, MY_CONTENT);
+      const aliasDir = path.join(tmpRoot, 'home-alias');
+      fs.symlinkSync(path.dirname(myAuth), aliasDir, 'junction');
+      const aliasAuth = path.join(aliasDir, 'auth.json');
+      const otherAuth = path.join(tmpRoot, 'other-home', 'auth.json');
+      fs.mkdirSync(path.dirname(otherAuth));
+
+      // Complete fixture syscalls synchronously behind their async interfaces,
+      // so the second relink advances before the independent-home checkpoint.
+      // This selects an interleaving without sleeps or filesystem timing guesses.
+      vi.spyOn(fs.promises, 'stat').mockImplementation(async (file, opts) =>
+        fs.statSync(file, opts as never) as never,
+      );
+      vi.spyOn(fs.promises, 'symlink').mockImplementation(async (target, file, type) => {
+        fs.symlinkSync(target, file, type as Parameters<typeof fs.symlinkSync>[2]);
+      });
+      vi.spyOn(fs.promises, 'rm').mockImplementation(async (file, opts) => {
+        fs.rmSync(file, opts);
+      });
+      let entered!: () => void;
+      const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+      let release!: () => void;
+      const firstReleased = new Promise<void>((resolve) => { release = resolve; });
+      const originalMove = authFileMove.moveCodexAuthFile;
+      vi.spyOn(authFileMove, 'moveCodexAuthFile').mockImplementationOnce(async (from, to) => {
+        entered();
+        await firstReleased;
+        if (failFirstMove) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        await originalMove(from, to);
+      });
+
+      const first = relinkSharedCodexAuth(systemAuth, myAuth, 'win32');
+      let second: ReturnType<typeof relinkSharedCodexAuth> | undefined;
+      try {
+        await firstEntered;
+        second = relinkSharedCodexAuth(systemAuth, aliasAuth, 'win32');
+        await expect(relinkSharedCodexAuth(systemAuth, otherAuth, 'win32'))
+          .resolves.toMatchObject({ kind: 'linked' });
+      } finally {
+        release();
+        await Promise.all([first, second]);
+      }
+      if (!failFirstMove) expect((await first).error).toBeUndefined();
+      expect((await first).kind).toBe(failFirstMove ? 'recovered' : 'linked');
+      expect((await second)?.kind).toBe('linked');
+      expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      expect(sameInode(systemAuth, myAuth)).toBe(true);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      expect(leftoverSidecars()).toEqual([]);
+      // A completed (including recovered) operation must release its queue entry.
+      await expect(relinkSharedCodexAuth(systemAuth, myAuth, 'win32'))
+        .resolves.toMatchObject({ kind: 'linked' });
+    },
+  );
 });
 
 describe('copyCodexAuthSnapshot', () => {
+  // P06 unit: repeat Dev reads must retain an independent equal snapshot, but
+  // never a stale comparison or a shared alias. Existing cases only tested copy
+  // publication. Real temp files + a close hook model replacement after reading.
+  it.each(['stable', 'different-bytes', 'source-changed', 'target-changed', 'source-replaced', 'target-replaced', 'authorization-changed'] as const)(
+    'rechecks exact bytes, file generations and caller authorization (%s)', async (change) => {
+      const edited = SYSTEM_CONTENT.replace('system-token', 'edited-token');
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      fs.writeFileSync(myAuth, change === 'different-bytes' ? edited : SYSTEM_CONTENT);
+      const original = fs.statSync(myAuth, { bigint: true });
+      const copy = vi.spyOn(fs.promises, 'copyFile');
+      const open = fs.promises.open.bind(fs.promises);
+      let current = true;
+      let changed = false;
+      vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) === myAuth && !changed) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close();
+            if (changed) return;
+            changed = true;
+            if (change === 'authorization-changed') current = false;
+            if (change === 'source-changed' || change === 'target-changed') {
+              const target = change === 'source-changed' ? systemAuth : myAuth;
+              const before = fs.statSync(target);
+              fs.writeFileSync(target, edited);
+              fs.utimesSync(target, before.atime, before.mtime);
+            }
+            if (change === 'source-replaced' || change === 'target-replaced') {
+              const target = change === 'source-replaced' ? systemAuth : myAuth;
+              const replacement = `${target}.replacement`;
+              fs.writeFileSync(replacement, SYSTEM_CONTENT);
+              fs.renameSync(replacement, target);
+            }
+          });
+        }
+        return handle;
+      });
+      const outcome = await copyCodexAuthSnapshot(systemAuth, myAuth, process.platform, undefined, () => {
+        if (!current) throw new Error('authorization changed');
+      });
+      if (change === 'stable') {
+        expect(outcome).toEqual({ kind: 'copied', unchanged: true });
+        expect(copy).not.toHaveBeenCalled();
+        const after = fs.statSync(myAuth, { bigint: true });
+        expect([after.dev, after.ino, after.mtimeNs, after.ctimeNs])
+          .toEqual([original.dev, original.ino, original.mtimeNs, original.ctimeNs]);
+      } else if (change === 'authorization-changed') {
+        expect(outcome.kind).toBe('copy-unsupported');
+        expect(copy).not.toHaveBeenCalled();
+        expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      } else {
+        expect(outcome).toEqual({ kind: 'copied' });
+        expect(copy).toHaveBeenCalledOnce();
+      }
+      if (change !== 'authorization-changed') {
+        expect(fs.readFileSync(myAuth)).toEqual(fs.readFileSync(systemAuth));
+        expect(sameInode(systemAuth, myAuth)).toBe(false);
+      }
+      expect(fs.readdirSync(path.dirname(myAuth))).toEqual(['auth.json']);
+    },
+  );
+
+  for (const link of ['hardlink', 'symlink'] as const) {
+    it.skipIf(link === 'symlink' && !canLinkFile)(
+      `still detaches an identical ${link} instead of treating it as an independent snapshot`, async () => {
+        fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+        if (link === 'hardlink') fs.linkSync(systemAuth, myAuth);
+        else fs.symlinkSync(systemAuth, myAuth, 'file');
+        const out = await copyCodexAuthSnapshot(systemAuth, myAuth, process.platform, undefined, () => {});
+        expect(out).toEqual({ kind: 'copied' });
+        expect(sameInode(systemAuth, myAuth)).toBe(false);
+        expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(false);
+        fs.writeFileSync(myAuth, MY_CONTENT);
+        expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      },
+    );
+  }
+
   it('publishes an independent snapshot so child writes cannot mutate the source', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
 
@@ -303,15 +431,21 @@ describe('copyCodexAuthSnapshot', () => {
 });
 
 describe('recoverCodexAuth', () => {
-  it('systemAuth 存在 → 重建 myAuth 并返回 true', async () => {
+  it('systemAuth 存在时按真实软链接能力恢复，失败时保护系统凭证', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     expect(fs.existsSync(myAuth)).toBe(false);
 
     const ok = await recoverCodexAuth(systemAuth, myAuth);
 
-    expect(ok).toBe(true);
-    expect(fs.existsSync(myAuth)).toBe(true);
-    expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+    expect(ok).toBe(canLinkFile);
+    expect(fs.existsSync(myAuth)).toBe(canLinkFile);
+    if (canLinkFile) {
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+      expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(true);
+    }
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(leftoverSidecars()).toEqual([]);
   });
 
   it('systemAuth 不存在 → 返回 false,不创建 myAuth', async () => {

@@ -17,6 +17,7 @@ import {
   NEW_BOT_DEFAULT_HARNESS,
 } from '../../../shared/botDefaults';
 import { getBotLastReadAtMap, seedMissingBotReadState } from './botReadState';
+import { parseTeammateInboxSnooze, type TeammateInboxSnooze } from './remoteBotRoster';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
 import { canonicalBotSession } from './botSessionOwners';
 export { canonicalBotSession } from './botSessionOwners';
@@ -220,6 +221,8 @@ export interface BotProfile {
   lastMessageAt?: number | null;
   /** Who sent that message — lets the list read like a chat list, not a log. */
   lastMessageRole?: 'user' | 'assistant' | null;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: TeammateInboxSnooze;
   createdAt: number;
   sessions: BotSessionProjection[];
 }
@@ -510,9 +513,12 @@ let profiles: BotProfile[] = [];
 const listeners = new Set<() => void>();
 let hydrated = false;
 let profileListLoaded = false;
+/** Read outcome is separate from the last successful (possibly empty) snapshot. */
+let profileLoadState: 'pending' | 'ready' | 'error' = 'pending';
 let profileOwner = getDataOwnerGeneration();
 let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
+let activeHydration: { owner: ReturnType<typeof getDataOwnerGeneration>; refreshPending: boolean } | null = null;
 /** 每个伙伴各自的写入代际 —— 见 updateBotProfile 里的 isLatestWrite。 */
 const profileWriteGenerations = new Map<string, number>();
 
@@ -522,12 +528,14 @@ function ensureProfileOwner(): void {
   profileOwner = getDataOwnerGeneration();
   profiles = [];
   profileListLoaded = false;
+  profileLoadState = 'pending';
   unreadCounts = {};
   globalModelChainCache = null;
   globalModelChainCustomized = null;
   modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();
+  activeHydration = null;
   hydrationGeneration += 1;
   hydrated = false;
 }
@@ -537,7 +545,22 @@ function assertCurrentOwner(owner: ReturnType<typeof getDataOwnerGeneration>): v
 }
 
 function trackHydration(): void {
-  const promise = hydrateFromDatabase();
+  if (activeHydration) return;
+  const flight = { owner: getDataOwnerGeneration(), refreshPending: false };
+  activeHydration = flight;
+  const promise = (async () => {
+    try {
+      do {
+        flight.refreshPending = false;
+        await hydrateFromDatabase();
+        // Notifications during a read only retain one successor. A failed read
+        // does not retry itself, and an old owner can neither restart nor clear
+        // the new owner's flight.
+      } while (flight.refreshPending && isDataOwnerGenerationCurrent(flight.owner));
+    } finally {
+      if (activeHydration === flight) activeHydration = null;
+    }
+  })();
   hydrationPromises.add(promise);
   void promise.then(
     () => hydrationPromises.delete(promise),
@@ -692,6 +715,7 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
       item.lastMessageRole === 'user' || item.lastMessageRole === 'assistant'
         ? item.lastMessageRole
         : null,
+    ...(parseTeammateInboxSnooze(item.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(item.inboxSnooze) } : {}),
     createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
     sessions: Array.isArray(item.sessions)
       ? item.sessions.filter((s): s is BotSessionProjection => !!s && typeof s.id === 'string')
@@ -746,6 +770,8 @@ async function hydrateFromDatabase(): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++hydrationGeneration;
   const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
+  profileLoadState = 'pending';
+  emit();
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
@@ -772,6 +798,7 @@ async function hydrateFromDatabase(): Promise<void> {
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
     profileListLoaded = true;
+    profileLoadState = 'ready';
     projectGlobalModelChain();
     applyUnreadCounts(rows);
     // Discovery is not an acknowledgement; absent/hidden rows never delete shared reads.
@@ -781,23 +808,34 @@ async function hydrateFromDatabase(): Promise<void> {
     // DB readiness can race the first renderer render during account/bootstrap.
     // The Bots layout explicitly calls refreshBotProfiles when entered, so do
     // not keep polling a signed-out renderer in the background.
-    if (isCurrent()) { hydrated = false; profileListLoaded = true; emit(); }
+    if (isCurrent()) {
+      hydrated = false;
+      profileLoadState = 'error';
+      // Keep the last successful snapshot; a failed first read proves no emptiness.
+      emit();
+    }
   }
 }
 
-trackHydration();
-
+// Do not read at module import: auth can precede LocalDbGate. AppWindowSync
+// mounts useBotUnreadSync after readiness; other consumers explicitly ensure.
 export function refreshBotProfiles(): void {
   ensureProfileOwner();
   emit();
   hydrated = false;
+  if (activeHydration) {
+    activeHydration.refreshPending = true;
+    // A pre-notification snapshot must not overwrite a just-accepted edit.
+    hydrationGeneration += 1;
+    return;
+  }
   trackHydration();
 }
 
 /**
- * Wait for the current owner's profiles outside the Bots views. The module-level
- * hydration can run before sign-in, and an owner change clears the projection
- * without reloading it; `refresh` also re-reads a projection that is already loaded.
+ * Wait for the current owner's profiles outside the Bots views. An owner change
+ * clears the projection without reloading it; `refresh` also re-reads a projection
+ * that is already loaded.
  */
 export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfile[]> {
   ensureProfileOwner();
@@ -846,6 +884,15 @@ export async function runBotLifecycleAction(
     }
   }
   return result;
+}
+
+/** Subscribe independently: a failed read need not replace the profile array. */
+export function useBotProfilesLoadState(): typeof profileLoadState {
+  const snapshot = () => {
+    ensureProfileOwner();
+    return profileLoadState;
+  };
+  return useSyncExternalStore(subscribeBotProfiles, snapshot, snapshot);
 }
 
 export function hasLoadedBotProfiles(): boolean {
@@ -901,7 +948,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
         }),
   };
   const bot: BotProfile = {
-    id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `bot_${now}_${crypto.randomUUID()}`,
     templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),

@@ -19,7 +19,63 @@ These diagnostics omit notification text, share links, credentials and absolute
 stack paths, and do not expand the log-upload allowlist. They observe visibility
 without hiding or destroying a host that may carry an active connection.
 
+## Privacy screen (2026-11-14)
+
+The away cover, the in-session privacy screen and the cover after a remote exit are one
+**privacy screen**; product rules, settings and wording are in
+[docs/product-rules/privacy-screen.md](product-rules/privacy-screen.md). Where the
+older sections below differ, this section wins.
+
+- **One local switch decides how to protect.** Settings → General → When You're Away
+  (`AwayFromComputerSection`) holds 「保持电脑唤醒」 and 「用隐私屏代替锁屏」 (the stored
+  `awayGuard` setting). `privacyScreenEnabled()` (awayGuardService) gates the away cover
+  and every protected remote end: off means `protectOnExit` really locks. While on,
+  `keepAwakeController.setPrivacyScreen(true)` also keeps the system awake; the user's own
+  keep-awake choice returns when it is turned off.
+- **Display only when work needs it.** `DisplayDemand` (displayDemand.ts) is true while an
+  Agent task runs (`AgentIslandService` task overview, phase `running`) or an active
+  schedule fires within 3 minutes (schedule storage read at most once a minute). Without
+  it the guard releases the display assertion and does not cover; an existing cover stays
+  until the system locks. Remote exit covers follow the same rule.
+- **Idle viewers follow the host.** Hosts with the rule advertise `hostIdle` and
+  `exitProtection` (`'privacy-screen' | 'lock'`, only where a privacy screen exists) and
+  ignore `idleTimeoutMinutes`. Remote input renews the lease's absence clock; at the
+  host's away time the lease ends with a real `lockScreen` (never the cover) and blocks
+  automatic recovery, unless the privacy screen is on and work needs the screen
+  (`keepWhileWorking`), which keeps the lease and restarts absence when work ends.
+  Involuntary ends of `hostIdle` leases are always protected. Viewers hide their idle
+  setting for such hosts and keep sending the old default to older hosts.
+- **Same picture everywhere.** `privacyScreenHtml` is black with the illustration, white
+  wordmark and status; full brightness for 10 s after load, then 30 %, drifting among eight
+  positions every 90 s (fade-and-move under reduced motion). Helpers report physical
+  pointer movement as the fixed word `pointer` (at most every 2 s; macOS and Windows);
+  `PrivacyScreen.wake()` reloads the page to restart the bright period. Every macOS mask is
+  99 % opaque. Hyprland's plugin renders the same layout natively, jumps between positions
+  instead of sliding, and answers `{"op":"idle"}` with milliseconds since physical input.
+- **When the lock is not confirmed** the masks stay and catch clicks (`holdInput`), the
+  display is released, and the helper's `--verify-owner` asks the OS to verify the owner
+  (macOS LocalAuthentication `deviceOwnerAuthentication`; Windows `UserConsentVerifier`
+  anchored to the mask's window handle). Input is released first (`releaseInput`, not a
+  failure) and the masks drop to the pop-up-menu level while the prompt is open (still above
+  the Dock and menu bar; the floating level showed the Dock). Verified
+  uncovers (`masksEnded`); cancelled or unavailable re-arms the input watcher
+  (`rearmInput`) so the next touch retries the lock. Only fixed words leave the helper.
+  The macOS helper links `native/remote-desktop/macos-input-Info.plist` into
+  `__TEXT,__info_plist` (packaging, dev build and personal build) so the prompt reads
+  "Cindy is trying to remove the privacy screen" instead of the executable name; its
+  `CFBundleIdentifier` equals the existing signing identifier so the Accessibility grant is
+  unchanged. Verified on macOS 27.3 with an ad-hoc dev build (2026-11-14).
+- **Platforms.** `supportsAwayGuard()` covers macOS 14+, and Windows 10 build 19041+ only
+  once `WINDOWS_PRIVACY_SCREEN_ENABLED` is turned on (off until verified on Windows
+  hardware; until then Windows also has no lock on exit, as before #9899);
+  `privacyScreenAvailable()` adds Hyprland once `supportsLinuxPrivacy()` resolves, with
+  `startLinuxAwayCover()` driving the compositor cover from its idle time. Windows reads
+  "follow system" from `powercfg` (`parseWindowsDisplayOffMs`); Hyprland uses 10 minutes.
+
 ## Idle protection
+
+> 2026-11-14: hosts advertising `hostIdle` replace the per-viewer minutes below with
+> their own away time; see "Privacy screen" above.
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
 Security panel. Each controller remembers its setting per computer: 1, 5 (default),
@@ -30,26 +86,71 @@ This is separate from the default-on lock-on-exit and privacy-screen preferences
 The host counts elapsed time since actual remote input or manual clipboard actions.
 Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
 reset it. Viewing a static desktop or video without input still counts as idle.
-When the deadline expires, the host revokes input, requests native locking and
-ends the remote desktop. It rejects automatic recovery until a new explicit start.
+When the deadline expires, the host revokes input, protects the local desktop and
+ends the remote desktop. On macOS 14+, Windows 10 build 19041+, and supported Hyprland hosts, protection
+uses the persistent privacy cover described below; unsupported hosts and failed cover setup use native locking. It rejects automatic recovery until a new explicit start.
 Lock failures are logged; the viewer reports disconnection without claiming that
 an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
 
-Desktop controller lock/suspend retires its viewer immediately and requests a host
-lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
-connection and requests a lock; temporary inactive states (such as biometric prompts)
+Desktop controller lock/suspend retires its viewer immediately and requests host
+exit protection. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests exit protection; temporary inactive states (such as biometric prompts)
 do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
 remote desktop when the controller returns. The lock request is retained for any
 in-flight start reply. Background PiP failure or preparation timeout follows the
 same protected exit. Automatic Mobile recovery
 does not use a saved password; deliberate reconnects may still auto-unlock.
 If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
-locks the protected lease. A transient
+protects the desktop and ends the lease. A transient
 media reconnect preserves the live host lease and its idle deadline until resume;
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
 
+## Privacy cover after remote exit (2026-11-11)
+
+> 2026-11-14: the cover is used only when the host's 「用隐私屏代替锁屏」 is on; otherwise
+> a protected exit really locks. The display is held only while work needs it.
+
+On macOS 14+ and Windows 10 build 19041+, a protected remote exit puts up the
+local away privacy cover. On macOS this is the same cover as **Keep working while
+away**, and works even if that setting is off. Windows uses the same lifecycle
+with native Windows input hooks and confirmed session locking. The cover keeps the display
+awake so Agents can continue working. It survives remote lease cleanup and has no
+preview timeout; an existing preview is adopted as persistent protection. Only
+local deliberate input (click, key press or meaningful scroll) triggers the system
+lock, while pointer drift is swallowed. Reconnecting does not remove the cover.
+
+Explicit local exit from the in-session privacy screen and quitting Cindy still
+lock immediately. If that local-exit lock is not confirmed, the host takes the same
+persistent cover with the lock-failed note instead of uncovering an unlocked desktop
+(user decision 2026-11-14), and drops it once the OS locks; the in-session local exit
+keeps its "Disconnect?" confirmation, because the phone may still be in use. Quitting
+cannot outlive the app and relies on the helper's EOF lock. Existing fail-safe locks (mask/helper failure and newly attached
+displays) remain. Failed cover startup or an unsupported platform falls back to the
+existing native lock where available. No path unlocks an already locked computer. The wire fields
+`lockOnExit` and `stop.lockScreen` stay compatible: old hosts still lock immediately.
+
+Linux uses the existing compositor privacy backend (Hyprland 0.56.2 with matching
+ABI). A protected exit adopts the existing mask/token without a stop/start gap,
+turns it into a black persistent cover, and keeps the display awake. Remote toggles
+and lease cleanup cannot remove it. Physical input requests the native session
+locker; capture and Agent injection continue while covered. The compositor stops
+masking and consuming input only when the system session lock owns the desktop.
+On Main heartbeat loss it requests locking and retains the cover until that handoff,
+rather than releasing it into an unlocked desktop. It runs the existing Omarchy
+locker, or logind's lock request on other supported Hyprland setups.
+
+This does not add a privacy backend to GNOME, KDE or X11: those environments keep
+their existing native-lock fallback. No generic Wayland portal can be assumed to
+provide the compositor's physical-input/capture separation. Native Windows and
+Hyprland lock/unlock and crash behavior still need verification on those systems;
+macOS unit tests and cross-compilation do not substitute for it.
+
 ## Keep working while away (macOS, 2026-11-06)
+
+> 2026-11-14: now 「用隐私屏代替锁屏」 under Settings → General → When You're Away, also on
+> Windows and Hyprland. It no longer keeps the display on around the clock: only while
+> work needs it. The black cover is now the shared privacy-screen picture.
 
 Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
 the privacy masks without a remote viewer. While it is on, Main holds
@@ -67,7 +168,7 @@ off; Agents keep working behind it: masks ignore mouse events and the
 
 The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
-turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
 some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
@@ -83,7 +184,7 @@ stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a lock
 screen rather than an uncovered desktop. Main locks before removing masks when the
 setting is turned off, a display is added (including while the masks are still going
 up), or a mask window fails, and removes them only once the lock is confirmed. If it
-cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+cannot lock, the masks stay up with a "press
 Control-Command-Q" note, the display assertion is released and the masks go when macOS
 locks. Agent input skips the person-at-the-Mac check only after every mask is up and
 the helper is consuming physical input. Remote desktop sessions do not end the cover:
@@ -101,6 +202,22 @@ in this path unlocks the screen, edits authorization rules or stores a password;
 screen that was already locked when the setting was turned on stays locked. Logic lives in
 `apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
 `awayGuardService.ts`; shared-userData passive instances do not run it.
+
+### macOS lock method (2026-11-14)
+
+Every macOS lock in this document (away cover, exit cover, local privacy exit, idle
+and disconnect protection) goes through the input helper's `lockOwnedSession`. It
+first calls loginwindow's immediate lock (`SACLockScreenImmediate` in the private
+`login.framework`, resolved at run time) and waits up to 1.5 s for the console session
+to report the lock; only then does it post Control-Command-Q (needs Accessibility) and
+wait 3 s more. The shortcut alone depended on the frontmost app handling the Apple
+menu's key equivalent: the away cover is non-activating, so a hung app, a full-screen
+game or a VM / remote client that captures keys left the desktop unlocked behind a
+"could not lock" cover. Success is still only the OS lock state, never the call's
+return value. A failure prints `lock-failed <reason>` with a fixed word (`session`,
+`caller`, `permission`, `timeout`); Main logs that word only (`screen lock not
+confirmed`, `away guard helper lock not confirmed`). Main's waits allow for both
+steps (`--lock-screen` 7 s, away helper `lock` 8 s).
 
 ## Desktop viewer
 

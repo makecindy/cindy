@@ -121,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   getPrimaryDisplay: vi.fn(),
   getDisplayMatching: vi.fn(),
   getAllDisplays: vi.fn(),
+  onDisplayEvent: vi.fn<(event: string, listener: () => void) => void>(),
   getPreferredSystemLanguages: vi.fn(),
   getLocale: vi.fn(),
   ipcHandle: vi.fn(),
@@ -170,6 +171,7 @@ vi.mock('electron', () => {
     ipcMain: { handle: mocks.ipcHandle },
     shell: { openExternal: mocks.openExternal },
     screen: {
+      on: mocks.onDisplayEvent,
       getPrimaryDisplay: mocks.getPrimaryDisplay,
       getDisplayMatching: mocks.getDisplayMatching,
       getAllDisplays: mocks.getAllDisplays,
@@ -251,6 +253,7 @@ beforeEach(async () => {
   mocks.getPrimaryDisplay.mockReset();
   mocks.getDisplayMatching.mockReset();
   mocks.getAllDisplays.mockReset();
+  mocks.onDisplayEvent.mockClear();
   mocks.getPreferredSystemLanguages.mockReset();
   mocks.getLocale.mockReset();
   mocks.ipcHandle.mockReset();
@@ -1101,6 +1104,8 @@ describe('AgentIslandService native publishing', () => {
     mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'muted-task');
     service.handleUserPrompt({ sessionId: 'muted-task', agentKind: 'codex' }, 'run tests');
 
+    // Privacy-screen demand must include muted execution (PR #10639).
+    expect(service.getLocalRunningTaskCount()).toBe(1);
     // 岛面（含菜单栏与提示音）里没有它。
     expect(published.at(-1)?.sessions).toEqual([]);
     // 但侧栏卡片与远端活动镜像仍有实时活动：静音不是把任务藏起来。
@@ -5552,7 +5557,7 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
-  it('falls back to the best current display when the selected display is disconnected', async () => {
+  it('hides the island while its selected display is disconnected and restores it on reconnect', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
@@ -5563,7 +5568,6 @@ describe('AgentIslandService native publishing', () => {
       getMainWindow: () => null,
       nativeHost: { failed: false, publish },
     });
-    syncEnabledForTest(service, publish);
     service.registerIpc();
 
     await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
@@ -5574,9 +5578,12 @@ describe('AgentIslandService native publishing', () => {
       displayInternal: false,
       displayBounds: { x: 1728, y: 0, width: 1512, height: 982 },
     });
+    service.setEnabled(true);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
+
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
-    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([1]);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
 
     const options = await registeredIpcHandler(AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL)(null);
     expect(options).toMatchObject({
@@ -5586,6 +5593,54 @@ describe('AgentIslandService native publishing', () => {
         displayName: 'Disconnected Display',
       },
     });
+
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    mocks.displays.push({
+      id: 7, label: 'Disconnected Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+    });
+    displayEvents.get('display-added')!();
+    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([7]);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
+  });
+
+  // Unit: alert callers must fall back while the selected display is absent.
+  // The previous regression only checked frames and missed notification ownership.
+  it.each([false, true])('releases alert ownership while disconnected (live activity=%s)', async (liveOwnsAlerts) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, available: true, publish },
+      liveActivity: { sync: vi.fn(), ownsAlerts: () => liveOwnsAlerts } as unknown as AgentIslandLiveActivity,
+    });
+    service.registerIpc();
+    service.setEnabled(true);
+    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: true });
+    service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'message',
+      mentioned: true, preview: 'hello', lastMessageAt: 1, members: [] });
+    const display = { id: 7, label: 'Studio Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 } };
+    await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
+      mode: 'display', displayId: display.id, displayName: display.label,
+    });
+    const ownsTaskAlerts = () => (['done', 'needs-reply', 'error'] as const).map(kind => service.ownsTaskAlert(kind));
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
+
+    mocks.displays.push(display);
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    displayEvents.get('display-added')!();
+    expect(ownsTaskAlerts()).toEqual([true, true, true]);
+    expect(service.notifyGroupChat('group')).toBe(true);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
   });
 
   it('remaps by persisted identity before trusting a reused display id', async () => {

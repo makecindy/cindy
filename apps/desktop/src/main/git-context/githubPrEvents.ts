@@ -1,5 +1,5 @@
 import type { GithubPrRefresh } from '../scheduler-host/webhook/github';
-import type { PrFollowWatch } from './prFollowWatch';
+import { changesBetween, type PrFollowWatch } from './prFollowWatch';
 import type { PrStatusService } from './prStatusService';
 
 function query(url: string) {
@@ -18,7 +18,7 @@ export async function cachedGithubPrHeads(service: PrStatusService, urls: readon
 
 /** A batch is acknowledged only after all selected facts have been re-read successfully. */
 export async function refreshGithubPrEvents(
-  service: PrStatusService, watch: Pick<PrFollowWatch, 'notify' | 'observedSignature'>, urls: readonly string[],
+  service: PrStatusService, watch: Pick<PrFollowWatch, 'notify' | 'observedSignature'> & Partial<Pick<PrFollowWatch, 'notifyChange'>>, urls: readonly string[],
   isCurrent: () => boolean, refresh: GithubPrRefresh,
 ): Promise<void> {
   const notify = new Set(refresh.notify);
@@ -41,11 +41,20 @@ export async function refreshGithubPrEvents(
         ]);
         if (!isCurrent()) return;
         if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+        // Use the verified lifecycle to distinguish a merge from an ordinary close.
+        const after = watch.observedSignature(pr);
+        if (refresh.closed?.includes(url) && result.status === 'merged' && !result.metadata?.merged_at && before === undefined) {
+          await watch.notifyChange?.(url, 'merged', isCurrent);
+        }
+        if (refresh.reviews?.includes(url) && !changesBetween(before, after).includes('review')) {
+          await watch.notifyChange?.(url, 'review', isCurrent);
+        }
         // CI uses the shared observer; comments/overflow also check unchanged summaries.
         // A changed observer baseline already rings the follower. An unchanged
         // summary (or first observation) still needs the explicit comment bell.
         if (notify.has(url) && (before === undefined || before === watch.observedSignature(pr))) {
-          await watch.notify(url, isCurrent);
+          if (refresh.reason === 'event' || !watch.notifyChange) await watch.notify(url, isCurrent);
+          else await watch.notifyChange(url, 'reconcile', isCurrent);
         }
       } catch (error) {
         failed = true;

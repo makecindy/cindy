@@ -1,4 +1,5 @@
 import type { ProgressEvent } from '../downloader/index.js';
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 
 /** Publisher metadata supplied by trusted host code, never by Renderer. */
 export interface ToolArtifact {
@@ -13,5 +14,8 @@ export interface ToolArtifact {
 }
 export interface ToolInstallProgress {
   status: 'downloading' | 'installing';
+  /** Kept for stored Cindy Make reports; new UI reads `download`. */
   progress?: Pick<ProgressEvent, 'loaded' | 'total' | 'percent'>;
+  /** Standard progress for the shared DownloadMeter (retries, verifying, speed, time left). */
+  download: DownloadProgress;
 }

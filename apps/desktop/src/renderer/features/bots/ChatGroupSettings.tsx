@@ -61,7 +61,7 @@ export function resolveChatGroupSettingsPage(group: BotGroupSummary, value: stri
   if (value === 'profile') return self?.actorId ? { kind: 'profile' } : null;
   if (!value.startsWith(COMPANION_PAGE)) return null;
   const actorId = value.slice(COMPANION_PAGE.length);
-  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true);
+  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true && candidate.assistant !== true);
   return member ? { kind: 'companion', member } : null;
 }
 
@@ -185,14 +185,14 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       refreshBotGroups();
     },
   }), [group.id, me?.actorId, me?.name, me?.groupAvatar, me?.defaultAvatarUrl, t]);
-  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; repository?: string | null; autoContinue?: boolean }) {
+  async function updateWorkSettings(input: { projectDir?: string | null; repository?: string | null }) {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const generation = getDataOwnerGeneration();
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
+      if (!result.ok) setError(t('repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
       else {
         if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
         refreshBotGroups();
@@ -236,22 +236,46 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     next.set('settingsBot', member.botId);
     setSearchParams(next);
   }
+  const removing = useRef(false);
+  async function removeMember(member: BotGroupMemberView) {
+    if (removing.current || busyRef.current) return;
+    removing.current = true;
+    try {
+      const mine = member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true;
+      const active = group.round?.speakers.some(speaker => speaker.botId === member.botId);
+      const note = mine ? t(key('removeOwnHint'), { name: member.name, group: group.name })
+        + (active ? `\n\n${t(key('removeOwnActiveHint'))}` : '') : t(key('removeHint'));
+      const generation = getDataOwnerGeneration();
+      if (!await confirm({ title: t(key('removeTitle'), { name: member.name }), description: note,
+        confirmText: t(key(mine && active ? 'stopAndRemove' : 'removeOwn')), cancelText: t('bots.cancel'), confirmVariant: 'destructive' })
+        || !mounted.current || !isDataOwnerGenerationCurrent(generation)) return;
+      if (await mutate({ type: 'member', actorId: member.actorId!, action: 'remove' }) && mine) go(null);
+    } finally { removing.current = false; }
+  }
   const memberActions: MemberActions = {
     access: member => go(`${COMPANION_PAGE}${member.actorId}`),
     role: member => void mutate({ type: 'member', actorId: member.actorId!, action: 'role', role: member.role === 'admin' ? 'member' : 'admin' }),
     transfer: member => void confirmed({ type: 'transfer', actorId: member.actorId! }, t(key('transferTitle'), { name: member.name }), t(key('transferHint'))),
-    remove: member => void confirmed({ type: 'member', actorId: member.actorId!, action: 'remove' }, t(key('removeTitle'), { name: member.name }), t(key('removeHint'))),
+    remove: member => void removeMember(member),
   };
 
   let body: ReactNode;
   let footer: ReactNode = null;
   if (page?.kind === 'manage') {
-    const activeCompanions = companions.filter(member => member.status === 'active');
     // The group's own Cindy (servers with groupAssistant) answers messages that @ nobody when anyone may
     // reply (bot-group-chat.md「群里的 Cindy」); turned off, or on older servers, the rows read as before.
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
+      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+        <SettingsCard>
+          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
+              }} />} />
+        </SettingsCard>
+      </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
@@ -285,23 +309,10 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {group.supportsGroupProject && <SettingsRow wrap title={t(key(group.supportsGroupProjectGit ? 'repository' : 'githubRepo'))} hint={t(key(group.supportsGroupProjectGit ? 'repositoryHint' : 'githubRepoHint'))}
             trailing={<RepositoryField repo={group.project ? groupRepositoryLabel(group.project) : ''} anyHost={group.supportsGroupProjectGit === true} busy={busy}
               onSave={repository => void updateWorkSettings({ repository })} />} />}
-          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
+          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(group.projectDirAuto ? key('projectDirAutoHint') : 'bots.groupChat.settings.projectDirNote')}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
         {projectNotice && <div className="mt-2"><SettingsNotice>{projectNotice}</SettingsNotice></div>}
-      </SettingsSection>
-      {/* The organizer arranges a 分工 whose steps are not written out (§7.1). */}
-      <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
-        <SettingsCard>
-          {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key('organizerHint'))}
-            trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
-              options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
-              onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}
-          {/* Kept on this computer like the project folder; only 分工 you start follow it (§7.4). */}
-          {group.autoContinue !== undefined && <SettingsRow title={t('bots.groupChat.plan.autoContinue')} hint={t(key('autoContinueHint'))}
-            trailing={<Switch data-testid="bot-group-auto-continue" checked={group.autoContinue === true} disabled={busy}
-              aria-label={t('bots.groupChat.plan.autoContinue')} onCheckedChange={autoContinue => void updateWorkSettings({ autoContinue })} />} />}
-        </SettingsCard>
       </SettingsSection>
       <SettingsSection caption={owner && group.supportsDissolve !== true ? t('bots.groupChat.lifecycle.unavailable') : undefined}>
         <SettingsCard>
@@ -360,6 +371,9 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
         </div>
       </div>
       <ChatBotAccessField groupId={group.id} member={member} disabled={busy} />
+      <SettingsSection caption={t(key('removeOwnScope'))}><SettingsCard>
+        <SettingsRow danger title={t(key('removeOwn'))} disabled={busy} onClick={() => void removeMember(member)} />
+      </SettingsCard></SettingsSection>
       {profiles.some(bot => bot.id === member.botId) && <SettingsSection caption={t(key('capabilityScope'), { name: member.name })}>
         <SettingsCard>
           <SettingsRow title={t(key('capabilitiesRow'), { name: member.name })} onClick={() => openCapabilities(member)}
@@ -438,7 +452,7 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   const { t } = useTranslation();
   const role = me?.role === 'owner' ? t(key('youAreOwner')) : me?.role === 'admin' ? t(key('youAreAdmin')) : null;
   return <div className="flex items-center gap-3">
-    <BotGroupSidebarAvatar members={group.members} compact surface="panel" />
+    <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
       <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">

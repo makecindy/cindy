@@ -20,6 +20,7 @@ import {
   observeSubscriptionAccountUsage,
   refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels,
   hasConnectedSubscriptionPool,
   hasUnavailableSubscriptionPoolAccount,
   type SubscriptionAccountLease,
@@ -27,6 +28,7 @@ import {
 import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexProviderId } from './store.js';
 import {
   readMergedProviderAccount,
+  accountProviderId,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
 import { registerSessionSubscriptionAccount } from './session.js';
@@ -161,7 +163,7 @@ async function historicalCodexAccount(
  * provider) still pins its own account for its old tasks. A provider that owns accounts assigns
  * among them like any provider (placement.ts), so nothing is pinned here.
  */
-function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string): string | undefined {
+function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string, hasNativeHistory: boolean): string | undefined {
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref?.ownAccount) return;
   if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
@@ -170,9 +172,12 @@ function legacyConnectionAccount(providerId: string | null | undefined, keys: st
   const fallback = readMergedProviderAccount(ref.providerId);
   if (!fallback) return;
   const bindings = keys.map(key => readAccountBinding(key, ref.kind)).filter(Boolean);
+  // A builtin with its CLI profile moved out is only a historical route. Fresh tasks cannot
+  // turn that history fallback into an explicit account selection in another provider.
+  if (ref.providerId === ref.kind && !hasNativeHistory && bindings.length === 0) return;
   const binding = bindings[0];
   if (bindings.some(entry => entry?.accountId !== binding?.accountId)
-    || (binding && binding.accountId !== fallback && binding.via !== ref.providerId))
+    || (binding && binding.accountId !== fallback && (binding.via ?? ref.kind) !== ref.providerId))
     throw new Error('The task subscription account changed');
   // A merged provider may previously have hosted several accounts. Recorded history keeps its
   // actual account; only an old route without any binding falls back to the provider's first one.
@@ -341,16 +346,24 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         return async (options?: RefreshLocalModelsOptions) => {
           if (target.kind === 'pi') return target.refreshLocalModels(options);
           const provider = target.kind === 'claude-code' ? 'anthropic' : 'openai';
+          const ref = options?.providerId ? resolveSubscriptionPoolProviderRef(options.providerId) : null;
           if (
             !readPool(provider) ||
-            (options?.providerId && options.providerId !== provider) ||
+            (options?.providerId && ref?.kind !== provider) ||
+            (ref && !ref.created && ref.providerId !== provider) ||
+            options?.[NATIVE_SUBSCRIPTION_ACCOUNT] ||
             options?.credentialMode === 'gateway-key'
           )
             return target.refreshLocalModels(options);
+          if (provider === 'anthropic')
+            return refreshSubscriptionPoolClaudeModels(true, options?.providerId ?? undefined);
           if (provider === 'openai' && readPool(provider)?.accounts.some(a => !readLegacyCodexProviderId(a.id))) {
-            await refreshSubscriptionPool(provider);
-            await refreshSubscriptionPoolCodexModels(true);
-            return hasConnectedSubscriptionPool(provider) && !hasUnavailableSubscriptionPoolAccount(provider);
+            const providers = options?.providerId ? [options.providerId]
+              : [...new Set(readPool(provider)!.accounts.filter(account => !readLegacyCodexProviderId(account.id))
+                .map(account => accountProviderId(provider, account.id)))];
+            await Promise.all(providers.map(id => refreshSubscriptionPool(id)));
+            await refreshSubscriptionPoolCodexModels(true, options?.providerId ?? undefined);
+            return providers.some(id => hasConnectedSubscriptionPool(id) && !hasUnavailableSubscriptionPoolAccount(id));
           }
           const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
           try {
@@ -383,7 +396,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
             if (!provider) return startLegacy();
             const kind = kindOf(provider);
-            imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
+            imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
             if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, kind))) {
               if (kind === 'openai') {
                 // Unknown private homes retain their legacy route; never pick another account.
@@ -474,7 +487,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let imported = await historicalCodexAccount(target, options, options.sourceSdkSessionId, [key], auth);
           const provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
           if (!provider) return target.forkSdkSession(options);
-          imported ??= legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
+          imported ??= legacyConnectionAccount(options.providerId?.trim(), [key], target.kind, true);
           const kind = kindOf(provider);
           if (!imported && !readAccountBinding(key, kind)) {
             if (kind === 'openai') {

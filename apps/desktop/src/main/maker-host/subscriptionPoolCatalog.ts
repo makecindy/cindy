@@ -5,33 +5,37 @@
  */
 import type { Catalog } from '@cindy/model-providers';
 import type { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
-import type { readMergedProviderAccount, accountProviderId, readCreatedSubscriptionProviders } from '../subscription-accounts/placement.js';
-import type { readSubscriptionPoolCodexModels } from '../subscription-accounts/runtime.js';
-import type { getActiveCatalogWithCodexModels, setSubscriptionPoolProviders } from './active-catalog.js';
+import type { readMergedProviderAccount, accountProviderId, readCreatedSubscriptionProvidersIfReadable } from '../subscription-accounts/placement.js';
+import type { readSubscriptionPoolCodexModels, readSubscriptionPoolClaudeModels } from '../subscription-accounts/runtime.js';
+import type { getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels, setSubscriptionPoolProviders } from './active-catalog.js';
 
 export interface SubscriptionPoolCatalogPorts {
   readPool: typeof readPool;
   codexAccountState(providerId: string): { authenticated: boolean };
   readSubscriptionPoolCodexModels: typeof readSubscriptionPoolCodexModels;
   getActiveCatalogWithCodexModels: typeof getActiveCatalogWithCodexModels;
+  readSubscriptionPoolClaudeModels: typeof readSubscriptionPoolClaudeModels;
+  getActiveCatalogWithClaudeModels: typeof getActiveCatalogWithClaudeModels;
   readMergedProviderAccount: typeof readMergedProviderAccount;
   accountProviderId: typeof accountProviderId;
   readProviderBoundAccountIds: typeof readProviderBoundAccountIds;
 }
 
 export interface SubscriptionPoolPublisherPorts {
-  readCreatedSubscriptionProviders: typeof readCreatedSubscriptionProviders;
+  readCreatedSubscriptionProvidersIfReadable: typeof readCreatedSubscriptionProvidersIfReadable;
   setSubscriptionPoolProviders: typeof setSubscriptionPoolProviders;
   log: { warn(message: string, data: Record<string, unknown>): void };
 }
 
-/** Preserve the previous list when the reader throws, as on Desktop. */
+/** Preserve the published list when the placement file is unreadable or the reader throws. */
 export function publishSubscriptionPoolProviders(ports: SubscriptionPoolPublisherPorts): void {
   try {
-    ports.setSubscriptionPoolProviders(Object.entries(ports.readCreatedSubscriptionProviders())
+    const created = ports.readCreatedSubscriptionProvidersIfReadable();
+    if (created === null) return;
+    ports.setSubscriptionPoolProviders(Object.entries(created)
       .map(([id, entry]) => ({ id, kind: entry.kind, name: entry.name })));
   } catch (err) {
-    // An unreadable placement file keeps the previous list; the next refresh retries.
+    // A thrown read also keeps the previous list; the next refresh retries.
     ports.log.warn('publishing subscription providers failed', { err: String(err) });
   }
 }
@@ -42,6 +46,19 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
   const aliases = pool?.legacyCodexAccounts;
   const originalProviders = catalog.providers;
   catalog = { ...catalog, providers: catalog.providers.map(provider => {
+    if (provider.id === 'anthropic' || provider.subscriptionPool === 'anthropic') {
+      const models = ports.readSubscriptionPoolClaudeModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
+      if (models === null) return provider;
+      const anthropic = ports.getActiveCatalogWithClaudeModels(models).providers.find(entry => entry.id === 'anthropic');
+      if (!anthropic) return provider;
+      // Existing local sends, mobile views, group recovery and guest admission also
+      // read the ordinary catalog. Preserve its native metadata in both projections;
+      // discovery adds/refines this provider's models, never a new task admission gate.
+      // Connection checks and model/share permissions still apply later.
+      const routingModels = new Map((provider.models['claude-code'] ?? []).map(model => [model.id, model]));
+      for (const model of anthropic.models['claude-code'] ?? []) routingModels.set(model.id, model);
+      return { ...provider, models: { ...provider.models, 'claude-code': [...routingModels.values()] } };
+    }
     const legacy = provider.auth.native === 'codex' && aliases && Object.hasOwn(aliases, provider.id);
     if (provider.id !== 'openai' && provider.subscriptionPool !== 'openai' && !legacy) return provider;
     const pooledModels = ports.readSubscriptionPoolCodexModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);

@@ -1,23 +1,25 @@
 /**
  * topologyModel —— 远程连接 V2 拓扑的纯状态推导(可单测,不碰 DOM / IPC)。
  * ---------------------------------------------------------------------------
- * 输入:同账号设备清单(V1 目录)、本机已协商链路快照(路径 / 往返 / 最近业务收发)、中转信息、
+ * 输入:同账号设备清单、本机已确认的连接路径与控制链路快照、中转信息、
  * 正在控制本机的设备、无响应熔断中的设备。输出:每台设备一个节点(状态 / 路径 / 往返 / 消息流向)、
  * 按「怎么连」分组并分到左右两边、离线多了折成一行、一组太多对半分,以及顶上那行数字。
  *
- * 状态分五档:直连、经中转、在线但没建链、要处理(对方没开被控 / 无响应)、离线。颜色只有绿(连着、
+ * 状态包括直连、经中转、连接中、在线但没建链、要处理(对方没开被控 / 无响应)、离线。颜色只有绿(连着、
  * 有消息时变流动虚线)和红(要处理),见 DESIGN.md §2 本页登记;状态同时靠位置、线型、组名和文字表达。
  * 组内按名字排,往返刷新不挪位置。
  */
 
 import { isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { selfDeviceName } from '@/components/settings/deviceLabels';
+import type { DeviceLinkAgentNetPeerRouteView } from '../../../shared/deviceLinkIpc';
 
-export type TopologyStatus = 'direct' | 'relay' | 'unlinked' | 'attention' | 'offline';
+export type TopologyStatus = 'direct' | 'relay' | 'connecting' | 'unlinked' | 'attention' | 'offline';
 export type AttentionReason = 'peer-control-off' | 'unresponsive';
 export type TopologyGroupKey = TopologyStatus;
 export type TopologySide = 1 | -1;
 
-export const GROUP_ORDER: readonly TopologyGroupKey[] = ['direct', 'relay', 'unlinked', 'attention', 'offline'];
+export const GROUP_ORDER: readonly TopologyGroupKey[] = ['direct', 'relay', 'connecting', 'unlinked', 'attention', 'offline'];
 /** 一组超过这么多台(且不经中转)就对半分到两边。 */
 export const SPLIT_THRESHOLD = 6;
 /** 离线设备达到这么多台就折成一行。 */
@@ -41,6 +43,9 @@ export const LABEL_HOLD_MS = 15_000;
 /** 消息流向:out 本机发给它,in 它发给本机,both 双向都有。 */
 export type TopologyFlow = 'out' | 'in' | 'both';
 
+/** 本机到某台设备数据面的实际传输协议:Agent-Net 直连走 UDP,经中转随中转走 UDP 或 WS;Device Link 直连走 WebRTC,经中转走 WS。 */
+export type LinkTransport = 'udp' | 'websocket' | 'webrtc';
+
 export interface TopologyNode {
   id: string;
   encrypted?: boolean;
@@ -50,8 +55,12 @@ export interface TopologyNode {
   modelLabel: string | null;
   isMobile: boolean;
   status: TopologyStatus;
-  /** 本机到它的数据路径;没建链 / 离线为 null。 */
+  /** 本机到它的数据路径，尚未连通时为 null。 */
   path: 'direct' | 'relay' | null;
+  /** 本机到它的实际底层传输协议;未建链、离线或尚无法确定时为 null。 */
+  transport?: LinkTransport | null;
+  /** 远程控制链路的协商状态，供需要控制链路的操作使用。 */
+  controlLinkOpen: boolean;
   rttMs: number | null;
   /** 最近有没有业务消息在这条链路上走、往哪边走;没有为 null。只有直连 / 经中转的设备会有。 */
   flow: TopologyFlow | null;
@@ -79,6 +88,9 @@ export interface TopologyGroup {
 }
 
 export interface TopologyRelay {
+  protocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
+  /** 经中转的数据走中转的 UDP 还是 WebSocket;rttMs 是这条路的往返。 */
+  transport?: DeviceLinkPeerLinksSnapshot['relayTransport'];
   name: string;
   selfHosted: boolean;
   rttMs: number | null;
@@ -109,36 +121,56 @@ export interface TopologyModel {
 export interface BuildTopologyInput {
   devices: readonly DeviceLinkDeviceView[];
   links: readonly DeviceLinkPeerLinkView[];
+  agentNetRoutes?: readonly DeviceLinkAgentNetPeerRouteView[];
   relayRttMs: number | null;
   relayName: string;
+  relayProtocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
+  relayTransport?: DeviceLinkPeerLinksSnapshot['relayTransport'];
   selfHosted: boolean;
   controlledBy: readonly string[];
   unresponsive: readonly string[];
   showOffline: boolean;
 }
 
+function deriveTransport(
+  status: TopologyStatus,
+  path: 'direct' | 'relay' | null,
+  encrypted: boolean | undefined,
+  relayProtocol: DeviceLinkPeerLinksSnapshot['relayProtocol'],
+  relayTransport: DeviceLinkPeerLinksSnapshot['relayTransport'],
+): LinkTransport | null {
+  if (!path || status === 'offline' || encrypted === undefined) return null;
+  if (encrypted) {
+    if (path === 'direct') return 'udp';
+    return relayProtocol === 'agent-net' ? relayTransport ?? null : null;
+  }
+  return path === 'direct' ? 'webrtc' : 'websocket';
+}
+
 function deriveNode(
   d: DeviceLinkDeviceView,
   link: DeviceLinkPeerLinkView | undefined,
+  route: DeviceLinkAgentNetPeerRouteView | undefined,
+  relayProtocol: DeviceLinkPeerLinksSnapshot['relayProtocol'],
+  relayTransport: DeviceLinkPeerLinksSnapshot['relayTransport'],
   controlledBy: ReadonlySet<string>,
   unresponsive: ReadonlySet<string>,
 ): TopologyNode {
   const isMobile = isMobilePlatform(d.platform);
-  const open = !!link && link.open;
-  const path = open ? link.path : null;
+  const control = link?.open ? link : undefined;
+  const agentNetPath = route?.path === 'connecting' ? null : route?.path ?? null;
+  const path = control?.path ?? agentNetPath;
+  const online = d.online || route !== undefined;
   let attention: AttentionReason | null = null;
-  if (d.online && unresponsive.has(d.deviceId)) attention = 'unresponsive';
+  if (online && unresponsive.has(d.deviceId)) attention = 'unresponsive';
   // 手机 / 平板是控制端,没有被控能力,不算「没开被控」。
-  else if (d.online && isCindyApp(d.app) && !isMobile && !d.remoteControlEnabled) attention = 'peer-control-off';
-  const status: TopologyStatus = !d.online
+  else if (online && isCindyApp(d.app) && !isMobile && !d.remoteControlEnabled) attention = 'peer-control-off';
+  const status: TopologyStatus = !online
     ? 'offline'
     : attention
       ? 'attention'
-      : path === 'direct'
-        ? 'direct'
-        : path === 'relay'
-          ? 'relay'
-          : 'unlinked';
+      : path ?? (route?.path === 'connecting' ? 'connecting' : 'unlinked');
+  const encrypted = control ? control.encrypted : agentNetPath ? true : undefined;
   return {
     id: d.deviceId,
     name: d.name,
@@ -148,10 +180,12 @@ function deriveNode(
     isMobile,
     status,
     path,
-    encrypted: open ? link.encrypted : undefined,
-    rttMs: open ? link.rttMs : null,
-    flow: open && (status === 'direct' || status === 'relay') ? flowOf(link) : null,
-    flowText: open && (status === 'direct' || status === 'relay') ? flowTextOf(link) : null,
+    transport: deriveTransport(status, path, encrypted, relayProtocol, relayTransport),
+    controlLinkOpen: control !== undefined,
+    encrypted,
+    rttMs: control ? control.rttMs : route?.rttMs ?? null,
+    flow: control && (status === 'direct' || status === 'relay') ? flowOf(control) : null,
+    flowText: control && (status === 'direct' || status === 'relay') ? flowTextOf(control) : null,
     busy: d.busy,
     lastSeenAt: d.lastSeenAt,
     controlling: controlledBy.has(d.deviceId),
@@ -216,10 +250,21 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
   const self = input.devices.find((d) => d.isSelf) ?? null;
   const others = input.devices.filter((d) => !d.isSelf);
   const linkById = new Map(input.links.map((l) => [l.deviceId, l] as const));
+  const routeById = new Map(input.agentNetRoutes?.map((route) => [route.deviceId, route] as const));
   const controlledBy = new Set(input.controlledBy);
   const unresponsive = new Set(input.unresponsive);
   const nodes = others
-    .map((d) => deriveNode(d, linkById.get(d.deviceId), controlledBy, unresponsive))
+    .map((d) =>
+      deriveNode(
+        d,
+        linkById.get(d.deviceId),
+        routeById.get(d.deviceId),
+        input.relayProtocol,
+        input.relayTransport,
+        controlledBy,
+        unresponsive,
+      ),
+    )
     .sort(compareNodes);
   const byId = new Map(nodes.map((n) => [n.id, n] as const));
 
@@ -262,12 +307,17 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
   };
 
   return {
-    self: self ? { name: self.selfName?.trim() || self.name, platform: self.platform } : null,
+    self: self ? {
+      name: selfDeviceName(self),
+      platform: self.platform,
+    } : null,
     nodes,
     byId,
     groups,
     relay: {
       name: input.relayName,
+      protocol: input.relayProtocol,
+      transport: input.relayProtocol ? input.relayTransport : undefined,
       selfHosted: input.selfHosted,
       rttMs: input.relayRttMs,
       flow: mergeFlows(nodes.filter((n) => n.status === 'relay').map((n) => n.flow)),

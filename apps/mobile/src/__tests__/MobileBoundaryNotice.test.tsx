@@ -35,6 +35,16 @@ afterEach(() => {
 });
 
 describe('MobileBoundaryNotice', () => {
+  // Unit, 2026-11-18 decision. A rebuild with coverage but no detail still
+  // shows its notice inline, which the existing collapsible-detail tests miss.
+  it.each([
+    ['complete', '已完整带上对话记录'],
+    ['condensed', '已压缩较早的对话，原记录仍保留'],
+  ] as const)('shows the %s handoff notice without requiring a tap', (handoffCoverage, caption) => {
+    act(() => root.render(<MobileBoundaryNotice type="context-rebuild" data={{ handoffCoverage }} />));
+    expect(host.textContent).toContain(caption);
+    expect(host.querySelector('button')).toBeNull();
+  });
   it.each(['goal-complete', 'context-rebuild'] as const)('keeps %s details selectable and available on demand', (type) => {
     const detail = '完整原因或交接正文\n第二行也必须保留';
     act(() => root.render(<MobileBoundaryNotice type={type} data={{ reason: detail, handoff: detail, turnsUsed: 3, elapsedMs: 65000 }} />));

@@ -1,3 +1,5 @@
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
+import { resolveSafe as resolveEvaluationImage } from '../imageCacheStore.desktop.js';
 /** Desktop platform services for the shared plugin gateway. */
 import { publishPluginAppResult, pluginModelResult } from '../mcp-apps/pluginCards.js';
 import * as community from '../plugin-contributions/host.js';
@@ -19,9 +21,12 @@ import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.desktop.js';
 import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createGhostGateway } from './ghost.js';
-export type { GhostGrantLiveSessionState, ToolResultImageDescription, CindyGhostsHostDeps } from './ghost.js';
+export type { GhostGrantLiveSessionState, CindyGhostsHostDeps } from './ghost.js';
 
 const gateway = createGhostGateway({
+  callEvaluate: (...args) => callEvaluate(...args),
+  readEvaluationImageFile: (...args) => readEvaluationImageFile(...args),
+  resolveEvaluationImage: (...args) => resolveEvaluationImage(...args),
   publishPluginAppResult: (...args) => publishPluginAppResult(...args),
   pluginModelResult: (...args) => pluginModelResult(...args),
   community,
@@ -58,4 +63,4 @@ const gateway = createGhostGateway({
   openGithubSignIn: (...args) => openGithubSignIn(...args),
   readGithubConnection: (...args) => readGithubConnection(...args)
 });
-export const { authorizeDesktopSessionPath, buildToolResultImageDescriptions, collectCindyMediaUrls, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;
+export const { authorizeDesktopSessionPath, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;

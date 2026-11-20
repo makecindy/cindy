@@ -134,6 +134,7 @@ const SCHEDULER_DDL = [
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
       webhook_trigger TEXT,
+      pr_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -146,6 +147,7 @@ const SCHEDULER_DDL = [
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
       model_agent_device_id TEXT,
+      inherited_project_dir TEXT,
       model TEXT,
       provider_id TEXT,
       agent_device_id TEXT,
@@ -411,6 +413,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      // DB tier: a PR checkout retains the creator project across insert/get/update.
+      inheritedProjectDir: '/projects/app',
+      workingDir: '/checkouts/pr',
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
@@ -434,6 +439,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'paused',
         updatedAt: 1_700_000_200_000,
       });
+      expect(updated?.inheritedProjectDir).toBe('/projects/app');
+      expect(updated?.workingDir).toBe('/checkouts/pr');
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);
@@ -685,7 +692,11 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
   // The in-task banner reads this projection; without missingPlugin it can only say
   // "checks blocked" when a plugin uninstall removed the check script.
-  it('projects the missing plugin of a blocked check into the sidebar index', async () => {
+  // Unit: the desktop sidebar reads a bounded SQL projection, not the full hook record.
+  it.each([
+    { missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } },
+    { prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', failures: 3, retryAt: 1_800_000, device: 'Build Mac' } },
+  ])('projects the blocked check diagnosis into the sidebar index: %j', async (diagnosis) => {
     const harness = createStorageHarness();
     try {
       harness.sqlite.exec(`
@@ -703,14 +714,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         preRunHookResult: {
           status: 'failed', decision: 'block', exitCode: 1, durationMs: 1, stdout: '', stderr: 'MODULE_NOT_FOUND',
           stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false,
-          missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+          ...diagnosis,
         },
       });
       const [run] = await harness.storage.listSidebarIndexRuns();
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
-        missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+        ...diagnosis,
       });
     } finally {
       harness.close();
@@ -790,9 +801,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         stderrTruncated: false, timedOut: false, aborted: false } as const;
       const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
         harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
-      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'provider mismatch' });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a'))
-        .toMatchObject({ errorMsg: 'provider mismatch' });
+        .toMatchObject({ errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
       const before = await harness.storage.listSidebarIndexRuns();
       expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
@@ -804,9 +815,15 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(recovered.find((r) => r.runId === 'execution-a')?.failureRecovered).toBe(false);
       await insert('healthy-a', 'recovery-a', 6, 'skipped', { preRunHookResult: { ...hook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true } });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a')).toBeDefined();
+      const previousFailure = { firedAt: 1, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED', laterRunSucceeded: false };
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session')).toEqual(previousFailure);
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'another-session')).toBeUndefined();
       await insert('success-a', 'recovery-a', 7, 'success', { readAt: 8 });
       expect((await harness.storage.listSidebarIndexRuns()).some((r) => r.runId === 'execution-a')).toBe(false);
-      expect((await harness.storage.listRuns('recovery-a', 50)).some((r) => r.id === 'execution-a')).toBe(true);
+      expect((await harness.storage.listRuns('recovery-a', 50)).find((r) => r.id === 'execution-a'))
+        .toMatchObject({ status: 'failed', failureRecovered: true });
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session'))
+        .toEqual({ ...previousFailure, laterRunSucceeded: true });
       await insert('new-a', 'recovery-a', 9, 'failed');
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'new-a')).toMatchObject({ failureRecovered: false, failureKind: 'execution' });
     } finally { harness.close(); }
@@ -2127,6 +2144,20 @@ it('bounds history chunk reads while preserving run costs and schedule totals', 
 });
 
 
+// #11309, database: recovery must distinguish a completed PR execution from a later timed lookup.
+it('only counts successful PR-triggered runs since the merge when reconciling', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    await h.storage.insertRun({ id: 'check', scheduleId: 'sch-1', firedAt: 30, status: 'failed', triggerSource: 'pr-check' });
+    await h.storage.insertRun({ id: 'skipped', scheduleId: 'sch-1', firedAt: 40, status: 'skipped', triggerSource: 'pr-check' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(false);
+    await h.storage.insertRun({ id: 'watch', scheduleId: 'sch-1', firedAt: 50, status: 'success', triggerSource: 'pr-status' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(true);
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 51)).toBe(false);
+  } finally { h.close(); }
+});
+
 it('deduplicates only identical unrecovered failures across persistent history', async () => {
   const h = createStorageHarness();
   try {
@@ -2148,6 +2179,46 @@ it('deduplicates only identical unrecovered failures across persistent history',
     await h.storage.insertRun({ ...failed, id: 'execution', firedAt: 67, errorMsg: 'model unavailable' });
     await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 68, status: 'success' });
     expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, errorMsg: 'model unavailable' })).toBe(false);
+  } finally { h.close(); }
+});
+
+it('deduplicates continuation cancellation by reason without losing per-run IDs (#10547)', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const error = (reason: string, id: string) =>
+      `Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`;
+    const first: ScheduleRun = { id: 'cancel-1', scheduleId: 'sch-1', firedAt: 1,
+      status: 'failed', errorMsg: error('wake_contract_unfulfilled', '1') };
+    await h.storage.insertRun(first);
+    const next = { ...first, id: 'cancel-2', firedAt: 2,
+      errorMsg: error('wake_contract_unfulfilled', '2') };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(true);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', 'unknown') })).toBe(true);
+    for (const id of ['0', '-1', '1.5', '9007199254740992', '1) private']) {
+      expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+        errorMsg: error('wake_contract_unfulfilled', id) })).toBe(false);
+    }
+    // Historical malformed IDs must not match a valid cancellation either.
+    for (const [index, id] of ['0', '-1', '1.5', '9007199254740992', '1) private', '01', ''].entries()) {
+      await h.storage.insertRun({ ...first, id: `malformed-${index}`, errorMsg: error('user_stop', id) });
+    }
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', '9007199254740991') })).toBe(true);
+    // An ordinary error containing an ID remains an exact match only.
+    await h.storage.insertRun({ ...first, id: 'ordinary', errorMsg: 'other continuationId: 1' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: 'other continuationId: 2' })).toBe(false);
+    await h.storage.insertRun(next);
+    expect((await h.storage.listRuns('sch-1')).find(run => run.id === next.id)?.errorMsg)
+      .toBe(error('wake_contract_unfulfilled', '2'));
+    await h.storage.insertRun({ id: 'recovered-cancel', scheduleId: 'sch-1', firedAt: 3, status: 'success' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, id: 'cancel-3', firedAt: 4 })).toBe(false);
   } finally { h.close(); }
 });
 

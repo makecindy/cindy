@@ -625,6 +625,22 @@ describe('mergeTelegramGroupActivationViews', () => {
 describe('buildGroupContextPrefix', () => {
   const externalKey = 'telegram:group:1:-900:42:9:g1';
 
+  it('points to the native image message when a later group turn has no attachment', async () => {
+    await recordGroupMessage(frame({
+      messageId: '101', text: '', fileNames: ['telegram-photo.jpg'],
+      imageRefs: [{ fileId: 'private-file-id', name: 'telegram-photo.jpg', mimeType: 'image/jpeg' }],
+    }));
+    const turn = { requestId: 'image', externalKey, workspace: 'chat', sessionId: null,
+      prompt: '前面的图片', source: { im: 'telegram' as const, triggerMessageId: '102' } };
+    const assembly = await buildGroupContextPrefix(turn);
+    expect(assembly.prefix).toContain('[图片消息 #101]');
+    expect(assembly.prefix.split('</group_chat_context>')[1]).toContain('get_images');
+    expect(assembly.prefix).not.toContain('private-file-id');
+    await assembly.commit();
+    await recordGroupMessage(frame({ messageId: '103', text: '下一条' }));
+    expect((await buildGroupContextPrefix(turn)).prefix).not.toContain('get_images');
+  });
+
   it('counts picked messages, not multiline bodies or truncation markers', async () => {
     for (let i = 0; i < 20; i += 1) {
       await recordGroupMessage(

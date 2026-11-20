@@ -8,8 +8,9 @@
  * know, which would silently undo the user's arrangement. They never read or write this file.
  *
  * An account without an entry belongs to its built-in provider (`openai` / `anthropic`), which is
- * exactly what every older client assumes. The CLI default account always stays there.
+ * exactly what every older client assumes. Native CLI directories remain unchanged when moved.
  */
+import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -28,6 +29,8 @@ const PROVIDER_ID = /^[a-z0-9_-]{1,40}$/;
 const CREATED_PROVIDER_ID = /^(openai|anthropic)-sub-[a-f0-9]{8}$/;
 const MAX_PLACEMENTS = 1024;
 const MAX_PROVIDER_NAME = 64;
+/** The upgrade split counted past ids already taken by the owner's created providers. */
+const UPGRADE_SPLIT_ID_ATTEMPTS = 16;
 
 /** A provider Cindy created for one subscription account (2026-11-13), e.g. a separate account. */
 export interface CreatedSubscriptionProvider {
@@ -59,7 +62,7 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       const split = key.indexOf(':');
       const kind = key.slice(0, split);
       const accountId = key.slice(split + 1);
-      if (isKind(kind) && accountIdValid(accountId) && accountId !== 'default'
+      if (isKind(kind) && accountIdValid(accountId)
         && typeof providerId === 'string' && PROVIDER_ID.test(providerId))
         accounts[key] = providerId;
     }
@@ -70,7 +73,7 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       if (!CREATED_PROVIDER_ID.test(providerId) || !entry || typeof entry !== 'object') continue;
       const { kind, name, account } = entry as Partial<CreatedSubscriptionProvider>;
       if (!isKind(kind) || !providerId.startsWith(`${kind}-`) || typeof name !== 'string' || !name.trim()
-        || !accountIdValid(account) || account === 'default') continue;
+        || !accountIdValid(account)) continue;
       providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME), account };
     }
   }
@@ -99,7 +102,6 @@ const file = createOverrideSettingsFile<PlacementFile>({
 
 /** The provider an account belongs to; its built-in provider when nothing else was recorded. */
 export function accountProviderId(kind: SubscriptionProvider, accountId: string): string {
-  if (accountId === 'default') return kind;
   file.invalidateIfChanged();
   return file.read().accounts[keyOf(kind, accountId)] ?? kind;
 }
@@ -148,6 +150,13 @@ export function readCreatedSubscriptionProviders(): Readonly<Record<string, Crea
   return file.read().providers ?? {};
 }
 
+/** Preserve an already-published list on an unreadable file; missing or valid empty files clear it. */
+export function readCreatedSubscriptionProvidersIfReadable(): Readonly<Record<string, CreatedSubscriptionProvider>> | null {
+  file.invalidateIfChanged();
+  if (file.isUnreadable()) return null;
+  return file.read().providers ?? {};
+}
+
 /** A provider that owns subscription accounts, with the pool kind its accounts live in. */
 export interface SubscriptionPoolProviderRef {
   kind: SubscriptionProvider;
@@ -165,7 +174,7 @@ export interface SubscriptionPoolProviderRef {
  */
 export function resolveSubscriptionPoolProvider(providerId: string | null | undefined): SubscriptionPoolProviderRef | null {
   if (!providerId) return null;
-  if (isKind(providerId)) return { kind: providerId, providerId };
+  if (isKind(providerId)) return { kind: providerId, providerId, ownAccount: 'default' };
   const created = readCreatedSubscriptionProviders()[providerId];
   if (created) return { kind: created.kind, providerId, ownAccount: created.account, created: true };
   const legacy = readLegacyCodexAccountId(providerId);
@@ -188,10 +197,10 @@ export function pinnedOwnAccount(ref: SubscriptionPoolProviderRef): string | und
 
 /** The provider an account was created with (a legacy connection or a created provider), if any. */
 export function accountOwnProvider(kind: SubscriptionProvider, accountId: string): string | undefined {
-  if (accountId === 'default') return kind;
   const created = Object.entries(readCreatedSubscriptionProviders())
     .find(([, entry]) => entry.kind === kind && entry.account === accountId)?.[0];
   if (created) return created;
+  if (accountId === 'default') return kind;
   if (kind !== 'openai') return undefined;
   return Object.entries(readOpenAiLegacyAccountsIfReadable() ?? {})
     .find(([, account]) => account === accountId)?.[0];
@@ -201,21 +210,25 @@ function assertOwner(owner: string): void {
   if (owner !== activeOwnerScopeKey()) throw new Error('Subscription account owner changed');
 }
 
-/** Record which provider an account belongs to (the default account always stays built-in). */
+/** Record which provider an account belongs to without changing its CLI directory. */
 export async function placeSubscriptionAccount(
   kind: SubscriptionProvider,
-  accountId: string,
+  accountId: string | readonly string[],
   providerId: string,
+  assertCanMove?: () => void,
 ): Promise<void> {
-  if (accountId === 'default' || !accountIdValid(accountId) || !PROVIDER_ID.test(providerId))
+  const ids = typeof accountId === 'string' ? [accountId] : accountId;
+  if (ids.some(id => !accountIdValid(id)) || !PROVIDER_ID.test(providerId))
     throw new Error('Account cannot be moved');
+  if (ids.length === 0) return;
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
     assertOwner(owner);
+    assertCanMove?.();
     const accounts = { ...value.accounts };
     // The built-in provider is the default; storing it explicitly records the user's choice so a
     // later load never mistakes this account for one the upgrade merged.
-    accounts[keyOf(kind, accountId)] = providerId;
+    for (const id of ids) accounts[keyOf(kind, id)] = providerId;
     return { accounts };
   });
 }
@@ -227,8 +240,10 @@ export async function createSubscriptionProvider(
   name: string,
   createId: () => string,
   prepare?: (providerId: string) => void,
+  additionalAccountIds: readonly string[] = [],
 ): Promise<string> {
-  if (accountId === 'default' || !accountIdValid(accountId)) throw new Error('Account cannot be moved');
+  const ids = [accountId, ...additionalAccountIds];
+  if (ids.some(id => !accountIdValid(id))) throw new Error('Account cannot be moved');
   const owner = activeOwnerScopeKey();
   let providerId = '';
   await file.updateAtomic(({ value }) => {
@@ -238,7 +253,9 @@ export async function createSubscriptionProvider(
     if (!CREATED_PROVIDER_ID.test(providerId)) throw new Error('Invalid subscription provider id');
     prepare?.(providerId);
     providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME) || kind, account: accountId };
-    return { providers, accounts: { ...value.accounts, [keyOf(kind, accountId)]: providerId } };
+    return { providers, accounts: { ...value.accounts,
+      ...Object.fromEntries(ids.map(id => [keyOf(kind, id), providerId])),
+    } };
   });
   return providerId;
 }
@@ -395,4 +412,21 @@ export async function restoreAutoMergedLegacyCodexAccounts(
     });
   }
   return true;
+}
+
+/**
+ * Providers that the 0.1.137–0.1.139 upgrade split created for an old pooled account (PR #10461,
+ * superseded on 2026-11-18: upgrades no longer split pooled accounts, see
+ * subscription-account-pools.md「升级不再自动拆分」). That upgrade derived the id from the account
+ * key (`<kind>-sub-<sha256(key:n)>`, n counting past ids already taken), while providers the user
+ * creates get a random suffix, so only upgrade-made providers match.
+ */
+export function isUpgradeSplitProvider(providerId: string, entry: CreatedSubscriptionProvider): boolean {
+  const prefix = `${entry.kind}-sub-`;
+  if (!providerId.startsWith(prefix)) return false;
+  const key = keyOf(entry.kind, entry.account);
+  for (let collision = 0; collision < UPGRADE_SPLIT_ID_ATTEMPTS; collision++) {
+    if (providerId === prefix + createHash('sha256').update(`${key}:${collision}`).digest('hex').slice(0, 8)) return true;
+  }
+  return false;
 }

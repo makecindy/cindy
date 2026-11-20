@@ -1,4 +1,8 @@
 import { BotGroupProcess } from './BotGroupProcess';
+import { FileText } from 'lucide-react';
+import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
+import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
+import { countPasteLines, isLongPasteText } from '@/components/new-chat/longPasteText';
 /**
  * 群聊时间线的一行（主时间线与话题面板共用），与伙伴私聊同一套气泡：
  *
@@ -6,7 +10,7 @@ import { BotGroupProcess } from './BotGroupProcess';
  *   时刻（text-11），下面是一个卡片底、细边框的气泡。引用、任务卡、分工表、附件与贴回的话题
  *   回复都收在气泡里。同一作者五分钟内的连续消息合并：后续行不再带头像和名字，时刻只在悬停
  *   时出现在左侧槽位。
- * - 气泡宽度由内容决定，上限 720px，并始终给外侧的操作栏留出位置；正文与任务正文同一字号。
+ * - 气泡按内容收窄，基础上限 720px；群聊主栏按可用空间扩展并调整操作栏，自己贴回的话题保持 560px。
  * - 表情回应贴在气泡外上角；消息操作栏（引用回复、话题、表情、更多）悬停时出现在气泡外侧，键盘
  *   聚焦与触屏时常显；话题入口是气泡下方一行。
  * - @ 点名在所有消息里都高亮：正文仍交给 MarkdownRenderer，高亮走 CSS Custom Highlight
@@ -31,6 +35,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubble';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -169,16 +174,20 @@ function ReadTailRow() {
   return <div aria-hidden {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="h-5 shrink-0" />;
 }
 
-function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, readTail = false }: {
+function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false }: {
   messageKey?: string;
   onRichSend?: (text: string) => Promise<boolean>;
   /** Reserve room for the read check at the end of the last line. */
   readTail?: boolean;
+  sharing: boolean;
   authorKind?: BotGroupAuthorKind; content: string; mentionLabels: readonly string[]; members: readonly BotGroupMemberView[];
   /** Who the message mentioned; decides whose card a highlighted name opens. */
   mentions: BotGroupMention;
   serverBacked: boolean;
 }) {
+  const { t } = useTranslation();
+  const [textPreview, setTextPreview] = useState(false);
+  const folded = !sharing && authorKind !== 'bot' && isLongPasteText(content);
   const sender = useMemo(() => onRichSend ? { send: onRichSend } : null, [onRichSend]);
   const ref = useRef<HTMLDivElement>(null);
   const rangesRef = useRef<Range[]>([]);
@@ -210,7 +219,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
       syncMentionHighlight();
     };
     // labelsKey stands in for the label array.
-  }, [content, labelsKey]);
+  }, [content, labelsKey, folded]);
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
   const [tailRow, setTailRow] = useState(false);
   useLayoutEffect(() => {
@@ -223,7 +232,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
     observer?.observe(root, { childList: true, subtree: true, characterData: true });
     apply();
     return () => { observer?.disconnect(); root.querySelectorAll('[data-read-tail]').forEach(node => node.remove()); };
-  }, [content, readTail]);
+  }, [content, readTail, folded]);
 
   const schedule = (next: () => void, ms: number) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -253,9 +262,12 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
     <div ref={ref} className="relative min-w-0 break-words" onPointerMove={onPointerMove}
       onPointerLeave={() => { if (ref.current) ref.current.style.cursor = ''; scheduleClose(); }}>
       <SessionQuickSendProvider value={authorKind === 'bot' ? sender : null}>
-        <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
-          renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />
+        {folded ? <InlineReferenceChip icon={<FileText aria-hidden />} label={t('newChat.pastedText.chipLabel', { lines: countPasteLines(content) })}
+          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
+          renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />}
       </SessionQuickSendProvider>
+      {textPreview && <ToolPayloadLightbox payload={{ kind: 'text', title: t('newChat.pastedText.previewTitle'), text: content }}
+        onClose={() => setTextPreview(false)} />}
       {readTail && tailRow ? <ReadTailRow /> : null}
       <BotGroupMentionCard member={card?.member ?? null} anchor={card?.anchor ?? null}
         onPointerEnter={keepOpen} onPointerLeave={scheduleClose} />
@@ -358,10 +370,11 @@ function Row({ message, highlighted, focusable, entering, block, children }: {
       data-bot-group-message-id={message.id}
       tabIndex={focusable ? -1 : undefined}
       className={cn(
-        'rounded-lg outline-none transition-colors first:mt-0',
+        'rounded-lg outline-none first:mt-0',
+        CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
         block === 'continued' ? 'mt-0.5' : block === 'author' ? 'mt-3.5' : 'mt-3',
         entering && 'animate-fade-in motion-reduce:animate-none',
-        highlighted && 'bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+        highlighted && CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS,
       )}
     >
       {children}
@@ -526,7 +539,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                       className="flex flex-col gap-2"
                     >
                       {quote}
-                      {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} readTail={hasReadMark && !hasAttachments} /> : null}
+                      {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} sharing={sharing} readTail={hasReadMark && !hasAttachments} /> : null}
                       <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
                       {hasReadMark && hasAttachments ? <ReadTailRow /> : null}
                       {readMark}
@@ -647,7 +660,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   {shareBody}
                   {!share && hasText ? (
                     <div className="min-w-0">
-                      <BotGroupMessageText authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
+                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
                         onRichSend={!props.readOnly && !sharing ? props.onRichSend : undefined} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
                     </div>
                   ) : null}

@@ -24,9 +24,10 @@
  *     变化时自动切到对应桶，已加载桶立即出列表，未加载桶走一次 ensure。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -62,7 +63,8 @@ interface UseCCSessionsReturn {
     fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
-    agentKind?: AgentKind;
+    /** 'acp' = 插件引擎任务(只在本机新任务草稿创建，见 sessionService.create)。 */
+    agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
     extraDirs?: string[];
     writableDirs?: string[];
     remoteHostId?: string;
@@ -108,7 +110,10 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     // 命中 cache: 立刻 swap, 关 loading。
     const cached = sessionsStore.getByFilter(filter);
     if (cached !== null) {
-      setSnapshotState({ data: cached, filter });
+      // Re-read after render, but do not publish the same warm snapshot twice.
+      setSnapshotState((previous) =>
+        previous.data === cached && previous.filter === filter ? previous : { data: cached, filter },
+      );
       setIsLoading(false);
       setError(null);
     } else if (!hasAnySnapshotRef.current) {
@@ -167,7 +172,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;
-      agentKind?: AgentKind;
+      agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
       extraDirs?: string[];
       writableDirs?: string[];
@@ -223,4 +228,17 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     refreshSessions,
     patchLocal,
   };
+}
+
+/**
+ * A bounded `all` query lets recent archived history displace active tasks. Keep
+ * each status's existing allowance and let sessionsStore own updates / migration.
+ * Concurrent subscribers share the same two bucket requests and subscriptions.
+ */
+export function useCCSessionsAllStatuses(): Session[] {
+  const active = useCCSessions({ includeArchived: 'active' });
+  const archived = useCCSessions({ includeArchived: 'archived' });
+  return useMemo(() => [...new Map(
+    [...archived.sessions, ...active.sessions].map(session => [session.id, session]),
+  ).values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [active.sessions, archived.sessions]);
 }

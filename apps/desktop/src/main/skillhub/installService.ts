@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, shell } from 'electron';
-import { download, DownloadError } from '../downloader/index.js';
+import { createDownloadProgressReporter, download, DownloadError } from '../downloader/index.js';
 import { isLocalSkillTargetCurrent, type LocalSkillTarget } from './localSkillTarget';
 import {
   isCindySkillEnabled,
@@ -78,6 +78,7 @@ import {
   isKnownAutoSyncCandidateSkill,
 } from './autoSyncPreferences';
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
+import type { DownloadProgress } from '../../shared/downloadProgress';
 
 import { createLogger } from '../logger';
 
@@ -126,7 +127,8 @@ export type InstallErrorCode =
 
 export type InstallProgressEvent =
   | { phase: 'fetching-info'; name: string }
-  | { phase: 'downloading'; name: string }
+  /** `download` (local IPC only) drives the shared DownloadMeter; remote receipts ignore it. */
+  | { phase: 'downloading'; name: string; download?: DownloadProgress }
   | { phase: 'verifying'; name: string }
   | { phase: 'extracting'; name: string }
   | { phase: 'registering'; name: string }
@@ -629,7 +631,16 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
       onProgress({ phase: 'failed', name: p.name, errorCode: 'DOWNLOAD_FAILED', message });
       return { success: false, errorCode: 'DOWNLOAD_FAILED', message };
     }
-    onProgress({ phase: 'downloading', name: p.name });
+    const reporter = createDownloadProgressReporter({
+      initialPhase: 'downloading',
+      total: info.fileSize,
+      emit: (download) => {
+        // Verifying and later phases keep their existing events.
+        if (download.phase === 'downloading' || download.phase === 'retrying')
+          onProgress({ phase: 'downloading', name: p.name, download });
+      },
+    });
+    onProgress({ phase: 'downloading', name: p.name, download: reporter.snapshot() });
     let zipBuf: Uint8Array;
     let downloadDir: string | undefined;
     try {
@@ -643,7 +654,10 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
         maxBytes: MAX_SKILL_ZIP,
         signal,
         resume: false,
-        retry: { maxAttempts: 1 },
+        // Up to 3 tries (user decision 2026-11-17); the signed URL is reused within its expiry.
+        retry: { maxAttempts: 3 },
+        onProgress: reporter.callbacks.onProgress,
+        onRetry: reporter.callbacks.onRetry,
       });
       zipBuf = await fs.promises.readFile(archive);
     } catch (error) {

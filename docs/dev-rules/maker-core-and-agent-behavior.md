@@ -4,6 +4,8 @@
 > **读取时机**：新增或修改 `packages/maker-core` 中的 Agent 编排、prompt 组装、
 > tool／MCP 暴露、translator、event loop、model 映射、usage／token 计量，或任何会进入
 > 模型 system 段的提示词之前
+> **适用路径**：`packages/maker-core/**`、`apps/desktop/src/main/maker-host/*prompt*.md`、
+> `apps/desktop/src/main/maker-ipc/botSystemPrompt.ts`、`apps/cindy-headless/profiles/**`
 
 本文治理 Cindy 连接 Claude／Codex 等 Agent 的编排核心 `packages/maker-core`。它是所有
 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无感知的情况下影响线上行为与
@@ -21,11 +23,51 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 准备环境失败也必须进入该契约，不能把尚未启动的任务永久
 记为可能仍占用目录。鉴权失败保留原 `AgentNotAuthenticatedError` 类型。
 
+共享 Codex 进程可以继续服务健康任务。只有原生卸载确认，或新订阅明确接收资源责任时，未交付
+的任务才可返回 `AgentStartupResourcesReleasedError`；Maker 仅释放这次任务的启动保护，不把它
+当作进程退出，也不触发只允许真实退出证明的自动重试。清理未确认时继续保留保护，通过
+`AgentStartupCleanupPendingError.whenStopped` 接收同 owner 的实际清理／移交或进程退出证明。
+
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
 退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
 保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
 “尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
+
+本机 Codex 的任务独占账号／自定义上下文进程在 `thread/resume` 等满 60 秒时记录线程与连接标识，macOS 尽力采样栈符号。只有确认旧进程已退出且仍在启动阶段，才用相同线程再恢复一次；第二次超时或清理失败即结束。共享进程、远端会话和已经发出的 turn 不走这条恢复路径。
+
+Codex 的 MCP 目录探测可能拿到新工具，但原线程的客户端仍启动失败；读取工具时优先采用原生
+`runtimeStatus`，不以目录非空代替线程就绪。明确的 `null` 表示当前配置尚无原生运行状态，保持
+`pending` 并在后续发送时复查；只有字段缺失的旧运行时才保留目录兼容判据。明确配置且启用的 `cindy_helper` 失败后，在下次普通发送
+之前复查；仅原线程明确 `failed`、没有原生子 Agent／终端／待续接工作时，释放该线程并冷恢复同一份
+完整历史，重用当前任务的 MCP 发现身份和配置。并发恢复合并，每个 handle 最多尝试两次，间隔至少
+30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。健康任务不增加发送前查询。
+仍在异步启动、鉴权失败、明确停用、Review 或旧运行时无明确状态时不触发恢复。停止、关闭、账号退役
+或配置变化使在途恢复失效；取消后的迟到回包不得重新订阅，也不得释放新 handle 已接管的线程。
+接管按 handle 身份计算：同一 handle 的权限刷新、冷恢复与 daemon 恢复保留清理归属；新 handle
+在 `thread/resume` 发起时即接管，不能只检查已订阅状态。迟到清理与订阅释放共用归属校验。
+Host 按请求代次保存待确认的接管：未派发或收到关联的原生错误响应时撤回该代，跳过已拒绝的
+前代。释放证明只属于上一次资源获取；Host 在每次 resume／start／fork 派发前统一使旧证明失效。
+新建／fork 尚未返回线程 id 时，超时或写失败仍属于清理未确认；仅未派发、关联的明确拒绝或
+实际退出可完成该次证明。不能在 no-rollout 回退时沿用被拒 resume 的证明。
+原生响应成功只进入待提交状态，订阅提交才移交资源；位置记录、历史注入等订阅前准备失败
+由同一启动清理责任方收口。已提交的新归属不被旧拒绝或旧订阅覆盖；同 handle 的原地刷新保留归属。
+旧归属在接管期间请求关闭时，释放 Promise 留待实际卸载或已提交的新归属移交；清理失败仍返回
+原调用者，不提前报告成功。等待和原生卸载共用既有清理预算；关闭失败保留重试句柄，或在下次
+  显式启动时先重试该线程清理，再派发新的恢复，不重放业务输入／工具。未发布的启动由 Maker
+  既有失败清理队列持有，只在确认本任务释放后完成其启动保护清理，再进入工作目录预检；
+  线程资源释放证明与整个进程退出证明分开，不能借此触发账号切换。存在健康订阅或启动租约时
+  不能退役共享 host。超时／写失败没有原生拒绝证明时保留任务隔离，不猜测就绪；未发布启动的
+  本机清理可复用既有退役路径，但须先确认没有其他健康订阅或启动租约，并取得实际退出证明；
+  托管／SSH 不据此退役远端共享进程。
+  有其他任务占用时保留隔离，下次显式重试；不能用一次 unsubscribe 回包代替在途恢复已停止的证明。
+  状态查询超时或出错只记诊断日志，在下次普通发送时复查。只有查到当前线程的 helper 确实不可用时，
+  才显示告警并写入任务历史。未知原生状态仍保持 pending，不用目录猜就绪。
+  不新增后台重试。
+停止探测时及时结束本轮等待，以“尚未派发”释放发送占位，不等待底层探测 RPC 返回；迟到结果不
+回写下一轮。异步启动转为明确不可用时，即使后台工作阻止恢复，也保留去重的缺席提示。
+原生冷恢复会重建失败任务内的 MCP 连接，其他任务的连接保持；后台工作未结束或状态不明时保留原线程。
+回归见 `agents/codex/helper-readiness.native.test.ts`、`index.test.ts` 与 `mcp-server-tools.test.ts`。
 
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
@@ -52,6 +94,11 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 （只认字面 `.log` 路径，可串联多个日志读取）；
 失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
 这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
+
+工具结果正文因超限被省略时，`tool_result_full.data.outputOmitted: 'oversized'` 只表示正文未知。
+Session 仍配对收口工具、移除循环检测器的在途调用，但占位文案不参与输出相等指纹；未知结果
+打断完全相同结果与长只读窗口，不算作进展证据。工具名和参数仍参与已有疑似复核。
+回归见 `session.tool-loop.test.ts` 的真实 Codex translator 链路与 `loop-guard.test.ts`。
 
 Codex code mode 下脚本在后台运行，模型同时继续回应；app-server 只逐个上报脚本内部的工具调用，
 不标注调用属于哪段脚本，用量通知与思考 item 也会落在同一段脚本的调用之间，后台脚本与模型采样
@@ -137,6 +184,18 @@ Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` /
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
+### 重放预算
+
+宿主按实际目标 Harness、模型、供应商和执行电脑核实窗口。目录条目须标记 `contextWindowVerified: true`，
+任务和模型级工作预算只在已核实路由上参与窗口收敛。旧版目录缺字段、供应商未申报窗口、远程目录只剩缓存、
+分享组尚未确定执行电脑、SSH 无可核实路由或读取失败时，走 16,000 字符预算。
+
+已核实的重放预算为目标窗口的 30%，最多 100,000 估算 token 和 250,000 字符。ASCII 按每字符
+0.4 token 计，为常见英文和代码留出余量。非 ASCII 按每 UTF-16 单元 1 token 计，emoji 的代理对计两个单元。
+宿主根据历史内容分布选字符预算，复核含检索指引、账本和结束标记在内的完整输出，超限时有界收紧重建。
+换小窗口按目标窗口保护。满窗重送或缩窗派发已知输入时，交接预算另扣输入文字，并为系统提示和输出保留 35% 的窗口。
+空闲重建保留最多 16,000 字符的上限，下一条消息仍开启新话题。
+
 ### 任务级窗口预算（分母）
 
 用户可以在单个任务上选择工作上下文窗口（tokens）：有效窗口 =
@@ -214,9 +273,9 @@ Codex 手动压缩使用原生 `thread/compact/start`，ACK 只表示受理；�
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
 （可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
 所有，不再先尝试改写历史／剥图。决定函数见 `cindyContextCompression.ts`。
-字节预算目前只有 Codex 能测量。工具输出不另开一档：图片恢复的交接保留受长度限制、
-带调用关联的文本结果摘要，省略图片数据；普通跨引擎交接也默认保留有界工具结果（调用方可显式关闭）。
-长消息与结果保留首尾，超总预算时优先保留最近请求与结果、检索指引和结束标记；仍为 16,000 字符预算，不额外调用模型。
+字节预算目前只有 Codex 能测量。图片恢复的交接保留带调用关联的可读结果，省略图片数据。普通跨引擎交接及同引擎重建按
+[2026-11-18 对话重放规则](protocol-compatibility/same-harness-cross-computer-native-resume.md)使用目标窗口预算，
+先保留较新的完整记录。检索指引与结束标记预留空间，重建不额外调用模型。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
 伙伴主对话、话题和 IM 专线与普通 Session 一样依赖原生压缩，不按空闲时长或 70%/90%
@@ -241,7 +300,9 @@ Codex 图片历史重建后，普通用户任务和伙伴主对话可在同一�
 切模型预检的数学仍在 `assessModelSwitchContext`。本机普通任务的用户选模只登记待应用意图，
 不改当前 route 或原生线程；用户反复改选时覆盖意图，以实际发送时的最终选择为准。
 沿用跨引擎的 pending registry 与发送入口，不能在 turn 结束或定时巡检时自动消费选模意图。
-设备互联控制本机任务同样适用；SSH 与 Orca 保留各自的运行时边界。
+设备互联控制本机任务同样适用（2026-11-18 用户裁决）。同账号 owner 的手机或桌面远控可以
+登记选模，由宿主在发送时核实精确窗口并自动整理；设备互联拒绝控制端传入窗口确认数字。
+访客、供应商分享和外部应用无此授权；SSH 与 Orca 的执行边界见各自规则。
 同引擎切到更小窗口时，main 在实际 send 持有的 session 锁内按目标窗口评估；
 用户发送即同意为最终选择执行必要的上下文整理，不再弹出二次确认。
 仅选择或反复切换模型不构成整理授权；同窗或扩窗不因此触发摘要重建。
@@ -393,9 +454,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
 收到 Codex 的 `warning`「Falling back from WebSockets to HTTPS transport」后同样清除重连
 计时：HTTPS 要先上传完整历史才有事件，交给 Codex 自身 HTTP 超时与 upstream-idle 兜底。
-ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009），codex-proxy 在出站消息超过
-15 MiB 时按 #5103 的附件外置把最旧的内联附件转为本地文件；这是按实际出站字节判定，不是
-按历史体积推断断连原因。
+ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009）。Codex 的附件外置已从旧的
+15 MiB 触发改为对缺少 `previous_response_id` 的整段重发帧按 12 MiB→8 MiB 重放，增量帧不挪图；
+成功恢复保持在 15 MiB 安全边界内。不可恢复帧仍沿原有 1009／HTTPS 回退路径处理，具体规则见
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)。
+这仍按实际出站字节判定，不是按历史体积推断断连原因。
 普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
@@ -513,8 +576,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `packages/maker-core/src/agents/shared/desktop-input-shell.ts` 一份判定覆盖：Claude PreToolUse
   守卫直接拒绝（完全访问档同样生效，仅本地运行时：SSH 远端的本地钩子不会跨 RPC 生效，远端桌面
   工具不受影响）；Ask／Auto 档由共用审阅策略（`continuation-policy.ts`，写明只针对运行 Cindy 的这台
-  电脑）让 reviewer 拦下。Codex 完全访问档（`approvalPolicy: never`，宿主没有拦截点）与 Pi 完全访问档
-  （非退化红线）不加拦截。
+  电脑）让 reviewer 拦下。对于直接调用 `cua-driver` 的路径，本地 Codex 普通任务在 Cindy 专用的实际
+  运行目录加载原生执行规则，包括恢复旧账号会话和完全访问档。规则在进程启动前拒绝匹配的驱动
+  子命令，版本和状态查询仍可执行。共用用户原生配置目录、远程执行及其他脚本输入未由这条规则覆盖。
+  Pi 完全访问档沿用原有策略。
 - Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
   使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
   第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户
@@ -731,6 +796,24 @@ Cindy 审核向 Codex／Claude 原生审核看齐：先判动作本身的风险�
 IM 与官方 Hook 确认卡统一显示为「自动审批需要你决定：…」，故障降级仍只显示固定文案。共用规则在
 `agents/shared/continuation-policy.ts`，真实模型配对比较入口为 `scripts/eval-auto-approval.mts`
 的 `--baseline-bundle`（隔离打包的旧审核器）；只审核合成操作，不执行副作用。
+
+审阅证据只算**一份**。MCP 工具调用的证据取原始调用（server、tool name、原始参数、工具标题
+与描述），不得再带确认卡那份渲染副本：codex 会把同一份 `tool_params` 再渲染一份
+`tool_params_display` 发给客户端（codex-rs `build_mcp_tool_approval_display_params` 是同一对象的
+逐字段副本，不是截断版），两份都进证据等于把同一个动作按完整证据预算
+（`MAX_AUTO_REVIEW_ACTION_TEXT_CHARS` = 131,072 字符）数两遍，普通调用会凭空多出一倍。
+证据里不做截断：参数一字不删，审阅模型看到的内容与之前完全一致，变的只是同一份内容不再被计两次。
+另有一个数不要混用：`MAX_AUTO_REVIEW_STATIC_TEXT_CHARS` = 4,096 是同步静态解析自己的上限，
+超过只是转完整模型审阅，不是拦截；完整证据超预算时裁决是 `ask`（交用户确认），不是静默拦截。
+拦截原因分两类：**Cindy 自己的确定性文案**（动作文本超限、证据不足、审阅器故障、授权范围变化、
+宿主固定的授权失效原因、delegate 根本没调用模型时给出的宿主固定判定）在决定里标 `policyReason`，
+可原样进 UI／日志／诊断通道；**模型自由文本**
+不带该标记，可能含参数、路径、片段，一律不得外泄。delegate 若判定出的是宿主自己的文案
+（没有调用模型），要用 `hostReason` 声明来源，由 maker-core 转成 `policyReason`；委托方解析模型
+输出时必须**新建对象**（不展开模型给的 JSON），模型才无法自己带上这个标记。Codex 的 MCP
+拦截通知只带 policy 原因。
+模型看到的拒绝文案由 codex app-server 决定（`user rejected MCP tool call`，客户端改不动），
+所以真实原因必须先在 Cindy 侧保住，别再让界面只显示一句通用文案。
 
 原生审批已接管的本地工具调用不叠加 Cindy 模型复审，以 Handle 的实时
 `getAutoReviewOwner()` 为准；Codex Guardian 故障切换后恢复 Cindy 负责。

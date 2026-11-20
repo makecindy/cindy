@@ -40,23 +40,16 @@ import type {
   AuthState,
 } from '@cindy/maker-core';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../shared/codexAuthReason.js';
 import { createLogger } from '../logger.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
-import {
-  prepareSharedGlobalSkillLinks,
-  markClaudeSessionObserved,
-  SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
-  sharedGlobalSkillLinksFingerprint,
-} from './shared-global-skills.js';
+import { markClaudeSessionObserved } from './shared-global-skills.js';
 import { PreparationCache } from './preparation-cache.js';
-import {
-  prepareBuiltInSkills,
-  migrateBuiltInGlobalSkillLinks,
-  resolveBundledSystemSkillsRoot,
-} from './built-in-skills.js';
+import { resolveBundledSystemSkillsRoot } from './built-in-skills.js';
+import { createSharedGlobalSkillsPreparation, preparationScope } from './sharedGlobalSkillsPreparationCore.js';
 import {
   copyCodexAuthSnapshotWithRetry,
   inspectCodexAuthLink,
@@ -114,10 +107,7 @@ import {
   isAppSessionBoundaryPending,
   type ActiveAppSession,
 } from '../appSessionState.js';
-import {
-  assertGhostSkillProjectionBoundaryStableForOwner,
-  withSharedGlobalSkillProjectionMutation,
-} from '../authBoundaryQuarantine.js';
+import { withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
@@ -146,18 +136,6 @@ const log = createLogger('auth-adapters');
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
 
-function preparationScope(): { key: string; ownerId: string | null; current: () => boolean } {
-  const owner = getActiveAppSession();
-  return {
-    key: JSON.stringify([owner.dataOwnerId, owner.generation, isAppSessionBoundaryPending()]),
-    ownerId: owner.dataOwnerId,
-    current: () => {
-      const latest = getActiveAppSession();
-      return !isAppSessionBoundaryPending() && latest.generation === owner.generation
-        && latest.dataOwnerId === owner.dataOwnerId;
-    },
-  };
-}
 /**
  * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
  * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
@@ -483,9 +461,17 @@ function claudeSubscriptionServesModel(model: string | undefined): boolean {
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
-  private readonly sharedSkillsPreparation = new PreparationCache(30_000);
-  /** Last reported set of persistent projection warnings; each set is logged once. */
-  private reportedPersistentSkillWarnings = '[]';
+  /** Built-in publication and shared home-level links (sharedGlobalSkillsPreparationCore.ts, shared with the Host). */
+  private readonly sharedGlobalSkills = createSharedGlobalSkillsPreparation({
+    preparationScope,
+    bundledSystemSkillsRoot: () => resolveBundledSystemSkillsRoot({
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+    }),
+    userDataDir: () => app.getPath('userData'),
+    appDataDir: () => app.getPath('appData'),
+  });
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
@@ -513,70 +499,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async ensureSharedGlobalSkills(): Promise<void> {
-    const scope = preparationScope();
-    // The opt-in setting and root listings are part of the key so a cached completion
-    // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
-    const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
-    await this.sharedSkillsPreparation.ensure(key, async () => {
-      const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
-      return success && scope.current();
-    });
-  }
-
-  private async runEnsureSharedGlobalSkills(ownerId: string | null): Promise<boolean> {
-    try {
-      const result = await withSharedGlobalSkillProjectionMutation(ownerId, async () => {
-        // Bundle publication keeps every managed Agent link on one stable
-        // active pointer. The stable-owner boundary prevents a passive profile
-        // from participating in that transaction.
-        const preparedBuiltIns = await prepareBuiltInSkills({
-          bundledRoot: resolveBundledSystemSkillsRoot({
-            isPackaged: app.isPackaged,
-            appPath: app.getAppPath(),
-            resourcesPath: process.resourcesPath,
-          }),
-          userDataDir: app.getPath('userData'),
-          appDataDir: app.getPath('appData'),
-        });
-        const migrationWarnings = preparedBuiltIns.projectionSafe
-          ? await migrateBuiltInGlobalSkillLinks({ userDataDir: app.getPath('userData'), appDataDir: app.getPath('appData') })
-          : [];
-        const sharedProjection = await prepareSharedGlobalSkillLinks({
-          assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        });
-        const persistent = new Set(sharedProjection.persistentWarnings);
-        return {
-          warnings: [
-            ...preparedBuiltIns.warnings,
-            ...migrationWarnings,
-            ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
-          ],
-          persistentWarnings: sharedProjection.persistentWarnings,
-        };
-      });
-      for (const warning of result.warnings) {
-        assetPrepLog.warn('shared global skill warning', { warning });
-      }
-      // The sync opt-out and user-owned conflicting paths are stable state, not failures:
-      // report each distinct set once and let the completion cache hold past them.
-      const persistentSignature = JSON.stringify([...result.persistentWarnings].sort());
-      if (persistentSignature !== this.reportedPersistentSkillWarnings) {
-        this.reportedPersistentSkillWarnings = persistentSignature;
-        for (const warning of result.persistentWarnings) {
-          if (warning === SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE) {
-            assetPrepLog.info('shared global skill notice', { warning });
-          } else {
-            assetPrepLog.warn('shared global skill warning', { warning });
-          }
-        }
-      }
-      return result.warnings.length === 0;
-    } catch (error) {
-      assetPrepLog.warn('prepare shared global skills failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+    await this.sharedGlobalSkills.ensureSharedGlobalSkills();
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
@@ -855,6 +778,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private isolatedAuthLaunchProofTrusted: boolean | null = null;
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
+  /**
+   * 最近一轮 reconcile 建不出指向系统凭证的共享链接(典型:Windows 没有创建符号链接
+   * 的权限)。这时系统侧凭证明明已登录、Cindy 却连不上它 —— 凭证是「连不上」而不是
+   * 「没登录」,报错必须区别于通用 no_oauth,否则用户只会反复重登。
+   */
+  private sharedAuthLinkUnavailable = false;
 
   /**
    * Plugin capability enforcement is always rechecked after concurrent callers
@@ -1112,6 +1041,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
+    // 每轮 reconcile 重新判定:只有这一轮真的建不出链接才算「连不上」。
+    this.sharedAuthLinkUnavailable = false;
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
       // XDT_ISOLATED_AUTH 可能被 shell / IDE 环境继承；单一 flag 不是删除凭证的授权。
       // 与 OAuth 写门禁复用同一完整信任谓词，确保只有 restart 脚本本轮派生的
@@ -1135,6 +1066,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     this.ensureInvalidationMarkerLoaded();
+    const reconcileOwner = getActiveAppSession();
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
@@ -1265,14 +1197,34 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
     if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-      const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
-      if (hasLocalEntry && !topology.healthy) {
+      const authorization = captureNativeProviderAuthorizationGeneration('openai');
+      const revoked = isNativeProviderAuthRevoked('openai');
+      const assertCurrent = () => {
+        const owner = getActiveAppSession();
+        if (isAppSessionBoundaryPending() || owner.dataOwnerId !== reconcileOwner.dataOwnerId
+          || owner.generation !== reconcileOwner.generation
+          || this.pendingLogin || this.loginCancellationOpen
+          || authorization !== captureNativeProviderAuthorizationGeneration('openai')
+          || revoked !== isNativeProviderAuthRevoked('openai')
+          || getSystemCodexAuthPath() !== systemAuth
+          || !this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)
+          || getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, myAuth)) {
+          throw new Error('Release auth snapshot authorization changed');
+        }
+      };
+      const snapshot = await copyCodexAuthSnapshotWithRetry(
+        systemAuth, myAuth, process.platform, undefined, assertCurrent,
+      );
+      // The primitive's resolved Promise yields before this continuation.
+      // Never grant scope to an owner/login that changed in that gap.
+      if (snapshot.kind === 'copied') assertCurrent();
+      if (hasLocalEntry && !topology.healthy && !snapshot.unchanged) {
         this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
       }
       if (snapshot.kind === 'copied') {
         markNativeProviderAuthSharedSystemCredential('openai');
         this.lastKnownCodexCredentialScope = 'system-shared';
-        log.info('codex auth.json copied from Release login for read-only Dev use');
+        if (!snapshot.unchanged) log.info('codex auth.json copied from Release login for read-only Dev use');
       } else {
         credPathLog.warn('Release auth snapshot failed, auth.json left intact', {
           error: snapshot.error?.message,
@@ -1297,6 +1249,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         credPathLog.warn('shared OpenAI auth link unavailable; use independent login', {
           error: error?.message,
         });
+        // 连不上系统凭证这件事要一路带到 getState 的 errorReason,否则用户只看到
+        // 通用 no_oauth,被引去反复重登 —— 而卡点其实是链接权限。
+        this.sharedAuthLinkUnavailable = true;
         break;
       case 'swap-failed-intact':
         // 替换失败但 myAuth 完好 (多半并发的另一次已放好) —— 无需补救。
@@ -1450,6 +1405,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     };
   }
 
+  /**
+   * 共享凭证连不上时的稳定 reason;系统侧没有凭证时不算(那是「没登录」)。
+   *
+   * 只在「这轮 reconcile 建不出链接」且「系统侧凭证确实在」时给 reason ——
+   * 这两者同时成立才是「连不上已登录的账号」,缺一个都该按未登录处理。
+   */
+  private codexSharedAuthLinkUnavailableReason(): string | undefined {
+    return codexSharedAuthLinkUnavailableReason({
+      linkUnavailable: this.sharedAuthLinkUnavailable,
+      systemAuthPresent: existsSync(getSystemCodexAuthPath()),
+    });
+  }
+
   private async readState(options?: {
     skipReconcile?: boolean;
     credentialMode?: AuthAdapterOptions['credentialMode'];
@@ -1495,7 +1463,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         if (accessToken) return this.withCodexRecoveryRequirement(localState);
       }
       if (this.oauthRecoveryRequiredReason) return this.codexRecoveryRequiredErrorState();
-      return { authenticated: false, errorReason: localState.errorReason ?? 'no_oauth' };
+      return {
+        authenticated: false,
+        errorReason: localState.errorReason ?? this.codexSharedAuthLinkUnavailableReason() ?? 'no_oauth',
+      };
     }
     const rawLocalState = await this.readLocalCodexAuthState();
     const localState =
@@ -1535,7 +1506,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (readClaudeApiKey()) {
       return { authenticated: true, identity: 'API Key · Cindy AI', authSource: 'api-key' };
     }
-    return localState;
+    // 没有 OAuth 也没有网关 key:连不上已登录的系统账号时给出可执行的原因,
+    // 别让「没登录」这种通用说法把用户引去反复重登。
+    const sharedLinkReason = this.codexSharedAuthLinkUnavailableReason();
+    return sharedLinkReason ? { ...localState, errorReason: sharedLinkReason } : localState;
   }
 
   private async clearStaleInvalidationIfSystemCodexChanged(): Promise<void> {

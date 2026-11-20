@@ -40,6 +40,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
+import { TaskManagementSection } from './TaskManagementSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -410,6 +411,8 @@ export function StorageManagementCard() {
           />
         </SettingsCard>
       </SettingsSection>
+
+      <TaskManagementSection />
 
       <SettingsSection
         title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
@@ -1189,7 +1192,7 @@ function DatabaseCleanupDialog({
                       </Button>
                     </AlertDialog.Cancel>
                     <Button data-settings-search-action="Confirm the selected database cleanup"
-                      variant="secondary"
+                      variant="primary"
                       size="lg"
                       tone="danger-solid"
                       ref={confirmButtonRef}
