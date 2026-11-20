@@ -9393,11 +9393,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A V1 teammate-to-teammate background task: not a teammate conversation to rebuild.
         return 'not-bot';
       }
-      if (
-        expectedSession.isTurnRunning() ||
+      const isRuntimeBusy = () => expectedSession.isTurnRunning() ||
         expectedSession.listBackgroundTasks().length > 0 ||
-        hasPendingAgentInteractionForSession(expectedSession.id)
-      ) {
+        expectedSession.countPendingWakeContinuations() > 0 ||
+        hasPendingAgentInteractionForSession(expectedSession.id);
+      if (isRuntimeBusy()) {
         await recordBotCompactRuntimeLifecycle({
           botId: row.botId,
           sessionId: expectedSession.id,
@@ -9492,6 +9492,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts);
             },
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
+            isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
             bootstrap: async () => (await bootstrapSession(createOpts)).session,
           });
@@ -13361,6 +13362,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
+    isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
     readGroupTaskStatus: async (taskId) => {
       const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status, model: sessions.model })
