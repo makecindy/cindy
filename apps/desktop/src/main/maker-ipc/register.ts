@@ -751,7 +751,7 @@ import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botG
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { withBotGroupUiMock } from './botGroupUiMock.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
+import { showDesktopChatMessage, getDesktopNotificationsEnabled, dismissSessionInteractionNotifications } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -23168,6 +23168,15 @@ function broadcastToAllWindows(
   ownerScope?: ReturnType<typeof captureDataOwnerBroadcastScope>,
 ): void {
   if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+  // A task can have several pending requests, including nonblocking questions.
+  // Keep its reminders until the last one closes; queued input is not completion.
+  if (channel === MAKER_PUSH.INTERACTION_DISMISSED && payload && typeof payload === 'object'
+    && typeof (payload as { sessionId?: unknown }).sessionId === 'string') {
+    const { sessionId } = payload as { sessionId: string };
+    if (getPendingInteractionsForSession(sessionId).length === 0) {
+      dismissSessionInteractionNotifications(sessionId);
+    }
+  }
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : getActiveDataOwnerPushStamp();
   if (
     channel === MAKER_PUSH.ORCA_WORKER_CHANGED &&
