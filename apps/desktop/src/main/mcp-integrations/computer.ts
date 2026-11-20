@@ -653,7 +653,10 @@ function onComputerUseSessionsChange(listener: () => void): () => void {
   return () => void computerUseListeners.delete(listener);
 }
 function openComputerUseSessions(): number {
-  return cuaMcpSessions.size;
+  // Teardown counts as use: a session being cleaned up keeps native input alive until its
+  // client has closed (see the teardown invariant in cleanupComputerDriverSessionEntry),
+  // and a late capture or global click must still not meet a freshly armed system sheet.
+  return cuaMcpSessions.size + cuaMcpSessionCleanups.size;
 }
 function notifyComputerUseSessions(): void {
   for (const listener of computerUseListeners) listener();
@@ -4095,6 +4098,8 @@ function cleanupComputerDriverSessionInternal(
     .finally(() => {
       if (cuaMcpSessionCleanups.get(sessionId) === cleanup) {
         cuaMcpSessionCleanups.delete(sessionId);
+        // Only now is the native side done with this desktop: let the cover re-arm.
+        notifyComputerUseSessions();
       }
     });
   cuaMcpSessionCleanups.set(sessionId, cleanup);
