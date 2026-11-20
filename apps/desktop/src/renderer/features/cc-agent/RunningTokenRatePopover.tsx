@@ -106,6 +106,8 @@ export function RunningTokenRatePopover({
   const thinkingShare = history.markStartedAt === history.startedAt
     ? formatThinkingShare(history.turnThinkingTokens ?? -1, history.turnThinkingOutputTokens ?? 0)
     : null;
+  const readingLabel = history.latestKind === 'request' && rate !== null
+    ? t('chat.runningStatus.lastRequestRate') : t('chat.runningStatus.currentRate');
   const card = (
     <div
       aria-description={t('chat.runningStatus.tokenRateDescription')}
@@ -115,7 +117,7 @@ export function RunningTokenRatePopover({
         <div className="col-start-1 row-start-1 min-w-0 self-center">
           <div className="mb-1 flex items-center gap-1.5 text-12 text-[var(--text-secondary)]">
             <Activity size={14} aria-hidden="true" />
-            {t('chat.runningStatus.currentRate')}
+            {readingLabel}
           </div>
           <div className="flex items-baseline gap-1.5 tabular-nums">
             <span className="text-28 font-medium leading-none">{rate ?? '—'}</span>
@@ -125,7 +127,7 @@ export function RunningTokenRatePopover({
           </div>
         </div>
         <GenerationTraceChart
-          points={samples.map((sample) => ({ at: sample.durationMs, rate: sample.rate }))}
+          points={samples.map((sample) => ({ at: sample.durationMs, rate: sample.rate, settled: sample.kind === 'request' }))}
           marks={marks}
           fromMs={firstTime}
           toMs={lastTime}
@@ -205,8 +207,8 @@ export function RunningTokenRatePopover({
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
                 className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
                 aria-label={
-                  [elapsedText, rateText && (isTokenCount ? rateText : `${t('chat.runningStatus.currentRate')}: ${rateText}`)]
-                    .filter(Boolean).join(' · ') || t('chat.runningStatus.currentRate')
+                  [elapsedText, rateText && (isTokenCount ? rateText : `${readingLabel}: ${rateText}`)]
+                    .filter(Boolean).join(' · ') || readingLabel
                 }
               >
                 {elapsedText && <span>{elapsedText}</span>}

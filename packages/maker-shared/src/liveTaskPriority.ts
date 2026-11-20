@@ -9,6 +9,8 @@
  * 灵动岛不展示 rest;它自己的短暂置顶 / 展开钉住顺序叠在这把尺子外面。
  */
 
+import type { TeammateStatus } from './teammateStatus';
+
 export const LIVE_TASK_PRIORITY = {
   waiting: 0,
   unread: 1,
@@ -69,6 +71,24 @@ export function taskInboxSection(
   if (signals.teammate) return null;
   if (signals.following && !signals.unread) return 'working';
   return 'inbox';
+}
+
+/**
+ * A teammate's main conversation is one inbox row, sorted like a task by whose turn it is
+ * (2026-11-20 user decision): Pending while it waits for the user, failed or has an unread reply,
+ * Working while it runs, and left out (null) once it is read and idle, so idle teammates never
+ * pile up; the teammate section keeps listing all of them. Reading settles it: there is nothing
+ * to archive. A snooze is kept on the conversation's Session and wakes on new input like a task's.
+ * Callers resolve `status` with a quiet offline state: an unreachable computer is not a request.
+ */
+export function teammateInboxSection(
+  status: TeammateStatus,
+  snooze: TaskInboxState | null | undefined,
+  nowMs: number,
+): TaskInboxSection | null {
+  if (snooze && taskSnoozeUntil(snooze) > nowMs) return 'snoozed';
+  if (status === 'running') return 'working';
+  return status === 'idle' ? null : 'inbox';
 }
 
 /**
