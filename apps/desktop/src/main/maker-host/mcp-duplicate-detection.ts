@@ -146,6 +146,7 @@ export async function detectMcpDuplicates(
     const injectedNames = new Set([...deps.builtinNames(), ...custom.map(server => server.id)]);
     const choices = deps.readChoices();
     for (const server of custom) {
+      if (server.transport === 'stdio') continue;
       const hostUrl = endpoint(server.url, input.env);
       if (!hostUrl) continue;
       for (const [name, raw] of Object.entries(native)) {

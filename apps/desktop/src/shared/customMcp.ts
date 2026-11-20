@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 用户自定义 MCP 服务器配置的类型 SSoT —— main（store / provider）、preload、renderer 共用。
  *
- * 仅远程 transport（http/sse）。bearer token 不在本类型里，单独走 safeStorage
+ * bearer token 不在本类型里，单独走 safeStorage
  * （`mcp_token_<id>`，见 providerSecrets 的 customMcpSecretStorageKey）。
  */
 
@@ -11,22 +11,55 @@ import type { AgentKind } from '@cindy/maker-core';
 import type { BotModelRoute } from './botModelChain.js';
 
 /** 支持的 transport 类型。 */
-export const MCP_TRANSPORTS = ['http', 'sse'] as const;
+export const MCP_TRANSPORTS = ['http', 'sse', 'stdio'] as const;
 export type McpTransport = (typeof MCP_TRANSPORTS)[number];
 
 /** 一条自定义 MCP 配置（不含 token）。 */
-export interface CustomMcpConfig {
+interface CustomMcpIdentity {
   /** MCP id slug（/^[a-z0-9_-]+$/，= agent 侧 mcpServers[name]）；同账号唯一。 */
   id: string;
   /** 展示名。 */
   name: string;
-  /** transport 类型：'http' | 'sse'。 */
-  transport: McpTransport;
+}
+
+export interface CustomMcpRemoteConfig extends CustomMcpIdentity {
+  transport: 'http' | 'sse';
   /** 远程 MCP 端点 URL（http(s)）。 */
   url: string;
   /** 额外请求头（不含鉴权 token）。 */
   headers: Record<string, string>;
 }
+
+/** Main-only resolved configuration. Environment values never enter list results. */
+export interface CustomMcpStdioConfig extends CustomMcpIdentity {
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string>;
+}
+
+export type CustomMcpConfig = CustomMcpRemoteConfig | CustomMcpStdioConfig;
+
+/** A retained row whose configuration cannot be read; never includes secret data or decoder errors. */
+export interface CustomMcpUnreadableEntry extends CustomMcpIdentity {
+  transport: McpTransport;
+  reason: 'unreadable';
+}
+
+/** Main-only batch read: one unreadable record does not hide healthy connections. */
+export interface CustomMcpReadResult {
+  servers: CustomMcpConfig[];
+  unreadableServers: CustomMcpUnreadableEntry[];
+}
+
+/** A native form submits only changes; omitted environment keys retain their saved values. */
+export type CustomMcpInput = CustomMcpRemoteConfig | (Omit<CustomMcpStdioConfig, 'env'> & {
+  envChanges: { set: Record<string, string>; remove: string[] };
+});
+
+/** Native form intent, consumed by Main before publishing the saved configuration. */
+export type CustomMcpTokenChange = { action: 'keep' } | { action: 'clear' } | { action: 'set'; value: string };
 
 /** Optional runtime projection for capability pickers; omitted for configuration CRUD. */
 export interface CustomMcpListContext {
@@ -36,13 +69,17 @@ export interface CustomMcpListContext {
   modelChain?: BotModelRoute[];
 }
 
-export interface CustomMcpListEntry extends CustomMcpConfig {
+export type CustomMcpListEntry = (CustomMcpRemoteConfig | (Omit<CustomMcpStdioConfig, 'env'> & {
+  envKeys: string[];
+})) & {
   /** Present only when a runtime context was requested. */
   available?: boolean;
-}
+};
 
 export interface CustomMcpListResult {
   servers: CustomMcpListEntry[];
+  /** Optional for compatibility with older hosts. Broken rows remain identifiable and deletable. */
+  unreadableServers?: CustomMcpUnreadableEntry[];
   /** Authoritative route used for this catalog; absent for raw configuration queries. */
   agentKind?: AgentKind;
 }

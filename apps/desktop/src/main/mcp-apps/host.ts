@@ -234,7 +234,10 @@ const transientRevisionKey = randomBytes(32).toString('hex');
 export function appServerRevision(config: AppServerConfig, key = transientRevisionKey): string {
   return createHmac('sha256', key)
     .update('cindy:mcp-app-server-revision:v1\0')
-    .update(JSON.stringify(config.plugin ? [config.id, config.transport, config.plugin.instance, config.plugin.revision, config.plugin.packageSha256, config.plugin.directory, config.url] : [config.id, config.url, config.transport, config.headers]))
+    .update(JSON.stringify(config.transport === 'stdio'
+      ? [config.id, config.transport, config.command, config.args, config.cwd ?? null, Object.entries(config.env).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)]
+      : config.plugin ? [config.id, config.transport, config.plugin.instance, config.plugin.revision, config.plugin.packageSha256, config.plugin.directory, config.url]
+      : [config.id, config.url, config.transport, config.headers]))
     .digest('hex');
 }
 
@@ -332,8 +335,9 @@ export class McpAppsHost {
     const entry = id ? this.connections.get(id) : undefined;
     if (entry) entry.retired = true;
     if ([...this.views.values()].some((view) => view.connection === connection)) return;
-    if (id) this.connections.delete(id);
+    if (id && connection.config?.transport !== 'stdio') this.connections.delete(id);
     await connection.close();
+    if (id) this.connections.delete(id);
   }
 
   async open(
@@ -1098,7 +1102,9 @@ export class McpAppsHost {
       return document;
     } catch (error) {
       stopContext?.();
-      if (detached) await this.releaseConnection(connection).catch(() => {});
+      if (detached) await this.releaseConnection(connection).catch(() => {
+        if (connection.config.transport === 'stdio') createLogger('mcp-apps').warn('stdio MCP process cleanup failed');
+      });
       throw error;
     }
   }
@@ -1615,6 +1621,26 @@ export class McpAppsHost {
     await this.revokePluginServers(ids);
   }
 
+  /** Settings edits belong to future facades. Only removal or unreadable
+   * configuration revokes an existing custom process before normal release. */
+  async reconcileStdioConnections(): Promise<void> {
+    const stale = [...this.connections.entries()].filter(([, { connection }]) => {
+      if (connection.config.transport !== 'stdio') return false;
+      let current: AppServerConfig | undefined;
+      try { current = this.deps.config(connection.config.id); } catch { /* Invalid configuration revokes its process. */ }
+      return !current || Boolean(current.plugin);
+    });
+    const staleConnections = new Set(stale.map(([, entry]) => entry.connection));
+    pagePermissionGrants.clearServers(new Set(stale.map(([, entry]) => entry.connection.config.id)));
+    // Close starts synchronously: no new work can enter while a View's teardown
+    // waits for its bounded handshake. In-flight requests are never replayed.
+    await Promise.all([
+      ...stale.map(async ([id, entry]) => { await entry.connection.close(); this.connections.delete(id); }),
+      ...[...this.views].filter(([, view]) => staleConnections.has(view.connection))
+        .map(([id, view]) => this.disposeView(id, view, true)),
+    ]);
+  }
+
   async revokePluginServers(ids: ReadonlySet<string>): Promise<void> {
     pagePermissionGrants.clearServers(ids);
     const closing: Promise<unknown>[] = [];
@@ -1635,9 +1661,12 @@ export class McpAppsHost {
     clearInterval(this.sweepTimer);
     this.sweepTimer = undefined;
     const views = [...this.views.entries()];
-    const connections = [...this.connections.values()];
+    const connections = [...this.connections.entries()];
     this.contexts.clear();
-    this.connections.clear();
+    // Keep ownership of a failed stdio stop for the next explicit reset. A
+    // failed tree receipt must not turn into an empty, successful account reset.
+    for (const [id, entry] of connections)
+      if (entry.connection.config?.transport !== 'stdio') this.connections.delete(id);
     await Promise.allSettled(
       views.map(async ([id, view]) => {
         try {
@@ -1648,7 +1677,12 @@ export class McpAppsHost {
         await this.disposeView(id, view);
       }),
     );
-    await Promise.allSettled(connections.map((entry) => entry.connection.close()));
+    const stopped = await Promise.allSettled(connections.map(async ([id, entry]) => {
+      await entry.connection.close();
+      this.connections.delete(id);
+    }));
+    if (stopped.some((result, index) => result.status === 'rejected' && connections[index]?.[1].connection.config.transport === 'stdio'))
+      throw new Error('MCP_STDIO_CLOSE_FAILED');
   }
 
   private async sweep(): Promise<void> {

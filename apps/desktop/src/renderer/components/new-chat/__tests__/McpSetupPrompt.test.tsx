@@ -44,12 +44,24 @@ it('saves through the existing Settings helper and resolves with only the server
     kind: 'mcp_setup', status: 'saved', serverId: 'custom_example',
   }));
   expect(api.createCustomMcpServer).toHaveBeenCalledWith({ id: 'custom_example', name: 'Example',
-    url: 'https://example.test/mcp', transport: 'http', headers: {} });
-  expect(store).toHaveBeenCalledWith('mcp_token_custom_example', 'test-invalid-token');
+    url: 'https://example.test/mcp', transport: 'http', headers: {} }, { action: 'set', value: 'test-invalid-token' });
+  expect(store).not.toHaveBeenCalled();
   expect(JSON.stringify(api.resolveInteraction.mock.calls)).not.toContain('test-invalid-token');
 });
 
-// Teammates get the tools in this chat on the next message, so they must not see "start a new session".
+// Unit regression: unreadable records still own their IDs; native add must not reuse them.
+it('reserves unreadable configuration IDs when saving a new connection', async () => {
+  api.listCustomMcpServers.mockResolvedValue({ servers: [], unreadableServers: [
+    { id: 'custom_example', name: 'Example', transport: 'stdio', reason: 'unreadable' },
+  ] });
+  render(<McpSetupPrompt request={request} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'settings.mcp.save' }));
+  await waitFor(() => expect(api.createCustomMcpServer).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'custom_example-2' }), { action: 'keep' },
+  ));
+});
+
+// Preserve the shared form's caller-specific hint without claiming when tools become available.
 it.each([
   [true, 'settings.mcp.dialog.teammateDesc', 'settings.mcp.dialog.desc'],
   [false, 'settings.mcp.dialog.desc', 'settings.mcp.dialog.teammateDesc'],
@@ -83,7 +95,7 @@ it.each(['saved', 'cancelled'] as const)('retries a failed %s result without sav
   await act(async () => complete({ accepted: true }));
   expect(screen.queryByRole('alert')).toBeNull();
   expect(api.createCustomMcpServer).toHaveBeenCalledTimes(status === 'saved' ? 1 : 0);
-  expect(store).toHaveBeenCalledTimes(status === 'saved' ? 1 : 0);
+  expect(store).not.toHaveBeenCalled();
 });
 
 it('can cancel result delivery after saving, and retires a request that has already expired', async () => {
@@ -122,4 +134,20 @@ it('does not resurrect a dismissed form from a late recovery snapshot', async ()
   act(() => dismiss({ sessionId: 'task', requestId: request.requestId }));
   await act(async () => complete([{ request }]));
   expect(screen.queryByLabelText('settings.mcp.fields.token')).toBeNull();
+});
+
+it('saves stdio through the native form without returning env to the task or writing bearer storage', async () => {
+  const stdioRequest: McpSetupRequest = { ...request, proposal: { name: 'Grafana', transport: 'stdio', command: 'uvx',
+    args: ['mcp-grafana'], envKeys: ['GRAFANA_SERVICE_ACCOUNT_TOKEN'] } };
+  render(<McpSetupPrompt request={stdioRequest} />);
+  const value = await screen.findByLabelText('settings.mcp.fields.envValue 1');
+  fireEvent.change(value, { target: { value: 'test-invalid-stdio-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
+  await waitFor(() => expect(api.resolveInteraction).toHaveBeenCalledWith('form-1', {
+    kind: 'mcp_setup', status: 'saved', serverId: 'custom_grafana',
+  }));
+  expect(api.createCustomMcpServer).toHaveBeenCalledWith({ id: 'custom_grafana', name: 'Grafana', transport: 'stdio',
+    command: 'uvx', args: ['mcp-grafana'], envChanges: { set: { GRAFANA_SERVICE_ACCOUNT_TOKEN: 'test-invalid-stdio-token' }, remove: [] } }, { action: 'keep' });
+  expect(JSON.stringify(api.resolveInteraction.mock.calls)).not.toContain('test-invalid-stdio-token');
+  expect(store).not.toHaveBeenCalled();
 });

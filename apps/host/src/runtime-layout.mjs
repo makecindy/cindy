@@ -29,6 +29,8 @@ export function hostRuntimeLayout() {
     libraryWorker: release ? path.join(root, 'bin', 'library-worker.mjs') : null,
     atomicRenameBinary: release ? resource('tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : null,
     atomicRenameSource: release ? null : path.join(desktop, 'native', 'windows-atomic-rename', 'main.rs'),
+    mcpJobBinary: release ? resource('tools', 'windows-mcp-stdio-job', 'cindy-mcp-stdio-job.exe') : null,
+    mcpJobSource: release ? null : path.join(desktop, 'native', 'windows-mcp-stdio-job', 'main.rs'),
     nodeWorker: release ? path.join(root, 'bin', 'node-worker.cjs') : null,
     piSubagentRunner: release ? path.join(root, 'bin', 'pi-subagent-runner.cjs') : path.join(root, 'apps', 'host', 'src', 'agent', 'pi-subagent-runner-process.cts'),
     pluginBridge: release ? resource('plugin-bridge.js') : null,

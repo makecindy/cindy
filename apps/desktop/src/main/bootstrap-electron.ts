@@ -12,6 +12,7 @@ import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ip
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
+import { resetAppServers } from './mcp-apps/runtime.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
@@ -2661,6 +2662,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
         resetMaker();
       }
+      // resetMaker invalidates synchronously; wait for its MCP process cleanup
+      // (including App-held connections) before handing the database to a new owner.
+      await resetAppServers();
       // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
       // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
       // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
@@ -11245,6 +11249,9 @@ onQuit(
   'async',
 );
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
+// Engine facades release first. Views can retain their upstream processes, so
+// drain the shared host before the later database/credential teardown.
+onQuit('mcp-apps', resetAppServers, 'post-async');
 // LSP 不占用 Agent 正常保存和退出的时间窗口。
 onQuit('lsp-pool', shutdownLspServerPool, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');

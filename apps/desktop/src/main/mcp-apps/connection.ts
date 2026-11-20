@@ -19,16 +19,26 @@ import {
 type AppServerNotification = Notification;
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { MCP_APPS_EXTENSION } from './protocol.js';
+import { AppStdioTransport } from './stdioTransport.js';
 
-export interface AppServerConfig {
+interface AppServerBase {
   id: string;
   /** User-configured display name; never upstream serverInfo or transport identity. */
   name?: string;
+}
+export type AppServerConfig = AppServerBase & ({
   url: string;
   transport: 'http' | 'sse' | 'in-process';
   plugin?: { ghostId?: string; namespace?: string | null; instance: string; revision: string; packageSha256: string; directory: string; title: string; trust: string; installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource; domains: string[]; assertCurrent(sessionId?: string): void; createTransport(): Transport };
   headers?: Record<string, string>;
-}
+} | {
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string>;
+  plugin?: never;
+});
 
 /** Credentials and the MCP client always stay in Main, never in a View. */
 export class AppConnection {
@@ -46,6 +56,17 @@ export class AppConnection {
         },
       },
     );
+    if (this.config.transport === 'stdio') {
+      const close = client.close.bind(client);
+      let closing: Promise<void> | undefined;
+      // SDK 1.29 intentionally calls `void this.close()` on initialize failure.
+      // Observe that exact promise while preserving its rejection for our owner;
+      // a failed process-tree stop must neither escape as unhandled nor look successful.
+      client.close = () => {
+        if (!closing) { closing = close(); void closing.catch(() => {}); }
+        return closing;
+      };
+    }
     if (this.peer && !this.config.plugin) {
       const peer = this.peer;
       const pending = new Map<RequestId, AbortController>();
@@ -72,6 +93,8 @@ export class AppConnection {
   }
   private client?: Client;
   private connecting?: Promise<Client>;
+  private transport?: Transport;
+  private closing?: Promise<void>;
   private closed = false;
   private readonly listeners = new Set<(message: AppServerNotification) => void>();
   get isClosed(): boolean {
@@ -93,18 +116,17 @@ export class AppConnection {
     if (!this.connecting) {
       const client = this.createClient();
       this.client = client;
-      const requestInit = { headers: this.config.headers };
-      const url = this.config.plugin ? undefined : new URL(this.config.url);
-      const transport =
-        this.config.plugin ? this.config.plugin.createTransport() : this.config.transport === 'sse'
-          ? new SSEClientTransport(url!, {
-              requestInit,
-              eventSourceInit: {
-                fetch: (input, init) =>
-                  fetch(input, { ...init, headers: { ...this.config.headers, ...init?.headers } }),
-              },
+      const config = this.config;
+      const transport = config.plugin ? config.plugin.createTransport()
+        : config.transport === 'stdio' ? new AppStdioTransport(config)
+        : config.transport === 'sse'
+          ? new SSEClientTransport(new URL(config.url), {
+              requestInit: { headers: config.headers },
+              eventSourceInit: { fetch: (input, init) =>
+                fetch(input, { ...init, headers: { ...config.headers, ...init?.headers } }) },
             })
-          : new StreamableHTTPClientTransport(url!, { requestInit });
+          : new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+      this.transport = transport;
       // A transport loss retires only this attempt. A later independent request
       // may connect again; requests already sent are never replayed here.
       const retire = () => {
@@ -112,7 +134,8 @@ export class AppConnection {
         this.client = undefined;
         this.connecting = undefined;
       };
-      client.onclose = retire;
+      let cleaningFailedInitialization = false;
+      client.onclose = () => { if (!cleaningFailedInitialization) retire(); };
       this.connecting = client.connect(transport, { timeout: 30_000 }).then(() => {
         if (this.closed || this.client !== client) throw new Error('MCP_APP_CONNECTION_CLOSED');
         for (const schema of [
@@ -132,8 +155,21 @@ export class AppConnection {
         };
         return client;
       }).catch(async (error) => {
-        retire();
-        await client.close().catch(() => {});
+        if (config.transport === 'stdio') {
+          cleaningFailedInitialization = true;
+          try {
+            await client.close();
+            // connect() may fail before the SDK retains its transport. A launched
+            // process is still ours; do not permit a retry until it is drained.
+            await transport.close();
+          } catch {
+            this.closed = true;
+            throw new Error('MCP_STDIO_CLOSE_FAILED');
+          } finally { retire(); }
+        } else {
+          retire();
+          await client.close().catch(() => {});
+        }
         throw error;
       });
     }
@@ -180,7 +216,18 @@ export class AppConnection {
   async close(): Promise<void> {
     this.closed = true;
     this.listeners.clear();
-    await this.client?.close();
+    if (!this.closing) {
+      // SDK close only delegates to its transport. Keep stdio cleanup tied to
+      // our owned transport even after SDK retirement or an earlier failed close.
+      const closing = this.config.transport === 'stdio'
+        ? this.transport?.close() ?? Promise.resolve()
+        : this.client?.close() ?? Promise.resolve();
+      this.closing = closing;
+      void closing.catch(() => {
+        if (this.config.transport === 'stdio' && this.closing === closing) this.closing = undefined;
+      });
+    }
+    return this.closing;
   }
 
   listen(listener: (message: AppServerNotification) => void): () => void {

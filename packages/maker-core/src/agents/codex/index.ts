@@ -39,6 +39,7 @@ import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/libra
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
@@ -5806,6 +5807,7 @@ assertRouteCurrent();
       }
       return out;
     };
+    let localSessionMcpConfig: Record<string, unknown> | undefined;
     const readSessionMcpConfig = (): Record<string, unknown> => {
       const client = opts[LOCAL_AGENT_CLIENT];
       if (client) return {
@@ -5815,7 +5817,14 @@ assertRouteCurrent();
         [`mcp_servers.${client.mcpName ?? 'client'}.default_tools_approval_mode`]: 'approve',
       };
       if (hosted) return readHostedMcpConfig();
-      const config = host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo });
+      // A local task retains its launch transports across cold resumes and
+      // workspace changes. New tasks read the edited catalog; remote daemons
+      // keep their live readiness checks and hosted tasks use the tunnel above.
+      const config = opts.remoteHostId
+        ? host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo })
+        : (localSessionMcpConfig ??= structuredClone(
+            host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo }),
+          ));
       if (opts.remoteHostId && opts.botRuntimeProfile?.mcpPolicy
         && typeof config['mcp_servers.cindy_helper.url'] !== 'string') {
         throw new Error('Remote Codex Bot tools are not ready. Retry after the active remote task finishes.');
@@ -7365,6 +7374,8 @@ assertRouteCurrent();
     let helperRecoveryAbort: AbortController | undefined;
     let helperRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
+    const helperSettings = (config: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
     const expectedHelperConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
       if (!config || reviewMode || config['mcp_servers.cindy_helper.enabled'] === false
@@ -7372,7 +7383,13 @@ assertRouteCurrent();
           const value = config?.[`mcp_servers.cindy_helper.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
         })) return null;
-      return Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
+      if (localSessionMcpConfig) {
+        // A cold resume uses the launch routes. Recover that helper only while
+        // the host still provisions the same transport for this task.
+        const current = host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo });
+        if (!isDeepStrictEqual(helperSettings(localSessionMcpConfig), helperSettings(current))) return null;
+      }
+      return helperSettings(config);
     };
     const reportExpectedHelperAvailability = async (
       knownReport?: Awaited<ReturnType<typeof readCodexThreadMcpServerTools>>, signal?: AbortSignal,

@@ -79,17 +79,20 @@ async function fixture() {
     writeCard,
     callTool,
     result,
-    revoke(kind: 'owner' | 'server' | 'config') {
+    edit() {
+      registerAppServer(config.id, () => ({ ...config, url: 'https://changed.example.invalid' }));
+    },
+    revoke(kind: 'owner' | 'server' | 'invalid config') {
       if (kind === 'owner') owner = {};
       if (kind === 'server') clearAppServerConfigs();
-      if (kind === 'config')
-        registerAppServer(config.id, () => ({ ...config, url: 'https://changed.example.invalid' }));
+      if (kind === 'invalid config')
+        registerAppServer(config.id, () => { throw new Error('Invalid saved configuration'); });
     },
   };
 }
 
 describe('MCP App pre-call validation and card finalization', () => {
-  it.each(['owner', 'server', 'config'] as const)(
+  it.each(['owner', 'server', 'invalid config'] as const)(
     'discards the model tool list after %s revocation during discovery',
     async (kind) => {
       const f = await fixture();
@@ -123,7 +126,7 @@ describe('MCP App pre-call validation and card finalization', () => {
     expect(f.tools).toHaveBeenCalledOnce();
   });
 
-  it.each(['owner', 'server', 'config'] as const)(
+  it.each(['owner', 'server', 'invalid config'] as const)(
     'does not create a pending card after %s revocation during tool discovery',
     async (kind) => {
       const f = await fixture();
@@ -143,7 +146,7 @@ describe('MCP App pre-call validation and card finalization', () => {
     },
   );
 
-  it.each(['server', 'config'] as const)(
+  it.each(['server', 'invalid config'] as const)(
     'finalizes the pending card after %s revocation while it is being stored',
     async (kind) => {
       const f = await fixture();
@@ -194,7 +197,7 @@ describe('MCP App pre-call validation and card finalization', () => {
     expect(f.callTool).not.toHaveBeenCalled();
   });
 
-  it('executes once and records the result after a slow authorized card write', async () => {
+  it('executes once and records the result when settings change during a slow card write', async () => {
     const f = await fixture();
     const persistence = deferred();
     f.writeCard.mockImplementationOnce(async (_session, id, record) => {
@@ -204,6 +207,7 @@ describe('MCP App pre-call validation and card finalization', () => {
     const pending = f.client.callTool({ name: tool.name });
     await vi.waitFor(() => expect(f.writeCard).toHaveBeenCalledOnce());
     expect(f.callTool).not.toHaveBeenCalled();
+    f.edit();
     persistence.resolve();
     await expect(pending).resolves.toEqual(f.result);
     expect(f.callTool).toHaveBeenCalledOnce();

@@ -222,6 +222,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | codex-home、codex-accounts | 写 | Codex 登录、作废标记、账号目录 | 24b、m1-cp9、m1-cp13 | Codex 自己的格式；账号服务同一 core；作废双向对照（`hostCodexInvalidationParity.test.ts`） |
 | pi-agent-home、工作树租约、回合改动记录 | 写 | Pi 运行目录与会话；租约；改动记录 | 各行 | 同一份代码 |
 | browser-runtime、windows-atomic-rename | 写 | 托管浏览器运行目录；Windows 原子改名辅助程序缓存 | M1 前 | 与桌面同名，同一份代码、同一布局 |
+| windows-mcp-stdio-job | 写（仅 Windows 开发版） | 首次使用 stdio MCP 时编译的辅助程序缓存 | 自定义 stdio MCP | 桌面与 Host 复用同一布局；旧版本会忽略，可从源码重建 |
 | Host 专用：两个锁库、`host-endpoint.json`、`host-api-token`、`host-device.json`、`host-background.log`、`platform-power` | 写 | Host 自己的运行状态 | M1 前 | 内嵌的旧桌面不读；`host-api-token` 只有客户端模式的窗口进程读（`host-delegation.ts`） |
 
 ## 四、移出 M1

@@ -87,8 +87,9 @@ describe('shared runtime capability discovery', () => {
     const index = await readAgentCapabilityCatalog([provider], context, {}, unavailable, read);
     expect(index).toMatchObject({ capabilities: [{ server: 'session_bridge',
       status: 'unavailable', reason: 'not-applicable-without-companion-environment' }] });
-    expect(await readAgentCapabilityCatalog([provider], context, { server: 'session_bridge' }, unavailable, read))
-      .toMatchObject({ ok: false, capability: { reason: 'not-applicable-without-companion-environment' } });
+    const detail = await readAgentCapabilityCatalog([provider], context, { server: 'session_bridge' }, unavailable, read);
+    expect(detail).toMatchObject({ ok: false, capability: { reason: 'not-applicable-without-companion-environment' } });
+    expect(detail).not.toHaveProperty('message');
     expect(read).not.toHaveBeenCalled();
     expect(provider.toClaudeSdkConfig).not.toHaveBeenCalled();
     const failed = await readAgentCapabilityCatalog([provider], context, {},
@@ -207,18 +208,28 @@ describe('shared runtime capability discovery', () => {
       expect(custom[0]!.toClaudeSdkConfig).not.toHaveBeenCalled();
     });
 
+    // Custom MCP saves preserve live runtimes while newly started local tasks load updates.
+    // Recovery must not require restarting Cindy or interrupting an existing task.
+    // Unit tier: existing engine-status fixture through the public catalog; this adds the
+    // previously missing recovery guidance for not-mounted/failed reports, not a source scan.
     it.each([
-      ['not-mounted', '新建任务'],
+      ['not-mounted', '尚未加载'],
       ['no-tools', '连接失败'],
       ['failed', '连接此服务失败'],
       ['needs-auth', '授权'],
       ['pending', '仍在连接'],
       ['disabled', '已被停用'],
     ] as const)('names the %s engine state instead of reporting success', async (state, text) => {
-      const result = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+      const result = await readAgentCapabilityCatalog(custom, { ...context, agentKind: 'codex' }, { server: 'custom_omc' }, undefined,
         async () => ({ state, tools: [] }));
       expect(result).toMatchObject({ ok: false, errorCode: 'HARNESS_MCP_NOT_READY', engineState: state });
       expect((result as { message: string }).message).toContain(text);
+      if (state === 'not-mounted' || state === 'failed') {
+        const message = (result as { message: string }).message;
+        expect(message).toContain('新启动的本机任务');
+        expect(message).toContain('已有任务');
+        expect(message).not.toContain('重启 Cindy');
+      }
     });
 
     it('distinguishes an engine without a status entry from a failed read and hides failure text', async () => {
@@ -242,14 +253,28 @@ describe('shared runtime capability discovery', () => {
       }
     });
 
-    it('does not ask the engine about a server the runtime did not mount', async () => {
+    // Review #5: a frozen runtime's missing server returned only an internal reason,
+    // skipping recovery guidance. Existing coverage checked only the reason/no-read.
+    // Unit tier: production catalog detail query with one custom server absent from
+    // the runtime names; local callers get the known-state guidance, SSH does not.
+    // Isolated run: 10.03s (8.44s existing provider imports; 22ms tests), no new I/O.
+    it.each([null, 'ssh-fixture'])('explains an unmounted local server without reading the engine (remoteHostId=%s)', async (remoteHostId) => {
       const read = vi.fn();
-      expect(await readAgentCapabilityCatalog(custom, {
-        ...context, vendorOptions: { [RUNTIME_MCP_NAMES_KEY]: [] },
-      }, { server: 'custom_omc' }, undefined, read)).toMatchObject({
+      const result = await readAgentCapabilityCatalog(custom, {
+        ...context, agentKind: 'codex', remoteHostId, vendorOptions: { [RUNTIME_MCP_NAMES_KEY]: [] },
+      }, { server: 'custom_omc' }, undefined, read);
+      expect(result).toMatchObject({
         ok: false, capability: { reason: 'not-mounted-in-current-runtime' },
       });
       expect(read).not.toHaveBeenCalled();
+      if (remoteHostId) {
+        expect(result).not.toHaveProperty('message');
+      } else {
+        const reported = await readAgentCapabilityCatalog(custom, { ...context, agentKind: 'codex' },
+          { server: 'custom_omc' }, undefined, async () => ({ state: 'not-mounted', tools: [] }));
+        expect(result).toMatchObject({ message: expect.stringContaining('新启动的本机任务') });
+        expect((result as { message: string }).message).toBe((reported as { message: string }).message);
+      }
     });
   });
 

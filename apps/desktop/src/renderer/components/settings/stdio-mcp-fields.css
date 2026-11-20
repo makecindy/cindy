@@ -1,0 +1,48 @@
+.mcp-env-fields {
+  container: mcp-env / inline-size;
+}
+
+.mcp-env-head {
+  display: none;
+}
+
+.mcp-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mcp-env-row + .mcp-env-row {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border-default);
+  padding-top: 0.75rem;
+}
+
+.mcp-env-value {
+  grid-column: 1;
+}
+
+.mcp-env-remove {
+  grid-area: 1 / 2 / span 2;
+}
+
+@container mcp-env (min-width: 400px) {
+  .mcp-env-head,
+  .mcp-env-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) 2.25rem;
+    gap: 0.5rem;
+  }
+
+  .mcp-env-row + .mcp-env-row {
+    margin-top: 0.5rem;
+    border: 0;
+    padding: 0;
+  }
+
+  .mcp-env-value,
+  .mcp-env-remove {
+    grid-area: auto;
+  }
+}

@@ -73,14 +73,9 @@ export interface SourceMarketSourceFact {
   source: { type: 'git'; url: string; ref?: string; sparsePaths: string[] } | { type: 'local'; path: string };
 }
 
-export interface SourceMcpFact {
-  id: string;
-  name: string;
-  transport: 'http' | 'sse';
-  url: string;
-  headers: Record<string, string>;
+export type SourceMcpFact = { transport: 'stdio' } | (import('../../shared/customMcp.js').CustomMcpRemoteConfig & {
   hasToken: boolean;
-}
+});
 
 export interface SourceProviderFact {
   id: string;
@@ -101,7 +96,7 @@ export interface SetupSnapshotSourceDeps {
   pluginHasUserSecrets?(instanceKey: string): boolean;
   readMarketSources(): Promise<SourceMarketSourceFact[]>;
   readSkills(): Promise<SetupSnapshotSkill[]>;
-  readMcpServers(): Promise<SourceMcpFact[]>;
+  readMcpServers(markPartial: () => void): Promise<SourceMcpFact[]>;
   readProviders(): Promise<SourceProviderFact[]>;
   /** False for providers owned by an organization, BYOK or managed local runtimes. */
   isUserProvider(id: string): boolean;
@@ -140,11 +135,17 @@ export async function collectSetupSnapshot(deps: SetupSnapshotSourceDeps): Promi
     projectMarketSources(await deps.readMarketSources()),
   );
   const skills = await guard('skills', [] as SetupSnapshotSkill[], () => deps.readSkills());
-  const mcpServers = await guard('mcpServers', [] as SetupSnapshotMcpServer[], async () =>
-    (await deps.readMcpServers())
-      .slice(0, SETUP_SNAPSHOT_LIMITS.mcpServers)
-      .flatMap((server) => projectMcpServer(server) ?? []),
-  );
+  const mcpServers = await guard('mcpServers', [] as SetupSnapshotMcpServer[], async () => {
+    const markPartial = () => { unavailable.add('mcpServers'); };
+    const sources = await deps.readMcpServers(markPartial);
+    const portable: SetupSnapshotMcpServer[] = [];
+    for (const source of sources) {
+      const entry = source.transport === 'stdio' ? null : projectMcpServer(source);
+      if (entry && portable.length < SETUP_SNAPSHOT_LIMITS.mcpServers) portable.push(entry);
+      else markPartial();
+    }
+    return portable;
+  });
   const providers = await guard('providers', [] as SetupSnapshotProvider[], async () =>
     (await deps.readProviders())
       .filter((config) => deps.isUserProvider(config.id))
@@ -304,7 +305,7 @@ export function projectMarketSources(sources: SourceMarketSourceFact[]): SetupSn
  * and query parts can carry credentials, so none of them leave this computer. A server that
  * had any of them is marked as needing its credentials entered again on the other computer.
  */
-function projectMcpServer(server: SourceMcpFact): SetupSnapshotMcpServer | null {
+function projectMcpServer(server: Extract<SourceMcpFact, { transport: 'http' | 'sse' }>): SetupSnapshotMcpServer | null {
   try {
     new URL(server.url);
   } catch {

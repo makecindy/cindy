@@ -18,6 +18,20 @@ function host(readKey: () => string) {
 }
 
 describe('private MCP App server revisions', () => {
+  // User contract: changing any launch field retires the prior process; a map's
+  // insertion order is not a configuration change. Existing tests cover HTTP only (unit).
+  it('binds stdio process revisions to all launch fields without exposing env values', () => {
+    const stdio: AppServerConfig = { id: 'stdio', transport: 'stdio', command: 'uvx', args: ['mcp-grafana'],
+      env: { URL: 'https://fixture.invalid', TOKEN: 'invalid-fixture-secret' } };
+    const revision = appServerRevision(stdio, key);
+    expect(appServerRevision({ ...stdio, env: { TOKEN: stdio.env.TOKEN!, URL: stdio.env.URL! } }, key)).toBe(revision);
+    for (const changed of [
+      { ...stdio, command: 'other' }, { ...stdio, args: ['mcp-grafana', '--other'] },
+      { ...stdio, cwd: '/different-host-directory' }, { ...stdio, env: { ...stdio.env, TOKEN: 'invalid-rotated-secret' } },
+    ]) expect(appServerRevision(changed, key)).not.toBe(revision);
+    expect(revision).not.toContain('invalid-fixture-secret');
+  });
+
   it('requires a host secret instead of persisting an offline credential verifier', () => {
     const input = JSON.stringify([config.id, config.url, config.transport, config.headers]);
     const revision = appServerRevision(config, key);

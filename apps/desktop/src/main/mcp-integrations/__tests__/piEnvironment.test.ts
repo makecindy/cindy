@@ -993,17 +993,18 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it.each([false, true])('enforces frozen Pi custom-App mounts at the bridge request boundary (remote=%s)', async (remote) => {
-    const credentials = vi.fn((id: string) => `test-main-only-credential-${id}`);
+    // Providers snapshot stored tokens at construction. Observe credential use at the upstream boundary.
+    const callUpstream = vi.fn();
     const providers = ['allowed_app', 'excluded_app'].map((id) => new CustomMcpProvider(
       { id, name: id, url: 'https://mcp.example.invalid', transport: 'http', headers: {} },
-      credentials,
+      (id) => `test-main-only-credential-${id}`,
       (read) => {
         const server = new McpServer({ name: id, version: '1' });
         server.tool('credentialed', {}, async () => {
-          read(); // Main would attach the stored credentials to the upstream here.
+          callUpstream(read());
           return { content: [{ type: 'text' as const, text: 'done' }] };
         });
-        server.server.fallbackNotificationHandler = async () => { read(); };
+        server.server.fallbackNotificationHandler = async () => { callUpstream(read()); };
         return server;
       },
     ));
@@ -1023,7 +1024,7 @@ describe('piEnvironment per-session identity', () => {
     try {
       expect(frozen!.mcpBridge!.servers.map((server) => server.name)).toEqual(['allowed_app']);
       expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_app']);
-      expect(credentials).not.toHaveBeenCalled();
+      expect(callUpstream).not.toHaveBeenCalled();
       const headers = (token: string) => ({
         authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream',
         'content-type': 'application/json',
@@ -1041,8 +1042,10 @@ describe('piEnvironment per-session identity', () => {
       });
       expect(called.status).toBe(200);
       expect(await readRpcText(called)).toMatchObject({ result: { content: [{ text: 'done' }] } });
-      expect(credentials).toHaveBeenCalledWith('allowed_app');
-      credentials.mockClear();
+      expect(callUpstream).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        id: 'allowed_app', headers: { Authorization: 'Bearer test-main-only-credential-allowed_app' },
+      }));
+      callUpstream.mockClear();
 
       // A bridge transport can already exist for another Session. Neither its
       // MCP session id nor a rewritten mounted URL may widen this Bot's mount.
@@ -1079,7 +1082,7 @@ describe('piEnvironment per-session identity', () => {
       statuses.push(deleted.status);
       await deleted.text();
       expect(statuses).toEqual([403, 403, 403, 403, 403]);
-      expect(credentials).not.toHaveBeenCalled();
+      expect(callUpstream).not.toHaveBeenCalled();
     } finally {
       frozen?.disposeSessionCtx?.();
       ordinary?.disposeSessionCtx?.();
