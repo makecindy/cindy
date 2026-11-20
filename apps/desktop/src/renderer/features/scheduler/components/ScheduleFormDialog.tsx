@@ -1005,6 +1005,7 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  hostOnly={!!form.primaryHostKey}
                                   onSelect={({
                                     engine,
                                     modelId,

@@ -7925,6 +7925,7 @@ export type GhostPipeTaskViewResult =
  */
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
+  primaryDeviceOnly?: boolean;
   mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
@@ -7971,6 +7972,7 @@ export type GhostPipeScheduleDraftResult =
  * 文本字段已由主机净化 + 截断;频率建议已钳到最小间隔之上。
  */
 export interface GhostScheduleDraftPush {
+  primaryHostKey?: string;
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
