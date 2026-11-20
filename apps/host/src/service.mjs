@@ -1,5 +1,41 @@
 import { clientErrorMessage } from './client-error.mjs';
 import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-contract';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.ts';
+
+/**
+ * What still runs while a desktop that opens this profile's database is live (coexistence plan A,
+ * agent/profile-coexistence.ts). Everything else is refused, typed, before its handler runs; a path
+ * added later is refused too until it is listed here. Allowed are reads, and what a running turn
+ * needs to end: stopping it, and answering its permission requests, questions and plugin prompts.
+ * Without those the turn would not end and the profile could never be released.
+ */
+export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
+  // Reads: they answer from what this process holds or read the shared files; none writes. Not
+  // /api/browser-backend/get-health: a failed embedded-browser probe recovers the backend
+  // (health-service.ts getHealth), so it is refused like other writes.
+  read: Object.freeze([
+    '/api/me', '/api/auth/state', '/api/profile', '/api/runtime/sessions', '/api/conversations/search',
+    '/api/sessions/list', '/api/sessions/get', '/api/sessions/messages', '/api/sessions/agent-switch-intent',
+    '/api/sessions/interrupted-pending', '/api/sessions/error-tail-pending', '/api/sessions/interrupted-candidates',
+    '/api/messages/list', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
+    '/api/turn-change-sets/list', '/api/project-info/get', '/api/project-info/image', '/api/project-aliases/list',
+    '/api/recent-workdirs/list', '/api/ghosts', '/api/ghosts/runtime-states', '/api/ghosts/card', '/api/ghosts/cards',
+    '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
+    '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
+    '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
+    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state',
+  ]),
+  // Stopping or interrupting the running turn.
+  stop: Object.freeze(['/api/input/stop']),
+  // Answering the running turn: its permission requests and questions, and its plugin prompts. An
+  // install consent is answered only with a refusal (below): accepting installs into the shared profile.
+  answer: Object.freeze(['/api/interactions/respond', '/api/ghosts/confirm/resolve', '/api/ghosts/install-consent/resolve']),
+  // Renewing the account session (reviewer, 2026-11-17): the one shared credential the Host writes
+  // while held, because it would sign itself out otherwise (auth/refresh.mjs). A window in client
+  // mode asks the Host to renew through this path; refused, the window takes it as a failed renewal.
+  renew: Object.freeze(['/api/auth/refresh']),
+});
+const ALLOWED_WHILE_HELD = new Set(Object.values(HOST_PATHS_ALLOWED_WHILE_HELD).flat());
 
 /** Owner business operations shared by HTTP and authenticated Device Link.
  * Transport admission and owner leases belong to the caller. No synthetic HTTP
@@ -8,6 +44,10 @@ import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-
 export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
+    const held = deps.profileHold?.();
+    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throwIpcError('PRECONDITION_FAILED', held);
+    if (held && pathname === '/api/ghosts/install-consent/resolve' && body?.confirmed !== false)
+      throwIpcError('PRECONDITION_FAILED', held);
 
     for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
       if (pathname === `/api/browser-backend/${action}`)
@@ -64,6 +104,10 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/list') {
         return { status: 200, body: await deps.listSessions(body) };
     }
+    if (pathname === '/api/runtime-plugins') {
+      if (!context.trustedNativeClient) throwIpcError('PERMISSION_DENIED', 'A trusted desktop renderer is required');
+      return { status: 200, body: await deps.runtimePluginSettings(body.sessionId, body.value) };
+    }
     if (url.pathname === '/api/project-info/auto-icon') return { status: 200, body: await deps.resolveAutomaticProjectIcon(body) };
     if (url.pathname === '/api/project-info/image') return { status: 200, body: await deps.readProjectIconImage(body) };
     if (url.pathname === '/api/project-info/get') return { status: 200, body: await deps.readProjectInfo() };
@@ -95,8 +139,29 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/update') {
         return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
     }
+    if (url.pathname === '/api/sessions/set-effort') {
+      // The desktop's set-effort, set-fast-mode and set-thinking-enabled, with their IPC arguments.
+      return { status: 200, body: (await deps.setSessionEffort(body.sessionId, body.effort)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-fast-mode') {
+      return { status: 200, body: (await deps.setSessionFastMode(body.sessionId, body.fastMode)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-thinking-enabled') {
+      return { status: 200, body: (await deps.setSessionThinkingEnabled(body.sessionId, body.enabled)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-permission-mode') {
+      // The desktop's set-permission-mode and set-plan-mode, with their IPC arguments.
+      return { status: 200, body: (await deps.setSessionPermissionMode(body.sessionId, body.mode)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-plan-mode') {
+      return { status: 200, body: (await deps.setSessionPlanMode(body.sessionId, body.enabled)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-model') {
+      // The desktop's set-model, with its IPC arguments (the web client passes them through).
+      return { status: 200, body: await deps.setSessionModel(String(body.sessionId ?? ''), body.model, body.providerId, body.revision, body.selection) };
+    }
     if (url.pathname === '/api/sessions/switch-agent') {
-        return { status: 200, body: await deps.switchSessionAgent(String(body.sessionId ?? ''), String(body.targetAgentKind ?? ''), String(body.model ?? ''), body.providerId ?? null, body.effort, body.fastMode) };
+        return { status: 200, body: await deps.switchSessionAgent(String(body.sessionId ?? ''), String(body.targetAgentKind ?? ''), String(body.model ?? ''), body.providerId ?? null, body.effort, body.fastMode, body.options, body.thinking) };
     }
     if (url.pathname === '/api/sessions/agent-switch-intent') {
         return { status: 200, body: await deps.getSessionAgentSwitchIntent(String(body.sessionId ?? '')) };
