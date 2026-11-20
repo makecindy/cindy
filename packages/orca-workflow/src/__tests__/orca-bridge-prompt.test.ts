@@ -155,6 +155,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(missingGenericWorkerBoundary);
     expect(prompt).toContain(multiRoleReadinessBoundary);
     expect(prompt).toContain('Use get_workspace_info when the target is unknown, ambiguous, or a previous mapping is stale.');
+    expect(prompt).toContain('For a role or label, use get_workspace_info unless you have already verified the match for this assignment.');
     expect(prompt).not.toContain('Before any dispatch, call get_workspace_info');
   });
 

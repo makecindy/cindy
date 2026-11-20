@@ -27,7 +27,7 @@ export interface OrcaSessionStartOptionsDeps {
   getSessionRole(sessionId: string): Promise<OrcaRole | null>;
   getWorkerLink(workerSessionId: string): Promise<OrcaWorkerLink | null>;
   getRemoteLead?(sessionId: string): Promise<OrcaRemoteLead | null>;
-  listWorkersByLead?(sessionId: string): Promise<ReadonlyArray<Pick<OrcaWorkerRecord, 'id' | 'sessionId' | 'teamId' | 'role'>>>;
+  listWorkersByLead?(sessionId: string): Promise<ReadonlyArray<Pick<OrcaWorkerRecord, 'id' | 'sessionId' | 'teamId'>>>;
   warn(message: string, meta: Record<string, unknown>): void;
 }
 
@@ -166,8 +166,8 @@ export async function applyOrcaInstructions(
       const soleWorker = team.length === 1 ? team[0] : undefined;
       const target = initial ? team.find(w => w.id === initial.workerId && w.sessionId === initial.sessionId) : soleWorker;
       if (target) {
-        // Only an unambiguous built-in role may enter the system prompt. Custom labels stay tool-result data.
-        route = parseOrcaInitialWorkerRef({ workerId: target.id, sessionId: target.sessionId, role: soleWorker?.role });
+        // Roles and labels can change while this Lead's startup prompt remains cached.
+        route = parseOrcaInitialWorkerRef({ workerId: target.id, sessionId: target.sessionId });
       }
     } catch {
       deps.warn('orca lead startup: could not read the active Worker route', { sessionId: o.id });

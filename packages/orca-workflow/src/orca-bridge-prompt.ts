@@ -1,9 +1,6 @@
-import { ORCA_PREDEFINED_WORKER_ROLES } from '@cindy/maker-shared/orca-team';
-
 export interface OrcaInitialWorkerRef {
   workerId: string;
   sessionId: string;
-  role?: (typeof ORCA_PREDEFINED_WORKER_ROLES)[number];
 }
 
 export interface OrcaWorkerPromptMeta {
@@ -18,17 +15,15 @@ export function parseOrcaInitialWorkerRef(value: unknown): OrcaInitialWorkerRef 
   const candidate = value as Record<string, unknown>;
   if (typeof candidate.workerId !== 'string' || !candidate.workerId.trim()) return null;
   if (typeof candidate.sessionId !== 'string' || !candidate.sessionId.trim()) return null;
-  const role = ORCA_PREDEFINED_WORKER_ROLES.find(value => value === candidate.role);
   return {
     workerId: candidate.workerId,
     sessionId: candidate.sessionId,
-    ...(role ? { role } : {}),
   };
 }
 
 export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef | null): string {
   const lines = [
-    'You lead an Orca team. Delegate implementation work to Workers when appropriate. For a clear assignment to a known, matching Worker, send it directly with send_to_worker on server cindy_orca. Use get_workspace_info when the target is unknown, ambiguous, or a previous mapping is stale.',
+    'You lead an Orca team. Delegate implementation work to Workers when appropriate. For a clear assignment to a known, matching Worker, send it directly with send_to_worker on server cindy_orca. Use get_workspace_info when the target is unknown, ambiguous, or a previous mapping is stale. For a role or label, use get_workspace_info unless you have already verified the match for this assignment.',
     'An assignment to an Orca Worker MUST use the Orca tools below. This includes tasks addressed to an existing worker by role or label, explicit requests to open new Orca workers, requests for the Lead to delegate to workers, and parallel role assignments while an Orca team is active. Native subagents do not satisfy an Orca Worker assignment.',
     'Use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) only when the user explicitly asks for a "subagent" / "子代理" without assigning the task to an Orca Worker, or explicitly says not to use Orca Workers. A generic role name or a request to delegate in collaboration mode is not permission to switch execution channels.',
     'An Orca Worker is NEVER a substitute for a subagent. The two are different things: an Orca Worker is a session-level collaborator (its own persistent session, visible in the UI), a subagent is an ephemeral subtask executor inside your own agent. Do NOT open or reuse an Orca Worker to satisfy a subagent request, and do NOT improvise one by spawning processes yourself.',
@@ -79,7 +74,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
   if (initialWorker) {
     lines.push(
       '',
-      `Known Worker at session start${initialWorker.role ? ` (role=${initialWorker.role})` : ''}: worker_id=${initialWorker.workerId}. For assignments to this Worker, use send_to_worker with target_session_id=${initialWorker.sessionId}.`,
+      `Known Worker at session start: worker_id=${initialWorker.workerId}. For assignments to this Worker, use send_to_worker with target_session_id=${initialWorker.sessionId}.`,
     );
   }
 

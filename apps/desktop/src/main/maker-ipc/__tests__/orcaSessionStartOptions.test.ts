@@ -50,7 +50,8 @@ describe('persisted Orca session start options', () => {
       orcaRole: 'lead',
       orcaLeadSessionId: 'lead-session',
     });
-    expect(opts.userPrompt).toContain('role=reviewer');
+    expect(opts.vendorOptions?.initialWorker).toEqual({ workerId: reviewer.id, sessionId: reviewer.sessionId });
+    expect(opts.userPrompt).not.toContain('role=reviewer');
     expect(opts.userPrompt).toContain('target_session_id=review-session');
     expect(getWorkerLink).not.toHaveBeenCalled();
   });
@@ -60,7 +61,7 @@ describe('persisted Orca session start options', () => {
   it('falls back to discovery for ambiguous or stale routes and keeps custom role text out of instructions', async () => {
     const reviewer = { id: 'worker-1', sessionId: 'review-session', role: 'reviewer', teamId: 'team-1' };
     const other = { ...reviewer, id: 'worker-2', sessionId: 'other-session' };
-    const initialWorker = { workerId: reviewer.id, sessionId: reviewer.sessionId };
+    const initialWorker = { workerId: reviewer.id, sessionId: reviewer.sessionId, role: 'reviewer' };
     const start = async (workers: typeof reviewer[], vendor: Record<string, unknown> = {}) => {
       const opts: MakerSessionCreateOpts = {
         ...baseOpts('lead-session'), agentKind: 'pi',
@@ -75,6 +76,9 @@ describe('persisted Orca session start options', () => {
     const selected = await start([reviewer, other], { initialWorker });
     expect(selected).toContain('target_session_id=review-session');
     expect(selected).not.toContain('role=reviewer');
+    const renamed = await start([{ ...reviewer, role: 'developer' }], { initialWorker });
+    expect(renamed).toContain('target_session_id=review-session');
+    expect(renamed).not.toMatch(/role=(?:reviewer|developer)/);
     expect(await start([other], { initialWorker })).not.toContain('target_session_id=');
     expect(await start([reviewer], { orcaWorkflowId: 'different-team' })).not.toContain('target_session_id=');
     const custom = await start([{ ...reviewer, role: 'custom role text' }]);
