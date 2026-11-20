@@ -15,7 +15,7 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAX_STATE_JSON_BYTES } from '../../shared/rightSidebarTabState.js';
-import type { RsbWindowTabSnapshot } from '../../shared/rightSidebarWindow.js';
+import { copyRemoteTerminalDraft, type RsbWindowTabSnapshot } from '../../shared/rightSidebarWindow.js';
 import type {
   SidebarTabReturnSnapshot,
   SidebarTabWindowContext,
@@ -67,7 +67,7 @@ function parseContext(raw: unknown): SidebarTabWindowContext {
   };
 }
 
-function parseTabRow(raw: unknown, name: string): { id: string; kind: string; state: unknown } {
+function parseTabRow(raw: unknown, name: string): RsbWindowTabSnapshot['tabs'][number] {
   const tab = requireObject(raw, name);
   const id = requireId(tab.id, `${name}.id`);
   const kind = requireId(tab.kind, `${name}.kind`);
@@ -83,7 +83,7 @@ function parseTabRow(raw: unknown, name: string): { id: string; kind: string; st
   ) {
     throwIpcError('RIGHT_SIDEBAR_STATE_TOO_LARGE', `${name}.state is too large`);
   }
-  return { id, kind, state: tab.state };
+  return { id, kind, state: tab.state, ...(kind === 'terminal' && 'terminalDraft' in tab ? { terminalDraft: copyRemoteTerminalDraft(tab.terminalDraft) } : {}) };
 }
 
 /** 弹出时主窗交付的不可持久化会话整桶快照(与 RSB 窗口 handoff 同一形状)。 */
@@ -91,8 +91,8 @@ function parseHandoff(raw: unknown): RsbWindowTabSnapshot | null {
   if (raw === undefined || raw === null) return null;
   const snapshot = requireObject(raw, 'handoff');
   const sessionId = requireId(snapshot.sessionId, 'handoff.sessionId');
-  if (snapshot.persistable !== false) {
-    throwIpcError('INVALID_PARAMS', 'handoff must be non-persistable');
+  if (typeof snapshot.persistable !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'handoff.persistable must be boolean');
   }
   if (!Array.isArray(snapshot.tabs) || snapshot.tabs.length > MAX_HANDOFF_TABS) {
     throwIpcError('INVALID_PARAMS', 'handoff.tabs must be an array');
@@ -105,7 +105,10 @@ function parseHandoff(raw: unknown): RsbWindowTabSnapshot | null {
     throwIpcError('INVALID_PARAMS', 'handoff.activeTabId is invalid');
   }
   const tabs = snapshot.tabs.map((rawTab, index) => parseTabRow(rawTab, `handoff.tabs[${index}]`));
-  return { sessionId, tabs, activeTabId, persistable: false };
+  if (snapshot.persistable && (tabs.length === 0 || tabs.some(tab => tab.kind !== 'terminal' || tab.state !== null || !('terminalDraft' in tab)))) {
+    throwIpcError('INVALID_PARAMS', 'persistable handoff must contain only terminal runtime metadata');
+  }
+  return { sessionId, tabs, activeTabId, persistable: snapshot.persistable };
 }
 
 /** 合并回侧边栏时弹出窗口交回的单页签快照。 */
@@ -114,7 +117,13 @@ function parseReturnSnapshot(raw: unknown): SidebarTabReturnSnapshot | null {
   const snapshot = requireObject(raw, 'snapshot');
   const sessionId = requireId(snapshot.sessionId, 'snapshot.sessionId');
   const tab = parseTabRow(snapshot.tab, 'snapshot.tab');
-  return { sessionId, tab };
+  if (snapshot.persistable !== undefined && typeof snapshot.persistable !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'snapshot.persistable must be boolean');
+  }
+  if (snapshot.persistable && (tab.kind !== 'terminal' || tab.state !== null || !('terminalDraft' in tab))) {
+    throwIpcError('INVALID_PARAMS', 'persistable snapshot must contain only terminal runtime metadata');
+  }
+  return { sessionId, tab, ...(snapshot.persistable ? { persistable: true } : {}) };
 }
 
 function parsePosition(raw: unknown): { x: number; y: number } | undefined {

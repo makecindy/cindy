@@ -9,7 +9,7 @@
  * 镜像 store + 弹出窗口根组件)。只放纯类型与 channel 常量,不放运行时代码。
  */
 
-import type { RsbWindowTabSnapshot } from './rightSidebarWindow.js';
+import type { RemoteTerminalDraft, RsbWindowTabSnapshot } from './rightSidebarWindow.js';
 
 /** 弹出窗口承载页签所需的会话渲染上下文,由主窗在弹出瞬间一次性交付。 */
 export interface SidebarTabWindowContext {
@@ -35,7 +35,7 @@ export interface SidebarTabWindowAssignment {
   context: SidebarTabWindowContext;
 }
 
-/** 下发给弹出窗口的指派:附不可持久化会话的整桶内存快照(仅 device-link 远程会话非空)。 */
+/** 下发给弹出窗口的指派:附内存页签快照或持久化任务的运行期终端草稿。 */
 export interface SidebarTabWindowAssignmentPayload extends SidebarTabWindowAssignment {
   handoff: RsbWindowTabSnapshot | null;
   /** 本次指派要求选中的已承载页签；只发给它的窗口，不持久化。 */
@@ -48,7 +48,7 @@ export interface SidebarTabWindowOpenRequest {
   /** 任务页签所属任务;全局页签(不跟对话,如插件视图)为 null。 */
   sessionId: string | null;
   context: SidebarTabWindowContext;
-  /** 只对不可持久化会话(device-link 远程)非空。 */
+  /** 内存任务携带页签 state；持久化任务只携带运行期终端草稿。 */
   handoff?: RsbWindowTabSnapshot | null;
   /** 搬进已有的弹出窗口;缺省 / 窗口不存在或任务不符时新开一扇。 */
   targetWindowId?: string;
@@ -56,10 +56,12 @@ export interface SidebarTabWindowOpenRequest {
   position?: { x: number; y: number };
 }
 
-/** 弹出窗口合并回侧边栏时交回的单页签内存态(仅不可持久化会话)。 */
+/** 弹出窗口合并时交回内存页签 state，或持久化页签的运行期终端草稿。 */
 export interface SidebarTabReturnSnapshot {
   sessionId: string;
-  tab: { id: string; kind: string; state: unknown };
+  tab: { id: string; kind: string; state: unknown; terminalDraft?: RemoteTerminalDraft | null };
+  /** True carries runtime metadata only; SQLite remains the tab-state authority. */
+  persistable?: boolean;
 }
 
 /** 弹出窗口 → main:把某个页签合并回侧边栏。 */
@@ -94,7 +96,7 @@ export type SidebarTabWindowsState = Record<string, SidebarTabWindowEntryState>;
 export interface SidebarTabReturnedPayload {
   sessionId: string | null;
   tabId: string;
-  /** 不可持久化会话交回的内存态;可持久化会话为 null,主窗按 SQLite 刷新。 */
+  /** 内存任务交回页签 state；持久化任务只交回运行期草稿，页签按 SQLite 刷新。 */
   snapshot: SidebarTabReturnSnapshot | null;
   /**
    * merge = 用户合并回侧栏;crash = 窗口崩溃 / 作废;closed = 页签在窗口里被关掉(不再显示,

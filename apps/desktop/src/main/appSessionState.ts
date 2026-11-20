@@ -87,16 +87,23 @@ const store = createOverrideSettingsFile<PersistedAppSessionSettings>({
 let active: ActiveAppSession | null = null;
 let boundaryDepth = 0;
 let appSessionCommitBoundaryHook: (() => void) | null = null;
-const sessionInvalidationListeners = new Set<() => void>();
+/** Request cancellation does not always end owner-bound OS processes (e.g. SSH). */
+export interface AppSessionInvalidation {
+  kind: 'boundary' | 'commit';
+  ownerChanged: boolean;
+  /** Only a known same-owner projection repair may preserve process continuity. */
+  generationReason?: 'projection-repair';
+}
+const sessionInvalidationListeners = new Set<(change: AppSessionInvalidation) => void>();
 
 /** Cancel owner-bound requests before teardown or a new generation becomes visible. */
-export function onAppSessionInvalidated(listener: () => void): () => void {
+export function onAppSessionInvalidated(listener: (change: AppSessionInvalidation) => void): () => void {
   sessionInvalidationListeners.add(listener);
   return () => { sessionInvalidationListeners.delete(listener); };
 }
 
-function invalidateSessionRequests(): void {
-  for (const listener of sessionInvalidationListeners) listener();
+function invalidateSessionRequests(change: AppSessionInvalidation): void {
+  for (const listener of sessionInvalidationListeners) listener(change);
 }
 
 /**
@@ -178,7 +185,7 @@ export function activeOwnerScopeKey(): string {
  */
 export function beginAppSessionBoundary(): () => void {
   boundaryDepth += 1;
-  invalidateSessionRequests();
+  invalidateSessionRequests({ kind: 'boundary', ownerChanged: false });
   let released = false;
   return () => {
     if (released) return;
@@ -204,6 +211,7 @@ export function commitActiveAppSession(
   mode: AppSessionMode,
   cloudOwnerId?: string | null,
   forceBumpGeneration = false,
+  generationReason?: 'projection-repair',
 ): ActiveAppSession {
   const previous = ensureLoaded();
   let dataOwnerId: string | null = null;
@@ -221,7 +229,7 @@ export function commitActiveAppSession(
   }
 
   store.writePatch({ activeMode: mode });
-  invalidateSessionRequests();
+  invalidateSessionRequests({ kind: 'commit', ownerChanged, generationReason });
   if (ownerChanged) appSessionCommitBoundaryHook?.();
   active = {
     mode,
@@ -241,6 +249,7 @@ export function commitVolatileAppSession(
   mode: AppSessionMode,
   cloudOwnerId?: string | null,
   forceBumpGeneration = false,
+  generationReason?: 'projection-repair',
 ): ActiveAppSession {
   const previous = ensureLoaded();
   let dataOwnerId: string | null = null;
@@ -255,7 +264,7 @@ export function commitVolatileAppSession(
   if (!ownerChanged && !forceBumpGeneration) {
     return { ...previous };
   }
-  invalidateSessionRequests();
+  invalidateSessionRequests({ kind: 'commit', ownerChanged, generationReason });
   if (ownerChanged) appSessionCommitBoundaryHook?.();
   active = {
     mode,
