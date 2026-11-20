@@ -2368,6 +2368,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-final-headerless', 'Options:\n1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-analysis-final', 'Analysis:\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
     ['thinking-options-phase', 'Options:\n1. A\n2. B\n\nImplementation:\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-bold-options', '## **Options**\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-single-option', 'Options:\n1. A\n\n1. 验证\n2. 交付', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;

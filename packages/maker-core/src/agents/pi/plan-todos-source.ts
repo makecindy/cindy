@@ -20,8 +20,11 @@ function planLines(plan) {
   }
   return visible;
 }
+function headingText(line) {
+  return line.trim().replace(/^#{1,6}\s+/, '').replace(/[*_\x60]/g, '');
+}
 function isPlanHeader(line) {
-  const title = line.trim().replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '');
+  const title = headingText(line);
   return /^(?:(?:implementation|execution|action|work)\s+)?plan\s*[:：]?$/i.test(title)
     || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title)
     || /^(?:final\s+(?:plan|steps)|最终(?:计划|步骤))\s*[:：]?$/i.test(title);
@@ -74,7 +77,7 @@ function selectPlanText(content) {
     const roots = numbered.filter(line => indent(line) === minimum);
     // Section headings make a restart a phase boundary, not a new plan.
     // Keep the complete sectioned plan for ambiguous-id whole-plan tracking.
-    const reasoningHeader = line => /^(?:#{1,6}\s+)?(?:options|alternatives|considerations|analysis|reasoning|brainstorm(?:ing)?|选项|备选|思考|分析|推理)\s*[:：]?$/i.test(line.text.trim());
+    const reasoningHeader = line => /^(?:options|alternatives|considerations|analysis|reasoning|brainstorm(?:ing)?|选项|备选|思考|分析|推理)\s*[:：]?$/i.test(headingText(line.text));
     const sections = lines.filter(line => /^(?:#{1,6}\s+\S.*|[^\s\d].*[:：])\s*$/.test(line.text.trim())
       && !reasoningHeader(line));
     if (sections.length) {
@@ -82,10 +85,12 @@ function selectPlanText(content) {
       return native.slice(precedingReasoning ? sections[0].start : Math.min(sections[0].start, roots[0].start));
     }
     let start = 0;
+    const explicitReasoning = lines.some(line => line.start < roots[0].start && reasoningHeader(line));
     for (let i = 1; i < roots.length; i++) {
       const previous = roots[i - 1];
       const gap = native.slice(previous.start + previous.text.length, roots[i].start);
-      const restarts = i - start >= 2 && i + 1 < roots.length
+      const restarts = (i - start >= 2 || (start === 0 && explicitReasoning))
+        && (i + 1 < roots.length || (start === 0 && explicitReasoning))
         && Number(roots[i].text.trim().match(/^\d+/)[0]) === 1;
       // A fresh list can restart numbering after a completed enumeration.
       // Paragraphs and blank lines alone are still valid step details.

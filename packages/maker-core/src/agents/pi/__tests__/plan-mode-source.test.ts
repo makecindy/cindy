@@ -12,6 +12,11 @@ const selectPlan = runInNewContext(PI_PLAN_TODOS_SOURCE + '; selectPlanText') as
   (content: Array<{ type: string; text?: string; thinking?: string }>) => string;
 
 describe('Pi plan title extraction', () => {
+  it.each(['Options:', '## **Options**', '## __Options:__', '## *Options*'])('excludes an explicit single-option preamble: %s', heading => {
+    for (const plan of ['1. 验证\n2. 交付', '1. 验证']) {
+      expect(selectPlan([{ type: 'thinking', thinking: heading + '\n1. A\n\n' + plan }])).toBe(plan);
+    }
+  });
   it('excludes decimal and version continuations but retains no-space Chinese titles', () => {
     expect(extract('1.5.2 is the pinned runtime\n2.75 is a version')).toEqual([]);
     expect(selectPlan([{ type: 'thinking', thinking: '1.5.2 is the pinned runtime' }])).toBe('');
