@@ -942,8 +942,10 @@ describe('MorphPopover interaction contract', () => {
     expect(inner.style.height).toBe('240px');
 
     inner.scrollTop = 120;
+    const flushHeight = vi.spyOn(panel, 'offsetHeight', 'get');
     content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
     expect(inner.scrollTop).toBe(120);
+    expect(flushHeight).not.toHaveBeenCalled();
   });
 
   // #9573 复审：普通动效下，扫描结果 / 模型列表会在 220ms 开场动画内派发重测。
