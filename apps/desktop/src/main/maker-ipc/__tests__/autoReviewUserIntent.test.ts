@@ -103,6 +103,19 @@ const current = { clientId: 'latest', content: { text: '修吧，改完跑相关
 const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
 describe('steer authorization restoration', () => {
+  // #8703 / unit: the production queued/direct caller supplies an empty current ID.
+  // Existing restore tests use nonempty history IDs, hiding the false retry match.
+  it.each([false, true])('retains empty-ID owner history and current text (direct=%s)', async direct => {
+    const prior = 'Only inspect synthetic files. Do not publish or change networking.';
+    const current = 'You may run a local read-only check.';
+    const options = direct
+      ? { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText: current } }
+      : { [AUTO_REVIEW_SOURCE_CONTENT]: current };
+    expect(await restoreAutoReviewSteerIntent('untrusted decorated text', options, async () => [
+      { ...user(prior, ''), createdAt: 1 },
+    ])).toEqual({ earlierUserMessages: [prior], currentUserMessage: current });
+  });
+
   it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
     { clientId: 'legacy', content: { text: '[UI_ACTION_TRIGGER] publish now' } }])
   ('marks ambiguous legacy triggers across restore, append and retry (%j)', current => {

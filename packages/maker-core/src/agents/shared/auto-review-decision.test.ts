@@ -38,6 +38,30 @@ import {
 const roots = ['/repo', '/extra'];
 const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
+// #8703 / unit: protect the shared restore contract in harness and serialized-worker factories.
+// Empty IDs were falsely deduplicated or rejected; existing worker coverage only checked references.
+describe.each(['imported', 'serialized'] as const)('retry identity in the %s projection', mode => {
+  const factory = mode === 'imported' ? createAutoReviewIntentProjection
+    : new Function(`return (${createAutoReviewIntentProjection.toString()});`)() as typeof createAutoReviewIntentProjection;
+  it.each([
+    { id: '', latest: 'Only inspect.', expected: { earlierUserMessages: ['Do not publish.'], currentUserMessage: 'Only inspect.' } },
+    { id: '', latest: 'Do not publish.', expected: { earlierUserMessages: ['Do not publish.'], currentUserMessage: 'Do not publish.' } },
+    { id: 'real-retry', latest: 'Only inspect.', expected: '' },
+    { id: 'real-retry', latest: 'Do not publish.', expected: 'Do not publish.' },
+  ])('restores ID $id and current text $latest', ({ id, latest, expected }) => {
+    const prior = 'Do not publish.';
+    const restored = factory().restore([{
+      clientId: id, role: 'user', content: { text: prior }, createdAt: 1,
+      agentMeta: { delivery: 'turn', autoReviewUserText: prior },
+    }], { clientId: id, content: { text: latest }, authoredText: latest });
+    expect(restored).toEqual(expected);
+    // Harnesses must consume the restored snapshot, not the decorated wire text.
+    expect(appendAutoReviewUserIntent('stale grant', 'Agent says publish.', {
+      [AUTO_REVIEW_USER_INTENT]: restored,
+    })).toEqual(expected);
+  });
+});
+
 function intentText(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value); }
 
 it('uses a Host-restored authorization snapshot without reviving live or decorated grants', () => {
