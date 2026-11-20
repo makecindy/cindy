@@ -9,12 +9,24 @@ export default {
     'custom-ids': { about: '#10253: custom models with near-identical names and long IDs differing only at the end' },
     'custom-ids-legacy': { about: '#10253: the same custom IDs in the single-engine provider list' },
     recent: { about: '「最近」视图:三态 Fast 载体(`ultrafast`/`true`)的条目后缀原样保留' },
+    'share-favorite-recovery': { about: 'The production picker hides a shared favorite on temporary unavailability and shows it again after recovery' },
     'cindy-personal': { about: 'Personal Cindy AI source identity in the real model selector' },
     'cindy-xd': { about: 'XD Cindy AI source identity beside the unchanged Auto model' },
     'cindy-organization': { about: 'Long organization name in the real provider rail' },
   },
   async check(page, ui) {
     await page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') }).waitFor();
+    if (ui.case === 'share-favorite-recovery') {
+      await page.locator('[data-rail-item="favorites"]').click();
+      const favorite = page.getByRole('option').filter({ hasText: 'Opus 5' });
+      await favorite.waitFor();
+      await page.evaluate(() => window.setFixtureShareVisible(false));
+      await favorite.waitFor({ state: 'hidden' });
+      await page.evaluate(() => window.setFixtureShareVisible(true));
+      await favorite.waitFor();
+      await ui.capture('favorite-restored');
+      return;
+    }
     if (ui.case.startsWith('custom-ids')) {
       // Wait for the same rows on both sides of --compare; the old version has no ID text.
       await page.getByText('DeepSeek-V4.1-Flash', { exact: true }).waitFor();

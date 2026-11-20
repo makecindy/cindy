@@ -67,6 +67,19 @@ export class RecoveryJournal {
     durableWrite(this.file, s);
     return s;
   }
+  retryMigratedStartup(release, backupDirectory) {
+    const s = this.read();
+    assert(s.phase === 'blocked' && s.rollbackPolicy === 'manual' && s.failed?.id === release.id &&
+      s.failed.directory === release.directory && s.failed.assetDigest === release.assetDigest &&
+      s.databaseUpgrade?.candidateId === release.id && s.databaseUpgrade.backupDirectory === backupDirectory &&
+      s.databaseUpgrade.startupRetryAt === undefined, 'Same migrated candidate may retry startup only once');
+    const next = {...s, phase:'trial', selected:s.failed, generation:this.nonce(), startedAt:this.now(), readyAt:null,
+      databaseUpgrade:{...s.databaseUpgrade, startupRetryAt:this.now()},
+      rejected:s.rejected.filter(r => r.id !== release.id)};
+    delete next.error;
+    delete next.failed;
+    durableWrite(this.file, next);
+  }
   observe({ generation, id, healthy, processAlive }, probationMs) {
     const s = this.read();
     assert(s.phase === 'trial' && generation === s.generation && id === s.selected.id, 'Stale or unrelated health evidence');

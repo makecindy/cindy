@@ -71,6 +71,7 @@ interface Harness {
   reactToMessage: ReturnType<typeof vi.fn>;
   sendText: ReturnType<typeof vi.fn>;
   sendMarkdownText: ReturnType<typeof vi.fn>;
+  removeMessageReaction: ReturnType<typeof vi.fn>;
 }
 
 function wire(
@@ -79,6 +80,7 @@ function wire(
     channel?: string;
     notificationSessionId?: string;
     ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
+    channelToolScopeFor?: ImChannelAdapter['channelToolScopeFor'];
   } = { withPrepare: true },
 ): Harness {
   const calls: string[] = [];
@@ -87,6 +89,7 @@ function wire(
   const reactToMessage = vi.fn(async () => 'reaction-1');
   const sendText = vi.fn(async () => undefined);
   const sendMarkdownText = vi.fn(async () => undefined);
+  const removeMessageReaction = vi.fn(async () => undefined);
   const persistEarly = vi.fn(async () => {
     calls.push('persistEarly');
     return { sessionId: 'feishu-session', clientId: 'early-client' };
@@ -110,6 +113,7 @@ function wire(
     sendMarkdownText,
     sendText,
     reactToMessage,
+    removeMessageReaction,
   } as unknown as ChannelIM;
 
   const adapter = {
@@ -121,6 +125,7 @@ function wire(
     processingEmoji: 'Eyes',
     ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
     ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
+    ...(opts.channelToolScopeFor ? { channelToolScopeFor: opts.channelToolScopeFor } : {}),
   } as unknown as ImChannelAdapter;
 
   const attach = createMessageHandler(
@@ -135,7 +140,7 @@ function wire(
   );
   attach(im);
 
-  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText, sendMarkdownText };
+  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText, sendMarkdownText, removeMessageReaction };
 }
 
 function turnArgs(runAgentTurn: ReturnType<typeof vi.fn>): ImRunAgentTurnArgs {
@@ -148,6 +153,43 @@ beforeEach(() => {
 });
 
 describe('messageHandler early user-message persist', () => {
+  // #10002: context fallback must not give a revoked input a fresh grant; ordinary history failures still degrade.
+  it.each([false, true])('only falls back from history failure while the ingress grant remains current (revoked=%s)', async revoked => {
+    const scope = vi.fn(() => undefined);
+    const h = wire({ withPrepare: true, channel: 'discord', channelToolScopeFor: scope });
+    let grant = 1;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const event = makeEvent({ assertCurrent: () => { if (grant !== 1) throw new Error('DISCORD_AUTHORIZATION_CHANGED'); } });
+    h.prepareAgentTurnText!.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      event.assertCurrent?.();
+      throw new Error('history unavailable');
+    });
+    const work = h.deliver(event);
+    await entered.promise;
+    if (revoked) grant = 2;
+    release.resolve();
+    await work;
+    expect(scope).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(h.runAgentTurn).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(h.dispatchAgentTurn).not.toHaveBeenCalled();
+    expect(h.sendText).not.toHaveBeenCalled();
+    if (revoked) expect(h.removeMessageReaction).toHaveBeenCalledWith(event.messageId, 'reaction-1');
+    else expect(turnArgs(h.runAgentTurn).agentText).toContain(event.text);
+  });
+
+  it('retains the ingress guard until a queued turn actually starts its provider', async () => {
+    const h = wire();
+    let current = true;
+    await h.deliver(makeEvent({ assertCurrent: () => { if (!current) throw new Error('DISCORD_AUTHORIZATION_CHANGED'); } }));
+    const args = turnArgs(h.runAgentTurn);
+    await expect(args.beforeProviderStart!()).resolves.toBeUndefined();
+    current = false;
+    await expect(args.beforeProviderStart!()).rejects.toThrow('DISCORD_AUTHORIZATION_CHANGED');
+  });
+
   // Tier 1, #9250: durable inbound GUIDs must not enter the volatile sendQueue.
   // Existing early-persist cases cover only internal dispatch, not a busy external caller.
   it('defers durable inputs on a busy runner and waits for persistence on accepted dispatch', async () => {

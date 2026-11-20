@@ -567,6 +567,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       leadSessionId: 'lead-1',
       fromMs: 123,
       limit: 50,
+      order: 'asc',
       cursor: { createdAt: 234, id: 'previous', rowid: 9 },
     });
     expect(result).toMatchObject({
@@ -575,13 +576,21 @@ describe('orca_worker_bridge MCP helpers', () => {
       has_more: true,
       next_cursor: { created_at_ms: 456, id: 'message-1', rowid: 17 },
     });
+    await server._registeredTools.read_lead_history.handler({
+      worker_id: 'worker-1', limit: 8, order: 'desc',
+      cursor: { created_at_ms: 456, id: 'message-1', rowid: 17 },
+    });
+    expect(readLeadHistory).toHaveBeenLastCalledWith({
+      leadSessionId: 'lead-1', fromMs: null, limit: 8, order: 'desc',
+      cursor: { createdAt: 456, id: 'message-1', rowid: 17 },
+    });
     expect(base.createSessionCalls).toEqual([]);
 
     expect(expectToolError(await server._registeredTools.read_lead_history.handler({
       worker_id: 'forged-worker',
       limit: 50,
     }))).toMatchObject({ error: 'worker identity mismatch' });
-    expect(readLeadHistory).toHaveBeenCalledTimes(1);
+    expect(readLeadHistory).toHaveBeenCalledTimes(2);
   });
 
   function makeWorkerBridgeLeadHarness(

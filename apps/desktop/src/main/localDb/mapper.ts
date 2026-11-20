@@ -1,4 +1,5 @@
 import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
+import { projectHandoffPreview } from '../maker-ipc/agentHandoff.js';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
@@ -107,7 +108,7 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
-type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
@@ -133,6 +134,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  orcaLeadSessionId?: string | null;
   companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
@@ -305,6 +307,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
     source: normalizeSessionSource(row.source),
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     orcaRole: row.orcaRole as OrcaRole | null,
     parentSessionId: row.parentSessionId,
     forkedAtMessageId: row.forkedAtMessageId,
@@ -386,12 +389,19 @@ export function messageToCamel(row: MessageRow): Message {
       agentMeta = null;
     }
   }
+  const rebuild = (agentMeta as (AgentMeta & { contextRebuild?: unknown }) | null)?.contextRebuild;
+  if (rebuild) {
+    const contextRebuild = projectHandoffPreview(rebuild);
+    if (contextRebuild !== rebuild) agentMeta = { ...agentMeta, contextRebuild } as AgentMeta;
+  }
   return {
     id: row.id,
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
+    content: row.role === 'agent_switch'
+      ? projectHandoffPreview(content)
+      : projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -585,7 +595,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   now: number,
@@ -819,6 +829,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     effort: row.effort ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
+    inheritedProjectDir: row.inheritedProjectDir ?? undefined,
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
     targetSessionId: row.targetSessionId ?? undefined,
@@ -831,6 +842,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    primaryHostKey: row.primaryHostKey ?? undefined,
     preRunPlugin: row.preRunPluginId
       ? {
           pluginId: row.preRunPluginId,
@@ -881,6 +893,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
+    inheritedProjectDir: s.inheritedProjectDir ?? null,
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
     targetSessionId: s.targetSessionId ?? null,
@@ -888,6 +901,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    primaryHostKey: s.primaryHostKey ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
@@ -942,6 +956,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
+  if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;

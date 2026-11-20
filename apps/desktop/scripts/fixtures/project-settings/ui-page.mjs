@@ -8,8 +8,8 @@ export default {
   name: 'project-settings',
   entry: './fixture.tsx',
   viewport: { width: 720, height: 800 },
-  real: 'ProjectSettingsDialog, ProjectIcon and DeviceSectionHeader',
-  notCovered: 'Real persistence, device-link transport, full sidebar navigation and phone native presentation.',
+  real: 'Task header project menu, bulk archive confirmation, project settings and icon',
+  notCovered: 'Real persistence, device-link transport and phone native presentation.',
   cases: {
     'create-device': { about: 'Device-row add action appears on hover/focus and opens the creation form', data: { create: true } },
     'create-legacy': { about: 'Version 6 still requires an existing directory and hides clone fields', data: { create: true, version: 6 } },
@@ -40,9 +40,25 @@ export default {
       about: 'New project uses the same settings form and does not create a task before saving',
       data: { create: true },
     },
+    intro: {
+      about: 'Someone with no project yet meets the introduction before the new-project form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
+    'intro-once': {
+      about: 'Closing the introduction leads on to the form, and later openings go straight to the form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
     header: {
-      about: 'Click a task header project icon to edit its owning project, including worktrees',
+      about:
+        'Click the header project icon to create a task or edit its owning project, including worktrees',
       data: { header: true },
+    },
+    'remote-archive': {
+      about:
+        'Open the remote project menu, review the named project and skipped tasks, then cancel',
+      data: { header: true, remote: true },
     },
     letters: {
       about: 'Project-name initials prefill, draft preservation, cancellation and persistence',
@@ -82,6 +98,7 @@ export default {
   async ready(page) {
     await page
       .getByRole('button', { name: /^(更换图标|Change icon|项目设置|Project settings|新建项目|New project)$/ })
+      .or(page.locator('button[aria-haspopup="menu"]'))
       .first()
       .waitFor();
   },
@@ -89,6 +106,32 @@ export default {
     // Real header and dialog, with a local specimen row. Existing dialog cases
     // cannot verify hover/focus visibility. ProjectsSection unit tests cover
     // local/remote target routing separately from this browser layout check.
+    if (ui.case === 'intro' || ui.case === 'intro-once') {
+      const intro = page.locator('[data-feature-intro]');
+      const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+      const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
+      // The device row reveals its add action on hover.
+      const device = page.getByRole('button', { expanded: true });
+      await device.hover();
+      await add.click();
+      await page.getByText(await ui.t('featureIntro.project.lead'), { exact: true }).waitFor();
+      const overflow = await intro.locator('.first-run-cover').evaluate((cover) => cover.scrollHeight - cover.clientHeight);
+      if (overflow > 0) throw new Error(`The introduction must fit without scrolling (${overflow}px over)`);
+      // One dialog at a time: the form waits for the introduction instead of opening under it.
+      if (await name.count()) throw new Error('The form opened together with the introduction');
+      if (ui.case === 'intro') return;
+      await page.getByRole('button', { name: await ui.t('featureIntro.project.start'), exact: true }).click();
+      await intro.waitFor({ state: 'detached' });
+      await name.waitFor();
+      // Shown once: opening the form again on this computer goes straight to it.
+      await page.getByRole('button', { name: await ui.t('projectSettings.cancel'), exact: true }).last().click();
+      await name.waitFor({ state: 'detached' });
+      await device.hover();
+      await add.click();
+      await name.waitFor();
+      if (await intro.count()) throw new Error('The introduction appeared a second time');
+      return;
+    }
     if (ui.case === 'create-device') {
       const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
       const wrapper = add.locator('..');
@@ -315,6 +358,7 @@ export default {
       });
     };
     const editName = async (value, blur = false) => {
+      const writesBeforeEdit = await page.evaluate(() => window.projectSettingsWrites.length);
       const input = page.getByRole('textbox', {
         name: await ui.t('projectSettings.name'),
         exact: true,
@@ -328,11 +372,72 @@ export default {
       else await input.press('Enter');
       if ((await input.inputValue()) !== value)
         throw new Error('Inline edit did not update the displayed name');
-      if (await page.evaluate(() => window.projectSettingsWrites.length))
+      if (await page.evaluate(() => window.projectSettingsWrites.length) !== writesBeforeEdit)
         throw new Error('Inline rename persisted before Save');
     };
+    const movedActions = await Promise.all([
+      'ccAgent.sidebar.projectAction.pin',
+      'settings.sessionImport.projectMenu',
+      'ccAgent.sidebar.projectAction.removeFromSidebar',
+    ].map((key) => ui.t(key)));
+    if (ui.case === 'remote-archive') {
+      await page.locator('button[aria-haspopup="menu"]').click();
+      await ui.capture('project-menu');
+      const showFiles = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.projectAction.showFiles'), exact: true });
+      await showFiles.click();
+      await page.waitForFunction(() => window.projectFilesHref === '/cc-agent/files/header-task?device=fixture-studio');
+      await page.locator('button[aria-haspopup="menu"]').click();
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { writeText: async (href) => { window.copiedProjectLink = href; } },
+        });
+      });
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.projectAction.copyDeepLink'), exact: true }).click();
+      await page.waitForFunction(() => window.copiedProjectLink === 'cindy://project/device%3Afixture-studio%3A%2FProjects%2FCindy');
+      await page.locator('button[aria-haspopup="menu"]').click();
+      await page
+        .getByRole('menuitem', {
+          name: await ui.t('ccAgent.sidebar.projectAction.archivedAll'),
+          exact: true,
+        })
+        .click();
+      const dialog = page.getByRole('alertdialog');
+      await dialog.getByRole('heading', { name: /Cindy.*Studio/ }).waitFor();
+      const skip = await ui.t('ccAgent.sidebar.archiveAll.skipPinned', { count: 1 });
+      await dialog
+        .getByText(
+          await ui.t('ccAgent.sidebar.archiveAll.descriptionWithSkip', { count: 2, skip }),
+          { exact: true },
+        )
+        .waitFor();
+      await ui.capture('archive-confirmation');
+      await dialog
+        .getByRole('button', { name: await ui.t('ccAgent.sidebar.archiveAll.cancel'), exact: true })
+        .click();
+      await dialog.waitFor({ state: 'hidden' });
+      if (await page.evaluate(() => window.projectSettingsWrites.length))
+        throw new Error('Cancelling the remote archive changed a task');
+      await page.locator('button[aria-haspopup="menu"]').click();
+      await page.getByRole('menuitem', { name: await ui.t('projectSettings.title'), exact: true }).click();
+      const settingsDialog = page.getByRole('dialog');
+      await settingsDialog.getByRole('button', { name: movedActions[0], exact: true }).waitFor();
+      for (const name of movedActions.slice(1)) {
+        if (await settingsDialog.getByRole('button', { name, exact: true }).count())
+          throw new Error('Local-only project action appeared in remote settings: ' + name);
+      }
+      await (await button('cancel')).last().click();
+      return;
+    }
     if (ui.case === 'header') {
-      const trigger = await button('title');
+      const trigger = page.getByRole('button', {
+        name: await ui.t('ccAgent.sidebar.projectAction.menu', { name: 'Cindy' }),
+        exact: true,
+      });
+      const settings = page.getByRole('menuitem', {
+        name: await ui.t('projectSettings.title'),
+        exact: true,
+      });
       // The title bar is draggable in Electron; its project button must opt out.
       if (
         (await trigger.evaluate((el) => el.style.getPropertyValue('-webkit-app-region'))) !==
@@ -340,8 +445,28 @@ export default {
       )
         throw new Error('Project settings trigger is still in the drag region');
       await trigger.click();
+      await settings.waitFor();
+      for (const name of movedActions) {
+        if (await page.getByRole('menuitem', { name, exact: true }).count())
+          throw new Error('Settings action still appears in the project menu: ' + name);
+      }
+      await ui.capture('project-menu');
+      await page
+        .getByRole('menuitem', { name: await ui.t('ccAgent.common.newSession'), exact: true })
+        .click();
+      await page.waitForFunction(() => window.createdProjectKey === 'local:/Projects/Cindy');
+      await trigger.click();
+      await settings.click();
       await (await button('changeIcon')).waitFor();
       await page.getByText('/Projects/Cindy', { exact: true }).waitFor();
+      const settingsAction = async (key) => page.getByRole('button', { name: await ui.t(key), exact: true });
+      await (await settingsAction('settings.sessionImport.projectMenu')).waitFor();
+      await (await settingsAction('ccAgent.sidebar.projectAction.removeFromSidebar')).waitFor();
+      await ui.capture('project-settings');
+      await (await settingsAction('ccAgent.sidebar.projectAction.pin')).click();
+      await trigger.click();
+      await settings.click();
+      await (await settingsAction('ccAgent.sidebar.projectAction.unpin')).waitFor();
       await editName('Header project');
       await (await button('save')).click();
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -353,8 +478,44 @@ export default {
       )
         throw new Error('Header settings saved to the worktree instead of the owning project');
       await trigger.click();
-      await (await button('cancel')).last().click();
-      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      await settings.click();
+      await editName('Unsaved');
+      await (await settingsAction('settings.sessionImport.projectMenu')).click();
+      await (await button('keepEditing')).click();
+      await (await settingsAction('settings.sessionImport.projectMenu')).click();
+      await (await button('discard')).click();
+      await page.waitForFunction(() => window.importTarget === 'local:/Projects/Cindy');
+      await trigger.click();
+      await settings.click();
+      await (await settingsAction('ccAgent.sidebar.projectAction.removeFromSidebar')).click();
+      const removal = page.getByRole('alertdialog');
+      const checkbox = removal.getByRole('checkbox');
+      const remove = await ui.t('ccAgent.sidebar.projectAction.removeFromSidebarConfirmAction');
+      const removeAndArchive = await ui.t('ccAgent.sidebar.projectAction.removeAndArchive');
+      await removal.getByRole('button', { name: remove, exact: true }).waitFor();
+      if (await checkbox.isChecked()) throw new Error('Archive must be opt-in');
+      await ui.capture('remove-project');
+      await checkbox.check();
+      await removal.getByRole('button', { name: removeAndArchive, exact: true }).waitFor();
+      await ui.capture('remove-project-archive');
+      await removal.getByRole('button', { name: await ui.t('commonUi.confirmDialog.cancel'), exact: true }).click();
+      if (await page.evaluate(() => window.removedProject || window.archivedTask)) throw new Error('Cancelling changed the project');
+      const reopenRemoval = async () => {
+        await trigger.click();
+        await settings.click();
+        await (await settingsAction('ccAgent.sidebar.projectAction.removeFromSidebar')).click();
+        await checkbox.waitFor();
+        if (await checkbox.isChecked()) throw new Error('Previous archive choice leaked');
+      };
+      await reopenRemoval();
+      await removal.getByRole('button', { name: remove, exact: true }).click();
+      await page.waitForFunction(() => window.removedProject === 'local:/Projects/Cindy');
+      if (await page.evaluate(() => window.archivedTask)) throw new Error('Unchecked removal archived a task');
+      await page.evaluate(() => { delete window.removedProject; });
+      await reopenRemoval();
+      await checkbox.check();
+      await removal.getByRole('button', { name: removeAndArchive, exact: true }).click();
+      await page.waitForFunction(() => window.archivedTask === 'header-task' && window.removedProject === 'local:/Projects/Cindy');
       await trigger.waitFor();
       return;
     }

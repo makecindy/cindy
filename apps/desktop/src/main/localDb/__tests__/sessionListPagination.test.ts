@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { expect, it } from 'vitest';
-import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../schema';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles } from '../schema';
 import { selectSessionListRows, selectOrdinarySessionListRows, flattenSessionReadRow, projectSessionReadResult } from '../sessionQueries';
 import type { DbClient } from '../client/DbClient';
 
@@ -14,7 +14,7 @@ it.each([
 ])('previews the last real message of an imported task (stored=$stored)', async ({ stored, storedRole, role, content, preview }) => {
   const sqlite = new Database(':memory:');
   try {
-    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks]) {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks]) {
       sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
         .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
     }
@@ -36,7 +36,7 @@ it('pages the actual list query across tied timestamps without skipping or repea
   const sqlite = new Database(':memory:');
   try {
     // Derive columns from production schema; no account DB or migrations are touched.
-    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
       sqlite.exec(
         `CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
           .map((column) => `"${column.name}" ${column.getSQLType()}`)
@@ -52,6 +52,11 @@ it('pages the actual list query across tied timestamps without skipping or repea
     insert.run('active', 'active', 200, 'active');
     insert.run('deleted', 'deleted', 200, 'deleted');
     sqlite.prepare('UPDATE sessions SET last_activity_at=? WHERE id=?').run(900, 's0506');
+    sqlite.exec(`UPDATE sessions SET orca_role='worker' WHERE id='active';
+      INSERT INTO orca_teams(id,lead_session_id,status) VALUES ('team','lead','active');
+      INSERT INTO orca_workers(session_id,team_id) VALUES ('active','team');`);
+    const [workerRow] = await selectOrdinarySessionListRows(db, { cap: 1, statusFilter: 'active' });
+    expect(projectSessionReadResult(flattenSessionReadRow(workerRow)).orcaLeadSessionId).toBe('lead');
     const first = await selectSessionListRows(db, eq(sessions.status, 'archived'), 1);
     expect(first[0].session.lastActivityAt).toBe(900);
     const ids: string[] = [];
@@ -80,7 +85,7 @@ it('pages the actual list query across tied timestamps without skipping or repea
 it('lists existing group lanes in their companion project including private digests without moving execution', async () => {
   const sqlite = new Database(':memory:');
   try {
-    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
       sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
         .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
     }
@@ -93,11 +98,12 @@ it('lists existing group lanes in their companion project including private dige
         // 「每次新建任务」的例行任务专线在规则 id 后追加 `:<uuid>`。
         : role === 'routine' ? 'routine:daily-1:3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b' : null);
     }
-    sqlite.exec("UPDATE sessions SET working_dir='/buddy/workspace', workspace_kind='project' WHERE id='canonical'; UPDATE sessions SET working_dir='/group/repository', project_dir='/group/repository' WHERE id='group'");
+    sqlite.exec("UPDATE sessions SET working_dir='/buddy/workspace', workspace_kind='project' WHERE id='canonical'; UPDATE sessions SET working_dir='/group/repository', project_dir='/group/repository', workspace_kind='project' WHERE id='group'");
     for (const [id, route] of [['group-thread', 'group:g:thread:root'], ['group-plan', 'group:g:plan:p'], ['group-digest', 'group:g:personal-digest']]) {
       insert.run(id, 'bot', id === 'group-plan' ? 'archived' : 'active');
       link.run('owner', id, 'group', route);
     }
+    sqlite.exec("UPDATE sessions SET working_dir='/temporary/plan', workspace_kind='dialogue' WHERE id='group-plan'");
     insert.run('routine-persistent', 'bot', 'active');
     link.run('owner', 'routine-persistent', 'routine', 'routine:daily-1');
     for (const id of ['unlinked', 'removed', 'hidden']) insert.run(id, 'bot', 'active');
@@ -110,6 +116,7 @@ it('lists existing group lanes in their companion project including private dige
     expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'group', 'group-digest', 'group-plan', 'group-thread', 'ordinary', 'routine', 'routine-persistent']);
     expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
       .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
+    expect(flattenSessionReadRow(rows.find(row => row.session.id === 'group-plan')!).companion?.taskProjectDir).toBeUndefined();
     const group = flattenSessionReadRow(rows.find(row => row.session.id === 'group')!);
     expect(group.companion).toMatchObject({ id: 'owner', role: 'group', taskProjectDir: '/group/repository' });
     expect(group.workingDir).toBe('/group/repository');

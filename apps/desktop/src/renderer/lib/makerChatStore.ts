@@ -14,7 +14,7 @@ import {
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { findErrorTailMessage } from './errorTailMessage';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -68,6 +68,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
+import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProviderId,
@@ -210,7 +211,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError } from '@/utils/ipcError';
+import { extractIpcError, hostProfileInUseI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -380,6 +381,8 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return held;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
@@ -389,6 +392,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
@@ -403,6 +408,10 @@ export function decodeRemoteErrorMessage(msg: string): string {
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
+  // say why and what to do here, in the window's language (the Host's own sentence is not shown).
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.
   if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
@@ -2564,7 +2573,11 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
-  target: 'claude-code' | 'codex' | 'pi';
+  /**
+   * 'acp' = 切到插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 是 acp-plugin:<插件>:<引擎>。
+   * 内置引擎的展示与切换链路只读 builtinAgentSwitchIntent()，插件引擎由选择器单独呈现。
+   */
+  target: 'claude-code' | 'codex' | 'pi' | 'acp';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -2574,6 +2587,23 @@ export interface AgentSwitchIntentRecord {
    * 意图期内模型目录、选中态与 trigger 都按这台电脑显示。
    */
   agentDeviceId?: string | null;
+}
+
+/** 切到内置引擎的意图。 */
+export type BuiltinAgentSwitchIntentRecord = AgentSwitchIntentRecord & { target: 'claude-code' | 'codex' | 'pi' };
+
+/** 内置引擎那一套展示与切换只看内置意图；待切到插件引擎时按「没有内置意图」处理。 */
+export function builtinAgentSwitchIntent(
+  intent: AgentSwitchIntentRecord | null | undefined,
+): BuiltinAgentSwitchIntentRecord | null {
+  return intent && intent.target !== 'acp' ? (intent as BuiltinAgentSwitchIntentRecord) : null;
+}
+
+/** 待切到插件引擎的意图(下一条消息发送时生效)。 */
+export function pluginEngineAgentSwitchIntent(
+  intent: AgentSwitchIntentRecord | null | undefined,
+): AgentSwitchIntentRecord | null {
+  return intent?.target === 'acp' ? intent : null;
 }
 
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
@@ -3241,6 +3271,8 @@ const sessions = new Map<string, SessionChatState>();
 let nextSessionIncarnation = 1;
 const sessionIncarnations = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
+type MessageRemovalListener = (clientIds: Iterable<string>) => void;
+const messageRemovalListeners = new Map<string, Set<MessageRemovalListener>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
 /**
@@ -4308,7 +4340,8 @@ function resolveGatewayRecoveryProviderId(
   if (createOpts && Object.prototype.hasOwnProperty.call(createOpts, 'providerId')) {
     return createOpts.providerId ?? null;
   }
-  if (session.agentSwitchIntent) return session.agentSwitchIntent.providerId;
+  const builtinIntent = builtinAgentSwitchIntent(session.agentSwitchIntent);
+  if (builtinIntent) return builtinIntent.providerId;
   return session.sessionProviderId;
 }
 
@@ -6581,6 +6614,7 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
+          ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
           ...(toolName === 'update_plan'
             ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
             : {}),
@@ -6602,6 +6636,7 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
@@ -7575,7 +7610,7 @@ function mergeLiveGenerationStatus(
   // Speed belongs to the turn that produced it: a new turn drops the old value,
   // frames without the field keep the latest one (including the final average).
   // An unreliable frame without it means the host withdrew the speed (suspend).
-  const tokenSpeed = readTokenSpeedSnapshot(update.tokenSpeed)
+  const tokenSpeed = receiveTokenSpeedSnapshot(update.tokenSpeed, isTurnStart ? undefined : previous.tokenSpeed)
     ?? (isTurnStart || update.generationReliable === false ? undefined : previous.tokenSpeed);
   // Turn start drops leftover metrics from the previous turn, then keeps any
   // live fields carried by this same status. A reconnect-shaped first event
@@ -10338,6 +10373,33 @@ function subscribe(sessionId: string, cb: () => void): () => void {
     s.delete(cb);
     if (s.size === 0) listeners.delete(sessionId);
   };
+}
+
+function subscribeToMessageRemovals(sessionId: string, listener: MessageRemovalListener): () => void {
+  let subscribers = messageRemovalListeners.get(sessionId);
+  if (!subscribers) {
+    subscribers = new Set();
+    messageRemovalListeners.set(sessionId, subscribers);
+  }
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) messageRemovalListeners.delete(sessionId);
+  };
+}
+
+function notifyMessageRemovals(sessionId: string, clientIds: Iterable<string>): void {
+  for (const listener of messageRemovalListeners.get(sessionId) ?? []) listener(clientIds);
+}
+
+// Only committed rewinds use this path. A cache reload alone is not evidence of removal.
+function notifyRewoundMessages(sessionId: string, clientId: string): void {
+  if (!messageRemovalListeners.has(sessionId)) return;
+  const messages = sessions.get(sessionId)?.messages ?? [];
+  const index = messages.findIndex((message) => message.clientId === clientId);
+  if (index >= 0) {
+    notifyMessageRemovals(sessionId, messages.slice(index).map((message) => message.clientId));
+  }
 }
 
 function allPendingQuestions(state: SessionChatState): PendingAskUser[] {
@@ -13200,7 +13262,11 @@ async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Prom
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
+function reloadMessages(
+  sessionId: string,
+  opts?: { allowCacheHydrate?: boolean; rewindFromClientId?: string },
+): void {
+  if (opts?.rewindFromClientId) notifyRewoundMessages(sessionId, opts.rewindFromClientId);
   discardPendingTextDelta(sessionId);
   if (!opts?.allowCacheHydrate) invalidateRemoteMessageCache(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
@@ -13270,6 +13336,7 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  notifyMessageRemovals(sessionId, deletedClientIds);
   // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
   // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
   // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
@@ -13351,6 +13418,7 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  notifyRewoundMessages(sessionId, clientId);
   // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
   // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
   invalidateRemoteMessageCache(sessionId);
@@ -14988,8 +15056,9 @@ export function buildCreateOptsForCurrentSession(
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
-    ...(current.agentSwitchIntent
-      ? { providerId: current.agentSwitchIntent.providerId }
+    // 待切到插件引擎时 createOpts 仍描述当前引擎：主进程在发送事务里先完成切换，再按任务行启动插件引擎。
+    ...(builtinAgentSwitchIntent(current.agentSwitchIntent)
+      ? { providerId: current.agentSwitchIntent!.providerId }
       : current.sessionProviderId !== undefined
         ? { providerId: current.sessionProviderId }
         : {}),
@@ -18874,8 +18943,12 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'acp'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  // 插件引擎意图必须指出是哪一个引擎，否则按「无意图」处理。
+  if (item.targetAgentKind === 'acp'
+    && !pluginEngineKeyFromProviderId(typeof item.providerId === 'string' ? item.providerId : null)) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
   if (item.providerId != null && typeof item.providerId !== 'string') return null;
@@ -19043,14 +19116,18 @@ function mirrorSessionFields(
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
-  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
-    const nextKind = dbToMakerAgentKind(patch.agentKind);
+  const pluginEngineFlip = isPluginEngineKind(patch.agentKind);
+  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi' || pluginEngineFlip) {
+    // 插件引擎任务的事件走 Claude Code 这套通用 reducer，与直接打开的插件引擎任务一致
+    // (dbAgentKindToMakerKind 对 'acp' 回落 'claude-code')。
+    const nextKind = pluginEngineFlip ? 'claude-code' : dbToMakerAgentKind(patch.agentKind as string);
+    const intentTarget = pluginEngineFlip ? 'acp' : nextKind;
     setState(sessionId, (s) => {
       // New hosts publish the full runtime snapshot before explicitly clearing
       // the consumed intent with CAS. An agent-kind match alone may belong to
       // an older switch to the same engine, not the user's latest model choice.
       const intentApplied = !('runtimeEffective' in patch) &&
-        !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === nextKind;
+        !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === intentTarget;
       if (s.agentKind === nextKind && !intentApplied) return s;
       return {
         ...s,
@@ -19100,6 +19177,7 @@ function mirrorSessionFields(
 export const makerChatStore = {
   initGlobalListeners,
   subscribe,
+  subscribeToMessageRemovals,
   subscribeLight,
   getSnapshot,
   acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {
@@ -19979,6 +20057,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
+    const replyToFields = typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
+      ? { replyToClientId: m.agentMeta.replyToClientId } : {};
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
@@ -20024,6 +20104,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
@@ -20175,6 +20256,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           role: m.role,
           content: m.content,
           isStreaming: false,
+          ...replyToFields,
         };
       }
       const c = (m.content && typeof m.content === 'object' ? m.content : {}) as Record<
@@ -20192,6 +20274,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         role: m.role,
         content: message,
         isStreaming: false,
+        ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
@@ -20221,13 +20304,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { ...(sessionImport as Record<string, unknown>) },
       };
     }
-    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
-    const contextRebuild =
-      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
-        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
-        : undefined;
+    // 同一引擎换干净原生会话：展开查看发给新窗口的交接内容。
+    const contextRebuild = m.role === 'assistant' ? m.agentMeta?.contextRebuild : undefined;
     if (contextRebuild && typeof contextRebuild === 'object') {
-      const c = contextRebuild as Record<string, unknown>;
+      const c = contextRebuild;
       return {
         clientId: m.clientId,
         role: 'assistant' as const,
@@ -20237,6 +20317,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: {
           reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
         },
       };
     }
@@ -20261,6 +20343,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           fromModel: typeof c.fromModel === 'string' ? c.fromModel : null,
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
           resumed: c.resumed === true,
           ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
             ? { nativeHistory: c.nativeHistory } : {}),

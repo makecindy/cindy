@@ -10,8 +10,11 @@
 桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
 `expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
 任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
-原确认不会派发到改选目标。
+原点选对应的重试不会派发到改选目标。
 远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
+
+插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
+控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
 
 ## 托管请求的附件预算与保存（2026-11-17）
 
@@ -207,6 +210,12 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   旧控制端的大块仍正常接收，新控制端的小块也符合旧接收端的原协议；不新增字段、能力位或重试。
   官方与自建中转继续转发原有 invoke，无需服务端或中转升级。单次 `poll`
   每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
+  2026-11-19 两处只在 A 端生效、旧 B 照常工作的改动：`upload` 块同时在途（每台 B 最多 4 块，B 本来就按
+  `(uploadId, index)` 存块、引用时才检查齐全），链路类错误按同一块号重发最多 2 次；`poll` 可选 `maxBytes`，
+  B 在 64KB–1.5MB 之间取（超出范围按范围取，不拒绝），A 超时就减半、按实测回程速度定下一次，旧 B 忽略该字段。
+  都不新增 op、能力位或中转字段，官方与自建中转照常转发。Agent-Net 会话上 A 把 `upload` 块放后台通道，
+  这是发送端的通道选择，旧 B 的会话层本来就收三个通道。恢复规则见
+  [远程与手机适配](../remote-and-mobile-adaptation.md)「远程 Agent 的拉取与恢复」。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。
 - **凭证**：模型请求只由 B 上的 Agent 用 B 自己的登录与供应商发出，任何凭证不进事件流；B 本机
@@ -355,8 +364,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   发送时才在那台失败、且之后每次发送都重试的意图；本机窗口拿到 `REMOTE_AGENT_DEVICE_UNREACHABLE` /
   `REMOTE_AGENT_MODEL_UNAVAILABLE`，device-link 控制端降级为 `PRECONDITION_FAILED`。Mobile 与桌面同一套
   模型列表：A 自己的供应商之外，另列其他同账号电脑已开放远程调用的供应商(Mobile 直接经 device-link 读那台的
-  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置，换到另一台电脑先二次确认、再带
-  `agentDeviceId`(null = A)。共享任务访客不能换电脑。
+  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置。按 2026-11-18 用户裁决，
+  桌面与手机点选另一台电脑的模型即带 `agentDeviceId`(null = A)登记切换意图，下一条消息发送时生效。
+  共享任务访客不能换电脑。
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端经任务所在的 A 读取第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。
@@ -458,6 +468,11 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   分享者电脑、受邀者电脑与手机各过一遍。手机经同账号新 channel `maker:provider-share:received-catalogs`(进同账号 allowlist)
   读取被控电脑收到的分享及其目录；旧版电脑回 `CHANNEL_NOT_ALLOWED`，手机按没有分享处理。跨区域(P3)经服务端开关开放，
   受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
+  共享推理代理的范围拒绝仍回 HTTP 403 与原 JSON 结构，既有 code 保持原样（`shared_provider_only`，
+  或 Pi 令牌不匹配的 `pi_provider_mismatch`）；只在确认会话／供应商范围不匹配的
+  `error.message` 前追加 `[SHARED_PROVIDER_SCOPE_DENIED] `，不含模型或账号信息。新版接收方据此停止组内换机；
+  旧的无标记文案也可能表示某成员失去模型，新版接收方不能据此停止恢复。旧接收方继续按原 403 处理；
+  不新增 wire 字段、能力位或白名单，自建中转无需适配。
 - **分叉**：通过 `nativeFork` 能力协商在原运行端执行，见本节开头的分叉协议；旧运行端提示升级。
 - **暂不支持**：审查、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
@@ -570,3 +585,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
 共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
 本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。
+
+共享文生图沿用 `caps.sharedImageGeneration`。支持内置 OpenAI 订阅的执行端另报
+`sharedBuiltinOpenAiImage: true`。0.1.143 只报前者，接收端对这类分享端保留原有
+Codex 原生账号选项，隐藏内置订阅。供应商组选择内置 OpenAI 执行端时也复核新能力，
+缺少该声明则继续选择其他成员。两个字段都是可选能力，中转按原通道透传。

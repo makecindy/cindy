@@ -71,6 +71,10 @@ export interface WechatOutboxRecord {
   chunkIndex: number;
   text: string;
   mediaJson: string;
+  createdAt: number;
+  /** Original platform message time, falling back to local ingestion for legacy rows. */
+  receivedAt: number;
+  taskPayloadJson: string;
   attempts: number;
   contextToken: string;
 }
@@ -401,6 +405,10 @@ export class WechatTaskStore {
          o.text,
          o.media_json AS mediaJson,
          o.attempts,
+         o.created_at AS createdAt,
+         CASE WHEN i.platform_created_at > 0
+           THEN i.platform_created_at ELSE i.received_at END AS receivedAt,
+         i.payload_json AS taskPayloadJson,
          i.context_nonce AS contextNonce,
          i.context_ciphertext AS contextCiphertext,
          i.context_tag AS contextTag

@@ -25,13 +25,16 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
+  FILE_PEER_CHANNEL,
   PROTOCOL_VERSION,
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   parseRemoteResourceChangedPayload,
@@ -323,6 +326,8 @@ const CONTROLLER_CAPABILITIES = [
   // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
   // 保持折叠到重读完成,离线积压不留历史详情。
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 认识「待切到插件引擎」的意图(sessionAgentSwitch 把它单独交给插件引擎的展示)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -538,6 +543,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const openLinkInFlightRef = useRef(
     new Map<string, PresenceTrackedRequest<LinkAcceptPayload>>(),
   );
+  // Counts user closes per device; only closeLink bumps it. Handshake cache entries
+  // are also dropped by presence, peer resets and path changes, so an entry's
+  // identity cannot tell whether the user closed the link (same as Desktop's
+  // openLinkCloseEpochs).
+  const userCloseEpochsRef = useRef(new Map<string, number>());
+  // A settled handshake replaced by a refresh (refreshSettled) -> its replacement.
+  // A read still awaiting the old entry may finish; real invalidations delete
+  // entries instead and break the chain.
+  const refreshedOpenLinksRef = useRef(new WeakMap<object, object>());
+  // Requests waiting on a device's pre-send recovery, each with its own liveness
+  // check. The handshake is shared, so it is sent only while one of them still
+  // wants to send.
+  const presendRecoveryWaitersRef = useRef(new Map<string, Set<() => boolean>>());
+  // Handshakes that an explicit caller (openLink, reopenLink, history reads, reply
+  // recovery) created or joined; they are always wanted.
+  const explicitOpenLinksRef = useRef(new WeakSet<object>());
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     wipe: offlineMirrorWipeQueue.enqueue,
@@ -744,10 +765,29 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     allowProbe = false,
     refreshSettled = false,
     pendingReplyRecovery = false,
+    presendRecovery = false,
   ) => {
     const connectionEpoch = connectionEpochFor(deviceId);
     const releaseGeneration = backgroundReleaseGenerationRef.current;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
+    let ownRequest: object | undefined;
     const checkAvailability = () => {
+      // A pre-send recovery may wait for the relay first. openLink clears a user
+      // close, so recheck right before the handshake.
+      if (presendRecovery) {
+        if (clientRef.current !== client) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'pre-send recovery is no longer current');
+        }
+        if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
+          || client.isOutboundExplicitlyClosed(deviceId)) {
+          throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
+        }
+        const waiters = presendRecoveryWaitersRef.current.get(deviceId);
+        const explicit = ownRequest !== undefined && explicitOpenLinksRef.current.has(ownRequest);
+        if (!explicit && waiters && waiters.size > 0 && ![...waiters].some((stillWanted) => stillWanted())) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'no request still waits for this recovery');
+        }
+      }
       if (pendingReplyRecovery && (
         clientRef.current !== client
         || connectionEpochFor(deviceId) !== connectionEpoch
@@ -767,7 +807,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
       }
     };
-    return getOrCreatePresenceTrackedRequest(
+    const previous = refreshSettled ? openLinkInFlightRef.current.get(deviceId) : undefined;
+    const tracked = getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
@@ -775,7 +816,54 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
+    if (previous && previous !== tracked) refreshedOpenLinksRef.current.set(previous, tracked);
+    ownRequest = tracked;
+    if (!presendRecovery) explicitOpenLinksRef.current.add(tracked);
+    return tracked;
   }, [connectionEpochFor]);
+
+  /** The device's current handshake is this one, or only a refresh of it. */
+  const isCurrentOpenLink = useCallback((deviceId: string, tracked: object) => {
+    const current = openLinkInFlightRef.current.get(deviceId);
+    for (let entry: object | undefined = tracked; entry; entry = refreshedOpenLinksRef.current.get(entry)) {
+      if (entry === current) return true;
+    }
+    return false;
+  }, []);
+
+  const recoverLinkBeforeSend = useCallback(async (
+    client: PeerLinks, deviceId: string, preSend: () => void,
+  ) => {
+    preSend();
+    if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+    if (!client.needsLinkRecovery(deviceId)) return;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
+    const stillWanted = () => {
+      try { preSend(); return true; } catch { return false; }
+    };
+    const waitersByDevice = presendRecoveryWaitersRef.current;
+    const waiters = waitersByDevice.get(deviceId) ?? new Set<() => boolean>();
+    waitersByDevice.set(deviceId, waiters);
+    waiters.add(stillWanted);
+    try {
+      // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
+      // This sends no business request and does not restart the shared relay.
+      await sendOpenLinkOnce(client, deviceId, false, true, false, true).request;
+    } catch (err) {
+      // A request that no longer wants to send reports its own reason first.
+      preSend();
+      throw err;
+    } finally {
+      waiters.delete(stillWanted);
+      if (waiters.size === 0 && waitersByDevice.get(deviceId) === waiters) waitersByDevice.delete(deviceId);
+    }
+    preSend();
+    if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+    if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
+      || client.isOutboundExplicitlyClosed(deviceId)) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
+    }
+  }, [sendOpenLinkOnce]);
 
   const restorePendingReplyLinks = useCallback((client: PeerLinks, refreshSettled = false, connection?: PeerLinks) => {
     // A running business probe owns the breaker/scheduler slot until its reply
@@ -831,16 +919,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       generation: () => `${releaseGeneration}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, topics)}`,
       missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
         .filter((topic) => registryRef.current.hasTopic(deviceId, topic)),
-      send: (toSend) => sendSubscribeWithAccessHandling(
-        client,
-        deviceId,
-        toSend,
-        () => (
-          presenceAvailableByDeviceRef.current.get(deviceId) !== false
+      send: async (toSend) => {
+        const current = () => clientRef.current === client
+          && presenceAvailableByDeviceRef.current.get(deviceId) !== false
           && !backgroundReleaseInFlightRef.current
-          && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))
-        ),
-      ),
+          && backgroundReleaseGenerationRef.current === releaseGeneration
+          && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic));
+        // A topic released during recovery returns false like the send itself, so
+        // the confirmation recomputes and still subscribes the topics others hold.
+        const superseded = Symbol('subscription superseded');
+        try {
+          await recoverLinkBeforeSend(client, deviceId, () => {
+            if (!current()) throw superseded;
+          });
+        } catch (err) {
+          if (err === superseded) return false;
+          throw err;
+        }
+        return sendSubscribeWithAccessHandling(client, deviceId, toSend, current);
+      },
       acknowledge: (toSend) => {
         // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
         const held = markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
@@ -850,7 +947,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         if (held.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
       },
     });
-  }, [connectionEpochFor, refreshProjectAliasesForClient]);
+  }, [connectionEpochFor, refreshProjectAliasesForClient, recoverLinkBeforeSend]);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
   // 再发一条真正穿过被控端 runInvoke → dispatchLocalInvoke → local-db 的最小读,
@@ -1377,7 +1474,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
-        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+        providerPickerListArgs(),
       ),
       readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
         client, deviceId, 'maker:get-capabilities', [agent],
@@ -2125,6 +2222,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
 
   const closeLink = useCallback((deviceId: string) => {
+    userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -2154,7 +2252,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // A late accept from an obsolete link must not declare a downgrade.
         const tracked = sendOpenLinkOnce(client, deviceId);
         const accepted = await tracked.request;
-        if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked) {
+        if (clientRef.current !== client || !isCurrentOpenLink(deviceId, tracked)) {
           throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
         }
         preSend();
@@ -2169,6 +2267,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
           }
         }
+        // File cleanup is best effort over the existing link, as on Desktop: a late
+        // file answer must not reopen the link just to dispose its allocation.
+        if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+          if (client.needsLinkRecovery(deviceId)) {
+            throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+          }
+        } else {
+          await recoverLinkBeforeSend(client, deviceId, preSend);
+        }
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
     );
@@ -2182,7 +2289,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // is single-flight and never changes task-list success or connection recovery.
     if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
     return result;
-  }, [refreshProjectAliasesForClient, sendOpenLinkOnce]);
+  }, [refreshProjectAliasesForClient, sendOpenLinkOnce, recoverLinkBeforeSend, isCurrentOpenLink]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     topics = sharedTaskTopics(deviceId, topics);

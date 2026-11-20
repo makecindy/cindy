@@ -16,9 +16,15 @@ import { NativeSwitch } from '@/platform/chrome/NativeSwitch';
 import { ModelPickerSheet } from './ModelPickerSheet';
 import { normalizeMobileAgentCapabilities } from './agentCapabilities';
 import type { MobileModelConfiguration } from './unifiedMobileModels';
-import type { ProfileValues } from './companionProfileData';
+import type { CompanionModelGroup, ProfileValues } from './companionProfileData';
+import type { TFunction } from 'i18next';
 import { useRemoteAgentCatalogs } from './useRemoteAgentCatalogs';
 export type CompanionModelRoute = ModelRoute;
+/** 来源数 · 选法 · 推理强度，与 Desktop 选择器里模型组那一行同一写法。 */
+function modelGroupHint(group: CompanionModelGroup, t: TFunction): string {
+  return [t('models.modelGroups.sourceCount', { count: group.sources }), t(`models.modelGroups.strategy.${group.strategy}`),
+    group.effort ? t(`models.options.effortLevels.${group.effort}`, { defaultValue: group.effort }) : ''].filter(Boolean).join(' · ');
+}
 export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
   if (typeof value !== 'string') return [];
   try {
@@ -28,7 +34,7 @@ export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
     return normalized.every((row): row is ModelRoute => row !== null) ? normalized : [];
   } catch { return []; }
 }
-export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, single = false }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; single?: boolean }) {
+export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, single = false, modelGroups }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; single?: boolean; modelGroups?: CompanionModelGroup[] }) {
   const { t } = useTranslation(); const { colors } = useTheme();
   const catalog = useDeviceProviders(deviceId);
   // Only a ready catalog for this device may name a route. Never borrow a cached other-device account.
@@ -46,6 +52,15 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     const provider = routeProviders.find(item => item.id === providerId);
     const model = provider ? findCatalogModel(provider, route.model, agent) : undefined;
     const source = [provider ? mobileProviderAccountTitle(provider) : route.providerId, remote?.name].filter(Boolean).join(' · ');
+    // 选了模型组的一项显示组名：用哪个来源由伙伴所在的电脑按组的规则决定(model-groups.md §6.2)。
+    const group = route.modelGroup ? modelGroups?.find(item => item.id === route.modelGroup) : undefined;
+    if (group) return <View key={`group:${group.id}:${index}`} style={styles.row}>
+      <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
+        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{group.name}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{modelGroupHint(group, t)}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+      </Pressable>
+      {!following && index > 1 ? <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.moveModelUp')} disabled={disabled} style={styles.hit} onPress={() => { const next = [...chain]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(next); }}><ArrowUp size={iconSize.lg} color={colors.textSecondary} /></Pressable> : null}
+      {!following && index > 0 ? <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.removeModel')} disabled={disabled} style={styles.hit} onPress={() => update(chain.filter((_, i) => index !== i))}><MinusCircle size={iconSize.lg} color={colors.textSecondary} /></Pressable> : null}
+    </View>;
     return <View key={JSON.stringify([route.agentDeviceId ?? null, route.harness, route.providerId, route.model])} style={styles.row}>
       <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
         <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? t(route.fastMode === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
@@ -68,8 +83,10 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     </> : null}
   </View>;
 }
-export function CompanionModelPicker({ visible, deviceId, route, onClose, onClosed, onSelect }: {
+export function CompanionModelPicker({ visible, deviceId, route, onClose, onClosed, onSelect, modelGroups }: {
   visible: boolean; deviceId: string; route?: CompanionModelRoute; onClose(): void; onClosed(): void; onSelect(route: CompanionModelRoute): boolean;
+  /** The host computer's model groups; absent from older hosts. */
+  modelGroups?: CompanionModelGroup[];
 }) {
   const { user } = useAuth(); const { t } = useTranslation();
   const catalog = useDeviceProviders(visible ? deviceId : undefined, visible);
@@ -78,13 +95,22 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
     keepDeviceIds: route?.agentDeviceId ? [route.agentDeviceId] : [] });
   const agent = route?.harness === 'claude' ? 'claude-code' : route?.harness ?? 'pi';
   const select = async (config: MobileModelConfiguration, source?: { deviceId: string | null }) => onSelect({ agentDeviceId: source?.deviceId ?? null, harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
+  // 选组只记下组；这一项暂以原来的模型(新加的一项用组里第一个来源)作存下的具体模型，保存时伙伴所在的电脑换成组此刻会选的来源。
+  const selectGroup = (id: string) => {
+    const group = modelGroups?.find(item => item.id === id);
+    const base = route?.model ? route : group?.fallback ? { ...group.fallback, effort: group.effort ?? '', fastMode: false as const } : undefined;
+    return !!group && !!base && onSelect({ ...base, modelGroup: group.id });
+  };
+  const groupRows = (modelGroups ?? []).filter(group => route?.model || group.fallback)
+    .map(group => ({ id: group.id, title: group.name, subtitle: modelGroupHint(group, t), selected: route?.modelGroup === group.id }));
   return <ModelPickerSheet visible={visible} onClose={onClose} onClosed={onClosed} providers={catalog.ready ? catalog.providers : []}
     modelVisibilityOverrides={catalog.modelVisibilityOverrides} providersReady={catalog.ready}
     flatOptions={[]} agentKind={agent} capabilities={null} activeModelId={route?.model ?? ''} selectedProviderId={route?.providerId ?? null}
     selectedEffort={route?.effort ?? ''} selectedFastMode={route?.fastMode ?? false} existingSessionRoute
     disabled={!catalog.ready} loading={catalog.loading} emptyHint={catalog.error ?? t('devices.companionProfile.modelsUnavailable')}
     unified={{ remote: { catalogs: remoteCatalogs, selectedDeviceId: route?.agentDeviceId ?? null, hostDeviceId: deviceId }, scope: JSON.stringify([user?.id, deviceId]), agents: ['claude-code', 'codex', 'pi'],
-      loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; }, onSelect: select }}
+      loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; }, onSelect: select,
+      ...(groupRows.length ? { modelGroups: { rows: groupRows, onSelect: selectGroup } } : {}) }}
     onSelectFlatModel={() => {}} onSelectProviderRow={() => {}} permissionOptions={[]} activePermissionMode="ask" onSelectPermissionMode={() => {}} hidePermissionTrigger keyboardAvoidingBehavior="padding" />;
 }
 // §3 roles: row titles / options 16/22 medium, the ordinal beside them 16/22 regular secondary.

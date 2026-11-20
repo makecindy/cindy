@@ -8,8 +8,10 @@
  *
  * 同步做透明度渐变(高度收起的同时文字渐隐,对齐 Codex 的收起手感);
  * visibility 参与过渡 —— 收起动画播完后才隐藏(挡键盘焦点/交互),展开瞬间恢复。
- * 200ms 与侧栏宽度动画同缓动家族(cubic-bezier(0.4,0,0.2,1));
- * motion-reduce 下退化为瞬时切换(2026-07 用户定稿的侧栏动效)。
+ * 时长与曲线走 --motion-base / --motion-ease-move(默认 200ms、cubic-bezier(0.4,0,0.2,1),
+ * DESIGN.md §14.4),随「外观 → 动效」倍率缩放;卸载与调用方复位按
+ * sectionCollapseDurationMs() 读到的实际时长计时。motion-reduce 下退化为瞬时切换
+ * (2026-07 用户定稿的侧栏动效)。
  *
  * 额外 props(如 data-no-drag)透传到外层 grid 容器。
  */
@@ -18,7 +20,20 @@ import { useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
+/** --motion-base 的默认值;读不到 token 时的回退。 */
 export const SECTION_COLLAPSE_DURATION_MS = 200;
+
+/**
+ * 收起动画的实际时长(ms):读根元素上的 --motion-base。「外观 → 动效」倍率(0–2)与
+ * 减少动态效果都会改写它,写死 200 会在 2 倍时提前卸载、在 0 时多等一拍。
+ */
+export function sectionCollapseDurationMs(): number {
+  if (typeof document === 'undefined') return SECTION_COLLAPSE_DURATION_MS;
+  const token = getComputedStyle(document.documentElement).getPropertyValue('--motion-base').trim();
+  const value = parseFloat(token);
+  if (!Number.isFinite(value) || value < 0) return SECTION_COLLAPSE_DURATION_MS;
+  return token.endsWith('ms') || !token.endsWith('s') ? value : value * 1000;
+}
 
 interface SectionCollapseProps extends React.HTMLAttributes<HTMLDivElement> {
   collapsed: boolean;
@@ -43,7 +58,7 @@ export function SectionCollapse({
     }
     const timeoutId = window.setTimeout(() => {
       setKeepChildren(false);
-    }, SECTION_COLLAPSE_DURATION_MS);
+    }, sectionCollapseDurationMs());
     return () => {
       window.clearTimeout(timeoutId);
     };
@@ -55,7 +70,7 @@ export function SectionCollapse({
     <div
       {...rest}
       className={cn(
-        'grid transition-[grid-template-rows] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+        'grid transition-[grid-template-rows] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
         collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
         className,
       )}
@@ -65,7 +80,7 @@ export function SectionCollapse({
         data-sidebar-section-collapsed={collapsed ? 'true' : undefined}
         className={cn(
           'min-h-0 overflow-hidden',
-          'transition-[opacity,visibility] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+          'transition-[opacity,visibility] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
           collapsed ? 'invisible opacity-0' : 'visible opacity-100',
           innerClassName,
         )}

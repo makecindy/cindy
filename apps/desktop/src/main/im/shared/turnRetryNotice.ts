@@ -309,6 +309,10 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     return imText('imBot.text.shared.outputLimit.silentStopExhausted');
   }
   const { message, errorStatus, codexErrorInfo } = terminalErrorRecord(data);
+  // Providers return this rejection either as plain text or inside a JSON error envelope.
+  if (/(?:^|"message"\s*:\s*")Audio input is not (?:supported for this request|available)\.?(?:"|$)/i.test(message.trim())) {
+    return imText('imBot.text.shared.audioInputUnavailable');
+  }
   return (
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??

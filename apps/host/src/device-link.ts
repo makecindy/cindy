@@ -3,13 +3,14 @@
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
-import { createInboundDispatch } from '../../desktop/src/main/device-link/dispatch.js';
+import { createInboundDispatch, type InboundDispatchPorts } from '../../desktop/src/main/device-link/dispatch.js';
 import { createInvokeRegistry } from '../../desktop/src/main/device-link/invokeRegistryCore.js';
+import { toLegacyUsdModelPricing } from '../../desktop/src/main/maker-ipc/usageHandlers.js';
 import { createDeviceLinkSettingsStore } from '../../desktop/src/main/device-link/settings-store.js';
 import { createRemoteControlAccess } from '../../desktop/src/main/device-link/remoteControlAccessCore.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
@@ -17,6 +18,11 @@ import * as botBoundary from '../../desktop/src/main/device-link/remoteBotSessio
 import * as sharedTasks from '../../desktop/src/main/device-link/sharedTaskDispatch.js';
 import { admitSharedTaskFsWatchTopics } from '../../desktop/src/main/device-link/sharedTaskFileAccess.js';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.js';
+import { withoutPhaseOneUsagePushes } from './agent/usage-push-channels.js';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../desktop/src/shared/projectArchive.js';
+import { runProjectArchive } from '../../desktop/src/main/localDb/projectArchive.js';
+import { getDbClient } from '../../desktop/src/main/localDb/client/current.js';
+import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
@@ -28,9 +34,94 @@ import { createHostWebSocketAgent } from './outbound.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
-import { MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
-import { getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
+import { explicitPorts } from './agent/explicit-ports.js';
+
+/**
+ * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
+ * while a desktop uses this profile (coexistence plan A, reviewer 2026-11-17):
+ * - `read`: reads, or changes only this process's memory (controller access generations, the broadcast
+ *   tap, pending plugin authorizations); nothing in the profile is written.
+ * - `service-gate`: reaches the Host service, whose gate refuses writes while held (service.mjs).
+ * - `refused-at-entry`: writes without the service, so refused here (refuseWhileHeld below).
+ * - `unbound`: not passed; the dispatcher answers NOT_SUPPORTED or skips it (dispatch.ts `unavailable`).
+ * A port that is not listed here, or is bound against its entry, stops the Host device link from
+ * starting; the list is pinned in device-link.test.mjs.
+ */
+export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
+  sameAccountCapabilities: 'read',
+  readUsageWidgetSnapshot: 'unbound',
+  configureStandbyGuestCleanup: 'unbound',
+  prepareShareAvailability: 'unbound',
+  readKimiCodingAccountUsage: 'unbound',
+  readOpenCodeGoAccountUsage: 'unbound',
+  // `/api/task-tags/execute`, refused by the service gate while held.
+  executeTaskTags: 'service-gate',
+  TASK_TAG_CHANNEL: 'read',
+  requestFilePeer: 'unbound',
+  stopFilePeers: 'unbound',
+  requestTaskMigration: 'unbound',
+  delegatedProviderShareGuestAccess: 'unbound',
+  locallyProvenProviderShareDelegation: 'unbound',
+  delegatedProviderShareLeases: 'unbound',
+  invalidateProviderShareDelegation: 'unbound',
+  app: 'read',
+  remoteDesktop: 'unbound',
+  requestRemoteDesktop: 'unbound',
+  remoteCredentialHost: 'unbound',
+  readDeviceLinkSettings: 'read',
+  // remoteControlAccessCore.ts: generation counters and the observed-revocation set, in memory.
+  noteControllerAccessAllowed: 'read',
+  noteControllerAccessDenied: 'read',
+  syncRemoteControlAccessGeneration: 'read',
+  requestPluginOauth: 'refused-at-entry',
+  // Cancels pending authorizations in memory only (plugin-oauth/runtime.ts invalidatePluginOauth,
+  // transactions.ts cancelPeer, authentication.ts invalidate); nothing stored is deleted.
+  invalidatePluginOauth: 'read',
+  // The invoke registry: contract channels call the service (gated); maker:create-session and
+  // MCP_APPS_INVOKE are refused where they are registered.
+  dispatchLocalInvoke: 'service-gate',
+  assertRemoteBotInvocationAllowed: 'read',
+  projectRemoteSessionResult: 'read',
+  projectRemoteBotPush: 'read',
+  hasRemoteBotSessionLookup: 'read',
+  setRemoteBotSessionLookup: 'read',
+  // No shared-task host is set on the Host (setSharedTaskDispatchHost), so these answer "unavailable".
+  captureSharedTaskPeer: 'read',
+  captureSharedTaskPush: 'read',
+  assertSharedTaskInvoke: 'read',
+  sharedTaskMetadataTopic: 'read',
+  sharedTaskAccessFailure: 'read',
+  fetchLocalMediaToOss: 'unbound',
+  MAX_SHARED_TASK_TOPICS: 'read',
+  refreshSharedTaskPeer: 'read',
+  releaseSharedTaskWatchesOnWorkdirChange: 'read',
+  admitSharedTaskFsWatchTopics: 'read',
+  transcribeRemoteVoiceInput: 'unbound',
+  readTelegramRemoteStatus: 'unbound',
+  setTelegramRemoteOnline: 'unbound',
+  adviseAndRecordVoiceInputDictionaryLearning: 'unbound',
+  buildMobileDictionarySnapshot: 'unbound',
+  setBroadcastTapListener: 'read',
+  broadcastTap: 'read',
+  RECOVERY_CHECKPOINT_MARKER: 'read',
+  sanitizeBotAuthorizationMetaForRemote: 'read',
+  projectInteractionDismissedForRemote: 'read',
+  projectInteractionRequestForRemote: 'read',
+  remoteWorkingDirRejectionToIpcError: 'read',
+} as const satisfies Record<keyof InboundDispatchPorts, 'read' | 'service-gate' | 'refused-at-entry' | 'unbound'>);
+type UnboundDispatchPort = { [K in keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD]:
+  (typeof HOST_DISPATCH_PORTS_WHILE_HELD)[K] extends 'unbound' ? K : never }[keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD];
+
+function assertDispatchPortsClassified(ports: object): void {
+  const kinds: Record<string, string> = HOST_DISPATCH_PORTS_WHILE_HELD;
+  const wrong = Object.entries(ports).filter(([name, value]) => !Object.hasOwn(kinds, name)
+    || (kinds[name] === 'unbound') !== (value === undefined)).map(([name]) => name);
+  if (wrong.length) throw new Error(`Host dispatch ports without a matching hold class: ${wrong.join(', ')}`);
+}
+import { normalizeDeviceLinkSetModelWireArgs } from '../../desktop/src/main/maker-ipc/setModelWireArgs.js';
 
 type ServiceResult = { status: number; body: any };
 /** How long a connection waits for this Host's stored Agent-Net identity (the signed transport statement) at most. */
@@ -44,8 +135,16 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
-  preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string }): Promise<void>;
+  isBusyForProjectArchive(sessionId: string): boolean;
+  onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
+  preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
+  /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
+  profileHold?(): string | null;
+  /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
+  requestPluginOauth?(peer: string, raw: unknown): Promise<unknown>;
+  /** Cancels a peer's (or every) pending plugin authorization in memory; the runtime's unless a test passes its own. */
+  invalidatePluginOauth?(peer?: string): void;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
   availabilityPolicy?: ReturnType<typeof createAvailabilityPolicy>;
@@ -105,25 +204,105 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
-  registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
+  // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
+  // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
+  // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
+  registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
+  // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
+  // calls (they write through the plugin) are refused, as the service refuses other writes.
+  const refuseWhileHeld = () => {
+    const held = deps.profileHold?.();
+    if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+  };
+  registry.register('maker:create-session', ([input]) => { refuseWhileHeld(); return deps.createRuntimeSession(input); });
+  registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
+    // The preview is a read. Like project-info writes at the service boundary,
+    // apply is refused on entry and rechecked at the write boundary after waiting.
+    if ((input as { operation?: unknown } | null)?.operation === 'apply') refuseWhileHeld();
+    return runProjectArchive(input, true, {
+      withLock: withSendToSessionLock,
+      busy: deps.isBusyForProjectArchive,
+      write: async (sessionId, status, beforeWrite, projectGuard) => {
+        beforeWrite();
+        assertCurrent();
+        refuseWhileHeld();
+        const client = getDbClient();
+        if (status === 'archived') {
+          await client.tx('sessions.setTerminalStatus', { sessionId, status, projectGuard });
+        } else {
+          await client.tx('sessions.setStatus', { sessionIds: [sessionId], status, projectGuard });
+        }
+        assertCurrent();
+        deps.onProjectTaskStatus(sessionId, status);
+      },
+    });
+  });
+  registry.register(MAKER_INVOKE.SET_MODEL, async ([sessionId, model, wireProviderId, revision, wireSelection]) => {
+    const { providerId, selection } = normalizeDeviceLinkSetModelWireArgs(true,
+      deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1),
+      wireProviderId, revision, wireSelection);
+    if (selection && typeof selection === 'object' && 'confirmedContextWindow' in selection) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throw new Error('[PRECONDITION_FAILED] remote model selection requires an owner controller');
+    }
+    if (typeof model !== 'string' || (providerId !== undefined && providerId !== null && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    const result = await call('/api/sessions/set-model', { sessionId, model, providerId, revision, selection });
+    if (result && typeof result === 'object') dispatch.markRemoteSettingPersistedInsideHandler(result);
+    return result;
+  });
+  registry.register(MAKER_INVOKE.SWITCH_SESSION_AGENT, ([sessionId, targetAgentKind, model, providerId, effort, fastMode, options, thinking]) => {
+    if (options && typeof options === 'object') {
+      if ('confirmedContextWindow' in options) {
+        throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+      }
+      if ('agentDeviceId' in options) throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support remote execution');
+    }
+    if (typeof model !== 'string' || !model.trim() ||
+        (providerId !== null && providerId !== undefined && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throw new Error('[PRECONDITION_FAILED] remote agent switching requires an owner controller');
+    }
+    return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode,
+      options, thinking });
+  });
+  registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
+    call('/api/sessions/agent-switch-intent', { sessionId }));
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
-    const caller = getDeviceLinkInvokeContext();
-    if (!caller || caller.sharedTask) throw new Error('[PRECONDITION_FAILED] Task owner required');
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
     const request = input as { purpose?: string; workingDir?: string; pendingPiRoute?: unknown; model?: unknown } | null;
     if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
+    refuseWhileHeld();
     if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
       throw new Error('[INVALID_PARAMS] Session and working directory required');
     const pending = request.pendingPiRoute;
+    if ('confirmedContextWindow' in request || (pending && typeof pending === 'object' && 'confirmedContextWindow' in pending)) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
     if (pending !== undefined && (!pending || typeof pending !== 'object' || Array.isArray(pending)
       || ('agentDeviceId' in pending && pending.agentDeviceId != null)
       || typeof request.model !== 'string' || !request.model)) throw new Error('[INVALID_PARAMS] Unsupported Pi route');
-    const route = pending !== undefined ? { model: request.model as string } : undefined;
+    const nextInputChars = pending && typeof pending === 'object' && 'nextInputChars' in pending
+      ? pending.nextInputChars : undefined;
+    if (nextInputChars !== undefined && (typeof nextInputChars !== 'number' || !Number.isSafeInteger(nextInputChars) || nextInputChars < 0)) {
+      throw new Error('[INVALID_PARAMS] Invalid next input size');
+    }
+    const route = pending !== undefined
+      ? { model: request.model as string, ...(nextInputChars !== undefined ? { nextInputChars } : {}) }
+      : undefined;
     await deps.preparePiSkillRuntime(id, request.workingDir, route);
+    refuseWhileHeld();
     assertCurrent();
     return { accepted: true, piRuntimePrepared: true, ...(route ? { pendingRouteApplied: true } : {}) };
   });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
+    refuseWhileHeld();
     const source = getDeviceLinkInvokeContext();
     if (!source || source.sharedTask) throw new Error('[PRECONDITION_FAILED] MCP_APP_OWNER_ONLY');
     if (typeof sessionId !== 'string' || (input && typeof input === 'object' && 'deviceId' in input))
@@ -138,26 +317,61 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     try { const result = await work; assertCurrent(); return result; }
     finally { pending.delete(work); }
   };
+  const cancelPluginOauth = deps.invalidatePluginOauth ?? invalidatePluginOauth;
   const tags = { executeTaskTags: (request: TaskTagRequest) =>
     call('/api/task-tags/execute', { request }) };
   /** This Host runs on Agent-Net right now (set once the node exists, below). */
   let agentNetActive = (): boolean => false;
-  const dispatch = createInboundDispatch({
+  const unboundPorts = Object.fromEntries(Object.entries(HOST_DISPATCH_PORTS_WHILE_HELD)
+    .filter(([, kind]) => kind === 'unbound').map(([name]) => [name, undefined]));
+  const interactions = createInteractionProjection(supportsRemotePluginOauth);
+  const dispatchPorts = explicitPorts<InboundDispatchPorts>({
+    ...(unboundPorts as Record<UnboundDispatchPort, undefined>),
     // Platform capabilities are added only when their backing services are wired. Background links need none: this
     // dispatch already keeps a link that declares no subscriptions out of the controlled state. Without it a desktop
     // closes every background link it opens here (backgroundLink.ts) and opens the next one for its next read; on
     // Agent-Net that is a session link reopened per read. Only while Agent-Net is on: off, the Host answers as before.
     sameAccountCapabilities: () => (agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
     app: { getVersion: () => deps.version },
-    ...tags, TASK_TAG_CHANNEL, ...settings, ...access,
+    ...tags, TASK_TAG_CHANNEL,
     readDeviceLinkSettings: () => ({ ...settings.readDeviceLinkSettings(), remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled }),
+    noteControllerAccessAllowed: access.noteControllerAccessAllowed,
+    noteControllerAccessDenied: access.noteControllerAccessDenied,
+    syncRemoteControlAccessGeneration: access.syncRemoteControlAccessGeneration,
     dispatchLocalInvoke: invoke,
-    ...botBoundary, ...sharedTasks, admitSharedTaskFsWatchTopics,
-    setBroadcastTapListener: broadcastTap.setBroadcastTapListener, broadcastTap,
-    requestPluginOauth, invalidatePluginOauth,
-    ...createInteractionProjection(supportsRemotePluginOauth), projectInteractionDismissedForRemote,
+    assertRemoteBotInvocationAllowed: botBoundary.assertRemoteBotInvocationAllowed,
+    projectRemoteSessionResult: botBoundary.projectRemoteSessionResult,
+    projectRemoteBotPush: botBoundary.projectRemoteBotPush,
+    hasRemoteBotSessionLookup: botBoundary.hasRemoteBotSessionLookup,
+    setRemoteBotSessionLookup: botBoundary.setRemoteBotSessionLookup,
+    captureSharedTaskPeer: sharedTasks.captureSharedTaskPeer,
+    captureSharedTaskPush: sharedTasks.captureSharedTaskPush,
+    assertSharedTaskInvoke: sharedTasks.assertSharedTaskInvoke,
+    sharedTaskMetadataTopic: sharedTasks.sharedTaskMetadataTopic,
+    sharedTaskAccessFailure: sharedTasks.sharedTaskAccessFailure,
+    MAX_SHARED_TASK_TOPICS: sharedTasks.MAX_SHARED_TASK_TOPICS,
+    refreshSharedTaskPeer: sharedTasks.refreshSharedTaskPeer,
+    releaseSharedTaskWatchesOnWorkdirChange: sharedTasks.releaseSharedTaskWatchesOnWorkdirChange,
+    admitSharedTaskFsWatchTopics,
+    // Phase 1: the usage pushes are not forwarded to remote devices (agent/usage-push-channels.ts).
+    setBroadcastTapListener: (listener: Parameters<typeof broadcastTap.setBroadcastTapListener>[0]) =>
+      broadcastTap.setBroadcastTapListener(withoutPhaseOneUsagePushes(listener)),
+    broadcastTap,
+    // A remote plugin authorization writes the plugin's sign-in on this computer: refused while a
+    // desktop uses this profile, as the service refuses other writes (the dispatcher handles this
+    // channel itself, PLUGIN_OAUTH_CHANNEL, so the service gate does not see it).
+    requestPluginOauth: async (peer: string, raw: unknown) => {
+      refuseWhileHeld();
+      return (deps.requestPluginOauth ?? requestPluginOauth)(peer, raw);
+    },
+    invalidatePluginOauth: cancelPluginOauth,
+    sanitizeBotAuthorizationMetaForRemote: interactions.sanitizeBotAuthorizationMetaForRemote,
+    projectInteractionRequestForRemote: interactions.projectInteractionRequestForRemote,
+    projectInteractionDismissedForRemote,
     RECOVERY_CHECKPOINT_MARKER, remoteWorkingDirRejectionToIpcError,
   });
+  assertDispatchPortsClassified(dispatchPorts);
+  const dispatch = createInboundDispatch(dispatchPorts);
   botBoundary.setRemoteBotSessionLookup(readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch);
   dispatch.setRemoteWorkingDirGuard((dir, context) => {
     // SSH needs its own endpoint authority and cannot fall through to local IO.
@@ -381,15 +595,30 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         ...(agentNet.active() && compatibilityIssue ? { compatibilityIssue } : {}) } } : {}) }),
     async setEnabled(enabled: boolean) {
       assertCurrent();
+      // Turning remote control on writes the profile's device-link settings outside the service gate, so it
+      // refuses a held profile as setAgentNetEnabled does: at entry and again inside the settings lock.
+      // Turning it off keeps its current path (disable and revoke under a hold are decided separately).
+      if (enabled) refuseWhileHeld();
       if (enabled && !deps.canRegister()) throw new Error('Sign in with cindy-host login to register an independent Host device.');
-      await settings.writeDeviceLinkSetting('remoteControlEnabled', enabled);
+      if (enabled) {
+        await settings.updateDeviceLinkSetting('remoteControlEnabled', () => {
+          assertCurrent();
+          refuseWhileHeld();
+          return true;
+        });
+      } else await settings.writeDeviceLinkSetting('remoteControlEnabled', false);
       sync(); return this.state();
     },
     /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
     async setAgentNetEnabled(enabled: boolean) {
       assertCurrent();
+      refuseWhileHeld();
       if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
-      await settings.writeDeviceLinkSetting('agentNetEnabled', enabled);
+      await settings.updateDeviceLinkSetting('agentNetEnabled', () => {
+        assertCurrent();
+        refuseWhileHeld();
+        return enabled;
+      });
       sync(); return this.state();
     },
     async revoke(deviceId: string) {
@@ -401,7 +630,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     },
     async stop() {
       if (closed) return;
-      closed = true; invalidatePluginOauth();
+      closed = true; cancelPluginOauth();
       clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
       dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
       await releaseApps();

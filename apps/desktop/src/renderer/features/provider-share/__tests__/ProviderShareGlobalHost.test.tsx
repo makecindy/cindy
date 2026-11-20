@@ -94,6 +94,7 @@ const receivedShare: ProviderShareReceived = {
 const membership = (): ProviderShareReceivedSnapshot => ({
   ownerStamp: { dataOwnerId: bus.auth.dataOwnerId, ownerGeneration: bus.auth.dataOwnerGeneration },
   confirmedRegions: ['global'], received: bus.received,
+  leftMemberIds: bus.received.length ? [] : [receivedShare.memberId],
 });
 
 beforeEach(() => {
@@ -189,7 +190,7 @@ describe('ProviderShareGlobalHost', () => {
     });
     const view = renderHost();
     await waitFor(() => expect(finish).toBeTypeOf('function'));
-    const old = { ...membership(), received: [] };
+    const old = { ...membership(), received: [], leftMemberIds: [receivedShare.memberId] };
     bus.auth = { ...bus.auth, dataOwnerGeneration: 2 };
     setDataOwnerGeneration('recipient', 2);
     view.rerender(<MemoryRouter><ProviderShareGlobalHost /><LocationProbe /></MemoryRouter>);

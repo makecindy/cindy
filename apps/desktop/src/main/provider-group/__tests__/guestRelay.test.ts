@@ -66,6 +66,18 @@ function setup(
 const PLAN = { kind: 'claude-code' as const, model: 'opus', providerId: 'anthropic', exclude: new Set<string>() };
 
 describe('provider group guest relay planner', () => {
+  it('routes image generation through the same reshare consent check as a task', async () => {
+    const reshareAllows = vi.fn(() => false);
+    const { relay, router } = setup([FRIEND, MINI], CONFIG, { reshareAllows });
+    const plan = await relay.plan({ ...PLAN, capability: 'image.generate', reshareKey: 'approved-guest' });
+    expect(router.pick).toHaveBeenCalledWith(expect.objectContaining({
+      capability: 'image.generate',
+      exclude: new Set([FRIEND.key]),
+    }));
+    expect(reshareAllows).toHaveBeenCalledWith(FRIEND.agentDeviceId, 'approved-guest');
+    expect(plan).toMatchObject({ kind: 'member', memberKey: MINI.key });
+  });
+
   // PR #10910 / unit: real guest plan(reserve) → router → relay load. The local
   // reserveFor regression missed guests, whose pending handles live externally.
   it('balances concurrent guest reservations and retires pending load on state or release', async () => {

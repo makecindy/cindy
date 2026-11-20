@@ -71,6 +71,30 @@ describe('readDeviceProviderViews', () => {
       .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
   });
 
+  // Unit, PR #11352 review: a listed BYOK model is usable even when its
+  // 200K catalog entry is a display fallback. The route must not enlarge a replay.
+  it.each([
+    { label: 'missing flag', contextWindowVerified: undefined, expected: null },
+    { label: 'inherited default', contextWindowVerified: false, expected: null },
+    { label: 'stale view', contextWindowVerified: true, stale: true, expected: null },
+    { label: 'shared group', contextWindowVerified: true, groupSize: 2, expected: null },
+    { label: 'confirmed destination', contextWindowVerified: true, expected: 200_000 },
+  ])('requires proof of the actual execution window ($label)', async ({ contextWindowVerified, stale, groupSize, expected }) => {
+    const model = 'spark/qwen';
+    deviceLink.remoteBackgroundInvoke.mockResolvedValueOnce({
+      ok: true, result: {
+        providers: [provider({
+          remoteInvocationEnabled: true, groupSize,
+          models: { pi: [{ id: model, contextWindow: 200_000, contextWindowVerified }] },
+        })],
+        ...(stale ? { providerContinuity: { stale: true, remainingMs: 1000 } } : {}),
+      },
+    });
+    const agentDeviceId = groupSize ? 'share:s1' : 'device-b';
+    await expect(readRemoteProviderRoute({ agentDeviceId, agentKind: 'pi', providerId: 'spark', model }))
+      .resolves.toMatchObject({ model: { contextWindow: 200_000 }, verifiedContextWindow: expected });
+  });
+
   it('asks the other computer for its provider list with the controller capabilities', async () => {
     const invoke = vi.fn(async () => ({ ok: true, result: { providers: [provider({ remoteInvocationEnabled: true })] } }));
     expect((await readDeviceProviderViews(invoke, 'device-b')).map((view) => view.id)).toEqual(['spark']);

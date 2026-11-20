@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {managedConfig} from './managed.mjs';
 import {acquire} from './lock.mjs';
 import {RecoveryJournal,durableWrite} from './recovery.mjs';
+import {verifyInterface} from './interface-assets.mjs';
 import {releaseDescriptor} from './automatic.mjs';
 import {preflightSharedStartup} from './startup-preflight.mjs';
 
@@ -33,6 +34,10 @@ export async function reconcileRunning(options) {
     check(changes.every(f=>['scripts/dev-migration-policy.mjs','scripts/personal-migration-allowlist.json'].includes(f)),
       'Recovery contains changes beyond the reviewed startup-policy repair');
     check(run('git',['status','--porcelain','--untracked-files=no'],directory)==='','Tracked recovery files are dirty');
+    if (original.failed.assetDigest) {
+      release.assetDigest = original.failed.assetDigest;
+      verifyInterface(directory, release.assetDigest);
+    }
     preflightSharedStartup(c,release);
     const require=createRequire(path.join(directory,'package.json'));
     const helper=out+'.readonly.mjs';check(!fs.existsSync(helper),'Recovery helper exists');
@@ -55,6 +60,7 @@ export async function reconcileRunning(options) {
       check(i,'Repaired instance changed or is not ready');
       const heartbeat=read(path.join(monitor,'heartbeat.json')), age=Date.now()-heartbeat.at;
       check(heartbeat.pid===pid&&heartbeat.generation===owner.generation&&age>=0&&age<=10000&&heartbeat.ready&&
+        (!release.assetDigest || (heartbeat.interactive === true && heartbeat.assetDigest === release.assetDigest))&&
         (c.automatic?.requireRemote===false||heartbeat.remoteReady),'Unhealthy or stale repaired instance');
       check(releaseDescriptor(directory).id===release.id,'Checkout changed during observation');
       const now=Date.now();

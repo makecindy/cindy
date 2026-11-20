@@ -28,6 +28,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
+import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -60,7 +61,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.railAll': '全部',
         'newChat.modelSelector.unified.railRecent': '最近',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
-        'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
+        'newChat.modelSelector.unified.crossEngineWarning': '下一条消息将切换引擎并接续对话，较早的部分可能会压缩',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
         'newChat.modelSelector.category.gpt': 'OpenAI',
         'effortLevels.low': '低',
@@ -1573,7 +1574,7 @@ describe('统一面板 · 会话内形态', () => {
     });
     expect(
       screen.getByRole('listbox').querySelector('[data-cross-engine-warning]')?.textContent,
-    ).toContain('切换引擎会重建上下文');
+    ).toContain('下一条消息将切换引擎并接续对话');
   });
 
   it('选中跨引擎行走 onCrossEngineSelect,不走普通 onSelect', async () => {
@@ -4899,6 +4900,176 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
+  // PR #11683 reviews (model-groups.md §6.2), unit, real editor + picker in a controlled form like the settings
+  // pages: picking a group records it at once (an immediate Create keeps it); the preview only swaps in the group's
+  // source while the entry still holds that group. Minimal inputs: resolve late after re-picking the same plain model.
+  it('records a model group at once, fills in its source from the preview, and drops a late preview after a plain pick', async () => {
+    type Route = { harness: 'codex'; providerId: string; model: string; effort: string; fastMode: boolean; modelGroup?: string };
+    const route: Route = { harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const previews: Array<(value: unknown) => void> = [];
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'Late group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(() => new Promise((resolve) => { previews.push(resolve); })),
+    } });
+    // The client caches the config per account: leave it empty for the following tests.
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
+      modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] };
+    const saved: Route[][] = [];
+    let setChain!: (next: Route[]) => void;
+    function Form() {
+      const [chain, setState] = React.useState<Route[]>([route]);
+      setChain = setState;
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next as Route[]); setState(next as Route[]); }} />;
+    }
+    const view = render(<Form />);
+    const chooseGroup = async () => {
+      fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+      const rail = await waitFor(() => {
+        const item = document.querySelector('[data-rail-item="model-groups"]');
+        if (!item) throw new Error('model groups rail not shown');
+        return item;
+      });
+      await act(async () => fireEvent.click(rail));
+      await act(async () => fireEvent.click(screen.getByText('Late group')));
+    };
+
+    await chooseGroup();
+    // Recorded before the preview returns: submitting now keeps the group, with the previous model as its fallback.
+    expect(saved.at(-1)).toEqual([{ ...route, modelGroup: 'grp' }]);
+    await act(async () => previews.shift()!(routed));
+    // The group's effort comes with its source; the previous model's 'high' is not kept (review r4640307228).
+    expect(saved.at(-1)).toEqual([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]);
+
+    await act(async () => setChain([route]));
+    await chooseGroup();
+    const count = saved.length;
+    // The same plain model is picked again before the preview returns: the final chain equals the original one.
+    await act(async () => setChain([route]));
+    await act(async () => previews.shift()!(routed));
+    expect(saved.length).toBe(count);
+  });
+
+  // PR #11683 review r4640307222, unit, real editor + picker: the "choose a model first" page starts with no entry
+  // and drops changes without a model, so recording the group alone is lost; the preview must create the entry.
+  // Minimal input: an empty chain and a routed preview.
+  it('creates the first entry from the group preview when the chain is empty', async () => {
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'First group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'routed', groupName: 'First group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
+        modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<Array<{ model: string }>>([]);
+      return <BotModelChainEditor value={chain as never} onChange={(next) => {
+        if (!next[0]?.model) return; // like BotsHomeView's model-selection page
+        saved.push(next); setState(next);
+      }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('First group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([expect.objectContaining({
+      harness: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]));
+  });
+
+  // model-groups.md §6.2, user 2026-11-20「漏了补全客户端」, unit, real editor + picker: editing a companion on
+  // another computer offers that computer's groups (from its settings form). Choosing one only records it — that
+  // computer fills the source on save — and there is no manage entry for this computer's settings.
+  it('offers the host computer\'s groups for a remote companion and records a choice without a local preview', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const resolve = vi.fn();
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const,
+      candidates: [{ agentKind: 'pi' as const, providerId: 'xd', model: 'a' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([{ ...route, modelGroup: 'host-grp' }]);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  // PR #11683 review r4641455507, unit, real editor + picker: a backup added on another computer starts without a
+  // model and is only submitted once it has one; choosing a group there must still reach the form (the host replaces
+  // the placeholder source on save). Minimal input: Add backup, then pick a host group.
+  it('submits a backup model group added for a remote companion', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve: vi.fn() } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const, effort: 'low',
+      candidates: [{ agentKind: 'codex' as const, providerId: 'host-openai', model: 'gpt-6', off: true },
+        { agentKind: 'codex' as const, providerId: 'host-xd', model: 'gpt-5.6' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    const add = screen.getAllByRole('button').find((button) => /添加备用模型|Add fallback|bots\.modelChain\.add/.test(button.textContent ?? ''))!;
+    await act(async () => fireEvent.click(add));
+    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
+    fireEvent.click(pickers[pickers.length - 1]!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([route, expect.objectContaining({
+      harness: 'codex', providerId: 'host-xd', model: 'gpt-5.6', effort: 'low', modelGroup: 'host-grp' })]);
+  });
+
+  // PR #11683 review r4641455511, unit, real editor + picker: switching an entry from one group to another whose
+  // preview finds nothing keeps the group it had, instead of leaving a plain model. Minimal input: G1 entry, G2 unavailable.
+  it('keeps the previous group when another group has nothing usable', async () => {
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'gpt-5.6', effort: 'low', fastMode: false, modelGroup: 'g1' };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [
+        { id: 'g1', name: 'Day group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] },
+        { id: 'g2', name: 'Empty group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'gone', model: 'x' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'none', groupName: 'Empty group', trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<typeof route[]>([route]);
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next); setState(next as typeof route[]); }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(await screen.findByText('Empty group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([route]));
+  });
+
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
   // snapshot must show loading, then update the open picker without rewriting the
   // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector

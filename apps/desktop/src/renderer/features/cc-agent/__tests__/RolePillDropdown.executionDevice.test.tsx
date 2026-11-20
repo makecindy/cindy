@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
+import { resetPluginEnginesStoreForTests } from '@/hooks/usePluginEngines';
 import type { WorkerInfo } from '../hooks/useWorkers';
-import { RolePillDropdown } from '../RolePillDropdown';
+import { RolePillDropdown, WorkerListToolbar } from '../RolePillDropdown';
 
 const confirm = vi.hoisted(() => vi.fn(async (_opts: { description: string }) => false));
 
@@ -165,4 +166,48 @@ describe('Worker project badge device boundary', () => {
       }
     },
   );
+
+  // PR #11591 review：插件引擎 Worker 跑在 Lead 所在电脑。生产入口 WorkerListToolbar(经 OrcaWorkerPanel)；
+  // 缺口：Device Link 控制端此前读本机引擎目录，本机装了同名插件时画成本机的图标。
+  // 最小失败输入：被控电脑与本机的同名引擎图标不同。unit/jsdom。
+  it('draws a plugin engine Worker with the icon from the Lead computer under Device Link', async () => {
+    const REMOTE_ICON = 'data:image/png;base64,UkVNT1RF';
+    const engines = (iconDataUrl: string) => [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [], iconDataUrl,
+    }];
+    const invoke = vi.fn(async () => engines(REMOTE_ICON));
+    const listPluginEngines = vi.fn(async () => engines('data:image/png;base64,TE9DQUw='));
+    const host = window as unknown as { electronAPI?: unknown };
+    host.electronAPI = {
+      deviceLink: { invoke },
+      maker: { listPluginEngines, onPluginEnginesChanged: () => () => {} },
+    };
+    onTestFinished(() => {
+      delete host.electronAPI;
+      resetPluginEnginesStoreForTests();
+    });
+    const current = worker({ agent: 'acp', providerId: 'acp-plugin:dsh-acp:dsh' });
+    render(
+      <WorkerListToolbar
+        worker={current}
+        workers={[current]}
+        selectedWorkerId={current.workerId}
+        activeWorkerCount={1}
+        softLimit={4}
+        hardLimit={8}
+        onSwitchFocus={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onArchiveWorker={vi.fn()}
+        pluginEngineDeviceId="controlled-pc"
+      />,
+    );
+    await waitFor(() => {
+      const icons = [...document.querySelectorAll('[data-plugin-icon]')];
+      expect(icons.length).toBeGreaterThan(0);
+      expect(icons.map((icon) => icon.getAttribute('src'))).toEqual(icons.map(() => REMOTE_ICON));
+    });
+    expect(invoke).toHaveBeenCalledWith('controlled-pc', 'maker:list-plugin-engines', []);
+    expect(listPluginEngines).not.toHaveBeenCalled();
+  });
 });

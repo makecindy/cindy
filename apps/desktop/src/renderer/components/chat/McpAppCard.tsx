@@ -38,6 +38,8 @@ const appFailureCodes = new Set([
   'CHANNEL_NOT_ALLOWED', 'CHANNEL_NOT_FOUND', 'UNKNOWN_CHANNEL', 'NOT_FOUND',
 ]);
 const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
+const MCP_APP_DEFAULT_HEIGHT = 320;
+const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
 const MCP_APP_OFFSCREEN_KEEP_MS = 5_000;
@@ -140,7 +142,7 @@ interface McpAppCardProps {
   plugin?: unknown;
   customMcp?: unknown;
   chrome?: 'card' | 'panel';
-  sizing?: 'content' | 'fill';
+  sizing?: 'content' | 'fill' | 'sidebar-section';
   source?: { instanceId: string; viewId: string };
   contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
   onUnavailable?(): void;
@@ -193,8 +195,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [error, setError] = useState<ReturnType<typeof mcpAppFailureKey> | 'mcpApps.pluginRevoked' | 'mcpApps.pluginCspRejected' | 'mcpApps.filesOnExecutionComputer'>();
   const [loading, setLoading] = useState(true);
   const heightKey = `${deviceId ?? 'local'}:${sessionId ?? 'none'}:${clientId}`;
-  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey) ?? 320);
+  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey));
   const [mode, setMode] = useState('inline');
+  const sidebarSection = sizing === 'sidebar-section';
   const fixed = sizing === 'fill' || mode === 'fullscreen';
   const fixedRef = useRef(fixed); fixedRef.current = fixed;
   const [border, setBorder] = useState(true);
@@ -213,7 +216,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const updateContextRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
-    setHeight(cachedMcpAppHeight(heightKey) ?? 320);
+    setHeight(cachedMcpAppHeight(heightKey));
   }, [heightKey]);
 
   useEffect(() => {
@@ -365,6 +368,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           setHeight(latestHeight);
         }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
       }
+      // A sidebar already waiting on a reported size keeps its compact footprint.
+      // Give pages with no size notification the standard viewport once visible.
+      if (sidebarSection && latestHeight === undefined) {
+        setHeight(current => current ?? MCP_APP_DEFAULT_HEIGHT);
+      }
       setRevealed(true);
       setLoading(false);
     };
@@ -486,7 +494,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -528,13 +536,23 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     setMode('inline');
     void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
   };
+  const showSpinner = loading && visible && !revealed;
+  const frameHeight = height ?? MCP_APP_DEFAULT_HEIGHT;
+  const sidebarHeight = height ?? MCP_APP_SIDEBAR_LOADING_HEIGHT;
+  const frameMount = (
+    <div
+      ref={root}
+      aria-busy={visible && !revealed ? true : undefined}
+      style={{ height: error ? 0 : fixed ? undefined : frameHeight, flex: fixed ? 1 : undefined, minHeight: 0 }}
+    />
+  );
   return (
     <dialog
       ref={card}
       open
       className={
         mode === 'fullscreen'
-          ? 'fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit backdrop:bg-transparent'
+          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
           : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
       // The modal's top layer still shares the macOS window controls and drag geometry.
@@ -552,7 +570,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       {(chrome === 'card' || mode === 'fullscreen') && <div className="flex h-7 shrink-0 items-center gap-2 px-2 text-12 text-[var(--text-secondary)]">
         <McpAppIdentity title={title} plugin={plugin} customMcp={customMcp} />
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {loading && visible && !revealed && <Spinner size={14} />}
+          {showSpinner && <Spinner size={14} />}
           {error && error !== 'mcpApps.filesOnExecutionComputer' && <Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button>}
           {!error && (mode === 'fullscreen' || revealed && canFullscreen) && <Button variant="secondary" tone="quiet" size="sm" className={mode === 'fullscreen' ? undefined : 'h-7 w-7 p-0'}
             data-exit-fullscreen={mode === 'fullscreen' ? true : undefined}
@@ -564,7 +582,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           </Button>}
         </div>
       </div>}
-      {chrome === 'panel' && mode !== 'fullscreen' && loading && visible && !revealed && <div className="flex justify-center p-3"><Spinner size={16} /></div>}
+      {chrome === 'panel' && mode !== 'fullscreen' && !sidebarSection && showSpinner && <div className="flex justify-center p-3"><Spinner size={16} /></div>}
       {chrome === 'panel' && mode !== 'fullscreen' && error && <div className="p-3"><Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button></div>}
       {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
@@ -577,15 +595,16 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           {fallbackText}
         </p>
       )}
-      <div
-        ref={root}
-        aria-busy={visible && !revealed ? true : undefined}
-        style={{
-          height: error ? 0 : fixed ? undefined : height,
-          flex: fixed ? 1 : undefined,
-          minHeight: 0,
-        }}
-      />
+      {sidebarSection ? (
+        // Clip the frame during the transition so the guest receives only the final viewport size.
+        <div
+          className={fixed ? 'flex min-h-0 flex-1' : 'relative shrink-0 overflow-hidden transition-[height] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none'}
+          style={{ height: error ? 0 : fixed ? undefined : sidebarHeight }}
+        >
+          {frameMount}
+          {!fixed && showSpinner && <div className="pointer-events-none absolute inset-0 grid place-items-center"><Spinner size={16} /></div>}
+        </div>
+      ) : frameMount}
     </dialog>
   );
 }

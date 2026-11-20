@@ -37,7 +37,7 @@ function flush(file) { const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd)
 function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 export async function executeDatabasePlan(plan, action) {
-  check(['rehearse', 'preflight', 'apply'].includes(action), 'Invalid database action');
+  check(['rehearse', 'preflight', 'apply', 'verify-applied'].includes(action), 'Invalid database action');
   if (action === 'apply') check(process.platform === 'darwin', 'Production database apply currently requires macOS');
   if (action === 'apply') check(plan.authorized === true && plan.rehearsal?.ready === true,
     'Production apply requires an explicitly authorized, rehearsed plan');
@@ -52,6 +52,30 @@ export async function executeDatabasePlan(plan, action) {
   check(pending.every(p => p.scriptHash === null), 'Companion migrations require their own reviewed workflow');
   const inventory = files(plan.dataDir);
   check(inventory.length > 0, 'No existing account databases found');
+  if (action === 'verify-applied') {
+    const target = plan.backupDir;
+    check(path.dirname(target) === path.join(plan.dataDir, 'personal-upgrade-backups'), 'Invalid backup location');
+    const receipt = JSON.parse(fs.readFileSync(path.join(target, 'completed.json'), 'utf8'));
+    const backups = JSON.parse(fs.readFileSync(path.join(target, 'backups.json'), 'utf8'));
+    check(receipt.ready === true && receipt.action === 'apply' && receipt.directory === target &&
+      same(receipt.pending, pending) && same(receipt.databases, plan.databases) &&
+      backups.candidate === plan.candidate.id, 'Completed migration receipt does not match');
+    check(inventory.length === plan.databases.length, 'Migrated database inventory changed');
+    for (const [index, entry] of inventory.entries()) {
+      const previous = plan.databases[index];
+      check(entry.name === previous.name && entry.dev === previous.dev && entry.ino === previous.ino,
+        'Migrated database was replaced');
+      const file = path.join(plan.dataDir, entry.name);
+      const db = new Database(file, {readonly:true, fileMustExist:true});
+      try {
+        const result = checkMigrationCompatibility(db, newDir, file);
+        check(result.compatible && result.databaseVersion === pending.at(-1).seq &&
+          result.checkoutVersion === result.databaseVersion, 'Migrated schema differs from candidate');
+        quickCheck(db);
+      } finally { db.close(); }
+    }
+    return {ready:true, action};
+  }
   if (action !== 'rehearse') check(same(inventory, plan.databases), 'Database inventory or runtime manifest changed; prepare again');
   const space = fs.statfsSync(plan.dataDir);
   const bytes = inventory.reduce((n, f) => n + fs.statSync(path.join(plan.dataDir, f.name)).size, 0);

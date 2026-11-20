@@ -26,7 +26,7 @@ import { agentNetSharingAlias, agentNetSharingInvitation, agentNetSharingInvitat
   rememberAgentNetSharingService, requestAgentNetSharing, retireAgentNetSharingGuest, selectedAgentNetSharingRoute,
   forgetAgentNetProviderShareMember,
   type AgentNetSharingRoute } from './agentNetSharing.js';
-import { grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
+import { agentNetProviderExecutorProof, grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
 
 /** 服务端错误码 → 本机 IPC 错误码(Renderer 据此给出可行动的提示)。 */
 const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
@@ -276,6 +276,14 @@ const delegationChecks = createProviderShareDelegationChecks({
 
 export function checkProviderShareDelegation(input: DelegationCheckInput,
   generation?: string, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<DelegationCheckResult> {
+  if (options.signal?.aborted) return Promise.reject(options.signal.reason);
+  const proof = agentNetProviderExecutorProof(input, options.background ? undefined : generation);
+  // Existing task leases share a guest/executor transport entry. Its latest
+  // generation confirms membership on recheck. A new task still needs an exact match.
+  if (proof && (options.background || generation === undefined || proof.generation === generation)) {
+    const { active, generation, expiresAt, ownerDeviceId, delegation } = proof;
+    return Promise.resolve({ active, generation, expiresAt, ownerDeviceId, proofId: delegation.id });
+  }
   return delegationChecks.check(input, generation, options);
 }
 

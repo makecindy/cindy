@@ -82,6 +82,7 @@ import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { normalizeProviderShareMemberNote, PROVIDER_SHARE_MEMBER_NOTE_MAX_LENGTH } from '../../shared/providerShareMemberNote.js';
 import { providerShareMemberNotes } from './providerShareMemberNotes.js';
+import { exportProviderShareRoster } from './providerShareRosterExport.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { readProviderManagementShares } from '../provider-group/managementClient.js';
 import type { ProviderShareManagementCommand } from '../../shared/providerManagement.js';
@@ -625,7 +626,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       if (!recovery || !isDataOwnerPushStamp(recovery.ownerStamp) || !Array.isArray(recovery.regions) ||
           recovery.regions.length > 2 || !recovery.regions.every((region) => region === 'cn' || region === 'global'))
         throwIpcError('INVALID_PARAMS', 'Invalid favorite recovery');
-      return { action: 'received-snapshot', favoriteRecovery: { ownerStamp: recovery.ownerStamp, regions: recovery.regions } };
+      const revision = recovery.cleanedLeftMemberRevision;
+      if (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1))
+        throwIpcError('INVALID_PARAMS', 'Invalid favorite cleanup receipt');
+      return { action: 'received-snapshot', favoriteRecovery: { ownerStamp: recovery.ownerStamp, regions: recovery.regions,
+        ...(revision !== undefined ? { cleanedLeftMemberRevision: revision } : {}) } };
     }
     case 'preview':
     case 'send-request':
@@ -1295,7 +1300,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
     && (listArgs[0] as { includeCatalog?: unknown }).includeCatalog === false
   );
   // 未全部就绪时也返回已加载的区域，但账号切换期间不得返回旧账号名单。
-  const shares = getReceivedSharesSnapshot().received;
+  const shares = getReceivedShares();
   return {
     ready: isReceivedSharesReady(),
     shares: await Promise.all(shares.map(async (share): Promise<ProviderShareReceivedCatalog> => {
@@ -1335,6 +1340,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
 }
 
 export function registerProviderShareIpc(): void {
+  ipcMain.handle(PROVIDER_SHARE_IPC.EXPORT_ROSTER, exportProviderShareRoster);
   // 受邀者对每个分享的本机偏好(「信任 {分享者}」)：按当前账号存放，读写时解析。
   configureProviderShareGuestPrefs({ resolvePath: () => ownerScopedUserDataPath('provider-share-guest-prefs.json') });
   const insights = createProviderShareInsightsReader({

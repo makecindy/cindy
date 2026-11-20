@@ -259,7 +259,10 @@ describe('PI native subscription forwarding', () => {
         vi.mocked(injected.fetch).mockClear();
         vi.mocked(injected.getChatgptAuth).mockClear();
         for (const model of ['gpt-6.1-sol[1m]', 'unknown-model', undefined]) {
-          expect((await request(model)).status).toBe(403);
+          const refused = await request(model);
+          expect(refused.status).toBe(403);
+          const message = JSON.parse(Buffer.concat(refused.chunks).toString()).error.message;
+          expect(decideProviderGroupFailure({ errorStatus: refused.status, message }, 'run').action).toBe('switch');
           expect(injected.fetch).not.toHaveBeenCalled();
           expect(injected.getChatgptAuth).not.toHaveBeenCalled();
         }
@@ -279,6 +282,43 @@ describe('PI native subscription forwarding', () => {
       } finally { binding.release(); }
     },
   );
+
+  // Unit / provider-groups §6.1: the real native HTTP handler must distinguish
+  // a foreign provider from catalog loss. Existing grant tests only used the
+  // registered provider, so a scope refusal could still relocate the task.
+  it.each([
+    { providerId: 'openai', compressed: false },
+    { providerId: 'openai', compressed: true },
+    { providerId: 'xai', compressed: false },
+  ])('stops group recovery for a foreign $providerId native route (zstd: $compressed)', async ({ providerId, compressed }) => {
+    const modelDenial = vi.fn(() => ({ code: 'fixture-model-denial', message: 'Fixture model limit.' }));
+    const binding = registerGuestProviderRoute('pi-scope-guest', 'shared-a', undefined, undefined, modelDenial);
+    const injected = deps();
+    const body = { model: 'fixture-private-model', input: [] };
+    const raw = Buffer.from(JSON.stringify(body));
+    const res = responseRecorder();
+    try {
+      await getPiNativeSubscriptionHandler(providerId, 'pi-scope-guest', injected)({
+        rawBody: compressed ? zstdCompressSync(raw) : raw,
+        parsedBody: compressed ? undefined : body,
+        ctx: { reqId: 1, method: 'POST', url: providerId === 'openai' ? '/codex/responses' : '/v1/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+        res,
+      } as never);
+      const payload = Buffer.concat(res.chunks).toString();
+      const error = JSON.parse(payload).error;
+      expect(res.status).toBe(403);
+      expect(error.code).toBe('shared_provider_only');
+      expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+      expect(payload).not.toContain('fixture-private-model');
+      expect(payload).not.toContain('shared-a');
+      expect(decideProviderGroupFailure({ errorStatus: res.status, message: error.message }, 'run'))
+        .toEqual({ action: 'stay', why: 'policy' });
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(injected.getChatgptAuth).not.toHaveBeenCalled();
+      expect(injected.getGrokToken).not.toHaveBeenCalled();
+      expect(modelDenial).not.toHaveBeenCalled();
+    } finally { binding.release(); }
+  });
 
   afterEach(() => {
     setCustomProviders([]);

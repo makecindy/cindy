@@ -1,3 +1,4 @@
+import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -5,6 +6,7 @@ import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { writeModelUsage } from '../worker/opHandlers/modelUsageTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
@@ -26,9 +28,13 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const isSqliteCorruption = ${isSqliteCorruption.toString()};
+const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
+let corruptionError = null;
 const viewStateCardSql = ${viewStateCardSql.toString()};
 const assertViewStateCard = ${assertViewStateCard.toString()};
 const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
@@ -40,11 +46,13 @@ const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toSt
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const writeModelUsage = ${writeModelUsage.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -414,15 +422,21 @@ function readLocalWorktreeReferences() {
     const file = path.join(root, name);
     if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
     const isCurrent = file === currentPath;
-    const nextDb = isCurrent ? db : new Database(file, {
-      readonly: true, fileMustExist: true,
-      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
-    });
+    let nextDb;
     try {
+      nextDb = isCurrent ? db : new Database(file, {
+        readonly: true, fileMustExist: true,
+        ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+      });
       const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
       rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } catch (error) {
+      if (!isCurrent && isSqliteCorruption(error)) {
+        throw Object.assign(new Error('Task reference source is corrupt'), { code: 'DB_REFERENCE_SOURCE_CORRUPT', cause: error });
+      }
+      throw error;
     } finally {
-      if (!isCurrent) nextDb.close();
+      if (!isCurrent && nextDb) nextDb.close();
     }
   }
   const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
@@ -445,8 +459,10 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordModelUsage':
+      return readyDb.transaction(() => writeModelUsage(readyDb, request.args))();
     case 'usage.recordPiUsage':
-      return recordPiUsage(readyDb, request.args);
+      return recordPiUsage(readyDb, request.args, writeModelUsage);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
@@ -1207,6 +1223,10 @@ function sessionsSetStatus(readyDb, args) {
     const applied = [];
     const now = Date.now();
     for (const sessionId of sessionIds) {
+      const guard = payload.projectGuard;
+      if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+        sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
+      )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       if (existing.status === 'deleted') {
@@ -1253,6 +1273,10 @@ function sessionsSetTerminalStatus(readyDb, args) {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
   return readyDb.transaction(() => {
+    const guard = payload.projectGuard;
+    if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+      sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, 'active',
+    )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
     if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
       || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
       || !readyDb.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
@@ -2149,7 +2173,11 @@ function forkSession(readyDb, args) {
         expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
         expectString(newSession.id, 'newSession.id'),
         'assistant', '', null,
-        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        JSON.stringify({ contextRebuild: {
+          reason: content.reason,
+          handoff: content.handoffPreview ?? content.handoff,
+          handoffCoverage: content.handoffCoverage,
+        } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
         markerCreatedAt,
       );
@@ -2524,9 +2552,11 @@ parentPort.on('message', async (req) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
+    if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
+    if (isSqliteCorruption(err)) corruptionError = err;
     parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
@@ -2611,6 +2641,8 @@ export interface WorkerThreadTransportOptions {
   maxBackgroundInFlightRpcs?: number;
   /** 后台读排队上限；超出只拒后台读，不挡写入。 */
   maxBackgroundQueuedRpcs?: number;
+  /** Synchronous notification after admission is closed; never requests a restart. */
+  onCorruption?: (error: Error) => void;
 }
 
 export class WorkerThreadTransport implements DbTransport {
@@ -2625,6 +2657,7 @@ export class WorkerThreadTransport implements DbTransport {
   private nextId = 1;
   private closed = false;
   private closing = false;
+  private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly queued: QueuedRpc[] = [];
@@ -2642,6 +2675,9 @@ export class WorkerThreadTransport implements DbTransport {
       return Promise.reject(
         createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
       );
+    }
+    if (this.corruptionError && op !== 'closeDb') {
+      return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
@@ -2870,7 +2906,7 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private drainQueue(): void {
-    while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
+    while (!this.closed && !this.corruptionError && this.pending.size < this.maxInFlightRpcs) {
       const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
@@ -2905,14 +2941,15 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private createWorker(): Worker {
+    const { onCorruption: _onCorruption, ...workerData } = this.opts;
     // 显式 workerScriptPath 用于真实文件 worker 校验，不能被临时 inline fallback 覆盖。
     if (this.opts.workerScriptPath) {
-      return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+      return new Worker(this.resolveWorkerScriptPath(), { workerData });
     }
     if (this.shouldUseInlineWorker()) {
-      return new Worker(WORKER_CODE, { eval: true, workerData: this.opts });
+      return new Worker(WORKER_CODE, { eval: true, workerData });
     }
-    return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+    return new Worker(this.resolveWorkerScriptPath(), { workerData });
   }
 
   private shouldUseInlineWorker(): boolean {
@@ -2933,6 +2970,18 @@ export class WorkerThreadTransport implements DbTransport {
 
   private handleMessage(msg: WorkerMessage): void {
     if ('id' in msg) {
+      // A timed-out response still reports the health of this connection. Close
+      // admission before resolving/rejecting promises or draining queued work.
+      if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
+        this.corruptionError = Object.assign(new Error(msg.error.message), { code: msg.error.code });
+        for (const queued of this.queued.splice(0)) {
+          if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
+          queued.reject(createCorruptDbUnavailableError(this.corruptionError));
+        }
+        // Keep already-posted requests pending: some may have committed. The
+        // worker rejects unstarted work and returns actual completed outcomes.
+        try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
+      }
       const pending = this.pending.get(msg.id);
       if (!pending) return;
       this.pending.delete(msg.id);

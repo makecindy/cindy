@@ -121,7 +121,7 @@ export function buildTelegramAdapter(
         decodeTelegramLaneUserId(userId)
           ? `[TG·群] ${userId.slice(-6)}`
           : `[TG·DM] ${userId.slice(-6)}`,
-      generatedTitlePrefix: 'TG · ',
+      generatedTitlePrefix: 'Telegram · ',
       // 私聊与群 lane 的工作目录都是 app 托管目录, 不该聚成假项目组。
       workspaceKind: 'dialogue',
       ensureWorkingDir,

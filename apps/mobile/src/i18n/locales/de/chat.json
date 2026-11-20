@@ -190,9 +190,15 @@
       }
     }
   },
+  "geminiRateLimit": {
+    "retried": "Nach der Gemini-Wartezeit automatisch erneut versucht",
+    "title": "Das Eingabelimit pro Minute für Gemini ist erreicht.",
+    "exhausted": "Gemini ist nach einem erneuten Versuch weiterhin begrenzt. Versuche es später manuell.",
+    "retryIn": "Automatischer Versuch in {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
-    "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+    "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
+    "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
     "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
     "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
     "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",

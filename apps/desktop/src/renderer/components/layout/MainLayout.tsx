@@ -26,6 +26,7 @@ import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import { companionChatTarget } from '@/features/bots/companionChatTarget';
 import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
@@ -485,6 +486,11 @@ export function MainLayout() {
     syncNotificationsEnabledToMain();
   }, []);
 
+  // Task and companion focus changes share a split tree. Remounting the
+  // outlet here would lose pending pane closes and in-progress chat input.
+  const contentFeatureKey = companionChatTarget(location.pathname, location.search)
+    ? 'cc-agent'
+    : location.pathname.split('/')[1] || 'root';
   const isSettingsRoute = location.pathname === '/settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
@@ -709,7 +715,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -727,6 +733,7 @@ export function MainLayout() {
       navigate('/cc-agent/scheduled', {
         state: pluginScheduleNavigationState({
           kind: 'plugin-schedule-draft',
+          ...(typeof primaryHostKey === 'string' ? { primaryHostKey } : {}),
           requestId,
           ghostId,
           ghostName,
@@ -1457,7 +1464,6 @@ export function MainLayout() {
           openPerformanceTrace();
           break;
         case 'new-maker':
-          // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
           navigate('/cc-agent/new', {
             state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
@@ -1962,7 +1968,7 @@ export function MainLayout() {
                     </div>
                   )}
                   <VoiceCallFloatingSlot />
-                  <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
+                  <FadeSwitcher key={contentFeatureKey}>
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>

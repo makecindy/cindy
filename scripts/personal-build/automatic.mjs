@@ -8,7 +8,7 @@ import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 import {acquire} from './lock.mjs';
 import {prepareDatabasePlan, validateDatabasePlan, runDatabasePlan} from './database-upgrade.mjs';
-import {preflightSharedStartup} from './startup-preflight.mjs';
+import {preflightPersonalLauncher, preflightSharedStartup} from './startup-preflight.mjs';
 import {activatePreparedCandidate} from './activation-stages.mjs';
 export {acquire} from './lock.mjs';
 import {installFixedRuntime, preflightFixedRuntime} from './fixed-install.mjs';
@@ -16,6 +16,7 @@ import { nativeIdentity, verifyDeveloperSignature, designatedRequirement } from 
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
 import {appRegistry,registeredApps,reconcileRegistrations} from './app-registry.mjs';
+import {interfaceDigest, verifyInterface} from './interface-assets.mjs';
 import {treeIdentity} from './runtime-store.mjs';
 import {publishSupervisorControl, shouldYieldSupervisor, requestSupervisorRelease} from './supervisor-handoff.mjs';
 
@@ -86,6 +87,9 @@ async function stopLaunch(c, release, launched, dataDir = c.runtime.dataDir) {
   // A LaunchServices app is reparented outside the wrapper tree. Stop its exact
   // verified PID first; normal app exit lets the Terminal/runner finish as well.
   // Tearing down their process groups first can strand the app without its UI server.
+  // A cold Forge build in Terminal can outlive the coordinator. Disallow a late
+  // LaunchServices open from this generation before inspecting or stopping its app.
+  if (launched?.dir) durableWrite(path.join(launched.dir, 'cancelled.json'), {generation:launched.generation});
   const owned = snapshot(c, release, dataDir);
   check(!owned.unknown, 'Process identity unavailable; cleanup deferred');
   if (owned.pid) await stopOwned(c, release, dataDir);
@@ -169,19 +173,31 @@ function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   const nativeFile = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(nativeFile) ? read(nativeFile).runtime : null;
   const destination = c.runtime.mode === 'shared' ? c.runtime.personalApp : null;
+  let assetDigest = release.assetDigest;
+  if (mock && runtime && destination) {
+    const desktop = path.join(release.directory, 'apps/desktop');
+    const compile = spawnSync(c.runtime.node, ['scripts/dev-remote-env.mjs', c.runtime.node,
+      'scripts/build-personal-assets.mjs', `--region=${c.region}`], {
+      cwd: desktop, stdio: 'inherit', env: {...runtimeEnv(c, cli), CINDY_PERSONAL_ASSET_DIGEST: ''},
+    });
+    if (compile.error) throw compile.error;
+    check(compile.status === 0, 'Personal interface build failed before smoke');
+    assetDigest = interfaceDigest(release.directory);
+  } else if (assetDigest) verifyInterface(release.directory, assetDigest);
   const fixedApp = runtime && !mock && destination ? installFixedRuntime(runtime, destination, {verifySignature:verifyDeveloperSignature, isRunning:assertFixedAppStopped, registry:appRegistry()}) : null;
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
   delete env.CINDY_PERSONAL_FIXED_APP;
+  delete env.CINDY_PERSONAL_ASSET_DIGEST;
+  if (assetDigest) env.CINDY_PERSONAL_ASSET_DIGEST = assetDigest;
   if (fixedApp) env.CINDY_PERSONAL_FIXED_APP = fixedApp;
   for (const name of ['XDT_ISOLATED', 'XDT_ISOLATED_NAME', 'XDT_ISOLATED_AUTH', 'XDT_ISOLATED_AUTH_PROOF', 'XDT_USER_DATA_DIR', 'XDT_USER_DATA_DIR_EPOCH']) delete env[name];
   env.CINDY_PERSONAL_MONITOR_DIR = dir; env.CINDY_PERSONAL_GENERATION = generation;
   const mode = mock ? [`--isolated=personal-smoke-${generation.slice(0, 8)}`, '--mock'] : c.runtime.mode === 'shared' ? ['--shared'] : [`--isolated=${c.name}`, ...(c.automatic.mock ? ['--mock'] : [])];
   const log = path.join(dir, 'console.log');
-  // Keep coordinator output in a file, but pass the existing terminal input.
-  // The repository wrapper uses that terminal for the dev server and owns its
-  // single PTY + bounded log drain. Never pipe the PTY through the supervisor.
+  // Capture coordinator output. The shared fixed app gets a separate Terminal;
+  // an isolated smoke can still inherit the caller's terminal and environment.
   const output = fs.openSync(log, 'a', 0o600);
   let child;
   try {
@@ -195,13 +211,13 @@ function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   let exited = false, error, exitCode;
   child.once('error', e => { error = e; exited = true; }); child.once('exit', (code) => { exitCode = code; exited = true; });
   if (child.pid) durableWrite(path.join(dir, 'runner.json'), { pid: child.pid, directory: release.directory, smoke: mock, generation });
-  return { generation, dir, log, child, mode, get exited() { return exited; }, get error() { return error; }, get exitCode() { return exitCode; } };
+  return { generation, dir, log, child, mode, assetDigest, get exited() { return exited; }, get error() { return error; }, get exitCode() { return exitCode; } };
 }
 export function readHeartbeat(runInfo, expectedPid, { now = Date.now(), remote = true } = {}) {
   try {
     const h = read(path.join(runInfo.dir, 'heartbeat.json'));
     if (h.protocol !== 1 || !Number.isFinite(h.at) || !Number.isSafeInteger(h.pid) || h.generation !== runInfo.generation || h.pid !== expectedPid || h.at > now || now - h.at > 10_000) return null;
-    return { ...h, healthy: h.ready === true && (!remote || h.remoteReady === true) };
+    return { ...h, healthy: h.ready === true && (!runInfo.assetDigest || (h.interactive === true && h.assetDigest === runInfo.assetDigest)) && (!remote || h.remoteReady === true) };
   } catch { return null; }
 }
 async function waitReady(c, release, launched, dataDir, requireHeartbeat) {
@@ -210,7 +226,11 @@ async function waitReady(c, release, launched, dataDir, requireHeartbeat) {
     if (launched.error) throw launched.error;
     if (launched.exited && launched.exitCode !== 0) throw new Error(`Desktop startup wrapper failed (exit ${launched.exitCode}); see ${launched.log}`);
     const s = snapshot(c, release, dataDir);
-    if (s.ready && s.pid && (!requireHeartbeat || readHeartbeat(launched, s.pid, { remote: c.automatic.requireRemote })?.healthy)) return s.pid;
+    const heartbeat = s.pid && requireHeartbeat ? readHeartbeat(launched, s.pid, {
+      remote: dataDir === c.runtime.dataDir && c.automatic.requireRemote,
+    }) : null;
+    if (heartbeat?.interfaceFailure) throw Error(`Main window failed to load (code ${heartbeat.interfaceFailure}); see ${launched.log}`);
+    if (s.ready && s.pid && (!requireHeartbeat || heartbeat?.healthy)) return s.pid;
     if (launched.exited && !s.pid && !s.unknown) throw new Error('Application exited before readiness');
     await sleep(2000);
   }
@@ -249,7 +269,7 @@ async function smoke(c, release) {
   try {
     const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
     profile = startup.defaultIsolatedUserDataDir(launched.mode[0].slice('--isolated='.length), c.region);
-    await waitReady(c, release, launched, profile, false);
+    await waitReady(c, release, launched, profile, !!launched.assetDigest);
   } catch(error) { failure=error; }
   try { await stopLaunch(c, release, launched, profile); } catch(error) { cleanupErrors.push(error); }
   if(process.platform==='darwin') {
@@ -267,7 +287,8 @@ async function smoke(c, release) {
   if(cleanupErrors.length) throw new AggregateError([...(failure?[failure]:[]),...cleanupErrors],
     [failure?.message,...cleanupErrors.map(error=>error.message)].filter(Boolean).join('; '));
   if(failure) throw failure;
-  return { at: Date.now(), profile, log: launched.log, registrationWarnings };
+  if (launched.assetDigest) verifyInterface(release.directory, launched.assetDigest);
+  return { at: Date.now(), profile, log: launched.log, registrationWarnings, assetDigest: launched.assetDigest };
 }
 export async function automaticCheck(file) {
   const c = config(file), unlock = acquire(path.join(root(c), 'prepare.lock'));
@@ -292,7 +313,7 @@ export async function automaticCheck(file) {
     const proof = await smoke(c, release);
     verifyUpgradeSnapshot(c, report);
     // Publish only a complete candidate; supervisor owns the promotion journal independently.
-    durableWrite(path.join(root(c), 'candidate.json'), { ...release, prepared: true, smoke: proof, buildReport: path.join(out, 'report.json') });
+    durableWrite(path.join(root(c), 'candidate.json'), { ...release, assetDigest: proof.assetDigest, prepared: true, smoke: proof, buildReport: path.join(out, 'report.json') });
     status(c, 'prepared', { id: release.id });
   } catch (e) { status(c, 'preparation-failed', { error: e.message }); throw e; }
   finally { unlock(); }
@@ -304,6 +325,7 @@ function candidate(c, s) {
   try {
     const v = read(path.join(root(c), 'candidate.json'));
     if (v.monitorProtocol !== 1 || !v.prepared || !v.smoke || v.id === s.good.id || blockedAutomaticCandidate(s, v.id) || !compatibility(s.good, v).compatible) return null;
+    if (requiresPrebuilt(c, v) && (!v.assetDigest || v.assetDigest !== v.smoke.assetDigest)) return null;
     verifyRelease(v); return v;
   } catch { return null; }
 }
@@ -322,10 +344,12 @@ export async function trial(c, store, release, operations = {}) {
   const inspect = operations.snapshot || snapshot;
   const wait = operations.sleep || sleep;
   const stop = operations.stopLaunch || stopLaunch;
-  let launched, pid;
+  let launched, pid, waitingForStartup = false;
   try {
     launched = startTrial(store, beforeSpawn => launch(c, release, { beforeSpawn }));
+    waitingForStartup = true;
     pid = await ready(c, release, launched, c.runtime.dataDir, true);
+    waitingForStartup = false;
     while (store.read().phase === 'trial') {
       const state = store.read(), h = heartbeat(launched, pid, { remote: c.automatic.requireRemote });
       const s = inspect(c, release);
@@ -337,6 +361,8 @@ export async function trial(c, store, release, operations = {}) {
   } catch (e) {
     if (store.read().phase === 'trial') store.reject(e.message);
     await stop(c, release, launched);
+    // A probation, cleanup or preflight failure is never a retry signal.
+    if (launched && waitingForStartup) e.cleanedStartupFailure = true;
     throw e;
   }
 }
@@ -427,15 +453,26 @@ function manualCandidate(c, store, manualFile) {
   verifyRelease(manual); verifyRelease(state.good);
   if (report.databaseUpgrade) runDatabasePlan(report.databaseUpgrade, 'preflight');
   preflightSharedStartup(c, manual, report.databaseUpgrade);
+  if (requiresPrebuilt(c, manual)) {
+    check(report.smoke.assetDigest, 'Prepare the candidate again with prebuilt interface verification');
+    manual.assetDigest = report.smoke.assetDigest;
+  }
   preflightInstallation(c, manual);
   return { manual, baseline: state.good };
 }
+function requiresPrebuilt(c, release) {
+  const file = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
+  return c.runtime.mode === 'shared' && fs.existsSync(file) && !!read(file).runtime;
+}
 function preflightInstallation(c, release) {
+  if (release.assetDigest) verifyInterface(release.directory, release.assetDigest);
   const file = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(file) ? read(file).runtime : null;
   const destination = c.runtime.mode === 'shared' ? c.runtime.personalApp : null;
-  if (runtime && destination) preflightFixedRuntime(runtime, destination,
-    {verifySignature: verifyDeveloperSignature, requirement: designatedRequirement});
+  if (runtime && destination) {
+    preflightPersonalLauncher(c.runtime.node, release.directory, destination);
+    preflightFixedRuntime(runtime, destination, {verifySignature: verifyDeveloperSignature, requirement: designatedRequirement});
+  }
 }
 async function verifyLaunchProfile(c) {
   const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
@@ -562,6 +599,14 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
         current = await activatePreparedCandidate(store, v, {
           databasePlan: databaseUpgrade,
           migrate: plan => runDatabasePlan(plan, 'apply'),
+          verifyRetry: plan => {
+            const observed = snapshot(c, v);
+            check(!observed.unknown && !observed.pid && !hasLaunchRunner(c, v), 'Candidate shutdown not confirmed');
+            verifyRelease(v);
+            preflightSharedStartup(c, v, plan);
+            preflightInstallation(c, v);
+            runDatabasePlan(plan, 'verify-applied');
+          },
           launch: release => trial(c, store, release),
           record: (stage, extra = {}) => {
             const event = {at:Date.now(), candidate:v.id, stage, ...extra};

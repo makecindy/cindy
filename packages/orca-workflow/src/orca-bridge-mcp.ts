@@ -191,6 +191,7 @@ export interface OrcaBridgeMcpDeps {
     fromMs: number | null;
     limit: number;
     cursor: OrcaLeadHistoryCursor | null;
+    order: 'asc' | 'desc';
   }) => Promise<OrcaLeadHistoryPage>;
   dispatchInterAgentMessage?: (params: {
     targetSessionId: string;
@@ -1324,6 +1325,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .optional()
             .describe('Optional inclusive Unix-ms lower bound, such as the UI assignment snapshot_before_ms.'),
           limit: z.number().int().min(1).max(200).default(100),
+          order: z.enum(['asc', 'desc']).optional()
+            .describe('Read earliest (asc, default) or latest (desc) first. A response without order uses asc. Keep the same order when following next_cursor.'),
           cursor: z
             .object({
               created_at_ms: z.number().int().nonnegative(),
@@ -1333,7 +1336,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .optional()
             .describe('next_cursor from the previous page.'),
         },
-        async ({ worker_id, from_ms, limit, cursor }) => {
+        async ({ worker_id, from_ms, limit, cursor, order }) => {
           const resolved = await resolveWorkerLink(deps, ctx, worker_id);
           if (!resolved.ok) return text(resolved.error, true);
           if (!deps.readLeadHistory) {
@@ -1345,6 +1348,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               leadSessionId: resolved.link.leadSessionId,
               fromMs: from_ms ?? null,
               limit,
+              order: order ?? 'asc',
               cursor: cursor
                 ? {
                     createdAt: cursor.created_at_ms,
@@ -1364,6 +1368,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
           return text({
             worker_id: resolved.link.workerId,
             lead_session_id: resolved.link.leadSessionId,
+            ...(order ? { order } : {}),
             messages: page.items.map((item) => ({
               id: item.id,
               role: item.role,

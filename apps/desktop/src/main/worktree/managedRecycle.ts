@@ -168,19 +168,39 @@ async function residualFilesCovered(
 export async function requestWorktreeRecycle(
   sessionId: string,
   resourcePaths: readonly string[] = [],
-  discardChanges?: true,
+  disposition?: true | 'keep',
 ): Promise<void> {
   const own = store.get(sessionId);
+  if (!own && !resourcePaths.length) return;
   const paths = new Set(await Promise.all(resourcePaths.map(physicalWorktreeKey)));
+  const discardChanges = disposition === true;
   if (discardChanges && (!own || !paths.has(await physicalWorktreeKey(own.path)))) return;
-  const candidates = own ? [own] : store.getAll();
+  const keep = disposition === 'keep';
+  const candidates = own && (!keep || !paths.size) ? [own] : store.getAll();
   for (const meta of candidates) {
-    if (meta.ephemeral || (!own && !paths.has(await physicalWorktreeKey(meta.path)))) continue;
+    if (meta.ephemeral && !keep) continue;
+    if (meta.sessionId !== sessionId && !paths.has(await physicalWorktreeKey(meta.path))) continue;
     await withWorktreeResourceLock(meta.path, async () => {
       const registered = store.get(meta.sessionId);
+      if (keep && (!registered || registered.pendingSessionTransfer || worktreeGeneration(registered) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)))
+        throw new Error('Worktree registration changed while preserving files');
       if (discardChanges && (!registered || registered.pendingSessionTransfer)) return;
       if (worktreeGeneration(registered ?? meta) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)) return;
       const previous = await readRecycleRecord(meta.path);
+      if (keep) {
+        const current = previous?.generation === worktreeGeneration(meta) && previous.phase !== 'restored' ? previous : null;
+        if (current && ['removing', 'restoring'].includes(current.phase)) throw new Error('Worktree files are being moved');
+        if (current?.phase === 'removed') return;
+        const record = current ?? await newRecycleRecord(meta);
+        if (!current) record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
+        delete record.discardRecovery;
+        record.retryPolicy = { state: 'kept', failures: 0, failedWorkMs: 0 };
+        record.reason = 'user-kept';
+        record.attempts = 0;
+        record.nextAttemptAt = 0;
+        await writeRecycleRecord(record);
+        return;
+      }
       if (previous?.generation === worktreeGeneration(meta) && previous.phase !== 'restored') {
         if (discardChanges && (previous.phase === 'pending' || previous.phase === 'snapshotted')) {
           // Freeze the discard decision to the contents at archive time. If a borrower
