@@ -343,6 +343,21 @@ test('an omitted quote is visible and can be restored without sending; an intent
   assert.equal(lookups.length, 1);
 });
 
+test('an empty or unavailable optional original leaves pending card edits and a later explicit send usable', async () => {
+  for (const lookup of [async () => null, async () => { throw new Error('offline'); }]) {
+    const f = fixture({ richText: true, replyParent: '<parent@example.test>', readReplyQuote: lookup });
+    await f.present();
+    await f.card('quote', { ...f.values(), body: 'Keep my edit', bodyHtml: '<p>Keep my edit</p>' });
+    assert.match(f.cards.at(-1).statusOnly.status, /原邮件/);
+    await f.flush();
+    assert.equal(f.current().editor.body, 'Keep my edit');
+    assert.deepEqual(f.writes.map(w => w.send), [false]);
+    assert.ok((await f.tool('send')).ok);
+    assert.deepEqual(f.writes.map(w => w.send), [false, true]);
+    assert.equal(f.writes.at(-1).fields.quote, '');
+  }
+});
+
 test('a newly requested missing quote is saved and verified before the shared send countdown', async () => {
   const original = { quote: '\n\nSender wrote:\n> Source', quoteHtml: '<blockquote>Source</blockquote>' };
   const f = fixture({ richText: true, replyParent: '<parent@example.test>', readReplyQuote: async () => original });

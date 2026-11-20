@@ -1124,6 +1124,7 @@ var cindyMail = (function () {
       if (match[1] === 'quote') {
         if (record.state !== 'draft' || edit.sent || edit.sending || edit.deleting || hasQuote(edit.fields) || edit.readBack.editor.quoteInBody) return;
         cancelMailSend(key);
+        let lookupNote;
         await navigator.locks.request('mail-compose:' + key, async () => {
           if (mailEdits.get(key) !== edit || edit.sent || edit.sending || edit.deleting || edit.error?.stale ||
               (edit.error && !edit.error.quote) || hasQuote(edit.fields)) return;
@@ -1141,12 +1142,15 @@ var cindyMail = (function () {
             edit.error = undefined;
             edit.revision++;
           } catch (error) {
-            edit.error = { ok: false, execution: 'not_executed', quote: true,
-              message: error.message === copy.quoteEmpty ? copy.quoteEmpty : copy.quoteUnavailable };
+            lookupNote = error?.message === copy.quoteEmpty ? copy.quoteEmpty : copy.quoteUnavailable;
           }
         });
-        if (edit.error || mailEdits.get(key) !== edit || edit.deleting) {
-          if (edit.error) await mailStatus(record.callId, edit.error.message);
+        if (mailEdits.get(key) !== edit || edit.deleting) return;
+        if (lookupNote || edit.error) {
+          // The optional fetch did not change the draft. Outstanding typing
+          // still autosaves; an earlier mandatory verification failure stays in force.
+          await mailStatus(record.callId, lookupNote || edit.error.message, '', false, undefined, edit.error ? 'error' : 'draft');
+          if (!edit.error && edit.savedRevision !== edit.revision) scheduleMailSave(key, record.callId, copy.failed);
           return;
         }
       }
