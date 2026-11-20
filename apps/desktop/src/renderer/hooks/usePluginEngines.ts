@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
 import {
@@ -120,11 +121,30 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 
 interface DeviceCatalogue {
   read(): Promise<void>;
+  ensureProvider(providerId: string): void;
+  prefetch(): Promise<void>;
+  markStale(): void;
+  evict(): void;
+  hasSubscribers(): boolean;
   subscribe(listener: () => void): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
 
+const MAX_PROBED_PROVIDERS = 64;
+
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
+
+function sameEngineViews(
+  a: readonly PluginEngineView[] | null,
+  b: readonly PluginEngineView[],
+): boolean {
+  if (a === null || a.length !== b.length) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function existingDeviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue | undefined {
+  return deviceCatalogues.get(owner)?.get(deviceId);
+}
 
 function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue {
   let devices = deviceCatalogues.get(owner);
@@ -137,25 +157,75 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
 
   let current: readonly PluginEngineView[] | null = null;
   let pending: Promise<void> | undefined;
+  let deviceGeneration = 0;
+  let lastReadAt = 0;
+  const probedProviders = new Set<string>();
   const subscribers = new Set<() => void>();
   const catalogue: DeviceCatalogue = {
     read() {
-      if (!isDataOwnerGenerationCurrent(owner)) return Promise.resolve();
-      pending ??= Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner)
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
+      if (pending) return pending;
+      const readGeneration = deviceGeneration;
+      const run = Promise.resolve()
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
           ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
-          if (!isDataOwnerGenerationCurrent(owner) || !Array.isArray(reply)) return;
+          if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
+            return;
+          }
           const next = sanitize(reply);
+          lastReadAt = Date.now();
           retainReportingPluginEngines(owner, deviceId, next);
+          if (sameEngineViews(current, next)) return;
           current = next;
           for (const subscriber of subscribers) subscriber();
         })
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch(() => undefined)
-        .finally(() => { pending = undefined; });
-      return pending;
+        .finally(() => {
+          if (pending === run) pending = undefined;
+        });
+      pending = run;
+      return run;
+    },
+    ensureProvider(providerId) {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return;
+      if (current !== null && findPluginEngine(current, providerId) !== null) return;
+      if (probedProviders.has(providerId)) return;
+      if (probedProviders.size >= MAX_PROBED_PROVIDERS) {
+        const oldest = probedProviders.values().next().value;
+        if (oldest !== undefined) probedProviders.delete(oldest);
+      }
+      probedProviders.add(providerId);
+      void catalogue.read();
+    },
+    prefetch() {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
+      if (pending) return pending;
+      if (current !== null && lastReadAt > 0 && Date.now() - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) {
+        return Promise.resolve();
+      }
+      probedProviders.clear();
+      return catalogue.read();
+    },
+    markStale() {
+      lastReadAt = 0;
+      probedProviders.clear();
+    },
+    evict() {
+      deviceGeneration += 1;
+      pending = undefined;
+      lastReadAt = 0;
+      probedProviders.clear();
+      retainReportingPluginEngines(owner, deviceId, []);
+      if (current !== null) {
+        current = null;
+        for (const subscriber of subscribers) subscriber();
+      }
+    },
+    hasSubscribers() {
+      return subscribers.size > 0;
     },
     subscribe(listener) {
       subscribers.add(listener);
@@ -167,6 +237,27 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   };
   devices.set(deviceId, catalogue);
   return catalogue;
+}
+
+/** Whether any mounted UI currently subscribes to a remote computer's plugin engine catalogue. */
+export function hasRemotePluginEngineSubscribers(deviceId: string): boolean {
+  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasSubscribers() ?? false;
+}
+
+/** One coalesced background catalogue read for a remote computer (used on bootstrap/reconnect). */
+export function prefetchRemotePluginEngines(deviceId: string): Promise<void> {
+  if (!deviceId || isSharedTaskPeer(deviceId)) return Promise.resolve();
+  return deviceCatalogue(getDataOwnerGeneration(), deviceId).prefetch();
+}
+
+/** Keep cached icons while a remote computer is transiently offline, but refresh on reconnect. */
+export function markRemotePluginEnginesStale(deviceId: string): void {
+  existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.markStale();
+}
+
+/** Drop cached engines and discard in-flight reads when a computer is revoked, removed or disabled. */
+export function evictRemotePluginEngines(deviceId: string): void {
+  existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
 function unreadSnapshot(): null {
@@ -273,14 +364,36 @@ export function usePluginEngineName(providerId: string | null | undefined): stri
 /**
  * Name and mark for a plugin-engine task: the engine's name and its plugin's icon, or the generic
  * label and no icon (the caller draws the generic engine mark) once the plugin is gone.
+ *
+ * For a remote computer (`deviceId`), shares one initial catalogue read across every mounted task
+ * row for that computer so sidebar icons resolve without opening a task first.
  */
 export function usePluginEngineIdentity(
   providerId: string | null | undefined,
   deviceId?: string,
+  options?: {
+    /** False while the remote computer is known to be disconnected/connecting: keep cached icon, skip new read. */
+    readRemote?: boolean;
+  },
 ): { name: string; iconDataUrl?: string } {
   const { t } = useTranslation();
+  const remoteDeviceId = deviceId && !isSharedTaskPeer(deviceId) ? deviceId : undefined;
   const localEngines = usePluginEngines(!!providerId && !deviceId);
-  const { engines: remoteEngines } = useRemotePluginEngines(providerId ? deviceId : undefined);
+  const owner = getDataOwnerGeneration();
+  const catalogue = useMemo(
+    () => (providerId && remoteDeviceId ? deviceCatalogue(owner, remoteDeviceId) : null),
+    [owner, providerId, remoteDeviceId],
+  );
+  const remoteEngines = useSyncExternalStore(
+    catalogue?.subscribe ?? subscribeDisabled,
+    catalogue?.snapshot ?? unreadSnapshot,
+    unreadSnapshot,
+  );
+  const readRemote = options?.readRemote !== false;
+  useEffect(() => {
+    if (!catalogue || !providerId || !readRemote) return;
+    catalogue.ensureProvider(providerId);
+  }, [catalogue, providerId, readRemote]);
   const engine = findPluginEngine(deviceId ? remoteEngines ?? NO_ENGINES : localEngines, providerId);
   if (!engine) return { name: t('newChat.pluginEngines.genericName') };
   return { name: engine.name, ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}) };
