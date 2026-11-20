@@ -17867,7 +17867,7 @@ describe('usage-limit wait (ordinary tasks)', () => {
     h.coordinator.onTurnEvent(sid, 'error', message, { errorStatus: 429, usageLimit: true });
     await flush();
     expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(gemini ? 1 : 2);
-    expect(h.coordinator.getProjection(sid).errorReason).toBe(gemini ? 'gemini-input-retry-exhausted' : null);
+    expect(h.coordinator.getProjection(sid).errorReason).toBe(gemini ? 'gemini-input-retry-exhausted' : undefined);
   });
 
   // Unit: cancellation uses the actual recovery entry, not an activity-field
