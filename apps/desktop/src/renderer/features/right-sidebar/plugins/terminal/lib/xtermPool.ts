@@ -10,8 +10,8 @@
  * Terminal 只是个 JS 对象,没有像 webview 那样必须保活的 DOM,挂到哪个 div
  * 都能 open()。所以 pool 只存"实例本体 + addons + 上次 fit 的尺寸",不存 DOM。
  *
- * Terminal 实例首次创建时,主题色用 RSB 内嵌色块预设(后续可改 token);如果将来
- * 接 token system,把这里的 theme 改成读 CSS variable 即可。
+ * Terminal 实例首次创建时,主题色取 `TERMINAL_CANVAS`(./terminalCanvasColors):
+ * 终端是固定深色画布,不跟随 Light / Dark,见 DESIGN.md §2「Terminal canvas」。
  */
 
 // xterm.js 自带的样式表 —— 必须 import,否则 xterm 内部用来接键盘/IME 输入的
@@ -34,6 +34,7 @@ import {
 
 import type { TerminalCreateParams, TerminalCreateResult, TerminalExitInfo, TerminalDataEvent, TerminalExitEvent } from '@/../shared/terminal-bridge';
 import { xtermEntries as pool, xtermSnapshots as snapshots, type XtermEntry } from './xtermEntries';
+import { TERMINAL_CANVAS } from './terminalCanvasColors';
 
 export type { XtermEntry } from './xtermEntries';
 
@@ -55,14 +56,8 @@ const DEFAULT_OPTIONS: ITerminalOptions = {
   scrollback: 5000,
   // 允许 OSC 8 超链接(WebLinksAddon 也会处理裸 URL)
   allowProposedApi: false,
-  // 反色风格的暗黑主题。RSB 视觉是黑底白字。
-  theme: {
-    background: '#1c1c1c',
-    foreground: '#e6e6e6',
-    cursor: '#e6e6e6',
-    cursorAccent: '#1c1c1c',
-    selectionBackground: '#3a4a5a',
-  },
+  // 固定深色画布,不跟随主题;取值与面板底色同源(DESIGN.md §2「Terminal canvas」)。
+  theme: { ...TERMINAL_CANVAS },
 };
 
 /** 获取或创建某个 tabId 的 xterm 实例。重复调用同 id 返回同一个。 */

@@ -187,6 +187,7 @@ function GiftCardEmailForm({
               <div className="w-[76px] shrink-0">
                 <GiftCardFace
                   faceCode={card.faceCode}
+                  face={card.face}
                   amount={card.amount}
                   currency={card.currency}
                   label={t('billing.giftCard.cardLabel', { amount })}

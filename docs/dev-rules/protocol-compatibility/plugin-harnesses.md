@@ -76,6 +76,44 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 `pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
 `acp-session.test.ts`（briefing / trusted caller）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
 
+## 自己的其他电脑使用插件引擎（2026-11-20，第三期，未发布）
+
+任务在 A(文件、命令与任务记录所在)，Agent 用 B 上插件提供的引擎运行，B 与 A 是同一账号的电脑。复用
+[远程 Agent](remote-agent.md) 的 `maker:remote-agent:v1`、影子目录与工具隧道，不新增 channel、relay kind 或错误码，
+官方与自建中转照常转发既有 invoke，无需同步修改。全部为追加，旧端一律明确拒绝，不回落到内置引擎。
+
+- **插件上报**：`PUT /harnesses` 条目追加可选 `remoteWorkspace: true`(仅 `available: true` 时保留)，表示入口认识固定
+  启动参数 `--cindy-remote-workspace`(`GHOST_HARNESS_REMOTE_WORKSPACE_ARG`)：收到它就只对这一次启动关掉 Agent
+  自带的文件与命令工具，不改用户的全局配置。旧 Host 丢弃该字段；旧插件不发，引擎只能跑本机任务。参数由 Host
+  固定给出，`spawnHarness` 仍然没有插件可控的参数面。未上报 `remoteWorkspace` 的引擎以这种方式启动时在 fork 前拒绝。
+  不增加 manifest 字段、权限行或批准状态，存量安装不受影响。
+- **开关**：B 上逐引擎的「允许被远程调用」，默认关，存在既有的 `remote-provider-access-prefs.json`(按账号)，
+  键为引擎的任务来源标识 `acp-plugin:<插件>:<引擎>`。只由 B 本机窗口经 `maker:set-plugin-engine-remote-use` 修改，
+  该通道不进 device-link allowlist。`maker:list-plugin-engines` 的每项追加可选
+  `remoteUse: { supported, enabled }`；旧被控端不带，控制端按「未开放」处理。
+- **能力位**：`caps` 追加可选 `pluginEngines: true`，只对同账号控制端声明。A 在 `open` 前检查，缺失时报
+  `REMOTE_AGENT_PEER_TOO_OLD`，不发 `open`。
+- **打开**：`open.agentKind` 新增取值 `acp`(`REMOTE_AGENT_ENGINE_KINDS`)，`options.providerId` 必为引擎标识。只有 `open`
+  接受这个取值；`allocate`、`standby-*`、`fork` 等仍只认内置引擎。不认识它的旧 B 按 `REMOTE_AGENT_INVALID` 拒绝。
+  B 只接同账号电脑直接发来的普通任务：受邀者(含供应商组中转)、`groupAssigned`、本机应用(`localApplication`)、
+  没有虚拟工作区或缺引擎标识的回 `REMOTE_AGENT_UNSUPPORTED`；引擎未开放、插件停用或报告不可用回
+  `REMOTE_AGENT_PROVIDER_NOT_ALLOWED`。每轮 `send` / `steer` 与 `setModel` 前复核；`setModel` 不能换来源。
+- **启动**：B 不经供应商解析、模型范围、预算、用量账本与速度策略(引擎用自己的登录直连厂商)。`session/new` 的
+  `mcpServers` 全部指向任务隧道(HTTP + `Authorization`)：`cindy_exec` 与 A 给出的 Cindy 工具(范围同内置 Pi)。
+  对端未声明 `mcpCapabilities.http` 时以 `[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED]` 拒绝，不建会话。B 自己的 Cindy 工具、
+  插件、记忆不进入这个任务。A 的说明文件与个人配置按 Pi 的口径同步到影子目录。
+- **状态**：`started.state` 与后续 `state` 追加可选 `negotiatedCapabilities`(引擎握手得到的模型、思考深度、权限档)，
+  只有插件引擎带。A 不必安装该插件，按它显示可选项；旧 A 忽略未知键。
+- **任务记录**：A 上 `agent_kind = acp`、`provider_id = acp-plugin:…`、`agent_device_id = B`。新建任务时 A 只拒绝注定
+  不成立的位置(SSH、`share:` 分享来源)，B 是否开放由 B 在启动时判定，与内置供应商在另一台电脑的规则一致。
+- **暂未开放**：任务中切换到另一台电脑的插件引擎、协同 Worker、自动任务、手机选择另一台电脑的插件引擎、分叉与回退、
+  供应商分享与供应商组。这些入口保持原有的明确拒绝。
+
+实现见 `maker-host/pluginEngineRemoteUse.ts`、`remote-agent/host/runHost.ts`(`pluginEngines`)、
+`remote-agent/controller/startRemote.ts`、maker-core `agents/acp/acp-agent.ts`；回归见 `roundtrip.test.ts`
+「a plugin engine of another computer」、`acp-session.test.ts`、`remoteAgent.test.ts`、`pluginHarnesses.test.ts`、
+`nodeRuntimeBroker.test.ts` 与 `pluginEngineSessionAdmission.test.ts`。
+
 ## 引擎账号用量
 
 执行引擎通过 `PUT /harnesses` 的可选布尔标志 `reportsUsage: true` 表示其主 JSON-RPC worker

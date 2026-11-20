@@ -23,7 +23,7 @@ import {
   shortDeviceRef,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
-  type RemoteAgentKind,
+  type RemoteAgentEngineKind,
   type RemoteAgentMethod,
   type RemoteAgentPayload,
   type RemoteAgentPushFrame,
@@ -251,7 +251,7 @@ export class RemoteAgentRunClient implements PolledRun {
    * 打开任务：等对方启动 Agent 成功(返回会话描述)或失败(抛出对方的错误)。已关闭的连接不能再打开：本机这边的
    * 任务已经结束(撤权、用户关闭)，再打开会在对方留下一个没人拉取、没人关闭的任务。
    */
-  async open(agentKind: RemoteAgentKind, openPayload: unknown, requireActive?: () => void,
+  async open(agentKind: RemoteAgentEngineKind, openPayload: unknown, requireActive?: () => void,
     onOpenRequest?: () => void): Promise<Record<string, unknown>> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     requireActive?.();
