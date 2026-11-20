@@ -97,17 +97,20 @@ describe('resolveHelperSurfaceForTools', () => {
     expect(onRestricted).toHaveBeenCalledTimes(1);
   });
 
-  it('reports a failed query instead of waiting for a row that was never asked for', async () => {
-    const db = {
-      queryOne: vi.fn().mockRejectedValue(new Error('db busy')),
-    } as unknown as Pick<DbClient, 'queryOne'>;
+  // Unit regression for PR #11819: the resolver must distinguish a failed read
+  // from a missing row, including when the first successful read was empty.
+  it.each([false, true])('reports a query failure once and stops retrying (initial miss: %s)', async (initialMiss) => {
+    const queryOne = vi.fn().mockRejectedValue(new Error('db busy'));
+    if (initialMiss) queryOne.mockResolvedValueOnce(undefined);
+    const db = { queryOne } as unknown as Pick<DbClient, 'queryOne'>;
     const onRestricted = vi.fn();
     const sleep = vi.fn(async () => {});
+    const options = { sleep, onRestricted, waitMs: 200, pollMs: 100 };
 
-    await expect(resolveHelperSurfaceForTools(db, 'broken', { sleep, onRestricted }))
-      .resolves.toBe('restricted');
+    await expect(resolveHelperSurfaceForTools(db, 'broken', options)).resolves.toBe('restricted');
+    await expect(resolveHelperSurfaceForTools(db, 'broken', options)).resolves.toBe('restricted');
     expect(onRestricted).toHaveBeenCalledExactlyOnceWith('query-failed');
-    expect(sleep).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(initialMiss ? 1 : 0);
   });
 
   it('resolves an existing row without waiting', async () => {

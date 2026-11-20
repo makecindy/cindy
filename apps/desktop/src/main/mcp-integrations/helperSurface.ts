@@ -68,30 +68,34 @@ export const helperSurfaceRowWait = {
   pollMs: DEFAULT_ROW_POLL_MS,
 };
 
+type RestrictedReason = 'row-missing' | 'query-failed';
+
 interface HelperSurfaceLedgerEntry {
   /** 已经为这个会话等过一次行(创建竞态只补一次)。 */
   waited: boolean;
   /** 已经记过的受限原因,避免同一会话反复刷日志。 */
-  logged: Set<string>;
+  logged: Set<RestrictedReason>;
 }
 
-/**
- * 每个会话一份的等待/日志账本。
- *
- * 查不到行有两种可能:这一行还没写(创建竞态),或者这个会话根本不存在。
- * 后者不该让每次 list_tools / call_tool 都白等一轮,所以同一会话只等一次、
- * 只记一条日志;等过之后仍按收紧收口,不会因为查不到就放开工具面。
- */
-const ledger = new Map<string, HelperSurfaceLedgerEntry>();
+// 只为缺行或查询失败保留记录，按数据库实例隔离。成功读取时清理对应记录。
+const MAX_TRACKED_SESSIONS = 512;
+let ledgers = new WeakMap<Pick<DbClient, 'queryOne'>, Map<string, HelperSurfaceLedgerEntry>>();
 
 /** 测试缝:清掉进程内账本,避免用例之间互相看到对方的等待记录。 */
 export function __resetHelperSurfaceLedger(): void {
-  ledger.clear();
+  ledgers = new WeakMap();
 }
 
-function ledgerEntry(sessionId: string): HelperSurfaceLedgerEntry {
+function ledgerEntry(db: Pick<DbClient, 'queryOne'>, sessionId: string): HelperSurfaceLedgerEntry {
+  let ledger = ledgers.get(db);
+  if (!ledger) {
+    ledger = new Map();
+    ledgers.set(db, ledger);
+  }
   let entry = ledger.get(sessionId);
   if (!entry) {
+    const oldest = ledger.keys().next().value;
+    if (ledger.size >= MAX_TRACKED_SESSIONS && oldest !== undefined) ledger.delete(oldest);
     entry = { waited: false, logged: new Set() };
     ledger.set(sessionId, entry);
   }
@@ -106,7 +110,7 @@ export interface ResolveHelperSurfaceForToolsOptions {
   /** 等待实现(测试注入)。 */
   sleep?: (ms: number) => Promise<void>;
   /** 判定为受限时的诊断回调。 */
-  onRestricted?: (reason: 'row-missing' | 'query-failed') => void;
+  onRestricted?: (reason: RestrictedReason) => void;
 }
 
 /**
@@ -127,35 +131,32 @@ export async function resolveHelperSurfaceForTools(
   const waitMs = options.waitMs ?? helperSurfaceRowWait.budgetMs;
   const pollMs = options.pollMs ?? helperSurfaceRowWait.pollMs;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
-  const entry = ledgerEntry(sessionId);
-
-  let row: HelperSurfaceRow | null | undefined = null;
+  let reason: RestrictedReason = 'row-missing';
   try {
-    row = await readHelperSurfaceRow(db, sessionId);
-  } catch {
-    options.onRestricted?.('query-failed');
-    return 'restricted';
-  }
-  if (row) return classifyRow(row);
-
-  if (waitMs > 0 && !entry.waited) {
-    entry.waited = true;
-    const attempts = Math.max(1, Math.ceil(waitMs / pollMs));
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      await sleep(pollMs);
-      let next: HelperSurfaceRow | null | undefined = null;
-      try {
-        next = await readHelperSurfaceRow(db, sessionId);
-      } catch {
-        next = null;
+    let row = await readHelperSurfaceRow(db, sessionId);
+    if (!row && waitMs > 0) {
+      const entry = ledgerEntry(db, sessionId);
+      if (!entry.waited) {
+        entry.waited = true;
+        const attempts = Math.ceil(waitMs / pollMs);
+        for (let attempt = 0; attempt < attempts && !row; attempt += 1) {
+          await sleep(pollMs);
+          row = await readHelperSurfaceRow(db, sessionId);
+        }
       }
-      if (next) return classifyRow(next);
     }
+    if (row) {
+      ledgers.get(db)?.delete(sessionId);
+      return classifyRow(row);
+    }
+  } catch {
+    reason = 'query-failed';
   }
 
-  if (!entry.logged.has('row-missing')) {
-    entry.logged.add('row-missing');
-    options.onRestricted?.('row-missing');
+  const entry = ledgerEntry(db, sessionId);
+  if (options.onRestricted && !entry.logged.has(reason)) {
+    entry.logged.add(reason);
+    options.onRestricted(reason);
   }
   return 'restricted';
 }
