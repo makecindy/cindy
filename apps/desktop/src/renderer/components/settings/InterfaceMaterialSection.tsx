@@ -138,7 +138,7 @@ function LiquidGlassSetting({ platform }: { platform: string | undefined }) {
                 data-settings-search-action="Restore the slider's default value"
                 aria-label={defaultMarkLabel}
                 disabled={!canResetClarity}
-                className="group absolute inset-y-0 left-1/2 z-10 grid w-7 -translate-x-1/2 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] disabled:pointer-events-none"
+                className="group absolute inset-y-0 left-1/2 z-10 grid w-7 -translate-x-1/2 place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[var(--focus-ring)] disabled:pointer-events-none"
                 onClick={() => reset('liquidGlassClarity')}
               >
                 <span aria-hidden className="h-1.5 w-0.5 rounded-full bg-[var(--slider-thumb)] opacity-70 ring-1 ring-[var(--slider-track)] group-hover:opacity-100 group-focus-visible:opacity-100" />
