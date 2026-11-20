@@ -531,7 +531,7 @@ describe('Worker worktree subproject directory', () => {
     },
   );
 
-  it('passes awaitFullCheckout to WorktreeManager when requested and resolves HEAD inside a linked worktree', async () => {
+  it('passes awaitFullCheckout to WorktreeManager when requested and resolves worktree-local refs inside a linked worktree', async () => {
     const target = path.join(fixture, 'acp-wt');
     mkdirSync(target, { recursive: true });
     vi.mocked(createWorktree).mockResolvedValue({
@@ -553,8 +553,8 @@ describe('Worker worktree subproject directory', () => {
     expectCreateCall('acp-root', 'main');
     expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
 
-    // Linked worktree on a different commit than main checkout: explicit HEAD must resolve
-    // the linked worktree's commit SHA rather than passing literal 'HEAD' to baseRepo.
+    // Linked worktree on a different commit than main checkout: worktree-local refs
+    // (HEAD, @, HEAD@{0}, @~1) must resolve inside the linked worktree rather than baseRepo.
     const linkedWt = path.join(fixture, 'linked-wt');
     const gitIn = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
     gitIn(repo, 'worktree', 'add', '-b', 'linked-branch', linkedWt, 'HEAD');
@@ -571,8 +571,15 @@ describe('Worker worktree subproject directory', () => {
     const mainSha = gitIn(repo, 'rev-parse', 'HEAD');
     expect(linkedSha).not.toBe(mainSha);
 
-    expect(await createWorkerWorktree('acp-linked', linkedWt, 'HEAD', { awaitFullCheckout: true })).toBe(target);
-    expectCreateCall('acp-linked', linkedSha);
+    for (const [ref, expectedSha] of [
+      ['HEAD', linkedSha],
+      ['HEAD@{0}', linkedSha],
+      ['@', linkedSha],
+      ['@~1', mainSha],
+    ] as const) {
+      expect(await createWorkerWorktree('acp-linked', linkedWt, ref, { awaitFullCheckout: true })).toBe(target);
+      expectCreateCall('acp-linked', expectedSha);
+    }
   });
 });
 

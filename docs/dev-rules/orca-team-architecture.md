@@ -355,6 +355,8 @@ Worker 项目历史写入时按规范化路径字符串去重，保留最近 10 
 新 worktree 勾选及面板内改选的源分支不写回记忆；其他仓库的默认源分支只读主任务的仓库偏好（见上文 Agent 工具默认路线），同仓库沿用目标目录当前分支。换项目重置勾选、分支和 dirty 状态。资格取决于当前目标：
 当前项目为 dialogue 或非 Git 时不提供；其他项目仅判断该目录。同目录默认源分支取 Lead 的 HEAD，同仓库其他目录取目标 HEAD，其他仓库先取主任务记住的源分支（不可用时回到当前 HEAD），
 建树 baseRepo 则解析为主仓，允许从 linked worktree 再分出一个独立 worktree。
+目标是 linked worktree 时，本地来源（`HEAD`、`@`、`@~1`、`HEAD@{1}` 等跟着当前检出或 reflog 走的写法）先在该 worktree 内解析成提交再建树，
+不会按主仓的 HEAD 解析；`origin/…` 与 `refs/remotes/…` 来源保持原样不在这里解析，创建时仍会刷新 origin 默认分支。
 创建流程预留名额后用 Worker 自己的 sessionId 登记 worktree，再 bootstrap。选中 checkout 根目录时
 与普通任务一致，只等待启动必读文件检出，全量 checkout 在后台继续；选中子项目时保留其相对路径，
 等待全量 checkout 后进入对应子目录，若源分支没有该目录则回退新 worktree 根并记录警告。

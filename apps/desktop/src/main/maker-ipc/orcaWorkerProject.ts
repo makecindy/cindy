@@ -369,13 +369,15 @@ export async function createWorkerWorktree(
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
   // A Worker based on the origin default starts from a freshly fetched ref, like the
   // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
-  let resolvedSourceBranch = qualifyWorkerRemoteSource(sourceBranch);
-  // When targeting a linked worktree with a HEAD-relative ref (e.g. HEAD or HEAD~1),
-  // resolve it inside that worktree so git worktree add in baseRepo does not silently
-  // branch from the main checkout's HEAD.
-  if (info.isWorktree && /^HEAD(?:[~^]|$)/.test(sourceBranch)) {
+  const source = qualifyWorkerRemoteSource(sourceBranch);
+  let resolvedSourceBranch = source;
+  // When targeting a linked worktree, resolve the revision inside that worktree first so
+  // worktree-local refs (HEAD, @, @~1, HEAD@{1}, etc.) do not silently resolve against baseRepo.
+  // Remote-tracking refs are shared by every worktree and stay symbolic: the origin default
+  // refresh in WorktreeManager works on the ref name, so a commit ID would silently skip it.
+  if (info.isWorktree && !source.startsWith('refs/remotes/')) {
     const rev = await gitExec(
-      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${source}^{commit}`],
       directory,
       { timeoutMs: 5000 },
     );
