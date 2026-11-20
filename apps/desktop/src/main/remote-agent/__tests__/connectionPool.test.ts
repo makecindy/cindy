@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { Session, type AgentEvent, type AgentSessionHandle, type BackgroundTaskSnapshot, type StartSessionOptions } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getCurrentTest } from 'vitest/suite';
 
 import {
   isRemoteRunLimitError,
@@ -437,7 +438,12 @@ function fakeAgent(input: HostedStartInput): AgentSessionHandle {
           scenario.releaseHold = resolve;
         });
       } else if (text === 'bg') {
-        say(await tool('Bash', { command: 'while [ ! -e bg.go ]; do sleep 0.01; done; echo bg-finished', run_in_background: true }));
+        const background = await tool('Bash', { command: ': > bg.ready; while [ ! -e bg.go ]; do sleep 0.01; done; echo bg-finished', run_in_background: true });
+        // Bash returns an id before its child starts executing. Establish a real
+        // running command before testing release/reconnect, within the original
+        // test budget; the separate 5s completion assertions stay unchanged.
+        await vi.waitFor(() => expect(fs.existsSync(path.join(project, 'bg.ready'))).toBe(true), { timeout: getCurrentTest()!.timeout, interval: 20 });
+        say(background);
       } else if (text.startsWith('read ')) {
         say(await tool('BashOutput', { bash_id: text.slice(5) }));
       } else if (text === 'cat') {
