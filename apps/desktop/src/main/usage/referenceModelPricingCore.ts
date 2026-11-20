@@ -26,8 +26,10 @@ import {
   providerRegistryTariffEndedAt,
   providerSnapshotReferencePriceQuote,
 } from './accountReferencePrice.js';
+import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   applyModelPriceOverrides,
+  currencyCanProjectToLedger,
   mergeStoredModelPriceOverride,
   type ModelPriceOverridesSnapshot,
 } from './modelPriceOverrideStore.js';
@@ -148,6 +150,7 @@ export function getReferenceModelPricing(
   const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
+  const ledgerCurrency = currentLedgerCurrency();
   const pricing = registryPricingCatalog(registry, at);
   for (const provider of options.providers ?? catalog.providers) {
     if (provider.id === 'xd') continue;
@@ -155,7 +158,7 @@ export function getReferenceModelPricing(
     // declares one, so stale static `provider-models.json` `model.cost` entries never
     // shadow scheduled price transitions, long-context tiers, priority rates or
     // deprecation cutoffs. Fall back to connection-local/discovered `model.cost` only
-    // when the Registry declares no tariff table for this route (e.g. OpenRouter).
+    // when the active tariff cannot be used on this ledger or the route has no tariff.
     if (provider.source === 'user') {
       // A local account can have the same ID as a public route. Rebuild its bucket
       // from verified engine/model quotes so an unmatched relay cannot inherit the generic price.
@@ -173,11 +176,11 @@ export function getReferenceModelPricing(
             registry,
             { agent: agentKind, at, ...(nativeOAuth ? { officialOnly: true } : {}) },
           );
-          if (registryQuote) {
+          if (registryQuote && currencyCanProjectToLedger(registryQuote.currency, ledgerCurrency)) {
             (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = registryQuote;
             continue;
           }
-          if (providerRegistryTariffEndedAt(provider, provider.id, model.id, registry, at, agentKind)) {
+          if (!registryQuote && providerRegistryTariffEndedAt(provider, provider.id, model.id, registry, at, agentKind)) {
             continue;
           }
           const localQuote = modelCostQuote(provider.id, model);
@@ -197,7 +200,7 @@ export function getReferenceModelPricing(
     }
   }
   return {
-    ...applyModelPriceOverrides(pricing, registry, undefined, { at, entries: options.overrides }),
+    ...applyModelPriceOverrides(pricing, registry, ledgerCurrency, { at, entries: options.overrides }),
     ...getByokPricing(),
   };
 }

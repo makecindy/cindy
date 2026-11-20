@@ -1,3 +1,5 @@
+import { setActiveLedgerCurrency, __resetActiveLedgerCurrencyForTesting } from '../ledgerCurrency.js';
+import { applyModelPriceOverrides } from '../modelPriceOverrideStore.js';
 import { resolveTurnCost } from '../turnCostCalculator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
@@ -40,8 +42,9 @@ const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: () => accountCatalog,
 }));
-vi.mock('../modelPriceOverrideStore.js', () => ({
-  applyModelPriceOverrides: (pricing: unknown) => pricing,
+vi.mock('../modelPriceOverrideStore.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../modelPriceOverrideStore.js')>(),
+  applyModelPriceOverrides: vi.fn((pricing: unknown) => pricing),
   mergeStoredModelPriceOverride: vi.fn(),
   readModelPriceOverridesSnapshot: vi.fn(),
 }));
@@ -333,6 +336,27 @@ describe('API-key preset reference prices and static cost precedence', () => {
       },
     },
   });
+  it.each([['USD', 1.9437], ['CNY', 13]] as const)(
+    'estimates Kimi usage with a price supported by the %s ledger', async (currency, amount) => {
+      const realStore = await vi.importActual<typeof import('../modelPriceOverrideStore.js')>('../modelPriceOverrideStore.js');
+      vi.mocked(applyModelPriceOverrides).mockImplementationOnce(realStore.applyModelPriceOverrides);
+      setActiveLedgerCurrency(currency);
+      try {
+        const provider = buildUserProvider({ id: 'moonshot-kimi-cn', name: 'Kimi', runtimes: { pi: {
+          baseUrl: 'https://api.moonshot.cn/v1', wireProtocol: 'openai-chat', catalogPresetId: 'moonshot-kimi-cn',
+          models: [{ id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro' }],
+        } } });
+        const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [provider], overrides: {} });
+        expect(resolveTurnCost({
+          agent: 'pi', rawModel: 'kimi-k3.1-pro', pricing,
+          tokens: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+          context: { providerId: provider.id, billingRoute: 'provider-api', region: 'global' },
+        })).toMatchObject({ source: 'reference', money: { currency, amount, kind: 'value-estimate' } });
+      } finally {
+        __resetActiveLedgerCurrencyForTesting();
+      }
+    },
+  );
   it.each([
     ['https://api.deepseek.com/v1', undefined],
     ['https://api.deepseek.com', '/chat/completions'],

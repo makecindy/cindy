@@ -439,7 +439,7 @@ function mergedQuote(
   };
 }
 
-function currencyCanProjectToLedger(
+export function currencyCanProjectToLedger(
   currency: MoneyCurrency,
   ledgerCurrency: MoneyCurrency,
 ): boolean {
