@@ -105,10 +105,10 @@ export async function synthesizeOrcaVendorOptionsFromDb(
   return false;
 }
 
-/** Inject the role-specific Orca instructions into the stable session startup prompt. */
-export function applyOrcaInstructions(o: MakerSessionCreateOpts): boolean {
+/** The role-specific Orca instructions for this session, or null when it has no complete role. */
+export function renderOrcaRoleInstructions(o: MakerSessionCreateOpts): string | null {
   const vendorOptions = o.vendorOptions;
-  if (!vendorOptions) return false;
+  if (!vendorOptions) return null;
   const role = vendorOptions.orcaRole;
   let prompt: string | null = null;
   if (role === 'lead') {
@@ -138,6 +138,12 @@ export function applyOrcaInstructions(o: MakerSessionCreateOpts): boolean {
       });
     }
   }
+  return prompt;
+}
+
+/** Inject the role-specific Orca instructions into the stable session startup prompt. */
+export function applyOrcaInstructions(o: MakerSessionCreateOpts): boolean {
+  const prompt = renderOrcaRoleInstructions(o);
   if (!prompt) return false;
   if (o.userPrompt && `\n\n${o.userPrompt}\n\n`.includes(`\n\n${prompt}\n\n`)) return true;
   o.userPrompt = o.userPrompt ? `${o.userPrompt}\n\n${prompt}` : prompt;

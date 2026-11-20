@@ -1,6 +1,6 @@
 import type { OrcaWorkerCreateRequest } from './orcaWorkerDefaults';
 import { withoutModelGroupDecision } from './orcaWorkerModelGroup';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -23,7 +23,8 @@ export const ORCA_WORKER_READY_MESSAGE =
 /** 开启协同时的一次性入参；负责把 UI/MCP 的 worker 偏好归一到 worker 创建内核。 */
 export interface OrcaEnableTeamParams {
   leadSessionId: string;
-  workerAgent: AgentKind;
+  /** 'acp' = 插件引擎 Worker(providerId 指出是哪一个)。 */
+  workerAgent: EngineKind;
   role?: string;
   label?: string;
   model?: string;
@@ -125,7 +126,7 @@ export interface OrcaLifecycleDeps {
   clearLeadVendorOptions(leadSessionId: string): Promise<void>;
   sendWorkerReadyPlaceholder(params: {
     workerSessionId: string;
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     entrypoint: 'create_worker' | 'enable_collab_mode';
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<void>;

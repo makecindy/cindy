@@ -29,6 +29,7 @@ import {
 import { createLogger } from '../../logger';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   resolveLenientSessionRoute,
   resolveNewTaskDefaultModelRoute,
@@ -108,6 +109,9 @@ import type { ImChannelAdapter } from './types';
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+/** 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md)。 */
+const IM_CHANNEL_FEATURE = 'IM channels';
 
 /** 桌面偏好还没推过来时的兜底;模型不写死,按新建任务口径实时解析。 */
 const DESKTOP_CC_DEFAULTS: Omit<DesktopCcPrefs, 'model' | 'providerId'> = {
@@ -353,6 +357,9 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
+      // 不按内置引擎的路由去改。
+      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
       const isPiSession = sessionAgentKind === 'pi';
       if (previousRoute?.agentDeviceId && sessionAgentKind) {
         try {

@@ -28,6 +28,14 @@ const setting = (key: string, domain: string, title: string, summary: string, se
   ({ key, domain, title, summary, section, aliases, server: 'cindy_helper', tools: ['get_app_settings', 'update_app_settings', ...(reset ? ['reset_app_settings'] : [])] });
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
+const nativeSearchPhrases: Record<string, readonly string[] | undefined> = {
+  'native.send_to_session': [
+    '发消息给另一个任务会话', '发消息给另一个任务', '发消息给另一个会话',
+    '给另一个任务发消息', '给已有任务发消息', '向另一个任务发送消息', '向另一个会话发送消息',
+    '任务发消息', '会话发消息', '跨任务发送', '跨会话发送',
+    '给伙伴发消息', 'send to session', 'message another task', 'send a message to another task', 'send a message to another session',
+  ],
+};
 export const CONTROL_CATALOG: readonly Control[] = [
   helper('models.provider-sharing', 'models', '供应商分享成员', '查询自己分享的成员、暂停恢复与成员模型范围；默认本机，可指定同账号已授权电脑。', ['list_provider_share_members', 'set_provider_share_member_status', 'get_provider_share_model_access', 'set_provider_share_model_access'], ['供应商分享成员', '供应商组', '分享', '成员', '暂停分享', 'provider', 'sharing']),
   helper('models.subscription-usage', 'models', '订阅用量', '只读查询执行电脑上各 Claude/Codex 账号的套餐、额度窗口与更新时间；插件需声明用量读取权限。', ['get_subscription_usage'], ['usage', 'quota', '用量', '额度', '配额', '订阅', '账号', 'Claude', 'Codex']),
@@ -53,6 +61,7 @@ export const CONTROL_CATALOG: readonly Control[] = [
   helper('teammates.management', 'teammates', '伙伴创建与管理入口', '发现伙伴与主力电脑；创建及管理能力依当前身份。', ['create_teammate', 'list_agents', 'get_teammate_home', 'move_teammate_home'], ['创建伙伴', '主力电脑', '伙伴设置']),
   { key: 'automations.schedule', domain: 'automations', title: '自动化设置与运行', summary: '时间、时区、模型、脚本、位置、暂停与恢复。', aliases: ['automation', 'schedule', 'cron', '自动化', '定时', '时间'], server: 'cindy_scheduler', tools: ['schedule_list', 'schedule_get', 'schedule_update', 'schedule_create', 'schedule_pause', 'schedule_resume', 'schedule_run_now', 'schedule_list_models'], notes: 'intervalMs 非空时优先于 cronExpr；改时间需同时核对时区和 nextFireAt。保存不会立即运行；run_now 是独立动作。' },
   helper('projects.management', 'projects', '项目管理', '查询、创建、修改和删除项目；可跨电脑按名称自动分配目录、从 GitHub/GitLab 链接克隆，设置名称、图标与项目目录，并查询自动图标与来源。', ['list_projects', 'create_project', 'rename_project', 'get_project_icon', 'get_project_info', 'update_project_info', 'remove_project'], ['project', '项目', '工作目录']),
+  helper('tasks.shared-progress', 'groups-and-sharing', '查看共享任务进度', '使用已加入的共享任务链接，读取同事任务的最新运行状态和对话记录。', ['get_shared_task_progress'], ['共享任务', '同事共享', '复制任务链接', '分析任务', '监控进度', '跟进进度', 'shared task', 'monitor progress']),
   helper('tasks.runtime', 'tasks', '任务运行设置', '本机当前/指定任务的 Harness、模型、权限、运行状态及暂停、恢复、重试、压缩。', ['get_session_runtime', 'set_session_runtime', 'get_current_session_id', 'control_session'], ['task', 'session', '任务', '思考', '权限', 'harness', '暂停', '恢复', '重试', '压缩', 'pause', 'resume', 'retry', 'compact']),
   helper('tasks.lifecycle', 'tasks', '删除、分叉与回退', '删除明确任务，从指定消息分叉或恢复检查点，沿用宿主历史与运行清理。', ['delete_session', 'fork_session', 'rewind_session'], ['删除任务', '分叉', '回退', '检查点', 'delete task', 'fork', 'rewind'], '删除与回退风险固定为逐次确认；跨电脑使用 deviceId::sessionId，结果不明时先查询，不能自动重发。'),
   { key: 'devices.ssh', domain: 'devices', title: 'SSH 连接与设备名字', summary: 'SSH 主机的查询、创建、改名、修改和移除。', aliases: ['ssh', '主机', '设备名字', '设备名', '改名'], server: 'cindy_ssh', tools: ['ssh_list_hosts', 'ssh_add_host', 'ssh_update_host', 'ssh_remove_host', 'ssh_reload_config'], notes: '显示名与连接 alias 区分；改名不修改远端机器 hostname。' },
@@ -136,7 +145,7 @@ export function createControlReader(deps: Deps) {
     // New registered helper operations stay searchable without adding another
     // prompt paragraph or waiting for a hand-written product topic.
     const represented = new Set(CONTROL_CATALOG.filter(item => item.server === 'cindy_helper').flatMap(item => item.tools ?? []));
-    const nativeDomains: Record<string, string> = { settings: 'application', bots: 'teammates', control: 'tasks', history: 'tasks', skills: 'tools-and-extensions', app_update: 'application' };
+    const nativeDomains: Record<string, string> = { settings: 'application', bots: 'teammates', control: 'tasks', history: 'tasks', handoff: 'tasks', skills: 'tools-and-extensions', app_update: 'application' };
     const allowed = await deps.allowedNames();
     const native = deps.registry.list().filter(tool => !represented.has(tool.name) && allowed.has(tool.name))
       .map(tool => helper(`native.${tool.name}`, nativeDomains[tool.category] ?? 'application', tool.name,
@@ -169,13 +178,19 @@ export function createControlReader(deps: Deps) {
     if (!query.category && !query.toolQuery && !query.cursor) return { ok: true, domains: domains.map(([id, title, summary]) => ({ id, title, summary })),
       next: 'call_tool({name:"get_capabilities",args:{scope:"control",category:<id>}})', coverage: '包含独立界面；每项详情说明实际接通情况，不代表全量设置均已开放。' };
     const term = query.toolQuery?.toLowerCase().trim();
+    const actionPhrase = term
+      ?.replace(/^(?:请(?:\s*帮我)?[\s,，]*|please[\s,，]+)/u, '')
+      .replace(/[\s.!?。！？．…]+$/u, '') ?? '';
     const score = (item: Control) => {
       if (!term) return 1;
       if (item.key === term) return 100;
       // Agents often search with the exact tool name a prompt gave them.
       if (item.tools?.includes(term)) return 90;
+      // Match the whole action after trimming only polite prefixes and end punctuation.
+      const matchesPhrase = nativeSearchPhrases[item.key]?.includes(actionPhrase);
       const words = [item.key, item.title, ...item.aliases].map(word => word.toLowerCase());
-      return (item.summary.toLowerCase().includes(term) ? 1 : 0) + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
+      return (matchesPhrase ? 20 : 0) + (item.summary.toLowerCase().includes(term) ? 1 : 0)
+        + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
     };
     const matching = catalog.filter(item => !query.category || item.domain === query.category)
       .map(item => ({ item, score: score(item) })).filter(row => row.score > 0)

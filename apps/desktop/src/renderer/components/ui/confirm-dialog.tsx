@@ -58,6 +58,8 @@ export interface ConfirmDialogProps {
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
    */
   autoFocusConfirm?: boolean;
+  /** Return focus to a surviving control when the original opener was inside a popover. */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
   /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
@@ -116,6 +118,7 @@ export function ConfirmDialog({
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
+  restoreFocusTarget,
   confirmDisabled = false,
   requireTypedConfirmation,
   contentSelectable = false,
@@ -213,6 +216,13 @@ export function ConfirmDialog({
                 : {})}
             onEscapeKeyDown={(e) => {
               if (loading) e.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              const target = restoreFocusTarget?.();
+              if (target?.isConnected) {
+                event.preventDefault();
+                target.focus();
+              }
             }}
             onOpenAutoFocus={
               requireTypedConfirmation || autoFocusConfirm

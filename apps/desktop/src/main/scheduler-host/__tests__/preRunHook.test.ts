@@ -48,6 +48,18 @@ describe('executePreRunHook', () => {
     });
     expect(result.checkSucceeded).toBe(exitCode === 1 ? undefined : true);
   });
+  // Unit: a remote viewer used to see only a generic warning. Use the real
+  // process boundary and ensure the executing device overrides script input.
+  it('records a blocked PR probe with its own device and retry deadline', async () => {
+    const probe = { kind: 'dns', host: 'api.github.com', retryAt: 1_800_000, failures: 3, device: 'viewer' };
+    const data = Buffer.from(JSON.stringify(probe)).toString('base64');
+    const result = await executePreRunHook({
+      command: `node -e "console.log('CINDY_PR_CHECK_DIAGNOSIS '+Buffer.from('${data}','base64'));process.exit(1)"`,
+      stdinPayload: payload,
+    });
+    expect(result.prCheckDiagnosis).toEqual({ ...probe, device: expect.any(String) });
+    expect(result.prCheckDiagnosis).not.toHaveProperty('device', 'viewer');
+  });
   it('exit 0 → decision run', async () => {
     const result = await executePreRunHook({
       command: 'node -e "process.exit(0)"',

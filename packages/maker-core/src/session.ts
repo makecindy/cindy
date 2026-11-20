@@ -35,6 +35,7 @@ import type {
   Effort,
   PermissionMode,
   AgentKind,
+  EngineKind,
   UserMessage,
 } from './types/common.js';
 import type {
@@ -222,7 +223,7 @@ export interface SessionOptions {
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
   sessionInstanceId?: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   handle: AgentSessionHandle;
   capabilities: Capabilities;
@@ -479,9 +480,18 @@ export class Session {
   readonly id: string;
   /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
   readonly instanceId: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /** `AgentEvent.source` names built-in engines only; plugin engines leave it unset. */
+  private get eventSource(): AgentKind | undefined {
+    return this.agentKind === 'acp' ? undefined : this.agentKind;
+  }
   readonly workDir: string;
-  readonly capabilities: Capabilities;
+  private readonly initialCapabilities: Capabilities;
+  get capabilities(): Capabilities {
+    return this.agentKind === 'acp'
+      ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
+      : this.initialCapabilities;
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */
@@ -663,7 +673,7 @@ export class Session {
     this.agentKind = opts.agentKind;
     this.workDir = opts.workDir;
     this.handle = opts.handle;
-    this.capabilities = opts.capabilities;
+    this.initialCapabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
     this.agentDeviceId = opts.agentDeviceId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
@@ -677,12 +687,13 @@ export class Session {
     this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
+      currentOrigin: () => this.currentTurnOrigin,
       isActive: (generation) => this.status === 'active' && !this.terminationStarted
         && generation === this.turnGeneration,
       isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: async (text, signal, requestId, displayText) => {
-        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText);
+      deliver: async (text, signal, requestId, displayText, origin) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText, origin);
         const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
         if (this.handle.isTurnRunning?.()) {
           try { await this.steer(text, options); return; } catch (error) {
@@ -695,9 +706,9 @@ export class Session {
         if (!result.accepted) throw new Error('Async question answer was not accepted');
       },
       dismiss: (requestId, reason, withdrawalReason) => this.fanOutEvent({
-        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny', ...(withdrawalReason ? { withdrawalReason } : {}) }, source: this.agentKind,
+        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny', ...(withdrawalReason ? { withdrawalReason } : {}) }, source: this.eventSource,
       }),
-      reportError: () => this.fanOutEvent({ type: 'error', source: this.agentKind,
+      reportError: () => this.fanOutEvent({ type: 'error', source: this.eventSource,
         data: { message: 'Async question answer delivery failed.', isTerminal: false } }),
     });
 
@@ -885,13 +896,13 @@ export class Session {
     return snapshot;
   }
 
-  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>;
 
   /**
    * Hosts with a durable input queue own admission/persistence of question replies.
    * `text` is the model's copy; `displayText` is what history and queues show.
    */
-  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>): void {
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>): void {
     this.asyncQuestionAnswerDispatcher = dispatch;
   }
 
@@ -1795,12 +1806,12 @@ export class Session {
     if (!this.hasUnsettledTurn()) return;
     const usage = this.handle.getPendingTurnUsage?.();
     if (this.abortRecoveryScheduledFor === this.turnGeneration) {
-      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.agentKind });
+      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
         message, isTerminal: true, reason: 'session_event_loop_crashed',
         ...(usage ? { usage } : {}),
-      }, source: this.agentKind });
+      }, source: this.eventSource });
     }
   }
 
@@ -2609,7 +2620,8 @@ export class Session {
       generation,
       // Claude owns per-sidechain guards before translation. Pi/Codex share
       // the same detector here, paired with this product turn's lifecycle.
-      toolLoopMonitor: this.agentKind === 'claude-code' ? null : new ToolLoopMonitor(new ToolLoopGuard({
+      // Plugin (ACP) engines own their agent loop; Cindy's tool-loop guard stays built-in only.
+      toolLoopMonitor: this.agentKind === 'claude-code' || this.agentKind === 'acp' ? null : new ToolLoopMonitor(new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
         // not enable the retry-count rule without that evidence. Claude also
@@ -2621,7 +2633,8 @@ export class Session {
       }), {
         reviewer: this.toolLoopReviewer,
         context: () => ({
-          sessionId: this.id, agentKind: this.agentKind, model: this.handle.model,
+          // The monitor exists for built-in engines only (see the guard above).
+          sessionId: this.id, agentKind: this.agentKind as AgentKind, model: this.handle.model,
           userIntent: this.toolLoopUserIntent,
         }),
         onReviewedStop: (verdict) => this.interruptReviewedToolLoop(verdict, generation),
@@ -3364,7 +3377,7 @@ export class Session {
         reason: 'tool_use_loop_detected',
         toolLoop: { kind: verdict.reason, count: verdict.count },
       },
-      source: this.agentKind,
+      source: this.eventSource,
     });
     // A listener can synchronously take over. Never interrupt its replacement.
     if (generation !== this.turnGeneration) return;
@@ -3545,7 +3558,7 @@ export class Session {
         lastEventType: this.lastEventType,
         msSinceLastEvent,
       },
-      source: this.agentKind,
+      source: this.eventSource,
     } as AgentEvent);
     // 复核定时器**先于** abort 排定,且不挂在 abort 的 promise 上。
     // 曾经写在 .finally() 里,但 abort 走的正是"已经哑火"的那条链路:agent 的
@@ -3801,7 +3814,7 @@ export class Session {
             isTerminal: true,
             reason: 'session_event_loop_crashed',
           },
-          source: this.agentKind,
+          source: this.eventSource,
         });
       }
       try {

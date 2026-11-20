@@ -20,29 +20,54 @@ vi.mock('../../downloader/retry', async (importOriginal) => {
 });
 
 import { downloadVerifiedPlugin } from '../download';
+import * as downloader from '../../downloader/index';
 
 const realSetTimeout = globalThis.setTimeout;
-/** Fake-time driver for retrying downloads: lets real file I/O finish between timer steps. */
-async function settle(result: Promise<unknown>, maxMs: number): Promise<void> {
+const realDownload = downloader.download;
+const controllers: AbortController[] = [];
+const transfers: Promise<unknown>[] = [];
+const retryDelays: number[] = [];
+/** Advance backoff only after the real downloader has finished the attempt's I/O. */
+async function settle(result: Promise<unknown>): Promise<void> {
   let done = false;
   void result.then(
     () => (done = true),
     () => (done = true),
   );
-  for (let elapsed = 0; elapsed < maxMs && !done; elapsed += 2_500) {
-    await vi.advanceTimersByTimeAsync(2_500);
-    await new Promise((resolve) => realSetTimeout(resolve, 1));
+  while (!done) {
+    await vi.waitFor(() => expect(done || retryDelays.length > 0).toBe(true), { interval: 1 });
+    if (!done) await vi.advanceTimersByTimeAsync(retryDelays.shift()!);
   }
   await result;
 }
 
 const files: string[] = [];
-beforeEach(() => { host.packaged = false; host.endpoint = 'http://127.0.0.1:43340'; });
+beforeEach(() => {
+  host.packaged = false; host.endpoint = 'http://127.0.0.1:43340';
+  // Keep the real scheduler, transport and disk writes; own cancellation at the test boundary.
+  vi.spyOn(downloader, 'download').mockImplementation(options => {
+    const controller = new AbortController(); controllers.push(controller);
+    const pending = realDownload({ ...options, signal: controller.signal, onRetry: event => {
+      retryDelays.push(event.delayMs); options.onRetry?.(event);
+    } });
+    transfers.push(pending);
+    void pending.catch(() => undefined);
+    return pending;
+  });
+});
 
-afterEach(() => {
-  fetchMock.mockReset();
-  vi.useRealTimers();
-  for (const file of files.splice(0)) fs.rmSync(file, { force: true, recursive: true });
+afterEach(async () => {
+  try {
+    for (const controller of controllers.splice(0)) controller.abort();
+    await Promise.allSettled(transfers.splice(0));
+    expect(downloader.getActive()).toEqual([]);
+  } finally {
+    retryDelays.length = 0;
+    vi.restoreAllMocks();
+    fetchMock.mockReset();
+    vi.useRealTimers();
+    for (const file of files.splice(0)) fs.rmSync(file, { force: true, recursive: true });
+  }
 });
 function target(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-download-'));
@@ -99,6 +124,30 @@ describe('downloadVerifiedPlugin', () => {
       ),
     ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // #10002 Windows CI: a finite fake-time loop could finish before real I/O,
+  // then await a retry forever and strand the shared queue. Unit, real download entry;
+  // the old tests never held disk work past their timer driver's finite loop.
+  it('finishes retrying when disk work outlasts the fake-time driver loop', async () => {
+    vi.useFakeTimers();
+    const mkdir = fs.promises.mkdir;
+    vi.spyOn(fs.promises, 'mkdir').mockImplementationOnce(async (...args) => {
+      // real-wait: inject a 50ms disk delay beyond the old driver's ~10ms I/O budget.
+      await new Promise(resolve => realSetTimeout(resolve, 50));
+      return mkdir(...args);
+    });
+    const bytes = Buffer.from('delayed disk fixture');
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(bytes));
+    const file = target();
+    let completed = false;
+    const result = downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file);
+    void settle(result).then(() => { completed = true; }, () => undefined);
+    await vi.waitFor(() => expect(completed).toBe(true), { interval: 1 });
+    expect(fs.readFileSync(file)).toEqual(bytes);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   // Retry decision 2026-11-17: market packages get up to 3 tries instead of failing on one blip.
@@ -191,7 +240,8 @@ describe('downloadVerifiedPlugin', () => {
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     // Each try waits 60s for headers; retries stop at the 120s total budget.
-    await settle(result, 125_000);
+    await vi.advanceTimersByTimeAsync(125_000);
+    await result;
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -223,7 +273,8 @@ describe('downloadVerifiedPlugin', () => {
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('ab')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(pulls).toBe(2));
-    await settle(result, 125_000);
+    await vi.advanceTimersByTimeAsync(125_000);
+    await result;
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });

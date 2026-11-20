@@ -2,6 +2,12 @@ import type { ScheduleWebhookSource } from './webhook-formats.js';
 
 export type ScheduleKind = 'cron';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
+/**
+ * The engine a schedule runs on: a built-in Harness, or 'acp' = a plugin-provided engine on the
+ * automation host (docs/plans/acp-plugin-bridge.md). A plugin engine always comes with its
+ * `providerId` (`acp-plugin:<plugin>:<harness>`) and only runs as a new task each run on the host.
+ */
+export type ScheduleAgentKind = AgentKind | 'acp';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
@@ -227,6 +233,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Optional structured PR check output, annotated on the executing host. */
+  prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;
@@ -288,9 +296,9 @@ export interface Schedule {
    * 兼容/显式切回 Cron 时的表达式，但 UI 回显与引擎执行都必须以 intervalMs 为准。
    */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;
@@ -315,13 +323,15 @@ export interface Schedule {
   fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
-   * - project: workingDir is a user-selected project directory.
+   * - project: workingDir selects the execution directory; membership is resolved separately.
    * - dialogue: runner allocates an app-managed dialogue cwd per fire.
    *
    * Heartbeat schedules ignore this and use the target session's existing cwd.
    */
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
@@ -470,9 +480,9 @@ export interface CreateScheduleInput {
   manual?: boolean;
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;
@@ -490,6 +500,8 @@ export interface CreateScheduleInput {
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */
