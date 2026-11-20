@@ -1162,6 +1162,53 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     }
   });
 
+  it.each([
+    ['MEMBERSHIP_DISABLED', false], ['REFRESH_TOKEN_EXPIRED', false],
+    ['MEMBERSHIP_DISABLED', true], ['REFRESH_TOKEN_EXPIRED', true],
+  ] as const)('retains runtime rejection across candidate outage (%s, active responds again=%s)', async (code, activeRespondsAgain) => {
+    const { h } = recoverySetup();
+    h.useProductionCandidates();
+    let activeCalls = 0, candidateCalls = 0;
+    h.request.mockImplementation(async (token: unknown) => {
+      if (token === 'test-refresh') {
+        activeCalls++;
+        if (activeCalls === 1) return { ok: false, status: 0, data: null };
+        if (activeCalls === 2) {
+          h.saved.session.refreshToken = 'test-other-candidate';
+          return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
+        }
+        return { ok: false, status: 401, data: { error: { code } } };
+      }
+      candidateCalls++;
+      if (candidateCalls === 1) {
+        if (activeRespondsAgain) h.saved.session.refreshToken = 'test-refresh';
+        return { ok: false, status: 0, data: null };
+      }
+      return { ok: false, status: 401, data: { error: { code } } };
+    });
+    await h.runtimeRefresh();
+    await vi.advanceTimersByTimeAsync(185_000);
+    expect(h.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-refresh', 'test-refresh', 'test-other-candidate',
+      activeRespondsAgain ? 'test-refresh' : 'test-other-candidate',
+    ]);
+    if (activeRespondsAgain) {
+      expect(h.deps.expireRuntimeAuth).toHaveBeenCalled();
+      expect(h.authClient.exchangeAccountMembership).not.toHaveBeenCalled();
+    } else {
+      expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+      expect(h.vault.activeAccountKey).toBe(ORIGINAL_KEY);
+      expect(h.vault.resources[ORIGINAL_KEY].refreshToken).toBe('test-refresh');
+      // A different projection still cannot authorize runtime Passport recovery.
+      expect(h.authClient.exchangeAccountMembership).not.toHaveBeenCalled();
+      h.saved.session.refreshToken = 'test-refresh';
+      await vi.advanceTimersByTimeAsync(500_000);
+      expect(h.authClient.exchangeAccountMembership).toHaveBeenCalledWith('test-passport-access', 'original');
+      expect(h.saved.session?.refreshToken).toBe('test-rotated');
+      expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    }
+  });
+
   it.each(['MEMBERSHIP_DISABLED', 'REFRESH_TOKEN_EXPIRED'] as const)('does not reinterpret the active owner\'s own %s as INVALID', async code => {
     const { h } = recoverySetup();
     await h.runtimeRefresh();

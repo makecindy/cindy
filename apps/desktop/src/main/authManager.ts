@@ -3509,6 +3509,7 @@ function clearReplacementIntegrationReloadTimers(): void {
 const uncertainResourceRefreshTokens = new Map<AuthRegion, {
   accountKey: string;
   refreshToken: string;
+  invalidConfirmed: boolean;
 }>();
 const pendingResourcePassportRecoveries = new Map<AuthRegion, {
   refreshToken: string;
@@ -3650,13 +3651,25 @@ async function runAuthRefreshWithReplacementRetry(
       if (getRefreshErrorCode(result) === 'INVALID_REFRESH_TOKEN') {
         invalidRefreshTokens.add(refreshToken);
         opts.rejectedRefreshTokens?.add(refreshToken);
+        const uncertain = uncertainResourceRefreshTokens.get(opts.realm);
+        if (uncertain && uncertain.accountKey === vault.activeAccountKey &&
+          uncertain.refreshToken === refreshToken &&
+          vault.resources[uncertain.accountKey]?.refreshToken === refreshToken &&
+          typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, uncertain.accountKey)) {
+          uncertain.invalidConfirmed = true;
+        }
       }
       if (result.ok || result.status === 0 || (result.status >= 200 && result.status < 300)) {
         const key = vault.activeAccountKey;
         if (key && vault.resources[key]?.realm === opts.realm &&
           vault.resources[key]?.refreshToken === refreshToken &&
           typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, key)) {
-          uncertainResourceRefreshTokens.set(opts.realm, { accountKey: key, refreshToken });
+          const previous = uncertainResourceRefreshTokens.get(opts.realm);
+          uncertainResourceRefreshTokens.set(opts.realm, {
+            accountKey: key, refreshToken,
+            invalidConfirmed: previous?.accountKey === key &&
+              previous.refreshToken === refreshToken && previous.invalidConfirmed,
+          });
         }
       }
       if (result.ok) {
@@ -3720,7 +3733,7 @@ async function runAuthRefreshWithReplacementRetry(
     uncertainRefreshToken &&
     (invalidRefreshTokens.has(uncertainRefreshToken) ||
       (!run.rejectedTokens.includes(uncertainRefreshToken) &&
-        opts.rejectedRefreshTokens?.has(uncertainRefreshToken)))
+        (uncertain?.invalidConfirmed || opts.rejectedRefreshTokens?.has(uncertainRefreshToken))))
   ) {
     try {
       const pair = await recoverActiveResourceSession(
