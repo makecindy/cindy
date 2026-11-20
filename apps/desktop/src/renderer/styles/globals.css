@@ -2791,7 +2791,7 @@ html[data-liquid-glass='off'] .mcp-app-fullscreen::backdrop {
 html[data-liquid-glass='off'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost,
 html[data-liquid-glass='off']:not([data-wallpaper-active='true'], [data-desktop-background='true'])
   aside.bg-sidebar > .sidebar-frost {
-  background-color: var(--sidebar-bg, var(--surface));
+  background-color: hsl(var(--sidebar));
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }

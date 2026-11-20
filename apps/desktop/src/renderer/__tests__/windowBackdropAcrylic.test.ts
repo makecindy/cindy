@@ -41,6 +41,12 @@ describe('Windows Acrylic resize backing contract', () => {
     );
   });
 
+  it('keeps the macOS creation backing transparent when the resolved material is opaque', () => {
+    const creationBacking = "backgroundColor: process.platform === 'darwin' ? '#00000000' : winBackdropConfig.backgroundColor";
+    expect(bootstrapSource).toContain(creationBacking);
+    expect(secondaryWindowsSource).toContain(creationBacking);
+  });
+
   it('publishes the actual window material to a root data attribute', () => {
     expect(bootstrapSource).toContain(
       "createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none')",

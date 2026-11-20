@@ -4700,7 +4700,8 @@ const createWindow = () => {
       : path.join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     show: false,
-    backgroundColor: winBackdropConfig.backgroundColor,
+    // macOS needs an alpha-capable backing from creation for later backdrop changes.
+    backgroundColor: process.platform === 'darwin' ? '#00000000' : winBackdropConfig.backgroundColor,
     transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {

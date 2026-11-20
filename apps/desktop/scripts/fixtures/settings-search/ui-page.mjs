@@ -105,6 +105,29 @@ export default {
       await control.and(page.locator('[aria-checked="' + initial + '"]')).waitFor();
       assert.equal(await page.evaluate(() => window.glassResets.at(-1)?.[0]), 'liquidGlass');
 
+      // A custom theme can choose a sidebar color distinct from the main surface.
+      const sidebarColor = await page.evaluate(() => {
+        const aside = document.createElement('aside');
+        aside.className = 'bg-sidebar';
+        aside.style.setProperty('--sidebar', '210 30% 45%');
+        aside.style.setProperty('--surface', 'white');
+        const tint = document.createElement('div');
+        tint.className = 'sidebar-frost';
+        aside.append(tint);
+        document.body.append(aside);
+        const root = document.documentElement;
+        const previous = root.getAttribute('data-liquid-glass');
+        root.dataset.liquidGlass = 'off';
+        try {
+          return getComputedStyle(tint).backgroundColor;
+        } finally {
+          aside.remove();
+          if (previous === null) delete root.dataset.liquidGlass;
+          else root.dataset.liquidGlass = previous;
+        }
+      });
+      assert.equal(sidebarColor, 'rgb(80, 115, 149)');
+
       // Exercise the actual stylesheet cascade against both app background modes.
       const paints = await page.evaluate(() => {
         const root = document.documentElement;
