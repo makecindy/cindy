@@ -64,6 +64,18 @@ describe('model groups in a companion model chain', () => {
       .toEqual(['n1', 'a', 'b', 'c', 'z']);
   });
 
+  // PR #11683 Codex review: the pick may have come from the exception's group in a window that has since ended.
+  it('still tries the rest of a group a time-of-day exception can switch to after the window ends', () => {
+    const g1: ModelGroupRoute = { id: 'g1', name: 'G1', strategy: 'order', candidates: [{ agentKind: 'pi', providerId: 'xd', model: 'A' }],
+      exceptions: [{ when: { type: 'hours', from: 9, to: 12 }, use: { type: 'route', routeId: 'g2' } }] };
+    const g2: ModelGroupRoute = { id: 'g2', name: 'G2', strategy: 'order', candidates: [
+      { agentKind: 'pi', providerId: 'xd', model: 'B' }, { agentKind: 'pi', providerId: 'xd', model: 'C' }] };
+    const afterWindow = new Date(2026, 10, 20, 15).getTime();
+    const chain = expandBotModelGroups([plain('B', { harness: 'pi', modelGroup: 'g1' })], { routes: [g1, g2] }, afterWindow);
+    expect(chain.map((route) => route.model)).toEqual(['A', 'B', 'C']);
+    expect(nextBotModelRoute(chain, chain[1]!)?.model).toBe('C');
+  });
+
   it.each([
     { name: 'a deleted group', groups: { routes: [] }, first: plain('saved') },
     { name: 'a group with every source turned off', groups: { routes: [{ ...group, candidates: group.candidates.map((item) => ({ ...item, off: true })) }] }, first: plain('saved', { modelGroup: 'g' }) },
