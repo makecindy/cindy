@@ -228,14 +228,14 @@ export function Sidebar({
           - 不画下边框 —— 顶行与列表区是一块连续表面（对齐 Codex）。 */}
         <div
           // 46px 与 ContentHeader / ChromeActions 行高一致(红绿灯心 y=23 同轴)。
-          className="flex h-[46px] w-full shrink-0 items-center"
+          className="flex min-h-[46px] w-full shrink-0 flex-wrap items-center"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div
             aria-hidden
             // 占位宽 = ChromeActions 簇宽(折叠/菜单/后退/前进四个按钮,见
             // CHROME_ACTIONS_GEOMETRY.clusterWidth)。
-            className="h-full shrink-0"
+            className="h-[46px] shrink-0"
             style={
               {
                 width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
@@ -244,10 +244,10 @@ export function Sidebar({
               } as React.CSSProperties
             }
           />
-          {/* 任务列表视图在本行最右端放收件箱开关（与前进 / 后退同一排）。rail 态放不下，隐藏。 */}
+          {/* 优先与浮层同排；缩放后安全区占满侧栏时换至下一行，避免裁掉收件箱入口。rail 态隐藏。 */}
           {shouldMountFeatureContent && ownsTopNavScrollableRows && !isRail && (
             <div
-              className="ml-auto flex h-full shrink-0 items-center pr-2"
+              className="ml-auto flex h-[46px] shrink-0 items-center pr-2"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
               <TaskListModeToggle hasUnread={inboxUnread} />

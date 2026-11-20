@@ -1,7 +1,12 @@
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
 import { Sidebar } from '../../../src/renderer/components/sidebar/Sidebar';
-import { FeatureSidebarSlotProvider } from '../../../src/renderer/features/feature-context';
+import { FeatureSidebarSlotProvider, useOwnTopNavScrollableRows } from '../../../src/renderer/features/feature-context';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
+
+function InboxOwner() {
+  useOwnTopNavScrollableRows(true);
+  return null;
+}
 
 function Specimen() {
   const hidden = ctx.case === 'hidden';
@@ -17,13 +22,14 @@ function Specimen() {
     reducedMotion: true,
   });
   return <FeatureSidebarSlotProvider isCollapsed={hidden}>
+    {ctx.case.startsWith('inbox-') && <InboxOwner />}
     {/* A neutral native-backdrop stand-in exposes missing paint without a real desktop. */}
     <div style={{ position: 'fixed', inset: 0, zIndex: -4, background: '#808080' }} />
     <div className="relative flex h-screen text-foreground">
       <Sidebar
         isCollapsed={hidden || peek}
         isRail={ctx.case === 'rail'}
-        width={260}
+        width={ctx.case === 'inbox-wide' ? 360 : 260}
         peekState={peek ? 'pinning' : null}
         peekDrawerProps={peek ? {
           'data-sidebar-peek-drawer': '',
@@ -38,8 +44,17 @@ function Specimen() {
   </FeatureSidebarSlotProvider>;
 }
 
+if (ctx.case.startsWith('inbox-')) {
+  localStorage.setItem('sidebar.taskListMode', 'tasks');
+  localStorage.setItem('featureIntro.taskInbox.seen', '1');
+}
+
 void mountPage({
   host: {
+    appearanceSettings: {
+      getSync: () => ({ windowZoom: ctx.case === 'inbox-zoom' || ctx.case === 'inbox-wide' ? 0.5 : 1 }),
+      onChanged: subscription('appearance'),
+    },
     theme: { setSidebarWidth: () => {} },
     getFullscreenState: async () => false,
     onFullscreenChange: subscription('fullscreen'),

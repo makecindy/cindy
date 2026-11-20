@@ -20,6 +20,9 @@ export default {
     'src/renderer/features/cc-agent/sidebar/conversationSearchContext': 'export const ConversationSearchProvider = ({ children }) => children;',
   },
   cases: {
+    'inbox-zoom': { about: '#8656: default 260px expanded sidebar at 50% keeps inbox visible below chrome' },
+    'inbox-normal': { about: '#8656: default 260px expanded sidebar at 100% keeps inbox in the top row' },
+    'inbox-wide': { about: '#8656: 360px expanded sidebar at 50% keeps inbox in the top row' },
     default: { about: 'No wallpaper, 0% desktop visibility keeps the original backdrop: border must retain its tinted backing' },
     half: { about: '50% desktop visibility: the sidebar keeps its own tint at 85% of the main veil, separated only by its divider' },
     transparent: { about: '100% desktop visibility: both tints are clear; on macOS only the native sidebar frost remains' },
@@ -32,6 +35,24 @@ export default {
     const aside = page.locator('aside.bg-sidebar');
     const bounds = await aside.boundingBox();
     assert.ok(bounds);
+    if (ui.case.startsWith('inbox-')) {
+      const button = page.locator('[data-task-list-mode-toggle]');
+      await button.waitFor();
+      const box = await button.boundingBox();
+      assert.ok(box && box.x >= bounds.x && box.x + box.width <= bounds.x + bounds.width,
+        'Inbox stays fully visible inside the expanded sidebar');
+      const zoom = ui.case === 'inbox-normal' ? 1 : 0.5;
+      assert.ok(box.y >= 46 || box.x >= 78 / zoom + 124,
+        'Inbox does not overlap the floating chrome controls');
+      assert.equal(box.y >= 46, ui.case === 'inbox-zoom',
+        'Only the narrow zoomed sidebar needs a second row');
+      await button.click();
+      assert.equal(await button.getAttribute('aria-pressed'), 'true');
+      await button.click();
+      assert.equal(await button.getAttribute('aria-pressed'), 'false');
+      await ui.capture('inbox-visible');
+      return;
+    }
     if (ui.case === 'hidden') {
       assert.equal(bounds.width, 0, 'Collapsed sidebar has no visible width');
       return;
