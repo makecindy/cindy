@@ -362,3 +362,17 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(/Switch this task/)).toBeNull();
   });
 });
+
+// #8706 unit: render each real error surface with the new code; the old UI offered Full access.
+it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s without permission escalation', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} onRetry={vi.fn()} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} onContinue={vi.fn()} onDismiss={vi.fn()} />
+      : <ErrorMessageCard message={message} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
+});

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
@@ -232,12 +233,55 @@ async function observedStream(response: Parameters<typeof readUtilityTextStream>
     }
   });
 }
-async function observeRejectedResponse(response: Parameters<typeof readUtilityTextStream>[0], wire: string, model: string) {
+/** #8706: classify a bounded prefix in memory, keeping only safe transport metadata.
+ * Also retain existing usage accounting for complete error envelopes within that prefix.
+ * Never call text(): an error page can be unbounded or never finish streaming.
+ */
+async function observeRejectedResponse(
+  response: Parameters<typeof readUtilityTextStream>[0] & { status: number }, wire: string, model: string,
+): Promise<boolean> {
+  if (![400, 402, 422, 429].includes(response.status)) {
+    try { await observedStream(response, wire, model); } catch { /* Preserve the HTTP outcome. */ }
+    return false;
+  }
+  let quotaExhausted = response.status === 402;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try { reader = response.body?.getReader?.(); } catch { return quotaExhausted; }
+  if (!reader) return quotaExhausted;
+  if (quotaExhausted) {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+    return true;
+  }
+  let raw = '';
+  let bytes = 0;
+  const decoder = new TextDecoder();
   try {
-    await observedStream(response, wire, model);
+    while (bytes < 4096) {
+      const next = await reader.read();
+      const chunk = next.value?.subarray(0, 4096 - bytes);
+      bytes += chunk?.byteLength ?? 0;
+      raw += decoder.decode(chunk, { stream: !next.done });
+      if (matchesDeterministicUsageExhaustionText(raw)) {
+        quotaExhausted = true;
+        break;
+      }
+      if (next.done) break;
+    }
+    const context = usageContext.getStore();
+    const observed = parseAuxiliaryResponse(raw, wire);
+    if (context && observed.tokens) {
+      try { await context.record(observed.tokens, { ...context.route, model: observed.model ?? model, transport: wire }); }
+      catch { log.warn('auxiliary usage observer failed'); }
+    }
   } catch {
     // The HTTP status remains the request outcome, even for an incomplete error body.
+  } finally {
+    // Cancellation itself must not turn a known HTTP response into a timeout.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
+  return quotaExhausted;
 }
 function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>, source?: string) {
   return (...args: Args): Promise<Result> => {
@@ -294,7 +338,7 @@ type UtilityTextCandidateResolution =
 
 /** Credential-safe failure raised by a concrete utility transport. */
 type UtilityTextExecutionFailure =
-  | { reason: 'http_error'; httpStatus: number }
+  | { reason: 'http_error'; httpStatus: number; quotaExhausted?: true }
   | {
     reason: Extract<UtilityTextAttemptReason, 'timeout' | 'empty_response' | 'request_failed'>;
     httpStatus?: never;
@@ -1793,10 +1837,9 @@ async function requestLiteLlmText(input: {
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-      // Do not retain or log upstream response bodies: gateways may echo request
-      // metadata, while the HTTP status is sufficient for user recovery.
-      await observeRejectedResponse(response, 'chat-completions', input.model);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
+      const quotaExhausted = await observeRejectedResponse(response, 'chat-completions', input.model);
+      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status,
+        ...(quotaExhausted ? { quotaExhausted: true as const } : {}) });
     }
     let parsed = await response.json() as ChatCompletionBody;
     await observeUsage(parsed, 'chat-completions', input.model);
@@ -1819,7 +1862,9 @@ async function requestLiteLlmText(input: {
         text = chatCompletionChoicesText(parsed);
       } else {
         if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-        await observeRejectedResponse(budgeted, 'chat-completions', input.model);
+        if (await observeRejectedResponse(budgeted, 'chat-completions', input.model)) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     if (!text) {
@@ -2087,6 +2132,13 @@ async function requestProviderHttpText(input: {
     let response = await send(step, body);
     let requests = 1;
     while (!response.ok) {
+      // Gateways also wrap deterministic quota failures in 400/422. Classify
+      // before the compatibility ladder so a billing failure cannot spend its
+      // request budget retrying different parameters against the same account.
+      const quotaExhausted = await observeRejectedResponse(response, step.wire, targetFor(step).model);
+      if (quotaExhausted) {
+        throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status, quotaExhausted: true });
+      }
       // Only parameter-class rejections advance the plan. Steps already tried
       // in this call, and bodies identical to the rejected one (for example a
       // minimal body with nothing to strip), would only be rejected again.
@@ -2120,7 +2172,6 @@ async function requestProviderHttpText(input: {
       }
       if (next === null || !nextBody) break;
       tried.add(next);
-      await observeRejectedResponse(response, step.wire, targetFor(step).model);
       log.debug('utility text request rejected, trying the next reasoning step', {
         status: response.status,
         from: utilityRequestStepKey(step),
@@ -2135,7 +2186,7 @@ async function requestProviderHttpText(input: {
     }
     if (!response.ok) {
       if (response.status === 401) input.onUnauthorized?.();
-      await observeRejectedResponse(response, step.wire, targetFor(step).model);
+      // The rejected response was already observed once at the top of the loop.
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
@@ -2166,7 +2217,9 @@ async function requestProviderHttpText(input: {
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
-        await observeRejectedResponse(budgeted, step.wire, targetFor(step).model);
+        if (await observeRejectedResponse(budgeted, step.wire, targetFor(step).model)) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     // The step was accepted by the provider; remember it even when the model
@@ -2620,7 +2673,8 @@ function failedAttempt(
     status: 'failed' as const,
   };
   return failure.reason === 'http_error'
-    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus }
+    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus,
+      ...(failure.quotaExhausted ? { quotaExhausted: true as const } : {}) }
     : { ...base, reason: failure.reason };
 }
 

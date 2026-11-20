@@ -13103,6 +13103,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
           "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
@@ -15921,6 +15922,7 @@
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",

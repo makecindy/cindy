@@ -51,7 +51,7 @@ export type AutoReviewDecision = {
    */
   unavailable?: boolean;
   /** Safe Host diagnostic; model decision parsers never accept this field. */
-  unavailableReason?: 'no_available_model';
+  unavailableReason?: 'no_available_model' | 'quota_exhausted';
 };
 
 /**
@@ -61,6 +61,11 @@ export type AutoReviewDecision = {
  */
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
 export const AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE = 'AUTO_REVIEW_NO_AVAILABLE_MODEL';
+export const AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE = 'AUTO_REVIEW_UNAVAILABLE_QUOTA';
+const AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT =
+  'An automatic review provider has exhausted its quota. Check its usage or billing, '
+  + 'or customize Auxiliary models in Settings on the computer running the Agent. '
+  + 'Actions that need review still require your confirmation.';
 const AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT =
   'No automatic review model is available. On the computer running the Agent, '
   + 'enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. '
@@ -90,7 +95,12 @@ const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
 export function isAutoReviewUnavailableNotice(message: unknown): boolean {
   return typeof message === 'string'
     && (message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`)
-      || isAutoReviewNoAvailableModelNotice(message));
+      || isAutoReviewNoAvailableModelNotice(message)
+      || isAutoReviewQuotaExhaustedNotice(message));
+}
+
+export function isAutoReviewQuotaExhaustedNotice(message: unknown): boolean {
+  return typeof message === 'string' && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE}]`);
 }
 
 export function isAutoReviewNoAvailableModelNotice(message: unknown): boolean {
@@ -112,7 +122,9 @@ export function createAutoReviewUnavailableNotice(
     notify(decision): void {
       if (sent) return;
       sent = true;
-      emit(decision?.unavailable === true && decision.unavailableReason === 'no_available_model'
+      emit(decision?.unavailable === true && decision.unavailableReason === 'quota_exhausted'
+        ? `[${AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE}] ${AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT}`
+        : decision?.unavailable === true && decision.unavailableReason === 'no_available_model'
         ? `[${AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE}] ${AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT}`
         : `[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
     },
@@ -257,13 +269,15 @@ export function annotatePermissionRequestForUnavailableReview<
     description?: string;
     metadata?: Record<string, unknown>;
   },
->(req: T): T {
+>(req: T, reason?: string): T {
+  const { autoReviewUnavailableReason: _previousReason, ...metadata } = req.metadata ?? {};
   return {
     ...req,
     description: AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     metadata: {
-      ...req.metadata,
+      ...metadata,
       [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+      ...(reason === AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
     },
   };
 }
@@ -289,7 +303,7 @@ export function annotatePermissionRequestForAutoReview<
     metadata?: Record<string, unknown>;
   },
 >(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
-  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req, review.reason);
   const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
   if (!reason) return req;
   return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
@@ -638,10 +652,11 @@ export async function resolveAutoReviewDecision(
       )
     ) {
       if (decision.verdict === 'ask' && decision.unavailable === true
-        && decision.unavailableReason === 'no_available_model') {
+        && (decision.unavailableReason === 'no_available_model' || decision.unavailableReason === 'quota_exhausted')) {
         return {
-          verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model',
-          reason: AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT,
+          verdict: 'ask', unavailable: true, unavailableReason: decision.unavailableReason,
+          reason: decision.unavailableReason === 'quota_exhausted'
+            ? AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT : AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT,
         };
       }
       // Delegate 是运行期边界：即便当前 host 实现已做解析，未来实现也不能把
