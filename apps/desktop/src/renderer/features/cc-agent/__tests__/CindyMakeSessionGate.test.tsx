@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
 import { SessionRouteOriginGate } from '../SessionRouteOriginGate';
 import { sideChatTaskRoute } from '../../right-sidebar/plugins/side-chat/state';
-import { StrictMode } from 'react';
+import { StrictMode, useEffect } from 'react';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -13,12 +13,14 @@ const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
   localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
+  previewId: null as string | null,
   localListeners: new Set<() => void>(),
   origins: new Map<string, string>(),
   readCurrent: true,
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: {
   subscribe: () => () => {}, getMergedRemoteSessions: () => state.remote,
+  getCreationPreview: (id: string) => id === state.previewId ? {} : undefined,
   getSessionDeviceId: (id: string) => state.origins.get(id),
   pinSessionOrigin: (device: string, id: string) => { state.origins.set(id, device); },
   getDeviceSessions: () => state.remote,
@@ -37,6 +39,7 @@ vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession }));
 afterEach(cleanup);
 beforeEach(() => {
   state.remote = [];
+  state.previewId = null;
   state.localSource = undefined;
   state.getSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
@@ -66,6 +69,15 @@ describe('remote task route origin', () => {
       </Routes>
     </MemoryRouter></StrictMode>);
   }
+
+  // Unit: the pending task's host row doesn't exist yet. Rendering the real
+  // route must show its composer without an existence lookup or an error.
+  it('opens an optimistic new task before its host row arrives', async () => {
+    state.previewId = 'child';
+    await act(async () => { mountRoute('/cc-agent/child'); });
+    expect(screen.getByText('Remote composer')).toBeTruthy();
+    expect(state.getSession).not.toHaveBeenCalled();
+  });
 
   it('recovers a hidden task from only the URL after losing all renderer origins', async () => {
     const route = sideChatTaskRoute('child', 'host/encoded');
@@ -175,6 +187,31 @@ describe('old Cindy Make links', () => {
     state.localSource = 'desktop';
     mount();
     expect(screen.getByText('Composer')).toBeTruthy();
+    expect(state.getSession).not.toHaveBeenCalled();
+  });
+
+  // 协同侧栏给 Worker 发消息时，主进程会发新建通知，任务列表随即重拉。重拉期间任务短暂
+  // 不在缓存里，对话不能被卸载再重新挂载（用户看到整块清空后重新出现）。
+  it('keeps an open task mounted while it briefly leaves the cached list', () => {
+    state.localSource = 'desktop';
+    let mounts = 0;
+    function Composer() {
+      useEffect(() => { mounts += 1; }, []);
+      return <div>Composer</div>;
+    }
+    mount(<Composer />);
+    expect(mounts).toBe(1);
+    act(() => {
+      state.localSource = undefined;
+      for (const listener of state.localListeners) listener();
+    });
+    expect(screen.getByText('Composer')).toBeTruthy();
+    act(() => {
+      state.localSource = 'desktop';
+      for (const listener of state.localListeners) listener();
+    });
+    expect(screen.getByText('Composer')).toBeTruthy();
+    expect(mounts).toBe(1);
     expect(state.getSession).not.toHaveBeenCalled();
   });
 

@@ -11,12 +11,14 @@
  * 数据:设备目录与开关来自 useDeviceLinkSettings(与「我的设备」同一份);本机已建链对端的路径 / 往返 /
  * 最近业务收发来自 usePeerLinks(新 IPC);中转名来自 useSelfHostedRelayState;无响应熔断来自
  * unresponsiveDevicesStore。拓扑只画真实存在的数据:消息流动只在这台电脑与那台设备之间真有业务消息时出现,
- * 没有的(流量大小、第三方之间的链路)不画。
+ * 本机连接流量来自同一份快照。第三方之间的链路不画。
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
+import { useDeleteDeviceDialog } from '@/components/settings/useDeleteDeviceDialog';
+import { deviceLabel } from '@/components/settings/deviceLabels';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SettingsCard } from '@/components/ui/settings-rows';
@@ -30,6 +32,7 @@ import { createLogger } from '@/lib/logger';
 
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
+import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
 import { relativeTime } from './topologyPresentation';
@@ -70,7 +73,7 @@ function RecentActivity({ events }: { events: readonly PresenceEvent[] }) {
         {events.length ? (
           <ul className="max-h-72 overflow-y-auto pb-1.5">
             {events.map((e) => {
-              const title = t(e.online ? 'settings.remoteControl.v2.recent.online' : 'settings.remoteControl.v2.recent.offline', { name: e.name });
+              const title = t(e.online ? 'settings.remoteControl.v2.recent.online' : 'settings.remoteControl.v2.recent.offline', { name: deviceLabel(e, t) });
               return (
                 <li key={`${e.deviceId}:${e.at}`} className="flex items-baseline justify-between gap-3 px-3 py-1.5 text-12">
                   <span className="min-w-0 truncate text-[var(--text-primary)]" title={title}>
@@ -99,6 +102,7 @@ export function RemoteConnectionV2Section({
   deepLink: RemoteDevicesDeepLink;
 }) {
   const { t } = useTranslation();
+  const { requestDelete, dialog } = useDeleteDeviceDialog(s.remove);
   const peerLinks = usePeerLinks(true);
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
@@ -115,7 +119,10 @@ export function RemoteConnectionV2Section({
       buildTopology({
         devices: s.devices ?? [],
         links: peerLinks.links,
+        agentNetRoutes: peerLinks.agentNetRoutes,
         relayRttMs: peerLinks.relayRttMs,
+        relayProtocol: peerLinks.relayProtocol,
+        relayTransport: peerLinks.relayTransport,
         relayName,
         selfHosted: relay.state?.mode === 'self-hosted',
         controlledBy: s.controlledBy.map((c) => c.deviceId),
@@ -195,6 +202,7 @@ export function RemoteConnectionV2Section({
               standby={s.standby}
               onToggleOffline={() => setShowOffline((v) => !v)}
               onRemoteDesktop={onRemoteDesktop}
+              onDelete={(node, restoreFocus) => requestDelete({ deviceId: node.id, name: deviceLabel(node, t) }, restoreFocus)}
               focusDeviceId={focusDeviceId}
               focusRequestKey={deepLink.focusRequestKey}
               ready={s.devices !== null && peerLinks.takenAt > 0}
@@ -215,8 +223,10 @@ export function RemoteConnectionV2Section({
               </button>
             </div>
           ) : null}
+          <ConnectionTraffic traffic={peerLinks.traffic} />
         </SettingsCard>
       </section>
+      {dialog}
     </>
   );
 }

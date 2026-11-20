@@ -1,5 +1,12 @@
 # 消息来源：界面标签与模型说明同源
 
+> **读取时机**：新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明之前
+> **适用路径**：`packages/maker-shared/src/**/{messageSource,syntheticTrigger}*`、
+> `apps/desktop/src/main/maker-ipc/**/{messageSourceNote,forwardedRequest}*`、
+> `apps/desktop/src/shared/**/{imMessageSource,forwardedRequest}*`、
+> `apps/desktop/src/renderer/**/{MessageSourceLabels,messageSourceLabel,userMessageSourceLabels,AutomationOriginBadge}*`、
+> `apps/mobile/src/**/messageSourceLabels*`、`apps/desktop/src/main/device-link/**/sharedTaskMessageOrigin*`
+
 2026-10-05 裁决。非本机用户亲手输入的消息，界面上显示的来源与模型收到的来源说明必须来自
 同一份 host 盖章的数据、说同一件事。新增任何自动发送或远程发送路径时，两侧一起补。
 
@@ -26,6 +33,8 @@
   发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景……」，不再追加转交回执的那句「宿主已核实……」（回执只把他的原话交给审核）。
   它跟 `groupThread` 一样借用 session 来源的投递与展示链路；只有发起人自己的电脑会跑它，所以它是主人本人的请求，不是别人转来的话。
   手机端暂按既有任务来源显示。见 [伙伴群聊](bot-group-chat.md) 第 9 节。
+- 插件转发的 IM 消息（2026-11-16）：`sourcePlugin.relay` 记插件自报的平台、群与发言人，界面画成 IM 卡片，
+  发送方仍是插件。见下文「插件转发的 IM 消息」。
 - 新数据**不进** `origin`：多处 host 逻辑把任何 `origin.kind` 当作非人工派发。
 - 全部只用于归属展示，**不是**权限或信任判据；wire 传入的同名字段一律丢弃，由 host 重写。
 - 共享任务访客收到脱敏后的数据：任务来源去掉 id 与标题，自动化只保留「由自动化发送」，
@@ -54,6 +63,30 @@
   （`packages/maker-shared/src/syntheticTrigger.ts`）。
 - 界面不显示续接原文，桌面与手机从同一行派生一条可见留痕「主人在 iPhone 完成了 3 步输入 ·
   <域名>」；IM 渠道只收固定指引，不收续接。产品规则见 [代输入](input-handoff.md)。
+
+## 插件转发的 IM 消息（2026-11-16）
+
+插件把它代管的 IM 消息（例如「微信群里的 Cindy」转来主人微信群里的提问）经 `tasks.send` 送进任务时，可以附可选的
+`relay`：平台、群聊／私聊、群名、发言人（id、名字、是否主人本人）。
+
+- **发送方仍是插件。** `sourcePlugin` 照旧由宿主盖章（插件 id 与宿主读到的插件名），插件自带的身份字段一律丢弃；
+  `relay` 落在 `sourcePlugin.relay`，是插件自报的展示上下文，**不是**权限或信任判据，「是主人本人」也只是插件标明。
+  宿主与落库读取共用 `readMessageSourcePluginRelay` 清洗（去换行与控制字符、限长），排队与插话两条落库路径形状一致；
+  形状不对整段丢弃，插件消息照旧显示。
+- **界面复用 IM 卡片，但只在显示层派生**：不写 `imSource` / `hookSource`（否则会被伙伴云镜像、交接 `im` 标记和
+  伙伴专线当成真渠道消息）。桌面按与本地 IM 相同的卡片规则显示（[IM 消息呈现](im-message-presentation.md)）：正文只取插件的
+  可见 text；附带资料里只取插件按群窗口格式附上的 `<group_chat_context>` 块作「群聊背景」，`[渠道说明]` 等技术指引不显示，
+  插件没给条数就不显示条数。插件标明主人本人时卡头为「Cindy · 来自 微信」，否则为「{发言人} · 来自 {平台} 群「{群名}」」／
+  「… 私聊（非主人）」，悬停给 user_id；未知平台按原样显示平台 id。
+- **防冒充**：卡片上方照常显示「由插件「X」发送」，卡片不能替代插件来源标签。
+- **模型说明同源**：`[消息来源] 本条由插件「X」(plugin_id: …) 转发自 wechat 群「群名」，发言人「名字」(user_id: …)，插件标明是主人本人，
+  不是用户在 Cindy 里直接输入。`（非主人时没有「插件标明是主人本人」；私聊写「私聊」）。交接摘要与上下文重建用同一句。
+- **手机端**：已知平台（与 IM 卡片同一份平台集合）显示与其它 IM 一样的主人措辞卡片「Cindy · 来自 微信」，不显示发言人、群名
+  与背景（手机端对任何 IM 都暂不显示），正文同样只取插件可见 text，插件来源标签保留；未知平台保持插件气泡。
+- **共享任务访客**：`sourcePlugin` 整体不下发，`relay` 随之消失，访客看到普通插件消息正文，不出卡片。
+- **排队中的行**不变：派发前仍显示普通排队气泡与插件标签，落库后才成卡片。
+- 幂等：只有带 `relay` 的请求把它算进 `tasks.send` 回执摘要，不带的请求摘要与旧版逐字节相同，旧 requestKey 照常重放。
+  `targets.send` 不接受 `relay`。插件作者契约见 `cindy-plugin-creator/references/plugin-agent-tasks.md` §4.11.3。
 
 ## 另一台电脑上的任务发来的消息
 

@@ -161,7 +161,7 @@ describe('message write paths avoid large-content readback', () => {
     h.nextIds.push('z-first', 'a-second');
     const index = new GhostTaskEventIndex();
     index.replace([{ enabled: true, manifest: { subscribe: { topics: ['message'] } },
-      approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message'] } as InstalledGhost], owner);
+      approval: { state: 'approved', revision: 'r1' } } as InstalledGhost], owner);
     const publishIndexed = vi.fn();
     setTaskChangeListener((event, stamp) => index.publish(event, stamp,
       () => ({ publishIndexed }) as unknown as GhostSubscriptionGateway));
@@ -187,7 +187,7 @@ describe('message write paths avoid large-content readback', () => {
       result: { content: [{ type: 'text', text: 'Saved', _meta: { private: 'block' } }],
         structuredContent: { private: 'structured' }, _meta: { private: 'view-only' } },
     } };
-    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved' } };
+    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved', customMcp: true } };
     const created = await createMessage('s1', { clientId: 'app-card', role: 'assistant', content, agentMeta: { mcpApp: true } });
     expect(created.content).toEqual(publicContent);
     const row = (await h.db!.select().from(messages))[0]!;

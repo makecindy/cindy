@@ -25,7 +25,7 @@ vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: '
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
-import { remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
@@ -37,6 +37,31 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+// #10854, unit: production live reducer + banner/tail/history must retain the
+// actual cause for diagnosis while legacy reason-only errors use neutral copy.
+it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
+    sessionId: 'silent-copy', type: 'error',
+    data: { message, isTerminal: true, reason: 'silent-stop-exhausted', silentStopFailureCause: 'dispatch-not-accepted' },
+  } as Parameters<typeof handleStreamEvent>[1]);
+  expect(state.error).toBe(message);
+  const diagnose = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={state.error!} errorReason={state.errorReason} onRetry={vi.fn()} onSilentStopContinue={vi.fn()} onDiagnose={diagnose} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} errorReason="silent-stop-exhausted" onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />
+      : <ErrorMessageCard message={message} reason="silent-stop-exhausted" onDiagnose={diagnose} />}</I18nextProvider>);
+  expect(screen.getByText('An empty response was detected. Automatic continuation is paused.')).toBeTruthy();
+  expect(screen.queryByText(/dispatch-not-accepted/)).toBeNull();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.networkShowRaw));
+  expect(screen.getByText(/silentStopFailureCause=dispatch-not-accepted/)).toBeTruthy();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.diagnose));
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason: 'silent-stop-exhausted' }));
+});
 
 it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
   const i18n = createInstance();
@@ -172,7 +197,7 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
@@ -210,22 +235,37 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
-  it.each(['live', 'tail'] as const)('keeps known remote recovery guidance in the %s banner across language changes', async surface => {
+  // #10796, unit: a transport timeout used to lose its cause in both banners.
+  it.each([
+    ['live', 'REMOTE_LOCAL_ONLY_PROVIDER'], ['tail', 'REMOTE_LOCAL_ONLY_PROVIDER'],
+    ['live', 'REMOTE_AGENT_TIMEOUT'], ['tail', 'REMOTE_AGENT_TIMEOUT'],
+  ] as const)('keeps %s %s guidance across language changes', async (surface, code) => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
-    const code = 'REMOTE_LOCAL_ONLY_PROVIDER';
-    const rawRemoteError = `[${code}] upstream HTTP 502 api_key=private-test-value`;
+    const rawRemoteError = `[${code}] ${code === 'REMOTE_AGENT_TIMEOUT' ? '[INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write' : 'upstream HTTP 502'}; api_key=private-test-value`;
+    const retry = vi.fn();
+    const choose = vi.fn();
+    const agentDeviceId = code === 'REMOTE_AGENT_TIMEOUT' ? 'share:timeout-target' : undefined;
     const bannerError = remoteErrorMessageForBanner(rawRemoteError);
     expect(bannerError).toContain(`[${code}]`);
     render(<I18nextProvider i18n={i18n}>{surface === 'live'
-      ? <ErrorBanner error={bannerError} onRetry={vi.fn()} />
-      : <ErrorTailErrorBanner errorText={bannerError} onContinue={vi.fn()} onDismiss={vi.fn()} />}</I18nextProvider>);
+      ? <ErrorBanner error={bannerError} agentDeviceId={agentDeviceId} retryText="original message" onRetry={retry} onChooseComputer={choose} />
+      : <ErrorTailErrorBanner errorText={bannerError} agentDeviceId={agentDeviceId} onContinue={retry} onDismiss={vi.fn()} onChooseComputer={choose} />}</I18nextProvider>);
     expect(screen.getByText(locales[locale].chat.remoteError[code])).toBeTruthy();
     expect(screen.queryByText(locales[locale].chat.errorBanner.replyFailed)).toBeNull();
     expect(screen.queryByText(rawRemoteError)).toBeNull();
     fireEvent.click(screen.getByText(locales[locale].chat.errorBanner.networkShowRaw));
-    expect(screen.getByText(/upstream HTTP 502/).textContent).toContain('[REDACTED]');
+    expect(screen.getByText(code === 'REMOTE_AGENT_TIMEOUT' ? /no invoke-result within 30000ms/ : /upstream HTTP 502/).textContent).toContain('[REDACTED]');
     expect(screen.queryByText(/private-test-value/)).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    if (code === 'REMOTE_AGENT_TIMEOUT') {
+      expect(screen.queryByText(locales[locale].sharedTaskRecovery.reason.timeout)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: locales[locale].sharedTaskRecovery.choose }));
+      expect(choose).toHaveBeenCalledOnce();
+      expect(retry).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTitle(locales[locale].chat.errorBanner.retryTitle));
+      expect(retry).toHaveBeenCalledOnce();
+    }
     const next = locale === 'en' ? 'ja' : 'en';
     await act(async () => { await i18n.changeLanguage(next); });
     expect(screen.getByText(locales[next].chat.remoteError[code])).toBeTruthy();

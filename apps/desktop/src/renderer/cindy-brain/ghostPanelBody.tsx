@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -160,6 +161,7 @@ export function GhostPanelMediaMenu({
           同档(z-[10000]);默认 z-50 会被面板 webview 的合成层盖住——菜单
           开了但看不见(指针事件已被 Radix 关掉,表现为光标变默认箭头)。 */}
       <DropdownMenuContent align="start" sideOffset={2} style={{ zIndex: 10000 }}>
+        {menu.kind === 'image' && <DownloadImageMenuItem src={menu.url} />}
         <DropdownMenuItem onClick={handleCopy}>
           <Copy className="mr-2 h-4 w-4" />
           {t(menu.kind === 'video' ? 'chat.media.copyVideo' : 'chat.media.copyImage')}

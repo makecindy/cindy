@@ -1,5 +1,5 @@
 import type { WorkerOwnedWorktree } from '../../shared/orca-worker-project';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 export interface OrcaDiagnosticTeamSnapshot {
@@ -18,7 +18,7 @@ export interface OrcaDiagnosticWorkerSnapshot {
   idleSince: string | null;
   updatedAt: string;
   session: {
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     model: string;
     effort: string | null;
     workingDir: string;

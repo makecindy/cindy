@@ -9,17 +9,45 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createPrivateNetwork, generateIdentity, signature, verifyCertificate } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { MEDIA_ENCRYPTED_HEADER_BYTES as HEADER } from '@cindy/agent-net-protocol';
-import { PortableAgentNetClient } from '../portableClient.js';
+import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import { readNativeMedia } from '../nativeMedia.js';
 import type { NativeEnginePort } from '../nativeTransport.js';
 
 afterEach(() => vi.useRealTimers());
-function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}) {
+
+// App routing protocol, unit: real portable signing/WS handshake and presence
+// serializer. Media tests never sent presence, so dropping metadata was invisible.
+it('sends the App label in portable presence and accepts additive directory metadata', async () => {
+  const identity = generateIdentity('app-controller'), { bootstrap } = createPrivateNetwork('App metadata', identity);
+  let receive: BinarySocket['onmessage'] = null, ready!: () => void;
+  const listening = new Promise<void>(resolve => { ready = resolve; });
+  const send = vi.fn();
+  const ws: BinarySocket = { readyState: 1, bufferedAmount: 0, binaryType: '', onerror: null, onclose: null,
+    get onmessage() { return receive; }, set onmessage(callback) { receive = callback; ready(); }, send, close() {} };
+  const api = new PortableAgentNetClient('https://relay.example.test', { identity,
+    sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 17).toString('base64url') },
+    bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent() {},
+      sha256: value => createHash('sha256').update(value).digest('base64url'), createWebSocket: () => ws });
+  const connected = api.connect();
+  await listening;
+  ws.onmessage!({ data: JSON.stringify({ type: 'hello', deviceId: identity.deviceId, protocolVersion: 2,
+    devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', app: 'cindy', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
+  const uplink = await connected;
+  try {
+    uplink.presence(false, [], { platform: 'ios', app: 'cindy' });
+    expect(JSON.parse(send.mock.calls.at(-1)![0] as string)).toMatchObject({ type: 'presence', app: 'cindy', platform: 'ios' });
+    expect(uplink.devices[0].app).toBe('cindy');
+  } finally { uplink.close(); }
+});
+function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}, direct = false) {
   const identity = generateIdentity('media-controller'), { bootstrap } = createPrivateNetwork('Media cancellation', identity);
   let upstream!: AbortSignal, source!: ReadableStreamDefaultController<Uint8Array>;
   let noteRead!: () => void;
   const reading = new Promise<void>(resolve => { noteRead = resolve; });
   const fetchResponse: typeof fetch = async (_url, init) => {
+      if (direct && String(_url).startsWith('https://relay.example.test')) return Response.json({ request: {
+        method: 'GET', url: 'https://storage.example.test/object', headers: {}, expiresAt: Date.now() + 600_000,
+      } }, { headers: { 'x-agent-net-media-transfer': 'direct-v1' } });
       upstream = init!.signal as AbortSignal;
       return new Response(new ReadableStream<Uint8Array>({ start(controller) {
         source = controller;
@@ -38,7 +66,7 @@ function fixture(complete = false, kind: 'portable' | 'node' = 'portable', reque
   const command = vi.fn(async <T = unknown>(value: unknown): Promise<T> => ((value as { op: string }).op === 'mediaOpen'
     ? { id: 1, size: 0, encryptedSize: HEADER, header: '', headerSha256: '0'.repeat(64) } : true) as T);
   const engine = { command: command as NativeEnginePort['command'], destroy: async () => undefined };
-  return { api, engine, reading, signal: () => upstream, stop() { try { source.error(new Error('fixture cleanup')); } catch {} } };
+  return { api, engine, reading, signal: () => upstream, push(bytes: Uint8Array) { source.enqueue(bytes); }, finish() { source.close(); }, stop() { try { source.error(new Error('fixture cleanup')); } catch {} } };
 }
 
 it.each(['portable', 'node'] as const)('cancels a %s native range read after Fetch has already returned its headers', async kind => {
@@ -63,6 +91,45 @@ it.each(['portable', 'node'] as const)('keeps the %s media deadline armed while 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(value.signal().aborted).toBe(true);
     expect(await outcome).toBeInstanceOf(Error);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { value.stop(); await outcome; }
+});
+
+// #10142 review: real native range consumer on both client transports. Unit tier,
+// fake clock + Web Streams: existing stalled-body tests missed steady slow bytes
+// and direct storage. Three header chunks over 80 seconds are the smallest input.
+const mediaRoutes = (['portable', 'node'] as const).flatMap(kind => [false, true].map(direct => ({ kind, direct })));
+it.each(mediaRoutes)('keeps $kind media alive on slow bytes (direct=$direct)', async ({ kind, direct }) => {
+  vi.useFakeTimers();
+  const value = fixture(false, kind, undefined, undefined, direct);
+  const outcome = readNativeMedia(value.api, value.engine, 'unit-object', '0'.repeat(64), async () => undefined).catch(error => error);
+  try {
+    await value.reading;
+    value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(value.signal().aborted).toBe(false);
+    value.push(new Uint8Array(HEADER - 2)); value.finish();
+    expect(await outcome).toMatchObject({ size: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { value.stop(); await outcome; }
+});
+
+it.each(mediaRoutes)('expires $kind media after no new bytes (direct=$direct)', async ({ kind, direct }) => {
+  vi.useFakeTimers();
+  const value = fixture(false, kind, undefined, undefined, direct);
+  const outcome = readNativeMedia(value.api, value.engine, 'unit-object', '0'.repeat(64), async () => undefined).catch(error => error);
+  try {
+    await value.reading;
+    await vi.advanceTimersByTimeAsync(40_000); value.push(new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(value.signal().aborted).toBe(false);
+    value.push(new Uint8Array(0));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(value.signal().aborted).toBe(true);
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(value.engine.command).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   } finally { value.stop(); await outcome; }
 });
@@ -156,4 +223,113 @@ it('keeps an owner change terminal when Fetch fails at the same time', async () 
   const value = fixture(false, 'portable', async () => { changed = true; throw new TypeError('Network request failed'); },
     () => { if (changed) throw new Error('AGENT_NET_OWNER_CHANGED'); });
   await expect(value.api.request('GET', '/directory')).rejects.toThrow('AGENT_NET_OWNER_CHANGED');
+});
+
+// Direct media transfer, unit: the relay grants presigned storage requests and the portable client (mobile) must
+// send each chunk to the storage with the Content-MD5 it was granted, confirm progress through the relay (a lost
+// storage reply is not a lost write), read ranges from the storage, and go back to the relay when a cached read
+// is refused. Minimal input: two 5-byte chunks and one 4-byte range. Stub Fetch, no network.
+function directFixture(withMd5 = true) {
+  const identity = generateIdentity('direct-owner'), { bootstrap } = createPrivateNetwork('Direct media', identity);
+  const stored = new Map<string, Buffer>(), calls: string[] = [];
+  let grants = 0, dropNextStorageReply = false, revokedGrants = 0, blocked = false, blockedCalls = 0, relayedReads = 0;
+  const offers: boolean[] = [];
+  const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
+  const fetchStub: typeof fetch = async (input, init) => {
+    const url = new URL(String(input)), method = init?.method ?? 'GET';
+    calls.push(method + ' ' + url.host + url.pathname);
+    if (url.host === 'storage.example.test') {
+      if (blocked) { blockedCalls++; throw new TypeError('fetch failed'); }
+      const id = url.pathname.slice(1);
+      if (method === 'POST') {
+        const body = Buffer.from(init!.body as Uint8Array);
+        if ((init!.headers as Record<string, string>)['content-md5'] !== createHash('md5').update(body).digest('base64')) return new Response(null, { status: 400 });
+        stored.set(id, Buffer.concat([stored.get(id) ?? Buffer.alloc(0), body]));
+        if (dropNextStorageReply) { dropNextStorageReply = false; throw new TypeError('fetch failed'); }
+        return new Response(null, { status: 200 });
+      }
+      if (Number(url.searchParams.get('grant')) <= revokedGrants) return new Response(null, { status: 403 });
+      const object = stored.get(id)!, [, start, end] = /^bytes=(\d+)-(\d+)$/.exec((init!.headers as Record<string, string>).range)!.map(Number);
+      return new Response(new Uint8Array(object.subarray(start, end + 1)), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${object.length}` } });
+    }
+    const id = url.pathname.split('/')[4];
+    if (method === 'POST' && url.pathname.endsWith('/media')) {
+      const body = JSON.parse(String(init!.body));
+      offers.push(body.transfer === 'direct-v1');
+      return json({ id: 'object-1', chunkBytes: 8 * 1024 * 1024, ...(body.transfer === 'direct-v1' ? { transfer: 'direct-v1' } : {}) });
+    }
+    if (url.pathname.endsWith('/upload')) {
+      const body = JSON.parse(String(init!.body));
+      return json({ request: { method: 'POST', url: `https://storage.example.test/${id}?position=${body.offset}`, headers: { 'content-md5': body.md5 }, expiresAt: Date.now() + 60_000 } });
+    }
+    if (url.pathname.endsWith('/commit')) return json({ received: stored.get(id)?.length ?? 0, complete: (stored.get(id)?.length ?? 0) === 10 });
+    if (method === 'PUT') {
+      stored.set(id, Buffer.concat([stored.get(id) ?? Buffer.alloc(0), Buffer.from(init!.body as Uint8Array)]));
+      return json({ received: stored.get(id)!.length, complete: stored.get(id)!.length === 10 });
+    }
+    const headers = init!.headers as Record<string, string>;
+    if (headers['x-agent-net-media-transfer'] !== 'direct-v1') {
+      relayedReads++;
+      const object = stored.get(id)!, [, start, end] = /^bytes=(\d+)-(\d+)$/.exec(headers.range)!.map(Number);
+      return new Response(new Uint8Array(object.subarray(start, end + 1)), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${object.length}` } });
+    }
+    grants++;
+    return json({ transfer: 'direct-v1', size: 10, request: { method: 'GET', url: `https://storage.example.test/${id}?grant=${grants}`, headers: {}, expiresAt: Date.now() + 60_000 } },
+      { 'x-agent-net-media-transfer': 'direct-v1' });
+  };
+  const api = new PortableAgentNetClient('https://relay.example.test', { identity,
+    sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 17).toString('base64url') },
+  bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent() {}, fetch: fetchStub,
+    sha256: value => createHash('sha256').update(value).digest('base64url'),
+    ...(withMd5 ? { md5: (value: Uint8Array) => new Uint8Array(createHash('md5').update(value).digest()) } : {}),
+    createWebSocket() { throw new Error('No WebSocket in this fixture'); } });
+  return { api, stored, calls, offers, dropReply() { dropNextStorageReply = true; }, refuse() { revokedGrants = grants; },
+    block() { blocked = true; }, blockedCalls: () => blockedCalls, relayedReads: () => relayedReads };
+}
+
+it('sends media chunks and range reads straight to the granted storage, confirming each write through the relay', async () => {
+  const value = directFixture();
+  const created = await value.api.createMedia('recipient', 10);
+  value.dropReply();
+  await expect(value.api.putMediaChunk(created.id, 0, Buffer.from('hello'))).resolves.toEqual({ received: 5, complete: false });
+  await expect(value.api.putMediaChunk(created.id, 5, Buffer.from('world'))).resolves.toEqual({ received: 10, complete: true });
+  expect(value.stored.get('object-1')!.toString()).toBe('helloworld');
+  expect(value.calls.filter(call => call.startsWith('PUT'))).toEqual([]);
+  const read = () => value.api.withMediaResponse('object-1', 'bytes=3-6', async response => Buffer.from(await response.arrayBuffer()).toString());
+  await expect(read()).resolves.toBe('lowo');
+  const relayReads = () => value.calls.filter(call => call === 'GET relay.example.test/api/agent-net/media/object-1').length;
+  await expect(read()).resolves.toBe('lowo');
+  expect(relayReads()).toBe(1);
+  value.refuse();
+  await expect(read()).resolves.toBe('lowo');
+  expect(relayReads()).toBe(2);
+  expect(value.relayedReads()).toBe(0);
+});
+
+it('keeps media working through the relay when this network cannot reach the storage', async () => {
+  const upload = directFixture();
+  upload.block();
+  const created = await upload.api.createMedia('recipient', 10);
+  await expect(upload.api.putMediaChunk(created.id, 0, Buffer.from('hello'))).resolves.toEqual({ received: 5, complete: false });
+  await expect(upload.api.putMediaChunk(created.id, 5, Buffer.from('world'))).resolves.toEqual({ received: 10, complete: true });
+  expect(upload.stored.get('object-1')!.toString()).toBe('helloworld');
+  expect(upload.blockedCalls()).toBe(1);
+  // Later uploads from this client do not offer direct transfer for a while.
+  await upload.api.createMedia('recipient', 10);
+  expect(upload.offers).toEqual([true, false]);
+  const download = directFixture();
+  download.stored.set('object-1', Buffer.from('helloworld'));
+  download.block();
+  const read = () => download.api.withMediaResponse('object-1', 'bytes=3-6', async response => Buffer.from(await response.arrayBuffer()).toString());
+  await expect(read()).resolves.toBe('lowo');
+  await expect(read()).resolves.toBe('lowo');
+  expect(download.blockedCalls()).toBe(1);
+  expect(download.relayedReads()).toBe(2);
+});
+
+it('keeps media on the relay when the client cannot bind chunks with MD5', async () => {
+  const value = directFixture(false);
+  const created = await value.api.createMedia('recipient', 1);
+  await value.api.putMediaChunk(created.id, 0, Buffer.from('x'));
+  expect(value.calls).toEqual(['POST relay.example.test/api/agent-net/media', 'PUT relay.example.test/api/agent-net/media/object-1']);
 });

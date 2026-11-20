@@ -67,7 +67,8 @@ export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model
 export function decodeCatalogPin(
   raw: string,
 ): { providerId: string; agentKind: AgentKind; model: string } | null {
-  return decodeCatalogModelPin(raw);
+  const route = decodeCatalogModelPin(raw);
+  return route?.agentDeviceId ? null : route;
 }
 
 /**
@@ -182,7 +183,7 @@ function displayOrderedModels(models: readonly CatalogModel[]): CatalogModel[] {
 }
 
 /** Product-facing provider name for the picker; keep the catalog id stable. */
-function displayProviderName(provider: Provider): string {
+export function displayProviderName(provider: Provider): string {
   return provider.id === 'xd' && !provider.name?.startsWith('Cindy AI · ')
     ? 'Cindy AI' : provider.name;
 }

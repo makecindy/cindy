@@ -29,6 +29,7 @@ import {
 import { createLogger } from '../../logger';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   resolveLenientSessionRoute,
   resolveNewTaskDefaultModelRoute,
@@ -65,6 +66,7 @@ import {
   type ControlProject,
   type ControlSession,
 } from './controlProjects';
+import { projectToken } from './projectToken';
 import { exitControl } from './controlState';
 import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
@@ -107,6 +109,9 @@ import type { ImChannelAdapter } from './types';
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+/** 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md)。 */
+const IM_CHANNEL_FEATURE = 'IM channels';
 
 /** 桌面偏好还没推过来时的兜底;模型不写死,按新建任务口径实时解析。 */
 const DESKTOP_CC_DEFAULTS: Omit<DesktopCcPrefs, 'model' | 'providerId'> = {
@@ -352,6 +357,9 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
+      // 不按内置引擎的路由去改。
+      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
       const isPiSession = sessionAgentKind === 'pi';
       if (previousRoute?.agentDeviceId && sessionAgentKind) {
         try {
@@ -1339,9 +1347,21 @@ export function createCardActionHandler(
     let displayName: string;
     let workspaceKind: 'project' | 'dialogue';
     if (kind === 'project') {
-      workingDir = String(event.payload.workingDir ?? '');
-      displayName = String(event.payload.displayName ?? workingDir);
+      // 按钮只带不透明标记, 目录从当前项目清单找回; 清单里已经没有这个项目就按失败收口。
+      // 升级前发出的旧卡片按钮里还带着目录本身, 照旧认。
+      const token = String(event.payload.projectToken ?? '');
+      const picked = token
+        ? (await listProjectsForControl({ projectsOnly: true, all: true })).find(
+            (project) => projectToken(project.workingDir) === token,
+          )
+        : undefined;
+      workingDir = picked?.workingDir ?? (token ? '' : String(event.payload.workingDir ?? ''));
+      displayName = picked?.displayName ?? String(event.payload.displayName ?? workingDir);
       workspaceKind = 'project';
+      if (token && !picked) {
+        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+        return;
+      }
       if (!workingDir) {
         log.warn('project:pick missing workingDir — ignoring');
         return;

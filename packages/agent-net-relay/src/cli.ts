@@ -17,10 +17,20 @@ function port(flag: string): number | undefined {
 const logger: RelayLogger = Object.fromEntries(['info', 'warn', 'error'].map((level) => [level, (fields: Record<string, unknown>, message: string) => {
   process.stdout.write(JSON.stringify({ level, msg: message, ...fields }) + '\n');
 }])) as unknown as RelayLogger;
+// Diagnostics are allowlisted: arbitrary filesystem/TLS messages may contain paths or secrets.
+const safeCodes = new Set(['ENOENT', 'EACCES', 'EPERM', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EINVAL',
+  'ERR_OSSL_PEM_NO_START_LINE', 'ERR_OSSL_X509_KEY_VALUES_MISMATCH', 'ERR_OSSL_UNSUPPORTED']);
+const safeReasons = new Set(['DATA_DIRECTORY_REQUIRED', 'TLS_CERT_AND_KEY_REQUIRED_TOGETHER',
+  'GATEWAY_TLS_MATERIAL_REQUIRED', 'INVALID_TLS_MATERIAL', 'INVALID_PORT',
+  'INVALID_SHARING_AUTH_REGION', 'SHARING_AUTH_ISSUER_REQUIRED', 'INVALID_BOOTSTRAP',
+  'BOOTSTRAP_IDENTITY_MISMATCH', 'SELF_HOSTED_BOOTSTRAP_REQUIRED', 'INVALID_STUN_HOST']);
+let stage = 'arguments';
 try {
   const data = value('--data'); if (!data) throw new Error('DATA_DIRECTORY_REQUIRED');
   const bootstrapFile = value('--bootstrap');
+  stage = 'bootstrap';
   const bootstrap = bootstrapFile ? JSON.parse(await readFile(bootstrapFile, 'utf8')) as Bootstrap : undefined;
+  stage = 'arguments';
   const cert = value('--tls-cert'); const key = value('--tls-key');
   if (!!cert !== !!key) throw new Error('TLS_CERT_AND_KEY_REQUIRED_TOGETHER');
   const legacyUpstream = value('--legacy-upstream'), tlsMaterialFile = value('--tls-material');
@@ -30,12 +40,15 @@ try {
     if (typeof parsed.cert !== 'string' || typeof parsed.key !== 'string') throw new Error('INVALID_TLS_MATERIAL');
     return { cert: parsed.cert, key: parsed.key };
   };
+  stage = 'tls-material';
   let material = tlsMaterialFile ? await readMaterial() : null;
+  stage = 'arguments';
   const authIssuer = value('--auth-issuer');
   const authRegion = value('--auth-region') ?? 'global', peerRegion = value('--auth-peer-region');
   if (!['cn', 'global'].includes(authRegion) || peerRegion && !['cn', 'global'].includes(peerRegion)) throw new Error('INVALID_SHARING_AUTH_REGION');
   if (!authIssuer && ['--auth-jwks-url', '--auth-region', '--auth-peer-issuer', '--auth-peer-region', '--auth-peer-jwks-url'].some(flag => value(flag)))
     throw new Error('SHARING_AUTH_ISSUER_REQUIRED');
+  stage = 'relay';
   const relay = await startAgentNetRelay({
     notify: await createNotificationBridge(readNotificationBridgeConfig()),
     dataDir: path.resolve(data), bootstrap, mode: 'self-hosted', host: value('--host') ?? '127.0.0.1',
@@ -47,6 +60,7 @@ try {
   });
   let gateway: Awaited<ReturnType<typeof startRelayGateway>> | null = null;
   try {
+    stage = 'gateway';
     if (legacyUpstream && material) gateway = await startRelayGateway({ host: value('--gateway-host') ?? '0.0.0.0', port: port('--gateway-port') ?? 443,
       legacyUrl: legacyUpstream, agentNetUrl: relay.url, tls: material });
   } catch (error) { await relay.close(); throw error; }
@@ -64,6 +78,10 @@ try {
     void (async () => { await gateway?.close(); await relay.close(); })().then(() => process.exit(0), () => process.exit(1)); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
 } catch (error) {
-  logger.error({ name: error instanceof Error ? error.name : 'Unknown' }, 'agent-net relay failed to start');
+  const rawCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  const code = typeof rawCode === 'string' && safeCodes.has(rawCode) ? rawCode
+    : error instanceof Error && safeReasons.has(error.message) ? error.message
+    : error instanceof SyntaxError ? 'INVALID_JSON' : 'STARTUP_FAILED';
+  logger.error({ stage, code }, 'agent-net relay failed to start');
   process.exitCode = 1;
 }

@@ -6,6 +6,7 @@ import { type MainOwnedSendContext } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { noteInteractionRouteSteer } from './interactionRouter.js';
 import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
+import { prependPrivateChatContext } from './privateChatContext.js';
 import { prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHandoff.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { isMobileControllerInvoke } from '../device-link/invoke-context.js';
@@ -171,7 +172,8 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
         })
       : null;
     const withSteerReplyQuoteNote = steerReplyQuoteNote
-      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)
+      ? await prependPrivateChatContext(normalized as HandoffWireMessage, steerReplyQuoteNote, sessionId,
+        (id, input) => prepareUserMessageForAgent(id, input, 'steer'))
       : normalized;
     const withSteerSourceNote = steerSourceNote
       ? prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)
@@ -197,7 +199,6 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     const steerNotePlan = steerAllowsEnvironmentNotes
       ? wireNoteMemory.plan(sessionId, {
           'client-environment': steerNote,
-          'ui-language': steerLanguageNote,
           'side-chat': meta?.parentSessionId && (await readSessionSource(sessionId)) === 'side-chat' ? SIDE_CHAT_CONTEXT : null,
         }, { force: false })
       : null;
@@ -205,8 +206,9 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     const withSteerNote = steerPlannedNotes['client-environment']
       ? prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])
       : withSteerSourceNote;
-    let steerPayload = steerPlannedNotes['ui-language']
-      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
+    // Literary styles apply to this input only; do not deduplicate them across turns.
+    let steerPayload = steerLanguageNote
+      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerLanguageNote)
       : withSteerNote;
     // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
     // Same owner test as the queue's: this runs outside the context that told a guest apart at enqueue.

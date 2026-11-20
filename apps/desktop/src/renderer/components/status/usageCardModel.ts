@@ -147,7 +147,7 @@ export function buildClaudeUsageCard(
     typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined;
   return {
     title: 'Claude',
-    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType),
+    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName),
     windows,
     updatedAt: snapshot.updatedAt,
     emptyText: windows.length ? undefined : t('quotaCard.noWindows'),

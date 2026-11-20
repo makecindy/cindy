@@ -18,7 +18,7 @@
 - `noise.rs` 读完握手回复后清掉发起方的一次性私钥：`SecureConnection` 紧接着调用 `finish`，整个握手状态连同私钥一起丢掉，
   去掉这一行从外部看不出差别。保留它是为了直接使用 `Handshake` 的调用方。
 - `secure.rs` 认证失败超过 2^36 个包就放弃连接：测试里造不出这么多包，只能靠代码审查。
-- `secure.rs` 发回数据路径的路径验证回复填满到 `max_packet_size`：模拟器的链路不限包长，看不出差别。
+- `secure.rs` 发回数据路径的路径验证回复填满到这一端的发包上限（`Config::send_limit`）：模拟器的链路不限包长，看不出差别。
   它顺便确认新路径这个方向能过满长度的包，过不了就验证不通过、数据留在原路径上，QUIC 也要求验证包填满。
 - `secure.rs` 安静时只收到确认就当对端空闲：对端回过以后每 15 秒还会一来一回，两种写法只差传完后第一秒那一次探测，
   只有恰好在那一秒里悄悄换了地址才看得出。2026-11-05 加上 15 秒保活以前它能让连接失联，之后全量变异里不再变红。
@@ -31,6 +31,24 @@
 - 认出看不出的排队时不收回补偿、收回后立刻放开：2026-11-05 持续满发时随机丢包 16% 以内不再补偿以后，认出时多半已经没有补偿可收。
   不收回时对比矩阵三种策略、共享矩阵两种定时器的差别都在 0.3% 以内，浅队列扫描 144 种组合只有一种差 1.8 个百分点（6.45% → 8.20%）；
   立刻放开介于两者之间。代码留着：没满发、或随机丢包超过 16% 时还用得上。
+- 限速判断里「最近几轮平均低于 1 KB/s 不算证据」（原来的「换路径：降速阶段的节奏能压到零」）：2026-11-14 限速判断只看
+  发送方一直有数据可发的轮次以后，换网后那几轮零星包不再计入，原来靠它抓到的种子 5314、9232 不再走到这里。
+  去掉它后 2000 个随机换网种子、可靠性、共享、流和一阵一阵的测试全部通过。代码留着：忙碌的轮次也几乎没送到时，
+  它防的是节奏被压成 0、发包间隔除以 0。
+- 只剩小消息的副本要发时把这个包当成满负荷发出的（`connection.rs` 里 `app_limited` 不看 `duplicates`）：2026-11-14 在改动前的核心上
+  量到过，家宽 100 Mbit/s、往返 32 毫秒的线路停 5 秒后那一阵从 67% 掉到 17%（`sim/results/2026-11-14-ramp`）。一阵开头快发量速以后，
+  起步不再冲爆队列，在一阵一阵、随机丢包 1%–3% 的线路和千兆线路上都碰不到这条路径。代码留着：副本是冗余，不是排着的数据。
+- 确认一直成批到达多出来的量只在低排队模式加进窗口（普通模式也加）：普通模式的窗口留了两倍，很少被它卡住。2026-11-16 量过，
+  普通模式也加时 `exp_mixed.rs` 单独传一列 9 行相差不到 0.1%，流、共享、一阵一阵的用例全过。只在需要的地方改，
+  不动普通模式和多条连接一起发时的行为（取两个统计窗口里较大的那个时，普通模式也加会挤爆浅队列，见 `sim/results/2026-11-16-jitter-window`）。
+- 一阵开头那一串只在确认明显比发得慢时才不封顶：令牌桶、配额这类不排队的限速器放行的那串确认和发的一样快，
+  量出来是发送速度。2026-11-14 去掉这个条件，限速线路上一阵 1 MiB 的利用率按 4 个种子平均低 6–20 个百分点（同一份记录），
+  单个种子之间差得比这还多，测试里分不出来。
+- 在途分片数（`within_flight_limits`、交互消息的那一条）按实际窗口（`send_window_now`）而不是自己的 `send_window` 限：
+  在途的分片都在 `[snd_una, snd_sent)` 里，新分片已经不越过实际窗口，两种写法只差窗口正好填满时还让不让发校验包。
+  2026-11-17 两条都改回去，流的用例全过。写成实际窗口是为了对着旧版对端时和两端都是旧版逐行一样。
+- 校验覆盖范围（`parity_interval` 的 `coverable`）和判丢门槛上限按实际窗口算：同上，为了对着旧版对端时和两端都是旧版一样；
+  2026-11-17 改回按自己的窗口算，1% 随机丢包的互通用例看不出差别。
 """
 import os
 import pathlib
@@ -63,6 +81,81 @@ MUTANTS = [
      "return if self.probe_sender_limited { self.max_cwnd } else { self.initial_cwnd };", "return self.initial_cwnd;"),
     ("宽松上限等到期才放开", "src/congestion.rs",
      "if reached && self.round_count >= self.rate_cap_round + CAP_RELEASE_ROUNDS", "if false && reached && self.round_count >= self.rate_cap_round + CAP_RELEASE_ROUNDS"),
+    ("限速：一阵数据的尾巴也算应用空闲", "src/connection.rs",
+     "app_idle: packet.app_idle && !packet.tail,", "app_idle: packet.app_idle,"),
+    ("限速：随机丢包率不封顶", "src/congestion.rs",
+     "((self.calm_losses as u64 * 1_000_000 / samples) as u32).min(MAX_RANDOM_LOSS_PPM)", "(self.calm_losses as u64 * 1_000_000 / samples) as u32"),
+    ("一阵一阵：限速判断也算空闲的轮次", "src/congestion.rs",
+     "let recent = self.busy_round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;", "let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;"),
+    ("一阵一阵：发送缓冲一直按上限占", "src/connection.rs",
+     "        (self.congestion.cwnd() as usize).saturating_mul(SEND_BUFFER_CWNDS).clamp(cap.min(SEND_BUFFER_FLOOR), cap)", "        cap"),
+    ("一阵一阵：发送缓冲不跟着窗口放大", "src/connection.rs",
+     "        (self.congestion.cwnd() as usize).saturating_mul(SEND_BUFFER_CWNDS).clamp(cap.min(SEND_BUFFER_FLOOR), cap)", "        cap.min(SEND_BUFFER_FLOOR)"),
+    ("一阵一阵：只发过小消息时一阵开头不快发", "src/congestion.rs",
+     "let train = candidate && self.burst_train_sent < self.initial_cwnd", "let train = false && candidate && self.burst_train_sent < self.initial_cwnd"),
+    ("一阵一阵：量出瓶颈后照旧按启动的倍数发", "src/congestion.rs",
+     "if self.train_found_bottleneck() {", "if false && self.train_found_bottleneck() {"),
+    ("一阵一阵：抖动大时只看往返就结束启动", "src/congestion.rs",
+     "let jitter_masks_queue = jitter.saturating_mul(3) > QUEUE_MARGIN_MAX_US && !sample.app_limited && self.full_bw_rounds == 0;",
+     "let jitter_masks_queue = false;"),
+    ("一阵一阵：抖动只看相邻往返的差值", "src/congestion.rs",
+     "let jitter = self.rtt_jitter_us.max(self.idle_rtt_excess_us);", "let jitter = self.rtt_jitter_us;"),
+    ("一阵一阵：只有零星消息的一轮也拿来判排队", "src/congestion.rs",
+     "if self.round_rtt_samples >= ROUND_RTT_SAMPLES { self.round_loaded } else { self.last_round_loaded }", "true"),
+    ("抖动窗口：确认成批到达不加窗口", "src/congestion.rs",
+     "let aggregation = if self.low_queue && !self.queue_is_building() { self.extra_acked() } else { 0 };", "let aggregation = 0;"),
+    ("抖动窗口：开头放行的一阵也算（取较大的统计窗口）", "src/congestion.rs",
+     "self.extra_acked[(i + 1) % 3].min(self.extra_acked[(i + 2) % 3]).min(self.bdp())",
+     "self.extra_acked[(i + 1) % 3].max(self.extra_acked[(i + 2) % 3]).min(self.bdp())"),
+    ("抖动窗口：在排队时也加窗口", "src/congestion.rs",
+     "let aggregation = if self.low_queue && !self.queue_is_building() {", "let aggregation = if self.low_queue {"),
+    ("抖动窗口：自己排的队也当路径变慢", "src/congestion.rs",
+     "if delivered > 0 && delivered.saturating_mul(1000) < sent.saturating_mul(OWN_QUEUE_DELIVERY_PERMILLE) {", "if false {"),
+    ("抖动窗口：按发送节奏判断自己排的队", "src/congestion.rs",
+     "let sent = self.round_send_rates[0].min(self.round_send_rates[1]);", "let sent = self.pacing_rate();"),
+    ("抖动窗口：加速探测成功也不加大", "src/congestion.rs",
+     "self.low_queue_probe_step = if succeeded { (step * 2).min(LOW_QUEUE_PROBE_MAX_GAIN - 1000) } else { LOW_QUEUE_PROBE_GAIN - 1000 };",
+     "self.low_queue_probe_step = LOW_QUEUE_PROBE_GAIN - 1000;"),
+    ("抖动窗口：带宽没涨也加大探测", "src/congestion.rs",
+     "&& self.btl_bw.saturating_mul(1000) >= self.low_queue_probe_bw.saturating_mul(1000 + step * 6 / 10);", "&& true;"),
+    ("窗口互通：新分片不看对端的窗口", "src/connection.rs",
+     "let window = self.send_window_now() as u64;", "let window = self.config.send_window as u64;"),
+    ("窗口互通：收到新流不马上放宽额度", "src/connection.rs",
+     "if self.config.recv_window as u64 > state.granted_end {", "if false && self.config.recv_window as u64 > state.granted_end {"),
+    ("窗口互通：对端说出大窗口也不放开", "src/connection.rs",
+     "self.peer_window_max = self.peer_window_max.max(ack.window);", ""),
+    ("窗口互通：拥塞窗口上限不跟着对端改", "src/connection.rs",
+     "self.congestion.set_max_cwnd(", "drop("),
+    ("窗口互通：对端是旧版也不压拥塞窗口上限", "src/connection.rs",
+     "if !self.peer_window_known || ack.window > self.peer_window_max {", "if ack.window > self.peer_window_max {"),
+    ("窗口互通：新流的额度从自己的窗口起算", "src/connection.rs",
+     "SendStream::new(priority, Self::initial_window(&self.config) as u64)", "SendStream::new(priority, self.config.recv_window as u64)"),
+    ("窗口互通：收到新流时当作已经给过整个窗口", "src/connection.rs",
+     "let mut state = RecvStream::new(Self::initial_window(&self.config) as u64);", "let mut state = RecvStream::new(self.config.recv_window as u64);"),
+    ("窗口互通：开头按自己的窗口算", "src/connection.rs",
+     "config.recv_window.min(LEGACY_WINDOW)", "config.recv_window"),
+    ("包长：收包按发包上限截", "src/secure.rs",
+     "packet.len() > self.config.max_packet_size {", "packet.len() > self.config.send_limit() {"),
+    ("包长：收到的分片按发的上限查", "src/connection.rs",
+     "if payload.len() > self.max_recv_segment => {", "if payload.len() > self.max_segment => {"),
+    ("包长：校验恢复按发的上限查", "src/connection.rs",
+     "length <= self.max_recv_segment && (!headed", "length <= self.max_segment && (!headed"),
+    ("包长：握手回复按收包上限", "src/secure.rs",
+     "let total = config.send_limit().min(initiation.len());", "let total = config.max_packet_size.min(initiation.len());"),
+    ("包长：路径验证回复按收包上限", "src/secure.rs",
+     "self.paths.next_response(self.config.send_limit())", "self.paths.next_response(self.config.max_packet_size)"),
+    ("包长：发包按收包上限", "src/connection.rs",
+     "let out = &mut out[..self.config.send_limit() - self.overhead];", "let out = &mut out[..self.config.max_packet_size - self.overhead];"),
+    ("计时器：快的时候也交给粗计时器", "src/connection.rs",
+     "&& self.congestion.pacing_rate_estimate().saturating_mul(granularity_us) / 1_000_000 >= FINE_TIMER_BURST_BYTES", "&& false"),
+    ("计时器：一直看时间", "src/connection.rs",
+     "pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {", "pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {\n        if !self.dead { return true; }"),
+    ("计时器：没数据要发也按发送速率看时间", "src/connection.rs",
+     "            && self.has_data_to_send()", "            && true"),
+    ("计时器：攒 1 MiB 才算快", "src/connection.rs",
+     "const FINE_TIMER_BURST_BYTES: u64 = 64 << 10;", "const FINE_TIMER_BURST_BYTES: u64 = 1 << 20;"),
+    ("计时器：攒 8 KB 就算快", "src/connection.rs",
+     "const FINE_TIMER_BURST_BYTES: u64 = 64 << 10;", "const FINE_TIMER_BURST_BYTES: u64 = 8 << 10;"),
     ("首字节版本位不校验", "src/wire.rs",
      "packet[0] & VERSION_MASK != VERSION_BITS", "false"),
     ("确认了超窗口的包（丢数据）", "src/connection.rs",
@@ -101,8 +194,8 @@ MUTANTS = [
     ("窗口打开时不主动通知", "src/connection.rs",
      "window_after >= half) {\n                self.request_ack(now_us);\n            }\n", "window_after >= half) {\n            }\n"),
     ("不受拥塞窗口限制", "src/connection.rs",
-     "self.in_flight < self.config.send_window && self.bytes_in_flight < cwnd + parity_room",
-     "self.in_flight < self.config.send_window"),
+     "self.in_flight < self.send_window_now() && self.bytes_in_flight < cwnd + parity_room",
+     "self.in_flight < self.send_window_now()"),
     ("不按节奏发送", "src/connection.rs",
      "} else if self.in_flight < UNPACED_SEGMENTS || self.congestion.can_send(now_us) {", "} else {"),
     ("随机丢包不补偿速率", "src/congestion.rs",
@@ -173,7 +266,7 @@ MUTANTS = [
      "if complete && sized && self.accept_segment(sn, &restored[..length], headed) {",
      "let _ = (complete, sized);\n            if self.accept_segment(sn, &restored[..length.min(restored.len())], headed) {"),
     ("启动不看队列", "src/congestion.rs",
-     "if self.mode == Mode::Startup && self.queue_is_building() {", "if false {"),
+     "if self.mode == Mode::Startup && !sample.app_idle && !jitter_masks_queue && self.queue_is_building() {", "if false {"),
     ("第一批包不测速", "src/congestion.rs",
      "let delivery_rate = sample.delivery_rate.max(self.train_rate(now_us, sample, delivered));", "let delivery_rate = sample.delivery_rate;"),
     ("巡航不排空队列", "src/congestion.rs",
@@ -215,7 +308,11 @@ MUTANTS = [
     ("流：额度更新太慢", "src/connection.rs",
      "const GRANT_FRACTION: u64 = 8;", "const GRANT_FRACTION: u64 = 2;"),
     ("流：低优先级可以饿死", "src/stream.rs",
-     "if self.high_run >= STARVATION_LIMIT", "if false && self.high_run >= STARVATION_LIMIT"),
+     "candidates[rank].is_some() && self.waited[rank] >= STARVATION_LIMIT", "false && self.waited[rank] >= STARVATION_LIMIT"),
+    ("流：让过的那一档不清零", "src/stream.rs",
+     "*waited = if other == rank || !waiting[other] { 0 }", "*waited = if !waiting[other] { 0 }"),
+    ("流：共用发送缓冲满了以后没缓冲的流一个分片也写不进", "src/connection.rs",
+     "let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };", "let _ = max_segment;"),
     ("流：同级的流不轮转", "src/stream.rs",
      "self.quantum_left[rank] = if self.last[rank] == Some(id) { self.quantum_left[rank].saturating_sub(1) } else { ROUND_QUANTUM - 1 };", "self.quantum_left[rank] = ROUND_QUANTUM;"),
     ("流：每个分片都带流头", "src/connection.rs",
@@ -224,10 +321,16 @@ MUTANTS = [
      "                    self.send_streams.remove(&segment.stream);\n", ""),
     ("流：调整优先级不生效", "src/connection.rs",
      ".map(|state| state.priority = priority).is_some()", ".map(|_| ()).is_some()"),
+    ("流：低档的流占满共用发送缓冲后高档的流写不进", "src/connection.rs",
+     "self.send_buffered.saturating_sub(lower) + lower.min(lower_limit)", "self.send_buffered + 0 * lower_limit"),
+    ("流：同档的流也算作低档、多占共用发送缓冲", "src/connection.rs",
+     ".filter(|state| state.priority.is_lower_than(priority))", ".filter(|state| !priority.is_lower_than(state.priority))"),
+    ("流：高档的流写入时完全不算低档的流", "src/connection.rs",
+     "self.send_buffered.saturating_sub(lower) + lower.min(lower_limit)", "self.send_buffered.saturating_sub(lower) + 0 * lower_limit"),
     ("流：不给交互流留窗口", "src/connection.rs",
-     "let reserve = if self.mixed_traffic { (self.config.send_window as u64 / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };", "let reserve = 0u64;"),
+     "let reserve = if self.mixed_traffic { (window / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };", "let reserve = 0u64;"),
     ("流：交互消息也要排节奏", "src/connection.rs",
-     "            && self.in_flight < self.config.send_window\n            && self.next_is_urgent()\n", "            && false\n"),
+     "            && self.in_flight < self.send_window_now()\n            && self.next_is_urgent()\n", "            && false\n"),
     ("流：新消息排在重传后面", "src/connection.rs",
      "if !matches!(retransmit, Some((false, _)))\n", "if false && !matches!(retransmit, Some((false, _)))\n"),
     ("流：丢的交互消息不优先重传", "src/connection.rs",
@@ -245,9 +348,9 @@ MUTANTS = [
     ("流：低优先级重传不算前进", "src/connection.rs",
      "                    self.scheduler.record_retransmission();\n", ""),
     ("流：交互消息放行不限量", "src/connection.rs",
-     "self.urgent_round_bytes < INTERACTIVE_ROUND_SEGMENTS * self.config.max_packet_size\n", "self.urgent_round_bytes < usize::MAX\n"),
+     "self.urgent_round_bytes < INTERACTIVE_ROUND_SEGMENTS * self.config.send_limit()\n", "self.urgent_round_bytes < usize::MAX\n"),
     ("流：路径变慢也一直降速", "src/congestion.rs",
-     "            if floor.saturating_mul(32) >= self.queue_check_rtt.saturating_mul(31) {\n                self.recent_round_rtts = [floor; RECENT_ROUNDS];\n            }\n", ""),
+     "            } else if floor.saturating_mul(32) >= self.queue_check_rtt.saturating_mul(31) {\n                self.recent_round_rtts = [floor; RECENT_ROUNDS];\n            }\n", "            }\n"),
     ("共享：迟到的发送节奏不补", "src/congestion.rs",
      "        let earliest = if self.pacing_behind {\n", "        let earliest = if false && self.pacing_behind {\n"),
     ("流：等确认耽误的节奏不补", "src/congestion.rs",
@@ -340,7 +443,7 @@ MUTANTS = [
     ("加密：确认前就发数据", "src/secure.rs",
      "                if !*confirmed {\n                    return None;\n                }\n", ""),
     ("加密：回复按自己的包长填充", "src/secure.rs",
-     "let total = config.max_packet_size.min(initiation.len());", "let total = config.max_packet_size;"),
+     "let total = config.send_limit().min(initiation.len());", "let total = config.send_limit();"),
     ("加密：握手完成不发探测", "src/secure.rs",
      "        // 响应方要见到这一端的数据包才确认，没有数据要发时也要让它尽快确认。\n        self.connection.ping();\n", ""),
     ("加密：重发的请求不再回复", "src/secure.rs",
@@ -385,8 +488,6 @@ MUTANTS = [
      "        if result.is_ok() && newest && path != self.paths.active {\n            self.paths.active = path;\n            self.connection.on_path_change(now_us);\n        }\n        if result.is_ok() && newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route) {"),
     ("换路径：只能同时验证一条", "src/secure.rs",
      "        if self.candidates.len() == MAX_CANDIDATES {", "        if !self.candidates.is_empty() {"),
-    ("换路径：降速阶段的节奏能压到零", "src/congestion.rs",
-     "recent >= MIN_LIMITER_EVIDENCE_RATE && recent < self.btl_bw / 2", "recent < self.btl_bw / 2"),
     ("换路径：不守放大限制", "src/secure.rs",
      "        let room = candidate.received.saturating_mul(AMPLIFICATION_FACTOR).saturating_sub(candidate.sent);",
      "        let room = u64::MAX / 2;"),
@@ -455,10 +556,16 @@ def test_targets(name):
         return ["--test", "migration"]
     if name.startswith("驱动："):
         return ["--test", "udp"]
-    if name.startswith("流："):
+    if name.startswith(("流：", "窗口互通：")):
         return ["--test", "streams"]
     if name.startswith("共享："):
         return ["--test", "sharing"]
+    if name.startswith(("一阵一阵：", "计时器：")):
+        return ["--test", "bursts"]
+    if name.startswith("抖动窗口："):
+        return ["--test", "streams", "--test", "sharing"]
+    if name.startswith("包长："):
+        return ["--test", "secure", "--test", "migration"]
     return ["--test", "reliability", "--test", "streams", "--test", "sharing"]
 
 

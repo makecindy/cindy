@@ -392,7 +392,8 @@ describe('interactionModel', () => {
       { persistId: 'ask', request: { kind: 'ask_user_question', requestId: 'ask-1' } },
     ];
 
-    const selectedAsk = selectPendingInteractionByRequestId(interactions, 'ask-1');
+    expect(selectPendingInteractionByRequestId(interactions, 'ask-1')).toBe(interactions[0]);
+    const selectedAsk = selectPendingInteractionByRequestId(interactions.slice(1), 'ask-1');
     const selectedPlan = selectPendingInteractionByRequestId(interactions, 'plan-1');
 
     expect(selectedAsk?.request.requestId).toBe('ask-1');

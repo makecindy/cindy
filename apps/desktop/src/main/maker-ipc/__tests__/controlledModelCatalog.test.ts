@@ -115,6 +115,20 @@ describe('controlled model catalogs', () => {
     await f.read({ ...request(), args });
     expect(f.invoke).toHaveBeenCalledWith('device-a', 'maker:provider:list', args, f.assertOwner);
   });
+  // Unit: the model picker now asks B for anonymous share status. The existing
+  // catalog tests only send empty args, which missed this gateway rejecting the read.
+  it('forwards anonymous group status only for an authorized share', async () => {
+    const f = fixture();
+    const args = [{ includeSharedGroupStatus: true }];
+    f.invoke.mockResolvedValue({ ok: true, result: { providers: [{ id: 'anthropic', groupSize: 2,
+      groupStatus: ['available', 'cooling'], runningTurns: 4 }] } });
+    await expect(f.read({ ...request(), args })).rejects.toThrow('INVALID_PARAMS');
+    expect(f.invoke).not.toHaveBeenCalled();
+    await expect(f.read({ ...request('share:b-only'), args })).resolves.toEqual({ providers: [{
+      id: 'anthropic', groupSize: 2, groupStatus: ['available', 'cooling'],
+    }] });
+    expect(f.invoke).toHaveBeenCalledWith('share:b-only', 'maker:provider:list', args, f.assertOwner);
+  });
   it('discards results after source revocation', async () => {
     const f = fixture();
     f.invoke.mockImplementation(async () => {

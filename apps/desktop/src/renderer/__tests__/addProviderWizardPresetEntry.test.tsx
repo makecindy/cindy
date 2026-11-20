@@ -323,8 +323,10 @@ beforeEach(() => {
         id: 'default', status: 'signed-out', directory: '/default',
         running: 0, paused: false, limit: 4, weight: 1,
       }],
-    })) },
+    })), onChanged: vi.fn(() => () => undefined) },
     maker: {
+      // Providers another subscription account may join (2026-11-13); tests that need some override it.
+      listProviders: vi.fn(async () => ({ providers: [] })),
       llamaCppEnsure: vi.fn(async () => undefined),
       llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
       llamaCppInstall: vi.fn(async () => undefined),
@@ -2738,4 +2740,32 @@ it('respects an explicitly empty live directory for a bundled search target', as
     onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
   await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
   expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
+});
+
+it('offers one Google Gemini API setup and saves a shared key with all chat models unchecked', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const legacy = { ...anthropicProvider, id: 'gemini', name: 'Google Gemini',
+    auth: { method: 'apiKey' }, imageModels: [{ id: 'fixture', name: 'Fixture' }] } as ProviderView;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  vi.mocked(createCustomProvider).mockResolvedValueOnce({ ok: true });
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[legacy]} onOpenCustomForm={vi.fn()} onDone={onDone} onClose={vi.fn()} />);
+  const row = await screen.findByRole('button', { name: /Google Gemini API/ });
+  expect(screen.queryByText('Google Gemini', { exact: true })).toBeNull();
+  fireEvent.click(row);
+  expect(await screen.findByText('settings.providers.wizard.geminiImageKeyNote')).toBeTruthy();
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-gemini-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+  await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+  for (const model of preset.runtimes.codex!.models.filter(model => model.defaultEnabled !== false)) {
+    fireEvent.click(screen.getByText(model.name));
+  }
+  fireEvent.click(finish);
+  await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+  const [config, keys, options] = vi.mocked(createCustomProvider).mock.calls[0];
+  expect(config.name).toBe('Google Gemini API');
+  expect(options).toEqual({ bindGeminiImages: true });
+  expect(config.runtimes.codex!.models.every(model => model.defaultEnabled === false)).toBe(true);
+  expect(keys).toEqual(Object.fromEntries(Object.keys(preset.runtimes).map(agent => [agent, 'fake-gemini-key'])));
 });

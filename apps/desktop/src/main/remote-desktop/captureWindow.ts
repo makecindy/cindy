@@ -225,11 +225,18 @@ export class DesktopCaptureWindow {
     this.window = win;
     traceCaptureWindow(win, this.mode);
     markCaptureWindowWebContents(win.webContents);
-    if (this.mode === 'direct') {
-      // This data-only window signals exclusively to already authorized peers.
-      // Chromium's default mDNS host names cannot resolve across routed LANs.
-      // Expose the default route's address without enumerating other interfaces,
-      // granting media permissions, or changing the SDP's ICE/DTLS credentials.
+    if (this.mode === 'direct' || this.mode === 'files') {
+      // These data-only windows signal exclusively to already authorized peers.
+      // Without a capture permission Chromium publishes host candidates only as
+      // mDNS names. Those cannot resolve across routed LANs, and not at all when
+      // either OS withholds multicast (macOS Local Network privacy): the peer
+      // then never learns this address and the transfer leaves the LAN for TURN.
+      // A real address also lets a peer that may reach the LAN open the path
+      // when this app may only answer. Expose the default route's address
+      // without enumerating other interfaces, granting media permissions, or
+      // changing the SDP's ICE/DTLS credentials. The desktop window keeps
+      // Chromium's default: its capture permission already yields real addresses
+      // on every interface, which this policy would narrow to one.
       win.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces');
     }
     const failed = () => {
@@ -256,7 +263,7 @@ export class DesktopCaptureWindow {
     });
   }
 
-  dispose(): void {
+  dispose(finishDataTraffic?: (contents: Electron.WebContents, destroy: () => void) => void): void {
     const win = this.window;
     this.window = null; // Detach before destruction callbacks; never stop a replacement owner.
     const pending = this.ready;
@@ -265,6 +272,10 @@ export class DesktopCaptureWindow {
       clearTimeout(pending.timer);
       pending.reject(new Error('DESKTOP_VIDEO_STOPPED'));
     }
-    if (win && !win.isDestroyed()) win.destroy();
+    if (!win || win.isDestroyed()) return;
+    const destroy = () => { if (!win.isDestroyed()) win.destroy(); };
+    if (finishDataTraffic && !pending && (this.mode === 'files' || this.mode === 'direct')) {
+      finishDataTraffic(win.webContents, destroy);
+    } else destroy();
   }
 }

@@ -10,6 +10,6 @@
  *   - ipc:handler 注册与 Electron 依赖装配
  */
 
-// 模块门面只暴露 bootstrap 实际消费的两个入口;channel 常量与钩子函数由
+// 模块门面只暴露 bootstrap 实际消费的入口;channel 常量与钩子函数由
 // 消费方直接 import 对应文件(messages.ts → prRefsStore 等),不经此处中转。
-export { registerGitContextIpc, disposeGitContext } from './ipc.js';
+export { registerGitContextIpc, disposeGitContext, refreshSchedulePr } from './ipc.js';

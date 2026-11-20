@@ -23,7 +23,7 @@ export function ordinaryTaskListFilter(): SQL | undefined {
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
-        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel')
+        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel', 'group')
           AND task_bot.status <> 'deleting' AND (task_bot.hidden_at IS NULL OR task_bot.hidden_at = 0)
       )`)),
     isNull(sessions.hiddenAt),
@@ -125,6 +125,19 @@ export function projectSessionReadResult(
   resolve?: (session: ContextWindowSession) => number | null,
 ) {
   return sessionToCamel(projectSessionContextWindow(row, resolve));
+}
+
+/** Single-session reads sample the execution device's clock at response time. */
+export function projectSessionDetail(
+  row: SessionRowWithCount,
+  resolve?: (session: ContextWindowSession) => number | null,
+) {
+  const start = row.activeTurnStartedAt;
+  const end = row.lastTurnEndedAt;
+  const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    : null;
+  return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }
 
 /** No settled cache: every read observes the database and uses the same projection. */

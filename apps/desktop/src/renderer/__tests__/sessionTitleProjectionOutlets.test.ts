@@ -112,7 +112,7 @@ describe('desktop 会话标题投影出口', () => {
     expect(previewBeforeCreate).toBeGreaterThan(-1);
     expect(sendCreate).toBeGreaterThan(previewBeforeCreate);
     // 纯附件远程预览必须登记成系统合成标题,否则后续第一句文字无法即时覆盖。
-    expect(draftRoute).toContain('Boolean(normalizeAutoTitle(message))');
+    expect(read('features/cc-agent/remoteSessionHandoff.ts')).toContain('Boolean(normalizeAutoTitle(message.content))');
   });
 
   it('系统通知 / 飞书 / 手机推送的标题过投影,且语言走 ref 不被钉在首次渲染', () => {

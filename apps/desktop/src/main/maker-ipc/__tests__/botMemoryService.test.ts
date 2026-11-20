@@ -335,8 +335,52 @@ describe('cloud companion restore', () => {
     expect(requestRefresh).toHaveBeenCalledWith('session-1');
   });
 
-  it('rejects filenames outside the memory naming rule', async () => {
+  // #9339: production restore/remove must accept storage-generated digest shards;
+  // existing cloud tests cover curated files only. Minimal input: one digest filename.
+  // Unit tier, real isolated MemoryStorage; FTS remains a test port.
+  it('restores and tombstones internal digests without exposing curated editing', async () => {
+    const { service, requestRefresh, flushTimers } = setup();
+    const filename = 'digest_pi-compaction-1.md';
+    const raw = await fs.readFile(path.join(dir, filename), 'utf8');
+    await storage.delete(filename);
+    await service.restoreRaw('bot-1', filename, raw);
+    await service.restoreRaw('bot-1', filename, raw);
+    expect((await storage.read(filename)).body).toBe('summary');
+    expect(await storage.getIndex()).not.toContain(filename);
+    expect((await service.list('bot-1')).map(entry => entry.filename)).not.toContain(filename);
+    const updatedAt = (await storage.read(filename)).frontmatter.updatedAt;
+    await expect(service.update({ botId: 'bot-1', filename, title: 'edit', body: 'edit', expectedUpdatedAt: updatedAt }))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    await expect(service.delete({ botId: 'bot-1', filename, expectedUpdatedAt: updatedAt })).rejects.toThrow('[INVALID_PARAMS]');
+    await service.removeRaw('bot-1', filename);
+    await service.removeRaw('bot-1', filename);
+    await expect(storage.read(filename)).rejects.toMatchObject({ code: 'not-found' });
+    flushTimers();
+    expect(requestRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a legacy double-prefixed shard on an empty destination', async () => {
     const { service } = setup();
-    await expect(service.restoreRaw('bot-1', '../evil.md', 'x')).rejects.toThrow();
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+  });
+
+  it('restores a legacy name even when a single-prefixed alias exists', async () => {
+    const { service } = setup();
+    await storage.write({ type: 'project', name: 'legacy-note', title: 'Local', description: 'd', body: 'local body' });
+
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+    expect((await storage.read('project_legacy-note.md')).body).toBe('local body');
+  });
+
+  // Cloud inputs remain bounded basenames, even for internal memory types (#9339, unit).
+  it.each(['../digest_x.md', 'digest_../x.md', 'digest_..\\x.md', 'unknown_x.md', 'digest_.md',
+    'digest_' + 'x'.repeat(65) + '.md', 'digest_x.md\n', 'digest_x\n.md', 'MEMORY.md'])('rejects unsafe cloud filename %s before opening storage', async filename => {
+    const { service, getStore } = setup();
+    await expect(service.restoreRaw('bot-1', filename, 'body')).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(service.removeRaw('bot-1', filename)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(getStore).not.toHaveBeenCalled();
   });
 });

@@ -18,14 +18,15 @@ const refreshCallbacks = createGhostProductionCallbacks<{
 }>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
 
 function routing(activeComputer = true) {
-  const ghosts = [{ manifest: { id: 'plugin-a', agent: { hostTools: ['computer'] } }, enabled: true,
-    approval: { state: 'approved', revision: 'fixture' }, approvedHostToolGroups: ['computer'] }] as InstalledGhost[];
+  const ghosts: InstalledGhost[] = [{ dir: '/fixture/plugin-a',
+    manifest: { schemaVersion: 3, id: 'plugin-a', name: 'Plugin A', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      agent: { hostTools: ['computer'] } }, enabled: true, approval: { state: 'approved', revision: 'fixture' } }];
   const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
     apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), computer: vi.fn(), skills: vi.fn(), index: vi.fn(),
     taskEvents: vi.spyOn(taskEventIndex, 'replace'),
   };
-  const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
+  const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn(), harnesses = vi.fn();
   const list = vi.fn(() => ghosts);
   const manager = { list, invalidateNotificationCandidates: installation.index };
   let disabled = false;
@@ -45,8 +46,9 @@ function routing(activeComputer = true) {
     isGhostDisabledForWorkdir: () => disabled,
     setGhostDisabledForWorkdir: (_dir: string, id: string, value: boolean) => { disabled = value; return value ? [id] : []; },
     normalizeWorkdirKey: () => '/project', getGhostSetupChangeBus: () => ({ emit: setupChanged }),
+    reconcilePluginHarnesses: harnesses,
   });
-  return { callbacks, ghosts, installation, push, remote, setupChanged, contextChanged, list };
+  return { callbacks, ghosts, installation, push, remote, setupChanged, contextChanged, list, harnesses };
 }
 
 it('projects a locale change without installation effects, while real roster changes still reconcile', () => {
@@ -58,9 +60,12 @@ it('projects a locale change without installation effects, while real roster cha
   const { apps, ...installation } = r.installation;
   expect(apps).toHaveBeenCalledOnce();
   for (const effect of Object.values(installation)) expect(effect).not.toHaveBeenCalled();
+  // Task engine names are chosen by UI language, so a locale change re-projects the engine list.
+  expect(r.harnesses).toHaveBeenCalledOnce();
   r.callbacks.broadcastGhostsChanged(r.ghosts);
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
+  expect(r.harnesses).toHaveBeenCalledTimes(2);
   expect(installation.computer).toHaveBeenCalledWith(new Map([['plugin-a', 'approved:fixture']]));
 });
 

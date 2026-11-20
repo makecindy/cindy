@@ -1,3 +1,5 @@
+import { companionDragProps } from './companionDragProps';
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { TeammateStatusDot, TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
 import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
@@ -26,6 +28,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -33,6 +36,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -63,13 +67,15 @@ import {
   formatBotListTimestamp,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
-import { readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
   setBotHidden,
   setBotPinned,
   useBotProfiles,
+  useBotProfilesLoadState,
+  hasLoadedBotProfiles,
   useBotUnreadCounts,
   type BotProfile,
 } from './botStore';
@@ -112,7 +118,7 @@ function useAvatarRowCapacity(element: HTMLDivElement | null): number {
 /**
  * 侧栏第一层的「伙伴」段(2026-10-13 定稿):固定在置顶段上方,与置顶、全部任务并存。
  * 点伙伴只切换主区域,左栏不再整栏切换。显示方式与收起状态独立，按账号记住。
- * 收起时仅保留未读或等待处理的聊天。通知不在这里发 —— 唯一 owner 是任务侧栏。
+ * 收起默认仅保留未读或等待处理的聊天，可选择显示所有头像。通知由任务侧栏负责。
  */
 export function TeammatesSection() {
   const { t } = useTranslation();
@@ -134,6 +140,11 @@ export function TeammatesSection() {
   const [collapsed, setCollapsed] = useState(() => readTeammatesSectionCollapsed(dataOwnerId));
   const [keepSelectedChat, setKeepSelectedChat] = useState(true);
   const [viewMode, setViewMode] = useState(() => readTeammatesViewMode(dataOwnerId));
+  const [showCollapsedAvatars, setShowCollapsedAvatars] = useState(() => readCollapsedTeammateAvatars(dataOwnerId));
+  const changeCollapsedAvatars = (enabled: boolean) => {
+    setShowCollapsedAvatars(enabled);
+    writeCollapsedTeammateAvatars(dataOwnerId, enabled);
+  };
   const changeViewMode = (mode: TeammatesViewMode) => {
     setViewMode(mode);
     writeTeammatesViewMode(dataOwnerId, mode);
@@ -144,6 +155,7 @@ export function TeammatesSection() {
   useEffect(() => {
     setCollapsed(readTeammatesSectionCollapsed(dataOwnerId));
     setViewMode(readTeammatesViewMode(dataOwnerId));
+    setShowCollapsedAvatars(readCollapsedTeammateAvatars(dataOwnerId));
     setShowAllChats(false);
   }, [dataOwnerId, setShowAllChats]);
   const toggleCollapsed = () => {
@@ -167,6 +179,8 @@ export function TeammatesSection() {
     ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
   ];
   const allBots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
+  const profilesLoaded = hasLoadedBotProfiles();
   // A demoted local copy runs on its main computer now; it is listed there, not here.
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
   const { groups } = useBotGroupList();
@@ -210,7 +224,7 @@ export function TeammatesSection() {
     let focusArchived = !!group.archived;
     const actionKey = 'bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive');
     try {
-      const accepted = await confirm({ presentation: 'standard', title: t(actionKey),
+      const accepted = await confirm({ title: t(actionKey),
         description: t(actionKey + 'Hint'), confirmText: t(actionKey),
         cancelText: t('bots.cancel'), confirmVariant: 'destructive' });
       if (!accepted || !isDataOwnerGenerationCurrent(owner)) return;
@@ -314,7 +328,7 @@ export function TeammatesSection() {
       const rowIsVisible = visibleGroups.some(group => group.id === pending.groupId);
       if (row && rowIsVisible) {
         pendingArchiveFocusRef.current = null;
-        row.focus();
+        (row.matches('button') ? row : row.querySelector<HTMLButtonElement>('button'))?.focus();
         return;
       }
 
@@ -381,7 +395,9 @@ export function TeammatesSection() {
   const attentionChats = visibleChats.filter(entry =>
     (keepSelectedChat && entry === selectedChat) || needsAttention(entry));
   const displayedChats = collapsed ? attentionChats : showAllChats ? visibleChats : previewChats;
-  const iconChats = collapsed ? attentionChats : visibleChats;
+  const collapsedAvatars = collapsed && showCollapsedAvatars;
+  const showIconStrip = viewMode === 'icons' || collapsedAvatars;
+  const iconChats = collapsed && !collapsedAvatars ? attentionChats : visibleChats;
 
   useEffect(() => {
     if (roster.visible.length + remoteBots.length + groups.length === 0) return;
@@ -480,7 +496,10 @@ export function TeammatesSection() {
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={id => navigate('/bots/groups/' + encodeURIComponent(id))}
+      onOpenGroup={(id, reply) => {
+        const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
+        navigate('/bots/groups/' + encodeURIComponent(id) + query);
+      }}
       onContextMenu={event => {
         event.preventDefault(); event.stopPropagation();
         openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);
@@ -508,11 +527,11 @@ export function TeammatesSection() {
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const toggleLabel = collapsed ? t('bots.list.sectionExpand') : t('bots.list.sectionCollapse');
-  const openChat = (entry: (typeof visibleChats)[number]) => {
-    if (entry.kind === 'group') navigate(`/bots/groups/${encodeURIComponent(entry.group.id)}`);
-    else if (entry.kind === 'cindy') { if (currentCindy) navigate(currentCindy.route); }
-    else if ('deviceId' in entry.bot) navigate(`/bots/remote/${encodeURIComponent(entry.bot.deviceId)}/${encodeURIComponent(entry.bot.id)}`);
-    else navigate(`/bots/${entry.bot.id}`);
+  const chatRoute = (entry: (typeof visibleChats)[number]) => {
+    if (entry.kind === 'group') return `/bots/groups/${encodeURIComponent(entry.group.id)}`;
+    if (entry.kind === 'cindy') return currentCindy?.route;
+    const bot = entry.bot;
+    return 'deviceId' in bot ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
   };
 
   return (
@@ -566,14 +585,18 @@ export function TeammatesSection() {
                   {viewMode === mode && <Check size={15} className="ml-auto" />}
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={showCollapsedAvatars} onCheckedChange={changeCollapsedAvatars}>
+                {t('bots.list.showCollapsedTeammateAvatars')}
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
-      {viewMode === 'icons' && iconChats.length > 0 ? (
-        // 收起时所有待处理头像换行展示，不藏进 +N。
-        <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
+      {showIconStrip && iconChats.length > 0 ? (
+        // 默认收起时待处理头像全部可见；主动显示所有头像时沿用单行 +N。
+        <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed && !collapsedAvatars ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
             const entries = iconChats.map((entry) => {
               const key = entry.kind === 'group' ? `group:${entry.group.id}`
@@ -596,7 +619,7 @@ export function TeammatesSection() {
                 ...(mentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
               return { entry, key, selected, status, mentioned, label };
             });
-            const overflow = !collapsed && entries.length > avatarCapacity;
+            const overflow = (!collapsed || collapsedAvatars) && entries.length > avatarCapacity;
             let shown = overflow ? entries.slice(0, Math.max(0, avatarCapacity - 1)) : entries;
             // 正在看的聊天始终留在行内,占最后一个可见位。
             const selectedEntry = entries.find((item) => item.selected);
@@ -619,7 +642,8 @@ export function TeammatesSection() {
                   <Tip key={key} text={label} side="bottom">
                     <button
                       type="button"
-                      onClick={() => openChat(entry)}
+                      {...companionDragProps(chatRoute(entry), label)}
+                      onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
                       className="relative isolate flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -639,7 +663,7 @@ export function TeammatesSection() {
                   <Tip text={moreLabel} side="bottom">
                     <button
                       type="button"
-                      onClick={() => { changeViewMode('list'); setShowAllChats(true); }}
+                      onClick={() => { if (collapsed) toggleCollapsed(); changeViewMode('list'); setShowAllChats(true); }}
                       aria-label={moreLabel}
                       className="group/overflow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-11 font-medium tabular-nums text-[var(--sidebar-nav-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
@@ -656,16 +680,29 @@ export function TeammatesSection() {
         </div>
       ) : null}
 
-      <SectionCollapse collapsed={viewMode === 'icons' || (collapsed && attentionChats.length === 0)}>
+      {!profilesLoaded && profileLoadState === 'pending' ? (
+        <div role="status" className="flex items-center gap-2 px-3 py-3 text-12 text-[var(--text-secondary)]">
+          <Spinner size={14} />
+          {t('ccAgent.common.loading')}
+        </div>
+      ) : null}
+
+      {profileLoadState === 'error' ? (
+        <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
+      ) : null}
+
+      <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
 
       {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
-          <div className="px-3 py-3">
-            <BotCreateMenu label={t('bots.add')} />
-          </div>
+          profilesLoaded && profileLoadState === 'ready' ? (
+            <div className="px-3 py-3">
+              <BotCreateMenu label={t('bots.add')} />
+            </div>
+          ) : null
         ) : (
           <div className="flex flex-col gap-0.5">
             {displayedChats.map(entry => {
@@ -726,7 +763,8 @@ export function TeammatesSection() {
                   && Boolean(bot.generation || bot.teammateActivity?.phase === 'running');
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
-                    onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
+                    {...companionDragProps(chatRoute(entry), bot.name)}
+                    onClick={() => navigate(chatRoute(entry)!)}
                     className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -789,7 +827,8 @@ export function TeammatesSection() {
                       文字基线上把整行撑高。 */}
                   <button
                     type="button"
-                    onClick={() => navigate(`/bots/${bot.id}`)}
+                    {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
+                    onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -883,7 +922,8 @@ export function TeammatesSection() {
                       >
                         <button
                           type="button"
-                          onClick={() => navigate(`/bots/${bot.id}`)}
+                          {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
+                          onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
                           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
                         >
                           <BotAvatar bot={bot} size="sm" />

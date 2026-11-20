@@ -505,8 +505,6 @@ export function SessionImportSection() {
       </section>
 
       <ConfirmDialog
-        presentation="standard"
-        cancelFirst
         open={confirmOpen}
         onOpenChange={(next) => !starting && setConfirmOpen(next)}
         title={t('settings.sessionImport.confirm.title', { count: selectedList.length })}

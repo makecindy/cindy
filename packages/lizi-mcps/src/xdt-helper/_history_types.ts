@@ -66,6 +66,8 @@ export interface HistoryWorkdir {
 }
 
 export interface HistoryCompanion {
+  /** Task-list membership only; never the execution directory. */
+  taskProjectDir?: string;
   id: string;
   role: string;
   channel?: string;
@@ -245,6 +247,16 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  readSharedTaskProgress?: (
+    args: { task_link: string; before?: string },
+    caller: import('../types.js').LiziMcpSessionContext | undefined,
+  ) => Promise<ControlResult<{
+    title: string;
+    inTurn: boolean;
+    observedAt: string;
+    events: { role: string; text?: string; createdAt?: string; truncated?: boolean }[];
+    nextBefore: string | null;
+  }, string>>;
   readSessionAttachment?: (args: import('./read_session_attachment.js').ReadSessionAttachmentArgs,
     context?: import('../types.js').LiziMcpSessionContext) => Promise<ControlResult<Record<string, unknown>, string>>;
   listTeammates?: (args: { teammateId?: string; limit: number; cursor: HistoryCursor | null },

@@ -8,13 +8,13 @@ import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessi
 import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
   sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
-  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
+  clearSessionRuntimeControlState, applySessionRuntimeOverrideForStart } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
-const source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
+let source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
   ts.ScriptTarget.Latest, true);
 const branches: string[] = [];
 const confirmationChecks: string[] = [];
@@ -25,7 +25,6 @@ let scheduledAccountPreparation = '';
 let scheduledExecutionSelection = '';
 let subscriptionRuntimeRead = '';
 let subscriptionRouteMove = '';
-let bootstrapRuntimeOverride = '';
 let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
@@ -41,9 +40,6 @@ function visit(node: ts.Node) {
       const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
       if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
     }
-  }
-  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
-    bootstrapRuntimeOverride = node.getText(source);
   }
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
     directSendEntry = node.getText(source).replace(/^export /, '');
@@ -71,10 +67,9 @@ function visit(node: ts.Node) {
     terminalGuard = node.getText(source);
   }
   if (ts.isPropertyAssignment(node)) {
-    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
+    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('localWindowRebuild')) {
       confirmationChecks.push(node.initializer.getText(source));
     }
-    if (node.name.getText(source) === 'selectSameAgentModel') applySelectionAdapter = node.initializer.getText(source);
   }
   if (ts.isIfStatement(node) && node.expression.getText(source).includes('!internalOptions.applyingUserSelectionOnSend')
     && node.thenStatement.getText(source).includes('pendingUntilSend: true')) {
@@ -86,6 +81,33 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+// selectSameAgentModel moved verbatim into sessionRuntimeSelectionLanding.ts: the adapter is the function
+// createSelectSameAgentModel returns, with the same names (throwIpcError, applySessionRuntimeSelection).
+function landingSelectionAdapter(): string {
+  const landing = ts.createSourceFile('sessionRuntimeSelectionLanding.ts',
+    readFileSync(new URL('../sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let adapter = '';
+  const find = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createSelectSameAgentModel') {
+      const returned = node.body?.statements.find(ts.isReturnStatement);
+      adapter = returned?.expression?.getText(landing) ?? '';
+    }
+    ts.forEachChild(node, find);
+  };
+  find(landing);
+  return adapter;
+}
+applySelectionAdapter = landingSelectionAdapter();
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts. Walking it after register.ts
+// collects its branches in the order they had there (everything else stays before its old place).
+source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
+  readFileSync(new URL('../sessionRuntimeSelectionApply.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+visit(source);
+// updateSavedScheduledAxis and stagePendingUserRuntimeAxis moved verbatim into sessionRuntimeAxisSettings.ts
+// (register.ts calls their factories); walking it last takes those declarations, with the same names.
+source = ts.createSourceFile('sessionRuntimeAxisSettings.ts',
+  readFileSync(new URL('../sessionRuntimeAxisSettings.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+visit(source);
 const remoteLead = { leadDeviceId: 'lead-device', leadSessionId: 'lead-session', workerLabel: 'worker' };
 const orcaIdentities = [
   { orcaRole: 'lead' },
@@ -95,7 +117,11 @@ const orcaIdentities = [
 
 function compile(expression: string, bindings: Record<string, unknown>) {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  const context = {
+    readDeviceLinkModelSelectionOrigin: () => undefined,
+    isProviderShareAgentDeviceId: () => false,
+    getSessionRowSnapshotStrict: async () => null, ...bindings,
+  };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }
 
@@ -220,9 +246,12 @@ describe('complete selection commit boundaries', () => {
       expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
       expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
       expect(setProvider).toHaveBeenCalledWith(id, 'openai');
-      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
-      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
-        .toMatchObject({ ...profile, providerId: 'openai' });
+      // bootstrapSession starts the runtime through the shared step (no provider group here).
+      const started: Parameters<typeof applySessionRuntimeOverrideForStart>[0] = { ...saved, id } as never;
+      expect(applySessionRuntimeOverrideForStart(started, false)).toEqual(getSessionRuntimeControlSnapshot(id).effectiveOverride);
+      expect(started).toMatchObject({ ...profile, providerId: 'openai' });
+      expect(readFileSync(new URL('../register.ts', import.meta.url), 'utf8'))
+        .toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
       expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
     } finally { clearSessionRuntimeControlState(id); }
   });
@@ -230,16 +259,22 @@ describe('complete selection commit boundaries', () => {
   // Unit #10271: after the first fire migrates the task to account B, the saved
   // alias still pins account A. Exercise two real lease acquisitions and prove
   // the second fire never reapplies the alias, locally or on the same remote host.
-  it.each([null, 'executor'] as const)('retains an already migrated task on the next fire (%s)', async device => {
-    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old',
+  it.each([
+    [null, 'openai', 'openai-old'], ['executor', 'openai', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-old'], ['executor', 'openai-sub-target', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-sub-original'], ['executor', 'openai-sub-target', 'openai-sub-original'],
+  ] as const)('retains an already migrated task on the next fire (%s, %s, %s)', async (device, target, original) => {
+    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: original,
       effort: 'high', fastMode: false, agentDeviceId: device } as ScheduledModelSelection;
     let row = { ...saved };
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
       getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
-      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      isProviderShareAgentDeviceId: () => false, readMergedProviderAccount: () => 'account-a',
+      resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }), accountProviderId: () => target,
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
-      readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
+      readDeviceProviderViews: async () => [{ id: original, subscriptionPoolAlias: true,
+        ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }),
         models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
     });
     const applyProfile = async (_id: string, choice: ScheduledModelSelection) => {
@@ -263,31 +298,37 @@ describe('complete selection commit boundaries', () => {
       applyScheduledProfile: applyProfile,
       prepareUnhealthySessionForSend: async () => {
         if (applied.length !== 1) return false;
-        row = { ...row, providerId: 'openai' }; return true;
+        row = { ...row, providerId: target }; return true;
       },
     });
     for (let fire = 0; fire < 2; fire++) {
       const lease = await adapter('scheduled-repeat', undefined, saved);
-      try { expect(lease.selection.providerId).toBe('openai'); }
+      try { expect(lease.selection.providerId).toBe(target); }
       finally { lease.release(); }
     }
-    expect(applied).toEqual(['openai-old', 'openai']);
+    expect(applied).toEqual([original, target]);
     await scope.restore('scheduled-repeat');
     expect(baseline).toBeNull();
-    expect(row).toMatchObject({ ...saved, providerId: 'openai' });
-    expect(applied).toEqual(['openai-old', 'openai', 'openai']);
-    expect(saved.providerId).toBe('openai-old');
+    expect(row).toMatchObject({ ...saved, providerId: target });
+    expect(applied).toEqual([original, target, target]);
+    expect(saved.providerId).toBe(original);
   });
 
-  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): a connection restored to its own
+  // account is an ordinary provider again, so the saved choice runs there instead of on OpenAI.
+  it.each(['local-model-disabled', 'local-restored', 'local-wrong-target', 'remote-model-revoked', 'remote-not-alias', 'remote-wrong-target', 'remote-missing-target'] as const)(
     'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
-      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const device = mode.startsWith('local-') ? null : 'executor';
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
-        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
+        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai-sub-target' }),
         dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
-        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readMergedProviderAccount: () => (mode === 'local-restored' ? undefined : 'account-a'),
+        resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }),
+        accountProviderId: () => mode === 'local-wrong-target' ? 'different-target' : 'openai-sub-target',
+        legacyCodexAccountCanRun: () => mode !== 'local-model-disabled',
         readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
+          subscriptionPoolTarget: mode === 'remote-missing-target' ? undefined : mode === 'remote-wrong-target' ? 'different-target' : 'openai-sub-target',
           models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
         remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,
       });
@@ -402,6 +443,47 @@ describe('complete selection commit boundaries', () => {
     expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
     expect(baseline === null).toBe(route === 'ordinary');
     expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
+  });
+
+  // Unit: execute the production direct-send adapter with the real send lock.
+  // An input cancelled during lock admission must not restore/rebuild its task;
+  // existing queue tests always released the predecessor before cancellation.
+  it.each(['waiting', 'preparing'] as const)('cancels direct-send %s without leaking its route lease', async phase => {
+    const id = `cancelled-direct-send-${phase}`;
+    const release = phase === 'waiting' ? await acquireSendToSessionLock(id) : () => {};
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let preparationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { preparationEntered = resolve; });
+    const restore = vi.fn(async () => {});
+    const rebuild = vi.fn(async () => {});
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      scheduledModelScope: { restore }, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: rebuild, agentSwitchDeps: {},
+      recoverRenamedSessionModelOnSend: vi.fn(),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      prepareUnhealthySessionForSend: vi.fn(async () => {
+        if (phase === 'preparing') { preparationEntered(); await preparation; }
+        return false;
+      }),
+    });
+    const abort = new AbortController();
+    let failure: unknown;
+    const pending = adapter(id, abort.signal).catch((error: unknown) => { failure = error; });
+    if (phase === 'preparing') await entered;
+    else for (let n = 0; n < 10; n++) await Promise.resolve();
+    abort.abort();
+    finishPreparation();
+    try {
+      await vi.waitFor(() => expect(failure).toBe(abort.signal.reason));
+      if (phase === 'waiting') {
+        expect(restore).not.toHaveBeenCalled();
+        expect(rebuild).not.toHaveBeenCalled();
+      }
+    } finally { release(); finishPreparation(); await pending; }
+    await withSendToSessionLock(id, async () => {});
   });
 
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
@@ -597,7 +679,7 @@ describe('Orca model-only picker intent admission', () => {
         internalOptions, runtimeStatus, sessionId: 's1', model: 'new',
         targetProviderId: 'provider', effectiveProviderId: 'provider', currentProviderId: 'old-provider',
         agentKind: 'codex', dbToMakerAgentKind: (kind: string) => kind,
-        targetEffort: 'high', targetFastMode: true, targetContextWindow: undefined,
+        targetEffort: 'high', targetFastMode: true, targetContextWindow: onOtherDevice ? 200000 : undefined as number | undefined,
         confirmedContextWindow: 200000 as number | undefined,
         atomicSelection: { effort: 'high', fastMode: true },
         assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
@@ -606,7 +688,8 @@ describe('Orca model-only picker intent admission', () => {
         agentSwitchDeps: { onPendingSwitchChanged: changed },
         projectPendingAgentSwitchIntent: (intent: unknown) => intent,
         wakeSessionInputAfterCredentialSwitch: vi.fn(),
-        isDeviceLinkInvoke: () => true, markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
+        isDeviceLinkInvoke: () => true, readDeviceLinkModelSelectionOrigin: () => undefined,
+        markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
       };
       const compiled = ts.transpileModule(`return async () => { ${branch}; return applyLive(); };`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -620,13 +703,26 @@ describe('Orca model-only picker intent admission', () => {
       expect(bindings.markRemoteSettingPersistedInsideHandler).toHaveBeenCalledOnce();
       expect(applyLive).not.toHaveBeenCalled();
       expect(runtimeStatus.model).toBe('old');
-      if (!onOtherDevice) {
+      {
+        // PR #11071: remote restaging lost an already confirmed small window.
+        // The existing unit matrix only checked receipt inheritance locally.
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
         // Axis-only restaging retains this route's receipt; a different route
         // must not inherit acknowledgement from the previous selection.
         bindings.confirmedContextWindow = undefined;
+        bindings.targetContextWindow = undefined;
         await run();
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
+        const confirmedIntent = pending.get('s1');
+        for (const changedTarget of [
+          { providerId: 'another-provider' }, { targetAgentKind: 'pi' },
+          ...(onOtherDevice ? [{ targetAgentDeviceId: 'another-device' }] : []),
+        ]) {
+          pending.set('s1', { ...confirmedIntent, ...changedTarget });
+          await run();
+          expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
+        }
+        pending.set('s1', confirmedIntent);
         bindings.model = 'another-model';
         await run();
         expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
@@ -652,23 +748,21 @@ describe('Orca model-only picker intent admission', () => {
       expect(pending.has('s1')).toBe(false);
       await applyPendingAgentSwitchIfIdle(deps, 's1');
       expect(applyLive).toHaveBeenCalledTimes(1);
-      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 1 : 3);
+      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 6 : 5);
     }
   });
 
-  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only for the checked window: %s', confirmed => {
+  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only with a checked window or owner intent: %s', confirmed => {
     expect(confirmationChecks).toHaveLength(2);
     for (const expression of confirmationChecks) {
-      const check = new Function('runtimeStatus', 'internalOptions', 'isDeviceLinkInvoke',
-        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow', 'parseOrcaRemoteLead', `return ${expression};`);
-      for (const identity of orcaIdentities) {
-        for (const remote of [false, true]) {
-          expect(check(identity, { source: 'user', applyingUserSelectionOnSend: true },
-            () => remote, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(!remote && confirmed === 200000);
-        }
-      }
-      expect(check({ orcaRole: null }, { source: 'user', applyingUserSelectionOnSend: true },
-        () => false, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(true);
+      const check = new Function('internalOptions', 'isDeviceLinkInvoke',
+        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow',
+        'modelSelectionOrigin', 'ownerWindowRebuild', 'localWindowRebuild', `return ${expression};`);
+      const applying = { source: 'user', applyingUserSelectionOnSend: true };
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, false)).toBe(confirmed === 200000);
+      expect(check(applying, () => true, confirmed, 200000, 200000, 'owner', true, false)).toBe(true);
+      expect(check(applying, () => false, confirmed, 200000, 200000, 'scoped', false, false)).toBe(false);
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, true)).toBe(true);
     }
   });
 

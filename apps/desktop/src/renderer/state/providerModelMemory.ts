@@ -302,7 +302,8 @@ type ProviderMemoryOp =
   | { kind: 'set-fast'; agent: AgentKind; providerId: string; model: string; enabled: boolean | 'ultrafast' }
   | { kind: 'set-thinking'; agent: AgentKind; providerId: string; model: string; enabled: boolean }
   | { kind: 'clear-effort'; agent: AgentKind; providerId: string; model: string }
-  | { kind: 'clear-fast'; agent: AgentKind; providerId: string; model: string };
+  | { kind: 'clear-fast'; agent: AgentKind; providerId: string; model: string }
+  | { kind: 'clear-thinking'; agent: AgentKind; providerId: string; model: string };
 
 interface PendingProviderMemoryOp {
   op: ProviderMemoryOp;
@@ -382,7 +383,8 @@ function clearedSourceValues(
   /** 槽 key → 删之前的旧值(供写盘失败重放时判断别窗有没有改过它)。 */
   values: Record<string, Effort | boolean | undefined>;
 } {
-  const field = op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
+  const field = op.kind === 'clear-thinking' ? 'thinkingByModel'
+    : op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
   const presetKey = presetKeyOf(op.agent);
   const nextSlots: Record<string, ProviderMemory> = {};
   const values: Record<string, Effort | boolean | undefined> = {};
@@ -474,7 +476,8 @@ function applyProviderMemoryOp(
     };
   }
 
-  const field = op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
+  const field = op.kind === 'clear-thinking' ? 'thinkingByModel'
+    : op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
   const presetKey = presetKeyOf(op.agent);
   const nextProvider = withoutModelKey(provider, field, op.model);
   const nextPreset = withoutModelKey(map[presetKey], field, op.model);
@@ -494,7 +497,7 @@ function applyProviderMemoryOp(
 
 function opDimension(op: ProviderMemoryOp): 'effort' | 'fast' | 'thinking' | 'last-model' {
   if (op.kind === 'set-last-model') return 'last-model';
-  if (op.kind === 'set-thinking') return 'thinking';
+  if (op.kind === 'set-thinking' || op.kind === 'clear-thinking') return 'thinking';
   if (op.kind === 'set-fast' || op.kind === 'clear-fast') return 'fast';
   return 'effort';
 }
@@ -523,14 +526,14 @@ function captureOpConflictBaseline(
   // clear 的写集是「权威槽 + 所有来源副本」,基线也要这么多值:只取 providerValue +
   // presetValue 的话,别的窗口改了第三个来源时这两个都没变,旧清除按陈旧快照重放会把
   // 它刚写的新值一并删掉(Greptile 二审 finding)。
-  if (op.kind === 'clear-effort' || op.kind === 'clear-fast') {
+  if (op.kind === 'clear-effort' || op.kind === 'clear-fast' || op.kind === 'clear-thinking') {
     return {
       providerValue: undefined,
       lastModel: provider?.lastModel ?? '',
       // 权威槽的值仍要单独比:clearedSourceValues 为保持「只扫来源副本」的语义刻意跳过
       // 权威槽,所以它的变化只能在这里被发现。少了这一项,另一窗口写权威槽、来源值都没
       // 变时,旧清除会按陈旧快照重放,把那个新预设删回默认值(Greptile 三审 finding)。
-      presetValue: op.kind === 'clear-fast'
+      presetValue: op.kind === 'clear-thinking' ? preset?.thinkingByModel[op.model] : op.kind === 'clear-fast'
         ? preset?.fastByModel[op.model]
         : preset?.effortByModel[op.model],
       clearedSlots: clearedSourceValues(map, op).values,
@@ -571,7 +574,8 @@ function matchesOpConflictBaseline(
   if (baseline.clearedSlots) {
     for (const [key, value] of Object.entries(baseline.clearedSlots)) {
       const slot = map[key];
-      const field = op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
+      const field = op.kind === 'clear-thinking' ? 'thinkingByModel'
+        : op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
       if (slot?.[field][op.model] !== value) return false;
     }
   }
@@ -904,6 +908,16 @@ export function setProviderModelThinking(
   persist(next, [op], map);
 }
 
+/** Follow the default again, clearing the global value and source fallback copies. */
+export function clearProviderModelThinking(agent: AgentKind, providerId: string, model: string): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = freshMap();
+  const op: ProviderMemoryOp = { kind: 'clear-thinking', agent, providerId, model };
+  const next = applyProviderMemoryOp(map, op);
+  if (next === map) return;
+  persist(next, [op], map);
+}
+
 /**
  * 把某个模型键写进指定槽(一般为 `${agent}:*` 权威槽);槽不存在则新建。
  * 只返回需要覆盖的那个键,调用方展开进整表 —— 与 clear 侧只清点名槽同一形状。
@@ -936,7 +950,7 @@ function withModelKey<K extends 'effortByModel' | 'fastByModel' | 'thinkingByMod
  */
 function withoutModelKey(
   slot: ProviderMemory | undefined,
-  field: 'effortByModel' | 'fastByModel',
+  field: 'effortByModel' | 'fastByModel' | 'thinkingByModel',
   model: string,
 ): ProviderMemory | null {
   if (!slot || !(model in slot[field])) return null;

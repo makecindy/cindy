@@ -22,7 +22,20 @@
 import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
+import { readPrCheckDiagnosis } from '@cindy/maker-shared/schedule-model';
+import { deviceName } from '../device-link/deviceName.js';
 import os from 'node:os';
+import path from 'node:path';
+
+/** Platform port: Desktop uses utilityProcess; Node Host uses its own Node executable. */
+let spawnNodeScript = (script: string, cwd: string): ReturnType<typeof spawn> => {
+  if (process.versions.electron) throw new Error('Node script hook runtime is not configured');
+  return spawn(process.execPath, [script], { cwd, stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true, detached: process.platform !== 'win32' });
+};
+export function configurePreRunNodeScriptSpawner(spawner: typeof spawnNodeScript): void {
+  spawnNodeScript = spawner;
+}
 
 /** stdout / stderr 各自的截断上限(字节级近似,按 UTF-16 length 截)。 */
 const OUTPUT_CAP = 8 * 1024;
@@ -97,6 +110,18 @@ export function buildSkipResultText(hook: PreRunHookResult): string {
   const head = `pre-run hook exit ${hook.exitCode ?? '?'} — ${hook.durationMs}ms`;
   const out = hook.stdout.trim();
   return out ? `${head} — ${firstLine(out)}` : head;
+}
+
+function parsePrCheckOutput(stdout: string) {
+  const prefix = 'CINDY_PR_CHECK_DIAGNOSIS ';
+  const marker = stdout.split(/\r?\n/).find(line => line.startsWith(prefix));
+  if (!marker) return;
+  try {
+    const device = process.versions.electron ? deviceName() : process.env.CINDY_HOST_DEVICE_NAME?.trim() || deviceName();
+    return readPrCheckDiagnosis({ ...JSON.parse(marker.slice(prefix.length)), device });
+  } catch {
+    return undefined;
+  }
 }
 
 function firstLine(text: string): string {
@@ -185,6 +210,9 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
   if (input.signal?.aborted) return abortedResult();
 
   const resolved = resolveHookCommand(input.command);
+  // A literal script path, never a shell expression or Node CLI option. This is separate
+  // from legacy xdt-node, whose Electron Node-mode behavior is unsuitable for shipped fuses.
+  const nodeScript = /^cindy-node-script\s+"([^"\r\n]+)"\s*$/.exec(input.command.trim());
   // 预检与真实执行共用同一个取消信号和超时预算。
   const syntaxError = await findShellSyntaxError(resolved.command, {
     signal: input.signal,
@@ -252,8 +280,10 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
               : exitCode === 2
                 ? 'skipped'
                 : 'failed';
+      const diagnosis = status === 'failed' && !stdoutTruncated ? parsePrCheckOutput(stdout) : undefined;
       resolve({
         status,
+        ...(diagnosis && { prCheckDiagnosis: diagnosis }),
         ...((status === 'passed' || status === 'skipped') && !stdoutTruncated
           && stdout.split(/\r?\n/).includes('CINDY_PRECHECK_OK') ? { checkSucceeded: true as const } : {}),
         decision: status === 'passed' ? 'run' : status === 'skipped' ? 'skip' : 'block',
@@ -304,7 +334,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      child = spawn(resolved.command, {
+      child = nodeScript ? spawnNodeScript(path.resolve(input.cwd || os.homedir(), nodeScript[1]), input.cwd || os.homedir()) : spawn(resolved.command, {
         shell: true,
         cwd: input.cwd?.trim() ? input.cwd : os.homedir(),
         windowsHide: true,
@@ -358,5 +388,9 @@ export function formatPreRunHookFailure(result: PreRunHookResult): string {
   }
   if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
   if (result.error) return `pre-run hook failed: ${result.error}`;
-  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}`;
+  // The script's own first stderr line is usually the actual cause ("gh not found",
+  // "not authenticated"); a bare exit code leaves the user nothing to act on.
+  // Bounded like script-mode failures, which already carry their stderr tail.
+  const reason = firstLine(result.stderr.trim());
+  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}${reason ? `: ${reason}` : ''}`;
 }

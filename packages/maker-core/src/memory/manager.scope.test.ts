@@ -17,6 +17,7 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
+import { loadMemoryContext } from './context.js';
 import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
 import type { Logger } from '../interfaces/logger.js';
 
@@ -66,6 +67,71 @@ function trackingSqlite() {
 }
 
 describe('MakerMemoryManager · owner scope guard (#2341)', () => {
+  // PR #10294 / discussion_r4559490483: existing native-edit coverage bypassed store
+  // mutations. Minimal real-SQLite unit: search A, mutate its index, restore identical bytes;
+  // the same open store must find A again (as after Git restore), without stale search hits.
+  it.each(['write', 'update', 'delete', 'consolidate', 'resetAll'] as const)(
+    'finds an unchanged file restored after %s without reopening the store', async (operation) => {
+      const workdir = path.join(rootA, 'project');
+      const directory = path.join(workdir, '.cindy', 'memory');
+      const manager = new MakerMemoryManager({
+        basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger,
+        initialEnabled: true, resolveStorageDir: () => directory,
+      });
+      try {
+        const store = await manager.getStore(workdir);
+        const original = { type: 'user' as const, name: 'drink', title: 'Drink', description: 'Preferred drink', body: 'oolong' };
+        const { filename } = await store.write(original);
+        const file = path.join(directory, filename);
+        const bytes = await readFile(file);
+        expect(await store.search('oolong')).toHaveLength(1);
+        if (operation === 'write') await store.write({ ...original, body: 'sencha', mode: 'update' });
+        if (operation === 'update') {
+          const record = await store.read(filename);
+          await store.update(filename, record.frontmatter.updatedAt, { ...original, body: 'sencha' });
+        }
+        if (operation === 'delete') await store.delete(filename);
+        if (operation === 'consolidate') await store.consolidate({ sources: [filename], target: { ...original, body: 'sencha' } });
+        if (operation === 'resetAll') await store.resetAll();
+        await writeFile(file, bytes);
+        expect(await store.search('oolong')).toHaveLength(1);
+        expect(await store.search('sencha')).toHaveLength(0);
+      } finally { manager.dispose(); }
+    },
+  );
+  // Native project-file recall: startup must not create a store or inline its index; an external
+  // same-name edit and deletion must be visible to the compatibility search (real SQLite, unit).
+  it('loads project memory on demand and refreshes native edits without a service restart', async () => {
+    const workdir = path.join(rootA, 'project');
+    const directory = path.join(workdir, '.cindy', 'memory');
+    const factory = vi.fn(trackingSqlite().factory);
+    const manager = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: factory, agents: {}, logger: noopLogger, initialEnabled: true,
+      resolveStorageDir: (scope) => scope === workdir ? directory : null,
+    });
+    try {
+      const context = await loadMemoryContext({ manager, scopeKey: workdir, snapshot: 'PRIVATE_INDEX_CANARY' });
+      expect(context.index).toBe('');
+      expect(context.rules).toContain(JSON.stringify(directory));
+      expect(context.rules).not.toContain('cindy_memory');
+      expect(factory).not.toHaveBeenCalled();
+      expect(existsSync(workdir)).toBe(false);
+      const store = await manager.getStore(workdir);
+      await store.write({ type: 'user', name: 'drink', title: 'Drink', description: 'Preferred drink', body: 'oolong' });
+      expect(await store.search('oolong')).toHaveLength(1);
+      const file = path.join(directory, 'user_drink.md');
+      await writeFile(file, (await readFile(file, 'utf8')).replace('oolong', 'sencha'));
+      expect(await store.search('oolong')).toHaveLength(0);
+      expect(await store.search('sencha')).toHaveLength(1);
+      await rm(file);
+      expect(await store.search('sencha')).toHaveLength(0);
+      const hosted = await loadMemoryContext({ manager, scopeKey: '/remote', hosted: true, projectDirectory: directory, snapshot: 'OLD_INDEX' });
+      expect(hosted).toEqual(context);
+      const ordinary = await loadMemoryContext({ manager, scopeKey: path.join(rootB, 'ordinary'), snapshot: 'ordinary index' });
+      expect(ordinary.index).toBe('ordinary index');
+      expect(ordinary.rules).toContain('cindy_memory');
+    } finally { manager.dispose(); }
+  });
   it.each(['resetAll', 'resetDigests'] as const)(
     '%s preserves unopened legacy Bot memory until lazy Home migration',
     async (resetMethod) => {

@@ -50,6 +50,7 @@ describe('mobile TapDB analytics', () => {
 
     await expect(tapdb.initMobileTapdb()).resolves.toEqual({ ok: true });
 
+    expect(clearNativeTapdbUser).toHaveBeenCalledTimes(1);
     expect(initializeTapdb).toHaveBeenCalledWith({
       clientId: 'client-id',
       clientToken: 'client-token',
@@ -98,11 +99,41 @@ describe('mobile TapDB analytics', () => {
     vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
     const tapdb = await importMobileTapdb();
 
-    await tapdb.setTapdbUser('user-1');
+    await tapdb.setTapdbUser('pay1_' + '1'.repeat(48), 'use1_' + '2'.repeat(48));
     await tapdb.clearTapdbUser();
 
-    expect(setTapdbUserId).toHaveBeenCalledWith('user-1');
+    expect(setTapdbUserId.mock.calls).toEqual([['pay1_' + '1'.repeat(48)], ['use1_' + '2'.repeat(48)]]);
     expect(clearNativeTapdbUser).toHaveBeenCalled();
+  });
+
+  // Standard tier: a delayed native write can overlap an account switch.
+  // A login tested in isolation cannot detect binding the old retention alias after the switch.
+  it('only binds the current retention alias when switching accounts during payment registration', async () => {
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_ID', 'client-id');
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
+    const tapdb = await importMobileTapdb();
+    const oldCharge = 'pay1_' + '1'.repeat(48);
+    const oldUsage = 'use1_' + '2'.repeat(48);
+    const newUsage = 'use1_' + '3'.repeat(48);
+    let started!: () => void;
+    let finish!: () => void;
+    const charging = new Promise<void>(resolve => { started = resolve; });
+    setTapdbUserId.mockImplementationOnce(() => new Promise<void>(resolve => {
+      finish = resolve;
+      started();
+    }));
+
+    const first = tapdb.setTapdbUser(oldCharge, oldUsage);
+    await charging;
+    const second = tapdb.setTapdbUser(undefined, newUsage);
+    finish();
+    await Promise.all([first, second]);
+    expect(setTapdbUserId.mock.calls).toEqual([[oldCharge], [newUsage]]);
+
+    await tapdb.setTapdbUser('legacy-account-id', 'legacy-account-id');
+    expect(setTapdbUserId.mock.calls).toEqual([[oldCharge], [newUsage]]);
+    expect(clearNativeTapdbUser.mock.invocationCallOrder.at(-1))
+      .toBeGreaterThan(setTapdbUserId.mock.invocationCallOrder.at(-1)!);
   });
 
   // ── 同意闸(2026-07-25) ──────────────────────────────────────────────────
@@ -126,7 +157,7 @@ describe('mobile TapDB analytics', () => {
     vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
     const tapdb = await importMobileTapdb();
 
-    await tapdb.setTapdbUser('user-1');
+    await tapdb.setTapdbUser('pay1_' + '1'.repeat(48));
     await tapdb.clearTapdbUser();
 
     expect(initializeTapdb).not.toHaveBeenCalled();
@@ -156,13 +187,13 @@ describe('mobile TapDB analytics', () => {
     const tapdb = await importMobileTapdb();
     const consentStore = await import('@/analytics/analyticsConsentStore');
 
-    await tapdb.setTapdbUser('user-a');
-    expect(setTapdbUserId).toHaveBeenCalledWith('user-a');
+    await tapdb.setTapdbUser('pay1_' + '2'.repeat(48));
+    expect(setTapdbUserId).toHaveBeenCalledWith('pay1_' + '2'.repeat(48));
 
     await consentStore.clearAnalyticsConsent();
     setTapdbUserId.mockClear();
 
-    await tapdb.setTapdbUser('user-b-via-sso');
+    await tapdb.setTapdbUser('pay1_' + '3'.repeat(48));
 
     expect(setTapdbUserId).not.toHaveBeenCalled();
   });
@@ -173,11 +204,11 @@ describe('mobile TapDB analytics', () => {
     const tapdb = await importMobileTapdb();
     const consentStore = await import('@/analytics/analyticsConsentStore');
 
-    await tapdb.setTapdbUser('user-1');
+    await tapdb.setTapdbUser('pay1_' + '1'.repeat(48));
     await consentStore.setAnalyticsEnabled(false);
     setTapdbUserId.mockClear();
 
-    await tapdb.setTapdbUser('user-1');
+    await tapdb.setTapdbUser('pay1_' + '1'.repeat(48));
 
     expect(setTapdbUserId).not.toHaveBeenCalled();
   });

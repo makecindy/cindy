@@ -33,7 +33,7 @@ import {
 import { createXaiSubscriptionUsageReader } from '../usage/xaiSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { getDisplayReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
@@ -74,10 +74,20 @@ import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
-import { observeSubscriptionAccountUsage, pooledCodexResetTarget, onSubscriptionAccountsChanged } from '../subscription-accounts/runtime.js';
+import {
+  observeSubscriptionAccountUsage,
+  onSubscriptionAccountsChanged,
+  pooledCodexResetTarget,
+  refreshCodexSubscriptionAccountAfterReset,
+} from '../subscription-accounts/runtime.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import {
+  detachedDefaultCodexHome,
+  readDefaultCodexHomeIdentity,
+  withDetachedDefaultCodexHome,
+} from '../usage/codexDefaultAccountHome.js';
 import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
 import { observeUsageChanges } from '../usageBroadcaster.js';
 import type { CodexResetAutoUseSettings } from '@cindy/maker-shared/device-link-contract';
@@ -113,7 +123,9 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
     if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
-    return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
+    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}), planDisplayName };
   },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
@@ -291,8 +303,16 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const assertScope = () => {
       if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     };
-  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key) ?? {
-    readRateLimits: async () => { assertScope(); const result = await maker.readAgentAccountRateLimits('codex', providerId); assertScope(); return result; },
+  const nativeTarget: Parameters<typeof withDetachedDefaultCodexHome>[0] = {
+    readRateLimits: async () => {
+      assertScope();
+      const read = () => maker.readAgentAccountRateLimits('codex', providerId);
+      // Recovery verification belongs to the credential this native adapter actually reads.
+      const result = providerId ? await read()
+        : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(read);
+      assertScope();
+      return result;
+    },
     consumeResetCredit: async (params) => { assertScope(); const result = await maker.consumeAgentAccountRateLimitResetCredit('codex', params, providerId); assertScope(); return result; },
     readAccountIdentity: async () => {
       assertScope();
@@ -306,7 +326,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
       return { email: identity, accountId };
     },
     recordRateLimitSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  });
+  };
+  // The built-in target follows the current authorization for the pool's default account.
+  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key)
+    ?? (providerId ? nativeTarget : withDetachedDefaultCodexHome(nativeTarget, assertScope)));
 
     resetServices.set(key, service);
     return service;
@@ -320,22 +343,26 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const identity = await pooled.readAccountIdentity();
       return codexResetAccountKey(identity.email, identity.accountId);
     }
+    const defaultHome = id ? null : await detachedDefaultCodexHome();
+    if (defaultHome) {
+      const identity = await readDefaultCodexHomeIdentity(defaultHome, async () => {
+        if (await detachedDefaultCodexHome() !== defaultHome
+          || scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
+      });
+      return codexResetAccountKey(identity.email, identity.accountId);
+    }
     const state = await desktopCodexAuthAdapter.getState({ providerId: id });
     const accountId = state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId(id) : null;
     if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
     return codexResetAccountKey(state.authSource === 'oauth' ? state.identity ?? null : null, accountId);
   }
 
-  // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
-  // this account-level RPC. A stale response still returns its usage payload but cannot consume a
-  // newer recovery state.
+  // Account identity and automatic rules belong to the same owner and selected login as the read.
   const readCodexRateLimits: CodexRateLimitsReader = async (providerId) => {
     const scope = activeOwnerScopeKey();
     const accountKey = await accountKeyFor(providerId);
     const service = getResetService(providerId);
-    const result = providerId && providerId !== 'openai'
-      ? await service.read()
-      : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
+    const result = await service.read();
     if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     if (accountKey !== await accountKeyFor(providerId)) throw new Error('ChatGPT account changed');
     return { ...result, providerId: providerId ?? 'openai', autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) };
@@ -397,12 +424,13 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       if (accountKey !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
-      if (providerId && (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed')) {
-        await pooledCodexResetTarget(providerId)?.refresh().catch(() => {
+      if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      if (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed') {
+        // The completed redemption can return while the account pool re-reads its full quota.
+        void refreshCodexSubscriptionAccountAfterReset(providerId).catch(() => {
           log.warn('Codex account quota refresh after reset could not complete');
         });
       }
-      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai',
           autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) } : null };
@@ -416,7 +444,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   readClaudeAccountQuotaClear,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,
-    readReferenceModelPricing: getReferenceModelPricing,
+    readReferenceModelPricing: getDisplayReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
     readUsageDeviceRows: (request) =>
@@ -460,10 +488,14 @@ export function registerMakerUsageIpc(maker: Maker): void {
     if (!snapshot) return;
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
     void recordClaudeSubscriptionUsageSnapshot({
       ...snapshot,
       ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
+      ...(planTier ? { planTier } : {}),
+      planDisplayName,
     });
   });
 

@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
+import { act, render } from '@testing-library/react';
+import { createElement, type PropsWithChildren } from 'react';
+import { MemoryRouter } from 'react-router-dom';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { appendPendingQueueItems } from '@/components/chat/pendingQueueItems';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
+import { stringifyUserContent } from '@/lib/imageRef';
+import { updateQueuedMessageText } from '../../shared/agentInputQueue';
 
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -10,7 +18,6 @@ import {
 import {
   getPendingQueueRowPresentation,
   resolvePendingQueueEditSubmission,
-  resolveSoleSteerableQueuedMessage,
 } from '@/components/new-chat/pendingQueueRowPresentation';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 
@@ -43,6 +50,72 @@ function queuedMessage(patch: Partial<QueuedMessage> = {}): QueuedMessage {
     ...patch,
   };
 }
+
+// Unit / #11043 QA: a composer item keeps a persistence envelope after editing.
+// Existing plugin fixtures use plain persisted text, so they bypass the faulty body path.
+describe('PendingQueueBubble after a plugin edit', () => {
+  it.each([
+    ['edited text', false],
+    ['{"text":"literal JSON"}', true],
+  ])('shows %s as the body and keeps the pending message identity', async (body, withAttachment) => {
+    const file = {
+      id: 'attachment-1',
+      name: 'notes.txt',
+      path: '/tmp/project/notes.txt',
+      ext: 'txt',
+      category: 'file' as const,
+      size: 12,
+      mimeType: 'text/plain',
+    };
+    const files = withAttachment ? [file] : [];
+    const draft = queuedMessage({
+      files,
+      persistedContent: stringifyUserContent('queued text', [], files, false, [], []),
+      chatMessage: { ...queuedMessage().chatMessage, files },
+    });
+    const edited = updateQueuedMessageText(draft, body);
+    const entry: QueuedMessage = {
+      ...draft,
+      text: edited.text,
+      persistedContent: edited.persistedContent,
+      chatMessage: edited.chatMessage,
+      sourcePlugin: { pluginId: 'editor-plugin', name: 'Queue Editor' },
+    };
+    const props = {
+      pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+      index: 0,
+      count: 1,
+      editingClientId: null,
+      steeringClientIds: [],
+      editLocks: [],
+      interactionLocks: [],
+      onEdit: () => {},
+      onSteer: async () => false,
+      onRemove: () => {},
+      onMove: () => {},
+    };
+    const rendered = render(createElement(PendingQueueBubble, {
+      ...props,
+      entry: { ...entry, sourcePlugin: undefined },
+    }), {
+      wrapper: ({ children }: PropsWithChildren) =>
+        createElement(MemoryRouter, null, createElement(ConfirmDialogProvider, { children })),
+    });
+    await act(async () => {});
+    expect(rendered.getByText(body, { exact: true })).toBeTruthy();
+    expect(rendered.queryByText('Queue Editor', { exact: true })).toBeNull();
+    const bubble = rendered.container.querySelector('[data-pending-queue-message="client-1"]');
+    expect(bubble).not.toBeNull();
+
+    await act(async () => {
+      rendered.rerender(createElement(PendingQueueBubble, { ...props, entry }));
+    });
+    expect(rendered.getByText(body, { exact: true })).toBeTruthy();
+    expect(rendered.getByText('Queue Editor', { exact: true })).toBeTruthy();
+    expect(rendered.container.querySelector('[data-pending-queue-message="client-1"]')).toBe(bubble);
+    if (withAttachment) expect(rendered.getByText(file.name, { exact: true })).toBeTruthy();
+  });
+});
 
 describe('getPendingQueueRowPresentation', () => {
   it('allows messages sent by another session to steer without editing their source', () => {
@@ -348,53 +421,10 @@ describe('getPendingQueueRowPresentation', () => {
   });
 });
 
-describe('resolveSoleSteerableQueuedMessage', () => {
-  const idle = { editingClientId: null, steeringClientIds: [] as string[] };
-
-  it('targets the only queued row so the composer shortcut can steer it', () => {
-    expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
-  });
-
-  it('never targets a hidden answered question reply, but still targets a supplement', () => {
-    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
-    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
-    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
-    ).toBe('question-reply:request-2:digest');
-  });
-
-  it('declines when the target is ambiguous or the row cannot steer right now', () => {
-    expect(
-      resolveSoleSteerableQueuedMessage(
-        [queuedMessage(), queuedMessage({ clientId: 'client-2' })],
-        idle,
-      ),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage({ isPendingEnqueue: true })], idle),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage(
-        [queuedMessage({ sourcePlugin: { pluginId: 'ghost-github' } })],
-        idle,
-      ),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage()], {
-        editingClientId: 'client-1',
-        steeringClientIds: [],
-      }),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage()], {
-        editingClientId: null,
-        steeringClientIds: ['client-1'],
-      }),
-    ).toBeNull();
-  });
+it('keeps answered question replies non-editable and non-steerable', () => {
+  const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+  expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
 });
-
 
 // Unit regression: pending task input must show the same paragraphs as delivered
 // history, while its send payload and an ordinary user's draft stay literal.

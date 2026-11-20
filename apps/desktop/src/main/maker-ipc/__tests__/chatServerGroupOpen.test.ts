@@ -12,12 +12,14 @@ const fixture = vi.hoisted(() => ({ handle: vi.fn(), latencyMs: 100, profiles: [
   sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), cacheGeneration: 0, page: [] as unknown[],
   /** When the server reads its state and when the answer reaches the client, in ms after the request. */
   timing: null as null | ((route: string) => { serve: number; deliver: number }),
-  offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void) }));
+  offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void),
+  /** This computer's saved settings for every room; null means none, as for a history never imported. */
+  workspace: { projectDir: '/group/project', plans: {} } as Record<string, unknown> | null }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download,
   get cacheGeneration() { return fixture.cacheGeneration; } }) }));
-vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => fixture.workspace, save: vi.fn() }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
@@ -114,6 +116,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 100;
     fixture.timing = null; fixture.offline = false; fixture.onFrame = null; fixture.cacheGeneration = 0;
+    fixture.workspace = { projectDir: '/group/project', plans: {} };
     fixture.page = [message];
     fixture.handle.mockImplementation(response);
     fixture.download.mockResolvedValue(null);
@@ -475,7 +478,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(everyone.routes).toHaveLength(4);
   });
 
-  it('starts a claimed turn after one parallel read round and one lease check', async () => {
+  it('starts a claimed turn after context, scoped failures and the final lease check', async () => {
     service.dispose();
     const botActor = '20000000-0000-4000-8000-000000000001';
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
@@ -484,7 +487,10 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     let queued = true;
     let claimedAt = 0;
     let dispatchedAt = 0;
-    fixture.handle.mockImplementation(route => {
+    const order: string[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.includes('/execution-failures?')) order.push('failures');
+      if (body?.action === 'heartbeat') order.push('heartbeat');
       if (route === '/actors') return { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route === '/executions/claim') {
         if (!queued) return { body: { execution: null } };
@@ -495,13 +501,17 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       return response(route);
     });
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged,
+      validateProjectDir: async (dir: string) => ({ ok: true as const, dir }),
       ensureLane: async () => ({ ok: true, sessionId: 'lane' }), abortLane: async () => {},
-      dispatch: async () => { dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
+      dispatch: async () => { order.push('dispatch'); dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
     await vi.advanceTimersByTimeAsync(3000);
-    // Before: snapshot → lease check → history → lease check → dispatch (400ms after the claim).
+    // #11097 / unit: source-scoped failures depend on authorized history. The final
+    // lease check follows that read to catch a stop while it was in flight.
+    // This adds one necessary round (100ms here), not redundant snapshot/list reads.
     console.info(`[group-pickup-latency] ${JSON.stringify({ afterClaimMs: dispatchedAt - claimedAt })}`);
     expect(dispatchedAt).toBeGreaterThan(0);
-    expect(dispatchedAt - claimedAt).toBe(200);
+    expect(dispatchedAt - claimedAt).toBe(300);
+    expect(order).toEqual(['failures', 'heartbeat', 'dispatch']);
   });
 
   it('reads a new room only after the snapshot whose cursor it follows from', async () => {
@@ -795,6 +805,17 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     await timed(() => service.getGroup(rooms[1]));
     expect(local.listGroups).toHaveBeenCalled();
   });
+
+  it('archives a room whose own local row appeared after the upgrade ran', async () => {
+    await timed(() => service.listGroups());
+    fixture.localGroupIds = [rooms[1]];
+    fixture.workspace = null;
+    local.listGroups.mockImplementation(async () => ({ ok: true, groups: [{
+      id: rooms[1], name: 'Room 2', replyMode: 'all', speakingMode: 'auto', members: [], organizerBotId: null,
+      projectDir: null, lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, createdAt: 1, updatedAt: 1 }] }));
+    const { value } = await timed(() => service.chatServer!.manage({ groupId: rooms[1], action: { type: 'archive', archived: true, expectedRevision: 1 } }));
+    expect(value).toEqual({ ok: true });
+  });
 });
 
 describe('Chat Server realtime cursor against a server model', () => {
@@ -837,7 +858,7 @@ describe('Chat Server realtime cursor against a server model', () => {
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 20;
-    fixture.timing = null; fixture.offline = false;
+    fixture.timing = null; fixture.offline = false; fixture.workspace = { projectDir: '/group/project', plans: {} };
     head = 0; history = []; shown = []; requestVersion = 0; subscriptions.clear();
     for (const text of ['one', 'two', 'three']) commit(text);
     fixture.onFrame = (owner, frame) => {

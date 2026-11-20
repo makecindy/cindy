@@ -25,10 +25,13 @@ import {
 import {
   beginCodexGenerationTurn,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   finalizeCodexGenerationTurn,
   newCodexRuntimeState,
   settleCodexSpeedUsage,
   translateAgentMessageDelta,
+  translateReasoningSummaryTextDelta,
+  translateReasoningTextDelta,
   translateItemNotification,
 } from '../packages/maker-core/src/agents/codex/translator.js';
 import { estimateWordTokens } from '../packages/maker-core/src/agents/shared/calibrated-token-speed.js';
@@ -176,6 +179,7 @@ const codex: Harness = {
     const queue = { push: () => true } as never;
     const ctx = { rt, log } as never;
     let lastRefresh = -Infinity;
+    let publishedLiveRate = false;
     return {
       feed(line) {
         const { t, msg } = line;
@@ -188,18 +192,26 @@ const codex: Harness = {
           case 'item/started':
           case 'item/completed':
             translateItemNotification(msg.method === 'item/started' ? 'started' : 'completed', params as never, queue, ctx);
-            return false;
+            if (msg.method === 'item/completed') return false;
+            break;
+          case 'item/updated':
+            translateItemNotification('updated', params as never, queue, ctx);
+            if (!['agentMessage', 'reasoning'].includes(String(codexItem(line)?.type))) return false;
+            break;
           case 'item/agentMessage/delta':
             translateAgentMessageDelta(params as never, queue, ctx);
-            // The agent refreshes its status after a delta, a few times a second at most.
-            if (t - lastRefresh < 250) return false;
-            lastRefresh = t;
-            return true;
+            break;
+          case 'item/reasoning/summaryTextDelta':
+            translateReasoningSummaryTextDelta(params as never, queue, ctx);
+            break;
+          case 'item/reasoning/textDelta':
+            translateReasoningTextDelta(params as never, queue, ctx);
+            break;
           case 'thread/tokenUsage/updated': {
             const last = codexUsage(line);
             if (!last || !((last.outputTokens ?? 0) > 0)) return false;
             settleCodexSpeedUsage(rt, { outputTokens: last.outputTokens ?? 0, reasoningOutputTokens: last.reasoningOutputTokens }, t);
-            return true;
+            break;
           }
           case 'turn/completed':
             finalizeCodexGenerationTurn(rt, turnId, t);
@@ -208,6 +220,12 @@ const codex: Harness = {
           default:
             return false;
         }
+        const boundary = msg.method === 'item/started' ||
+          (msg.method === 'thread/tokenUsage/updated' && rt.generationPendingToolIds.size > 0);
+        if (!boundary && !codexUsageRefreshDue(rt, lastRefresh, publishedLiveRate, t)) return false;
+        publishedLiveRate = rt.generationTimingReliable && rt.tokenSpeed.hasLiveRate;
+        lastRefresh = t;
+        return true;
       },
       snapshot: (now) => codexSpeedSnapshot(rt, now),
     };
@@ -269,7 +287,9 @@ export interface ReplayResult {
   model: string;
   requests: number;
   realTokens: number;
+  timedTokens: number;
   streamMs: number;
+  qualifyingRate: number | null;
   /** Shown value divided by the real value, at every status update while running. */
   rate: number[];
   tokens: number[];
@@ -283,17 +303,29 @@ export interface ReplayResult {
 export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult {
   const harness = harnessOf(lines);
   const requests = harness.requests(lines);
-  const truth = truthOf(requests);
+  const timed = requests.filter(request => request.end > request.start);
+  const truth = truthOf(timed);
+  // Independent reference: whole reported output of requests with at least one second of
+  // observed stream time. The host also subtracts buffered output at the first byte.
+  const qualifying = timed.filter(request => request.end - request.start >= 1_000);
+  const qualifiedRate = (completed: Request[]) => {
+    const ms = completed.reduce((sum, request) => sum + request.end - request.start, 0);
+    const tokens = completed.reduce((sum, request) => sum + request.output, 0);
+    return ms > 0 ? tokens * 1_000 / ms : null;
+  };
   const measure = driver ?? harness.driver();
   const result: ReplayResult = {
     model: harness.model(lines),
     requests: requests.length,
     realTokens: requests.reduce((sum, request) => sum + request.output, 0),
-    streamMs: requests.reduce((sum, request) => sum + (request.end - request.start), 0),
+    qualifyingRate: qualifiedRate(qualifying),
+    timedTokens: timed.reduce((sum, request) => sum + request.output, 0),
+    streamMs: timed.reduce((sum, request) => sum + (request.end - request.start), 0),
     rate: [], tokens: [], average: [], firstReadingMs: null, final: undefined, chart: [], peak: 0,
   };
   let history = emptyRateHistory(null);
-  let lastRate = 0;
+  let lastMeasurementTime: number | undefined;
+  let lastRequestIndex = 0;
   const firstStart = requests[0]?.start ?? 0;
   // The Codex translator reads the clock itself: let it read the recording's.
   const realNow = Date.now;
@@ -306,19 +338,28 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
       const shown = measure.snapshot(line.t);
       if (!shown) continue;
       history = recordTokenSpeed(history, { startedAt: 1, speed: shown, now: line.t });
+      const latest = shown.measurement?.latest;
+      const index = shown.request?.index ?? 0;
+      if (index > lastRequestIndex && shown.measurement?.average != null) {
+        // Only compare settled averages with requests that had finished at this update.
+        // The reference uses first-to-last byte; a buffered first packet can still account for a difference.
+        const reference = qualifiedRate(qualifying.filter(request => request.end <= line.t));
+        if (reference) result.average.push(shown.measurement.average / reference);
+      }
+      lastRequestIndex = index;
       const real = truth.at(line.t);
       if (real.clockMs < 1_000 || real.tokens < 20) continue;
-      result.tokens.push(shown.tokens / real.tokens);
-      if (shown.average > 0) result.average.push(shown.average / ((real.tokens * 1_000) / real.clockMs));
-      if (!shown.streaming) continue;
-      const before = truth.at(truth.whenClock(Math.max(0, real.clockMs - WINDOW_MS)));
-      const realRate = ((real.tokens - before.tokens) * 1_000) / (real.clockMs - before.clockMs);
-      // Only a reading that changed is a new measurement; a held one was judged when it was taken.
-      if (shown.rate > 0 && shown.rate !== lastRate && realRate > 0) {
-        result.rate.push(shown.rate / realRate);
-        result.firstReadingMs ??= line.t - firstStart;
-      }
-      lastRate = shown.rate;
+      const untimedOutput = requests.filter(request => request.start === request.end && request.end <= line.t)
+        .reduce((sum, request) => sum + request.output, 0);
+      result.tokens.push((shown.totalOutputTokens ?? shown.tokens) / (real.tokens + untimedOutput));
+      if (!latest || latest.measuredAt === lastMeasurementTime) continue;
+      lastMeasurementTime = latest.measuredAt;
+      result.firstReadingMs ??= latest.measuredAt - firstStart;
+      if (latest.kind !== 'stream') continue;
+      const sample = truth.at(latest.measuredAt);
+      const before = truth.at(truth.whenClock(Math.max(0, sample.clockMs - WINDOW_MS)));
+      const realRate = ((sample.tokens - before.tokens) * 1_000) / (sample.clockMs - before.clockMs);
+      if (realRate > 0) result.rate.push(latest.rate / realRate);
     }
     const end = lines.at(-1)?.t ?? 0;
     result.final = measure.snapshot(end);
@@ -339,18 +380,18 @@ function quantiles(values: number[]): string {
 }
 
 export function printReport(name: string, result: ReplayResult): void {
-  const realTps = (result.realTokens * 1_000) / result.streamMs;
-  console.log(`\n${name}: ${result.model}, ${result.requests} requests, ${result.realTokens} real output tokens over ` +
-    `${(result.streamMs / 1_000).toFixed(1)}s of stream = ${realTps.toFixed(1)} tok/s`);
-  console.log('  shown / real while the turn runs (1.00 = exact)');
-  console.log(`    recent speed   ${quantiles(result.rate)}` +
+  const realTps = result.streamMs > 0 ? (result.timedTokens * 1_000 / result.streamMs).toFixed(1) : '—';
+  console.log(`\n${name}: ${result.model}, ${result.requests} requests, ${result.realTokens} reported output tokens, ${result.timedTokens} with timing over ` +
+    `${(result.streamMs / 1_000).toFixed(1)}s of stream = ${realTps} tok/s`);
+  console.log('  shown / replay reference (stream timing within a request is reconstructed)');
+  console.log(`    stream estimate ${quantiles(result.rate)}` +
     (result.firstReadingMs !== null ? `, first reading after ${(result.firstReadingMs / 1_000).toFixed(1)}s` : ''));
   console.log(`    output so far  ${quantiles(result.tokens)}`);
-  console.log(`    turn average   ${quantiles(result.average)}`);
+  console.log(`    settled average ${quantiles(result.average)}`);
   const final = result.final;
   console.log(final
-    ? `  when the turn ended: ${final.tokens} tokens (real ${result.realTokens}), average ${final.average.toFixed(1)} tok/s ` +
-      `(real ${realTps.toFixed(1)}), peak ${result.peak.toFixed(0)} tok/s`
+    ? `  when the turn ended: ${final.totalOutputTokens ?? final.tokens} tokens (reported ${result.realTokens}), average ${final.measurement?.average?.toFixed(1) ?? '—'} tok/s ` +
+      `(reference for requests >=1s: ${result.qualifyingRate?.toFixed(1) ?? '—'}), peak ${result.peak.toFixed(0)} tok/s`
     : '  when the turn ended: nothing shown');
   if (result.chart.length > 0) {
     console.log(`  chart: ${result.chart.length} points, ${Math.min(...result.chart).toFixed(0)}–${Math.max(...result.chart).toFixed(0)} tok/s`);

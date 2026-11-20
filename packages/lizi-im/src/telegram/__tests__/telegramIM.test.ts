@@ -2589,6 +2589,66 @@ describe('TelegramIM', () => {
     }
   });
 
+  it('group question buttons and replies belong to the requester, not the bot account owner', async () => {
+    await connect();
+    const seen: IMCardActionEvent[] = [];
+    const messages: IMMessageEvent[] = [];
+    im.onCardAction(event => { seen.push(event); });
+    im.onMessage(event => { messages.push(event); });
+    const sent = await im.sendInteractiveCard('g/-100200/77', {
+      body: 'Which format?', buttons: [{ id: 'aq:test:0:0:0', label: 'PDF' }],
+    }, { questionRespondentId: '222' });
+    const call = api.calls.filter(c => c.method === 'sendMessage').at(-1)!;
+    expect(call.params.chat_id).toBe('-100200');
+    expect(call.params.message_thread_id).toBe(77);
+    const token = (call.params.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard[0][0].callback_data;
+    const messageId = Number(sent.messageId.split('|')[1]);
+    let seq = 200;
+    const press = (fromId: number, target = messageId): TgUpdate => ({ update_id: ++seq, callback_query: {
+      id: `question-${seq}`, from: { id: fromId, is_bot: false, first_name: 'U' }, data: token,
+      message: { message_id: target, date: nowSec(), chat: { id: -100200, type: 'supergroup' },
+        message_thread_id: 77, is_topic_message: true },
+    } });
+    api.pushUpdates([press(111), press(333), press(222, messageId + 1)]);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(seen).toHaveLength(0);
+    api.pushUpdates([press(222)]);
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]).toMatchObject({ senderId: 'g/-100200/77', messageId: sent.messageId, buttonId: 'aq:test:0:0:0' });
+    const reply = (fromId: number): TgUpdate => {
+      const update = groupMessage({ fromId, messageId: ++seq, text: 'PDF', threadId: 77 });
+      update.message!.reply_to_message = { message_id: messageId, date: nowSec(), from: BOT,
+        chat: { id: -100200, type: 'supergroup' }, text: 'Which format?' };
+      return update;
+    };
+    api.pushUpdates([reply(111), reply(333)]);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(messages).toHaveLength(0);
+    api.pushUpdates([reply(222)]);
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+    expect(messages).toHaveLength(0);
+    expect(seen[1]).toMatchObject({ messageId: sent.messageId, buttonId: 'question:reply', payload: { answerText: 'PDF' } });
+    // PR #10511, unit via real inbound transport: a closed question must not
+    // swallow ordinary quoted messages from the owner or other admitted members.
+    await im.updateInteractiveCard(sent.messageId, { body: 'Answered', buttons: [] },
+      { questionRespondentId: '222', questionClosed: true });
+    api.pushUpdates([reply(111), reply(333)]);
+    await vi.waitFor(() => expect(messages).toHaveLength(2));
+    expect(seen).toHaveLength(2);
+    api.pushUpdates([{ update_id: ++seq, my_chat_member: {
+      chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+      from: { id: 111, is_bot: false, first_name: 'U' }, date: nowSec(),
+      old_chat_member: { status: 'member', user: BOT }, new_chat_member: { status: 'left', user: BOT },
+    } }]);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    api.pushUpdates([press(222)]);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(seen).toHaveLength(2);
+    await connect();
+    await expect(im.updateInteractiveCard(sent.messageId, { body: 'Answered', buttons: [] },
+      { questionRespondentId: '222' })).rejects.toThrow('expired connection');
+  });
+
   // 交互卡的 callback token 只活在进程内存里(codec 的 callbackRefs), 重启或被淘汰后
   // 解不出来。此前只弹一次「已过期」、按钮原样留在消息上, 看起来还能点。
   describe('失效回调的卡片收口', () => {

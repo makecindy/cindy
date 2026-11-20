@@ -75,40 +75,45 @@ async function main(): Promise<number> {
   const relay = await startRelayServer({ dataDir, port: 0 });
   try {
     const base = relay.localUrl;
-    // 与 Desktop / Mobile 相同的加入路径:主人生成加入链接,新设备解析链接、申请、等主人同意。
-    const { code } = await call(base, 'POST', '/api/device-link/relay/admin/join-codes', { credential: owner.credential });
-    const pairSecret = createRelayPairSecret(crypto);
-    const link = parseRelayJoinLink(
-      buildRelayJoinLink({ baseUrl: base, code, ownerPublicKey: ownerKey.publicKey, pairSecret, app: 'cindy' }),
-    )!;
-    const relayFetch: RelayFetch = (url, init) => fetch(url, init);
-    const deviceId = 'interop-controller-phone';
-    const identity = createRelayJoinIdentity(crypto, link, relayId, deviceId);
-    const request = await submitRelayPairRequest(relayFetch, link, {
-      deviceId,
-      deviceName: 'Interop controller',
-      platform: 'ios',
-      appVersion: '0.0.0-test',
-      accountUserId: OWNER_USER,
-      publicKey: identity.publicKey,
-      proof: identity.proof,
-    });
-    const approval = waitForRelayApproval(relayFetch, link, request, { deadlineMs: 30_000 });
-    // 主人电脑:核对配对证明后签发证书并同意。
-    const { requests } = await call(base, 'GET', '/api/device-link/relay/admin/pair-requests', { credential: owner.credential });
-    const pending = (requests as Array<Record<string, string>>).find((r) => r.requestId === request.requestId)!;
-    if (!verifyRelayPairProof(crypto, pairSecret, { relayId, deviceId, publicKey: pending.publicKey, proof: pending.proof })) {
-      throw new Error('pairing proof mismatch');
+    async function joinController(deviceId: string, deviceName: string) {
+      const { code } = await call(base, 'POST', '/api/device-link/relay/admin/join-codes', { credential: owner.credential });
+      const pairSecret = createRelayPairSecret(crypto);
+      const link = parseRelayJoinLink(
+        buildRelayJoinLink({ baseUrl: base, code, ownerPublicKey: ownerKey.publicKey, pairSecret, app: 'cindy' }),
+      )!;
+      const relayFetch: RelayFetch = (url, init) => fetch(url, init);
+      const identity = createRelayJoinIdentity(crypto, link, relayId, deviceId);
+      const request = await submitRelayPairRequest(relayFetch, link, {
+        deviceId,
+        deviceName,
+        platform: 'ios',
+        appVersion: '0.0.0-test',
+        accountUserId: OWNER_USER,
+        publicKey: identity.publicKey,
+        proof: identity.proof,
+      });
+      const approval = waitForRelayApproval(relayFetch, link, request, { deadlineMs: 30_000 });
+      // 主人电脑:核对配对证明后签发证书并同意。
+      const { requests } = await call(base, 'GET', '/api/device-link/relay/admin/pair-requests', { credential: owner.credential });
+      const pending = (requests as Array<Record<string, string>>).find((r) => r.requestId === request.requestId)!;
+      if (!verifyRelayPairProof(crypto, pairSecret, { relayId, deviceId, publicKey: pending.publicKey, proof: pending.proof })) {
+        throw new Error('pairing proof mismatch');
+      }
+      await call(base, 'POST', `/api/device-link/relay/admin/pair-requests/${request.requestId}/approve`, {
+        credential: owner.credential,
+        body: {
+          cert: issueRelayDeviceCert(crypto, ownerKey.seed, { relayId, deviceId, publicKey: pending.publicKey, role: 'member', issuedAt: Date.now() }),
+        },
+      });
+      const admitted = await approval;
+      acceptRelayDeviceCert(crypto, link, { relayId, deviceId, publicKey: identity.publicKey, cert: admitted.cert });
+      return { admitted, identity };
     }
-    await call(base, 'POST', `/api/device-link/relay/admin/pair-requests/${request.requestId}/approve`, {
-      credential: owner.credential,
-      body: {
-        cert: issueRelayDeviceCert(crypto, ownerKey.seed, { relayId, deviceId, publicKey: pending.publicKey, role: 'member', issuedAt: Date.now() }),
-      },
-    });
-    const admitted = await approval;
-    acceptRelayDeviceCert(crypto, link, { relayId, deviceId, publicKey: identity.publicKey, cert: admitted.cert });
-    console.log('[relay-interop] relay started on loopback; controller paired through the join flow');
+    const deviceId = 'interop-controller-phone';
+    const { admitted, identity } = await joinController(deviceId, 'Interop controller');
+    const observerId = 'interop-controller-other';
+    const observer = await joinController(observerId, 'Interop second controller');
+    console.log('[relay-interop] relay started on loopback; both controllers paired through the join flow');
 
     const { certs } = await call(base, 'GET', '/api/device-link/relay/certs', { credential: owner.credential });
 
@@ -121,6 +126,7 @@ async function main(): Promise<number> {
           CINDY_TEST_RELAY_URL: `${base.replace(/^http/, 'ws')}/api/device-link/ws`,
           CINDY_TEST_HOST_TOKEN: owner.credential,
           CINDY_TEST_CONTROLLER_TOKEN: admitted.credential,
+          CINDY_TEST_OBSERVER_TOKEN: observer.admitted.credential,
           CINDY_TEST_AUTH_SCHEME: 'CindyRelay',
           CINDY_TEST_FRAME_AUTH: JSON.stringify({
             relayId,
@@ -128,6 +134,7 @@ async function main(): Promise<number> {
             certs,
             host: { deviceId: 'interop-owner-desktop', seed: ownerKey.seed },
             controller: { deviceId, seed: identity.seed },
+            observer: { deviceId: observerId, seed: observer.identity.seed },
           }),
         },
       });

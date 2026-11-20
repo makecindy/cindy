@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "納",
     "mcpComplete": "已畢",
     "mcpCancel": "罷",
     "mode": {

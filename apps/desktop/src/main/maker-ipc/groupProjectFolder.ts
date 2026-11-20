@@ -1,122 +1,121 @@
 import path from 'node:path';
-import { githubRepositoryOfRemote, type GroupCheckoutResult, type GroupProjectCheckouts } from './groupProjectCheckout.js';
+import { groupRepositoryKey, parseGroupRepository, readGroupRepository, type GroupRepository } from '@cindy/maker-shared/botGroupChat';
 
-/**
- * A group's project folder on this computer (bot-group-chat.md §7.5), in this order:
- *
- * 1. the folder chosen here in group management;
- * 2. the one project registered in Cindy whose git `origin` is the group's repository;
- * 3. Cindy's own checkout of that repository, cloned on first need (`groupProjectCheckout.ts`).
- *
- * A chosen folder is binding: when it is gone the work fails rather than running somewhere else.
- * The other two are found for the user, so a folder that went away is simply looked up again.
- */
-export interface GroupProjectRoom { id: string; project?: { kind: 'github'; repo: string } | null }
-export interface GroupProjectFolder {
-  dir: string | null;
-  /** Found from the group's repository, not chosen on this computer. */
-  auto: boolean;
+export interface GroupProjectRoom { id: string; name?: string; project?: GroupRepository | null }
+export interface GroupProjectFolder { dir: string | null; auto: boolean }
+
+/** Only explicit URLs in the request can identify a repository. Never fetch one here. */
+export function requestRepository(text: string): GroupRepository | null {
+  const repositories = new Map<string, GroupRepository>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>`（）「」，。]+/gi)) {
+    const repo = parseGroupRepository(match[0].replace(/[).,;\]]+$/, ''));
+    if (repo) repositories.set(groupRepositoryKey(repo), repo);
+  }
+  return repositories.size === 1 ? [...repositories.values()][0]! : null;
 }
-/** `pending`: why the group's repository is not on this computer yet; `dir` is null then. */
-export type GroupWorkFolder = GroupProjectFolder & { pending?: Exclude<GroupCheckoutResult, { status: 'ready' }> };
-
-/** How long a found folder is trusted, and how soon a miss is looked up again. */
-const FOUND_MS = 5 * 60_000;
-const MISSED_MS = 20_000;
 
 export function createGroupProjectFolders(deps: {
-  /** The folder chosen for this group on this computer. */
   chosen: (roomId: string) => string | null;
-  /** Registered project folders whose git `origin` is this repository. */
-  findRegistered?: (repo: string) => Promise<string[]>;
-  checkouts?: Pick<GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
-  /** An existing local directory usable as a project (same rules as a new task's project). */
+  findRegistered?: (repository: GroupRepository) => Promise<string[]>;
+  executorProject?: (botId: string) => Promise<string | null>;
   validate?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false }>;
 }) {
-  // Settings reads and every reply resolve the folder, and each lookup reads the git remotes of
-  // local projects. A reply burst shares one lookup; a project registered just now is found soon.
-  const registered = new Map<string, { until: number; dir: Promise<string | null> }>();
-  const repoOf = (room: GroupProjectRoom) => room.project?.kind === 'github' ? room.project.repo : null;
-  const forget = (repo: string) => { registered.delete(repo.toLowerCase()); };
-  function registeredFolder(repo: string): Promise<string | null> {
-    const key = repo.toLowerCase();
-    const cached = registered.get(key);
-    if (cached && Date.now() < cached.until) return cached.dir;
-    const entry: { until: number; dir: Promise<string | null> } = { until: Date.now() + FOUND_MS, dir: Promise.resolve(null) };
-    // Several registered checkouts of one repository: Cindy does not guess which one is meant.
-    entry.dir = (deps.findRegistered?.(repo) ?? Promise.resolve([]))
-      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null)
-      .then(dir => { if (!dir) entry.until = Date.now() + MISSED_MS; return dir; });
-    registered.set(key, entry);
-    return entry.dir;
+  // Group snapshots refresh often. Cache presentation only; every dispatch resolves current membership.
+  const previews = new Map<string, { roomRepository: string; until: number; result: Promise<GroupProjectFolder> }>();
+  async function resolve(room: GroupProjectRoom, request?: GroupRepository | null): Promise<GroupProjectFolder> {
+    const chosen = deps.chosen(room.id);
+    if (chosen) {
+      const checked = await deps.validate?.(chosen);
+      if (!checked?.ok) throw new Error('WORKDIR_UNAVAILABLE');
+      return { dir: checked.dir, auto: false };
+    }
+    const roomRepository = readGroupRepository(room.project);
+    const repositories = roomRepository && request && groupRepositoryKey(roomRepository) === groupRepositoryKey(request)
+      ? [roomRepository] : [roomRepository, request];
+    for (const repository of repositories) {
+      if (!repository) continue;
+      const matches = await deps.findRegistered?.(repository);
+      if (matches?.length === 1) {
+        const checked = await deps.validate?.(matches[0]!);
+        if (checked?.ok) return { dir: checked.dir, auto: true };
+      }
+    }
+    return { dir: null, auto: true };
   }
-  const usable = async (dir: string) => {
-    const checked = await deps.validate?.(dir).catch(() => null);
-    return checked?.ok ? checked.dir : null;
-  };
 
   return {
-    /** What group management shows: the chosen folder, else the registered project. Never clones. */
-    async shown(room: GroupProjectRoom): Promise<GroupProjectFolder> {
+    registered: async (dir: string) => !!(await deps.validate?.(dir))?.ok,
+    invalidate: () => previews.clear(),
+    shown: async (room: GroupProjectRoom): Promise<GroupProjectFolder> => {
       const chosen = deps.chosen(room.id);
       if (chosen) return { dir: chosen, auto: false };
-      const repo = repoOf(room);
-      return { dir: repo ? await registeredFolder(repo) : null, auto: true };
-    },
-    /**
-     * The folder work for this group runs in, checked to exist. `signIn`: Cindy may open its GitHub
-     * sign-in to clone the repository (the requester's own request, on their computer).
-     */
-    async forWork(room: GroupProjectRoom, options: { signIn: boolean; isCurrent: () => boolean }): Promise<GroupWorkFolder> {
-      // A host that cannot check folders has no project folders.
-      if (!deps.validate) return { dir: null, auto: false };
-      const chosen = deps.chosen(room.id);
-      if (chosen) {
-        const dir = await usable(chosen);
-        if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
-        return { dir, auto: false };
-      }
-      const repo = repoOf(room);
+      const repo = readGroupRepository(room.project);
       if (!repo) return { dir: null, auto: true };
-      const found = await registeredFolder(repo);
-      if (found && !deps.checkouts?.isManaged(found)) {
-        const dir = await usable(found);
-        if (dir) return { dir, auto: true };
-        forget(repo);
+      const key = groupRepositoryKey(repo);
+      const cached = previews.get(room.id);
+      if (cached?.roomRepository === key && cached.until > Date.now()) return cached.result;
+      if (previews.size >= 128) previews.clear();
+      const result = resolve(room);
+      previews.set(room.id, { roomRepository: key, until: Date.now() + 20_000, result });
+      try { return await result; } catch (error) {
+        if (previews.get(room.id)?.result === result) previews.delete(room.id);
+        throw error;
       }
-      // Cindy's own checkout is a convenience: a clone that cannot run leaves the work without the project.
-      const checkout = await deps.checkouts?.ensure(repo, options)
-        ?.catch(error => { if (!options.isCurrent()) throw error; return null; });
-      if (!checkout) return { dir: null, auto: true };
-      if (checkout.status !== 'ready') return { dir: null, auto: true, pending: checkout };
-      // Registered by the clone: group management shows it from now on.
-      forget(repo);
-      const dir = await usable(checkout.dir);
-      if (dir) await deps.checkouts!.sync(dir);
-      return { dir, auto: true };
+    },
+    async forWork(room: GroupProjectRoom, options: {
+      botId: string; request?: GroupRepository | null; isCurrent: () => boolean;
+    }) {
+      if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
+      const project = await resolve(room, options.request);
+      if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
+      const dir = project.dir ?? await deps.executorProject?.(options.botId) ?? null;
+      if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
+      return { ...project, dir, continueConversation: !project.dir && !room.project && !options.request };
     },
   };
 }
 export type GroupProjectFolders = ReturnType<typeof createGroupProjectFolders>;
 
 /**
- * Registered project folders that are checkouts of `repo` (their `origin`), main checkouts only:
- * a linked worktree (`.git` is a file) or a folder inside another match is the same project.
+ * Registered project folders that are checkouts of `repo`: any of their git remotes is it, so a
+ * fork whose `upstream` is the repository counts. Main checkouts only: a linked worktree (`.git` is
+ * a file) or a folder inside another match is the same project. Keeps the order of `dirs`.
  */
-export async function findRepositoryFolders(dirs: readonly string[], repo: string, read: {
-  origin(dir: string): Promise<string | null>;
+export async function findRepositoryFolders(dirs: readonly string[], repo: GroupRepository, read: {
+  remotes(dir: string): Promise<string[]>;
   isMainCheckout(dir: string): Promise<boolean>;
 }): Promise<string[]> {
-  const wanted = repo.toLowerCase();
+  const wanted = groupRepositoryKey(repo);
   const matches: string[] = [];
   for (let start = 0; start < dirs.length; start += 8) {
     const batch = dirs.slice(start, start + 8);
     const found = await Promise.all(batch.map(async dir => {
-      const origin = await read.origin(dir).catch(() => null);
-      return origin && githubRepositoryOfRemote(origin)?.toLowerCase() === wanted && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
+      const remotes = await read.remotes(dir).catch(() => [] as string[]);
+      return remotes.some(url => { const found = parseGroupRepository(url); return !!found && groupRepositoryKey(found) === wanted; })
+        && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
     }));
     for (const dir of found) if (dir) matches.push(path.resolve(dir));
   }
   const unique = [...new Set(matches)];
   return unique.filter(dir => !unique.some(other => other !== dir && dir.startsWith(other + path.sep)));
+}
+
+/**
+ * The repositories a folder's git remotes point at (GitHub, GitLab, CNB or any git host), the group's
+ * best guess first: `upstream` (a fork's source, the repository the group shares), then `origin`,
+ * then the rest by name. Remotes that are no repository address are left out; the same repository
+ * written differently is listed once.
+ */
+export function folderRepositories(remotes: readonly { name: string; url: string }[]): GroupRepository[] {
+  const rank = (name: string) => name === 'upstream' ? 0 : name === 'origin' ? 1 : 2;
+  const ordered = [...remotes].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+  const seen = new Set<string>();
+  const repos: GroupRepository[] = [];
+  for (const remote of ordered) {
+    const repo = parseGroupRepository(remote.url);
+    if (!repo || seen.has(groupRepositoryKey(repo))) continue;
+    seen.add(groupRepositoryKey(repo));
+    repos.push(repo);
+  }
+  return repos;
 }

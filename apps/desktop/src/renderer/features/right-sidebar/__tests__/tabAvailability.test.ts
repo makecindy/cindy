@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { ghostHostUiApprovalTokens } from '../../../../shared/ghost';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import {
   buildTabAvailabilities,
@@ -136,7 +135,7 @@ it('keeps resource task views local while preserving the same plugin remote task
       ui:{resources:[{uri:'ui://board',file:'board.html'}],tools:{}},
       host:{views:[{id:'board',title:'Board',resourceUri:'ui://board',scope:'task'}]},
     }} } as unknown as InstalledGhost;
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
+
   const resource = {id:'resource',kind:'plugin-task',state:{instanceId:'planner',resourceViewId:'board'}} as unknown as TabState;
   const legacy = {id:'legacy',kind:'plugin-task',state:{instanceId:'planner'}} as unknown as TabState;
   const visible = (deviceLinkDeviceId:string|null|undefined,remoteHostId:string|null=null) => projectAvailableTabs([resource,legacy],null,buildTabAvailabilities({installedGhosts:[ghost],remoteHostId,deviceLinkDeviceId,subagentsAvailable:true}).session).tabs.map(tab=>tab.id);

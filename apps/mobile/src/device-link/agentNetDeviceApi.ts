@@ -3,7 +3,7 @@ import type { ApiFetchOptions } from '@/api/client';
 import { ApiError } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { isMobileAgentNetActive } from './agentNetRuntime';
+import { isMobileAgentNetActive, noteMobileAgentNetDeviceList } from './agentNetRuntime';
 import { ensureMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
 import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
 import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, normalizeSelfHostedRelayBase } from './selfHostedRelayRouting';
@@ -36,7 +36,7 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
         const directory = await identity.api.directory(); guard();
         await writeMobileAgentNetDirectory(identity, directory); guard();
         const devices: DeviceView[] = directory.map(view => ({ deviceId: view.certificate.deviceId, name: view.name, selfName: view.selfName ?? view.name,
-          platform: view.platform ?? null, appVersion: view.appVersion ?? null,
+          platform: view.platform ?? null, app: view.app, appVersion: view.appVersion ?? null,
           lastSeenAt: view.lastSeenAt ? new Date(view.lastSeenAt).toISOString() : null,
           online: view.online, busy: !!view.busy, remoteControlEnabled: view.remoteControlEnabled,
           isSelf: view.certificate.deviceId === enrollment.deviceId }));
@@ -44,7 +44,16 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
       };
       if (mobileAgentNetRequiresEncryption()) result = await readEncrypted();
       else {
-        const [legacy, encrypted] = await Promise.allSettled([readLegacy(), readEncrypted()]); guard();
+        const startedAt = Date.now();
+        const legacyDirectory = readLegacy().then(value => {
+          guard();
+          const list = value as { devices: DeviceView[] };
+          if (!getActiveSelfHostedRelay() && Array.isArray(list.devices)) {
+            noteMobileAgentNetDeviceList(list.devices.map(device => device.deviceId), startedAt);
+          }
+          return value;
+        });
+        const [legacy, encrypted] = await Promise.allSettled([legacyDirectory, readEncrypted()]); guard();
         // Only a transient directory outage can use the other live result;
         // invalid membership, certificates and owner changes stay terminal.
         for (const response of [legacy, encrypted]) {
@@ -59,7 +68,10 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
           const devices = new Map(previous.devices.map(device => [device.deviceId, device]));
           for (const device of encrypted.value.devices) {
             const old = devices.get(device.deviceId);
-            if (!device.online && old?.online) continue;
+            if (!device.online && old?.online) {
+              if (device.app !== undefined) devices.set(device.deviceId, { ...old, app: device.app });
+              continue;
+            }
             devices.set(device.deviceId, { ...old, ...device, deviceInfo: old?.deviceInfo ?? device.deviceInfo });
           }
           result = { ...previous, devices: [...devices.values()] };

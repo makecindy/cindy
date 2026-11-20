@@ -146,6 +146,7 @@ export {
   resolveIdentityFingerprints,
   SSH_AGENT_UNAVAILABLE_CODE,
 } from './sshAuthentication.js';
+export type { AgentUnavailableReason } from './sshAuthentication.js';
 
 export type {
   AddHostInput,

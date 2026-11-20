@@ -87,8 +87,9 @@ void mountPage({
       },
       getHealth: async () => ({
         active: (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case)) ? 'user-browser' : 'external',
-        status: ctx.case.startsWith('browser-') || ['my-browser-disconnected', 'my-browser-probe-failed'].includes(ctx.case) ? 'error' : 'ready',
+        status: ctx.case.startsWith('browser-') || ['my-browser-disconnected', 'my-browser-probe-failed', 'my-browser-no-chrome'].includes(ctx.case) ? 'error' : 'ready',
         ...(ctx.case === 'my-browser-disconnected' ? { reason: 'extension-disconnected' } : {}),
+        ...(ctx.case === 'my-browser-no-chrome' ? { reason: 'browser-missing' } : {}),
         ...(ctx.case === 'my-browser-probe-failed' ? { reason: 'status-failed' } : {}),
         ...(ctx.case === 'browser-updating' ? { reason: 'plugin-updating' } : {}),
         ...(ctx.case === 'browser-selection' ? { reason: 'plugin-selection-required' } : {}),

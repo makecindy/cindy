@@ -1,4 +1,7 @@
 import type { MakerMemoryManager } from '@cindy/maker-core';
+import { z } from 'zod';
+import { throwIpcError } from '../utils/ipcValidate.js';
+import type { AppSettingsSection } from './service.js';
 import type { MemorySettings, writeMemorySetting } from '../maker-host/memory-settings-store.js';
 import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 
@@ -60,4 +63,52 @@ export async function updateMakerMemorySettings(enabled: boolean, nativePatch: N
       }
     },
   });
+}
+
+interface MemorySectionDeps {
+  read(): object;
+  readState(): { value: MemorySettings };
+  isMakerEnabled(): boolean | null;
+  updateMaker(enabled: unknown, patch: NativeMemoryPatch): Promise<unknown>;
+  updateNative(kind: 'claude-code' | 'codex' | 'pi', enabled: unknown): Promise<unknown>;
+  reset(): Promise<unknown>;
+}
+
+/** The production settings entry; adapters inject the existing initialized runtime. */
+export function createMemorySettingsSection(deps: MemorySectionDeps): AppSettingsSection {
+  return {
+    id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
+    effective: 'immediate-or-when-idle',
+    schema: z.strictObject({ maker: z.boolean().optional(), claudeCode: z.boolean().optional(),
+      codex: z.boolean().optional(), pi: z.boolean().optional() }),
+    read: () => ({ ...deps.read(), runtime: { maker: deps.isMakerEnabled() } }),
+    update: async patch => {
+      const next = { ...deps.readState().value, ...patch };
+      // Preserve the Settings policy even for explicit false values: while
+      // Cindy memory owns native memory, those fields cannot be changed here.
+      const conflictingFields = (['claudeCode', 'codex'] as const).filter(key => patch[key] !== undefined);
+      if (next.maker && conflictingFields.length) return {
+        ok: false,
+        errorCode: 'MEMORY_SETTINGS_CONFLICT',
+        message: 'Cindy 记忆开启时不能修改 Claude Code 或 Codex 原生记忆。请先将 maker 设为 false，再修改这些字段；本次未应用任何字段。',
+        conflictingFields,
+        requires: { maker: false },
+      };
+      let result: unknown;
+      if (patch.maker !== undefined) {
+        const nativePatch: NativeMemoryPatch = {};
+        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+          if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
+        }
+        return deps.updateMaker(patch.maker, nativePatch);
+      }
+      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+        if (patch[key] !== undefined) {
+          await deps.updateNative(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
+          if (deps.readState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
+        }
+      }
+      return result;
+    }, reset: deps.reset,
+  };
 }

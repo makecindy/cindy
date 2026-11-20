@@ -1,3 +1,4 @@
+vi.mock("../session/ProjectPickerIcon", () => ({ ProjectPickerIcon: () => null }));
 // @vitest-environment jsdom
 import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -82,6 +83,7 @@ vi.mock("lucide-react-native", () => {
   const Icon = () => null;
   return {
     CircleAlert: Icon,
+    ListChecks: Icon,
     LogOut: Icon,
     Monitor: Icon,
     Search: Icon,

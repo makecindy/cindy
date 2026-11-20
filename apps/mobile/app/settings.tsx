@@ -29,7 +29,7 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
-import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
@@ -64,6 +64,7 @@ import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHost
 import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
 import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
 import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
+import { openManualGiftCard } from '@/gift-card/giftCardIntent';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -81,6 +82,7 @@ import {
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
+import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
 import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
@@ -151,6 +153,7 @@ function hasRunningRemoteTasks(): boolean {
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
   const rowStyles = useSettingsRowStyles();
+  const appIconChoice = useAppIconChoice();
   const { preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const push = useGuardedPush();
@@ -158,7 +161,6 @@ export default function SettingsScreen() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
-  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
@@ -596,8 +598,7 @@ export default function SettingsScreen() {
   const resumeAnalyticsReporting = useCallback(async () => {
     const status = await initMobileTapdb();
     if (!status.ok) return;
-    const userId = auth.user?.id;
-    if (userId) await setTapdbUser(userId);
+    await setTapdbUser(auth.user?.tapdbChargeAlias, auth.user?.tapdbUsageAlias);
   }, [auth.user?.id]);
 
   const toggleAnalytics = useCallback(async () => {
@@ -930,6 +931,17 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 礼品卡:与外部链接共用根级兑换面板,这里只负责打开。 */}
+        <SettingsGroup footer={t('giftCard.settingsFooter')} testID="settings.giftCard" title={t('giftCard.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('giftCard.action')}
+            chevron={false}
+            label={t('giftCard.action')}
+            onPress={openManualGiftCard}
+            testID="settings.giftCard.redeem"
+          />
+        </SettingsGroup>
+
         <SettingsGroup title={t('sharedTask.title')}>
           <ActionInfoRow
             accessibilityLabel={t('sharedTask.manageSharing')}
@@ -961,6 +973,7 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           <UserBubbleSettings />
+          {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
@@ -1002,7 +1015,7 @@ export default function SettingsScreen() {
               />
             </NativePullDownMenu>
           ) : null}
-          {classical || replyStyleOnly ? (
+          {classical ? (
             <NativePullDownMenu
               actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
                 id: style.id,

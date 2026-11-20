@@ -43,6 +43,8 @@ export type CloseHandler = (info: TransportCloseInfo) => void;
  * 字节流双向 transport。一个 transport 实例只服务一个 client (1:1)。
  */
 export interface Transport {
+  /** Bounded diagnostic of the local child before retiring a stalled resume. */
+  sampleResumeStack?(): Promise<string[]>;
   /** Local native SQLite bootstrap failed before any stdout, with a confirmed natural exit. */
   nativeSqliteInitializationFailed?(): boolean;
   /**

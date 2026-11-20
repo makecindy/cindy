@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · por {{person}}"
+  },
   "progress": {
     "stop": "Detener",
     "stopMine": "Detener las mías",
@@ -127,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} no pudo responder: el modelo actual no admite imágenes.",
         "advice": "Elige un modelo compatible con imágenes.",
-        "details": "Elige un modelo compatible con imágenes, o activa y configura Vision Bridge en Configuración → Personalización, y luego vuelve a enviar tu mensaje."
+        "details": "Elige un modelo compatible con imágenes."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} no pudo responder: no hay ningún modelo disponible.",
@@ -283,7 +286,7 @@
     "organizerSaveFailed": "No se pudo cambiar el organizador. Inténtalo de nuevo.",
     "projectDir": "Carpeta de proyecto",
     "projectDirNone": "Ninguna seleccionada",
-    "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
+    "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del compañero que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
     "add": "Agregar amigo de equipo",
     "projectDirOnComputer": "Elígelo o cámbialo en tu computadora",
     "memberActions": "Acciones para {{name}}",
@@ -301,6 +304,8 @@
       "loading": "Cargando configuración…",
       "unavailable": "No se pudo cargar la configuración del grupo. Inténtalo de nuevo."
     },
+    "allowMemberInvites": "Permitir que todos inviten amigos",
+    "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
     "allowMentionAllBots": "Permitir @todos los amigos",
     "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
     "notifications": {
@@ -319,6 +324,7 @@
     "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",
     "memberUnavailable": "Uno de estos amigos de equipo no está disponible. Elige otro y vuelve a intentarlo.",
     "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
+    "mentionAmbiguous": "Hay más de un miembro llamado «{{name}}». Elige a quién te refieres en la lista de @.",
     "notFound": "Este chat grupal ya no existe",
     "hostNotReady": "Cindy todavía se está preparando. Inténtalo de nuevo en un momento.",
     "planOpen": "Hay una división del trabajo en curso. Finalízala o detenla antes de iniciar otra.",
@@ -549,7 +555,7 @@
     "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
     "work": "Repartos de trabajo",
     "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
-    "ownFolder": "Carpeta propia del grupo",
+    "ownFolder": "Automático",
     "archive": "Archivar grupo",
     "unarchive": "Desarchivar grupo",
     "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
@@ -585,6 +591,11 @@
     "transferHint": "Pasará a ser el propietario y tú serás administrador.",
     "removeTitle": "¿Quitar a {{name}} de este grupo?",
     "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
+    "removeOwn": "Quitar del grupo",
+    "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+    "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
+    "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
+    "stopAndRemove": "Detener y quitar",
     "confirm": "Confirmar",
     "inviteTitle": "Invitar al grupo",
     "reusableLink": "Sin vencimiento · Reutilizable por varias personas",
