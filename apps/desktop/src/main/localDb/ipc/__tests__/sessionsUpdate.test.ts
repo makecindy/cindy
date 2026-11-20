@@ -491,9 +491,45 @@ it('restores an ordinary linked-task archive and leaves its Orca Lead role intac
   expect(cleanup).not.toHaveBeenCalled();
 });
 
+// DB IPC: an ordinary archive leaves the team active. A persisted tab can
+// still submit explicit close, which must commit the stop before responding.
+it.each(['local', 'device-link'])('stops an ordinarily archived follow-up on explicit close (%s)', async route => {
+  h.sqlite!.exec(`
+    CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
+      kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision));
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
+    INSERT INTO orca_teams VALUES ('team', 'codex-local', 'active');
+    INSERT INTO orca_workers VALUES ('worker', 'team');
+  `);
+  Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+  const status = () => h.sqlite!.prepare("SELECT status FROM orca_teams WHERE id = 'team'").pluck().get();
+  const intent = () => h.sqlite!.prepare("SELECT side_chat_close_pending FROM sessions WHERE id = 'codex-local'").pluck().get();
+  const cleanup = vi.fn(async () => {
+    expect(intent()).toBe(1);
+    h.sqlite!.exec("UPDATE orca_teams SET status = 'completed' WHERE id = 'team'");
+  }).mockRejectedValueOnce(new Error('shutdown interrupted'));
+  setSideChatArchiveCleanup(cleanup);
+  const archive = route === 'local' ? invokeUpdate : invokePatchMeta;
+  await expect(archive('codex-local', { status: 'archived' })).resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  expect(status()).toBe('active');
+  expect(intent()).toBe(0);
+  expect(cleanup).not.toHaveBeenCalled();
+  const close = () => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' });
+  await expect(close()).rejects.toThrow('shutdown interrupted');
+  expect(status()).toBe('active');
+  expect(intent()).toBe(1);
+  await expect(close()).resolves.toMatchObject({ status: 'archived', orcaRole: null });
+  expect(status()).toBe('completed');
+  expect(intent()).toBe(0);
+  await expect(close()).resolves.toMatchObject({ status: 'archived', orcaRole: null });
+  expect(cleanup).toHaveBeenCalledTimes(2);
+});
+
 // DB IPC tier: a close admitted while cleanup is pending must not reach a
 // replacement collaboration if restore wins the route lock first.
-it('rejects a queued close retry after the follow-up is restored to a new team', async () => {
+it.each(['active', 'archived'])('rejects a queued close retry after a replacement team is %s', async status => {
   h.sqlite!.exec(`
     UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
       status = 'archived', side_chat_promoted = 1, side_chat_close_pending = 1, orca_role = 'lead'
@@ -505,7 +541,7 @@ it('rejects a queued close retry after the follow-up is restored to a new team',
   setSessionRouteLockImplementation(async (_id, task) => {
     h.sqlite!.exec(`
       UPDATE orca_teams SET status = 'completed' WHERE id = 'old-team';
-      UPDATE sessions SET status = 'active', side_chat_close_pending = 0 WHERE id = 'codex-local';
+      UPDATE sessions SET status = '${status}', side_chat_close_pending = 0 WHERE id = 'codex-local';
       INSERT INTO orca_teams VALUES ('new-team', 'codex-local', 'active');
     `);
     return task();

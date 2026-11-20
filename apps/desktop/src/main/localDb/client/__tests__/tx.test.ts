@@ -2015,6 +2015,7 @@ describe('db worker tx handlers', () => {
       await client.exec("UPDATE sessions SET side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'worker-wins'");
       await client.tx('sessions.setTerminalStatus', { sessionId: 'worker-wins', status: 'archived' });
       await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'worker-wins', status: 'archived' });
       await client.tx('sessions.setTerminalStatus', {
         sessionId: 'worker-wins', status: 'archived', sideChatCloseParentId: 'parent',
       });

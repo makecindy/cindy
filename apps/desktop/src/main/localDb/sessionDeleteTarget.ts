@@ -6,7 +6,13 @@ export const COMMITTED_SIDE_CHAT_WORKER_SQL = `EXISTS (
 
 export const SIDE_CHAT_CLOSE_TARGET_SQL = `
   SELECT 1 FROM sessions WHERE id = ? AND parent_session_id = ? AND source = 'side-chat'
-    AND side_chat_promoted = 1 AND (status = 'active' OR (status = 'archived' AND side_chat_close_pending = 1))
+    AND side_chat_promoted = 1 AND (
+      status = 'active' OR (status = 'archived' AND (
+        side_chat_close_pending = 1 OR EXISTS (
+          SELECT 1 FROM orca_teams WHERE lead_session_id = sessions.id AND status = 'active'
+        )
+      ))
+    )
 `;
 
 /** Used inside both SQLite transaction implementations and before cleanup side effects. */

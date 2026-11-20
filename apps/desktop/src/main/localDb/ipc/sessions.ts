@@ -2126,13 +2126,18 @@ async function archiveLinkedSideChatInDb(
       || (row.status !== 'active' && row.status !== 'archived')) {
       throwIpcError('PRECONDITION_FAILED', 'The linked follow-up no longer matches this tab');
     }
-    if (row.status === 'archived' && !row.sideChatClosePending) return sessionToCamel(row);
-    if (row.status === 'active') {
-      const [current] = await readActiveTeam();
-      assertCurrent();
-      if (!current || requested?.status !== 'active' || requested.updatedAt !== row.updatedAt || requested.teamId !== current.teamId) {
-        throwIpcError('PRECONDITION_FAILED', 'The follow-up changed while closing. Review and try again.');
-      }
+    const [current] = await readActiveTeam();
+    assertCurrent();
+    if (current && row.status === 'archived' && !row.sideChatClosePending && !current.teamId) {
+      return sessionToCamel(row);
+    }
+    // A pending stop can outlive its team row's active status. It can be
+    // retried without an active team, but an old request cannot stop a new one.
+    const sameTeam = current && (requested?.teamId === current.teamId
+      || (row.sideChatClosePending && current.teamId === null));
+    if (!requested || !sameTeam || (!row.sideChatClosePending
+      && (requested.status !== row.status || requested.updatedAt !== row.updatedAt))) {
+      throwIpcError('PRECONDITION_FAILED', 'The follow-up changed while closing. Review and try again.');
     }
     return patchSessionMetaInDb(sessionId, { status: 'archived', pinnedAt: null }, {
       routeLockHeld: true,

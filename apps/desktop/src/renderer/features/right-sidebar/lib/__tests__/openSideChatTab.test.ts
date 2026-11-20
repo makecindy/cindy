@@ -288,6 +288,23 @@ describe('side chat task entry', () => {
     expect(mocks.status).not.toHaveBeenCalled();
   });
 
+  // Renderer tier: the archived Lead is missing from the ordinary side-chat list.
+  // A previously saved tab is still available when it missed the archive push.
+  it.each([null, 'execution-host'])('keeps a saved tab for an archived Lead on reload (%s)', async deviceId => {
+    mocks.device = deviceId;
+    mocks.tabs = [{ id: 'saved', kind: 'side-chat', state: { sessionId: 'child', deviceId } }];
+    mocks.list.mockResolvedValue([]);
+    mocks.readBatch.mockResolvedValue([{
+      sessionId: 'child',
+      value: { id: 'child', status: 'archived', sideChatPromoted: true, orcaRole: 'lead' },
+    }]);
+    await restoreSideChatTabs('parent');
+    expect(mocks.readBatch).toHaveBeenCalledWith(['child'], deviceId ?? undefined);
+    expect(mocks.tabs.map(tab => tab.id)).toEqual(['saved']);
+    expect(mocks.close).not.toHaveBeenCalled();
+    expect(mocks.add).not.toHaveBeenCalled();
+  });
+
   it('discards an older list and reads again when a deletion arrives during recovery', async () => {
     let finish!: (value: { id: string }[]) => void;
     mocks.list.mockReturnValueOnce(new Promise(resolve => { finish = resolve; })).mockResolvedValue([]);

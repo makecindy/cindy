@@ -163,8 +163,8 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       });
       const canCommit = () => current() && retiredChildRef.current !== childId;
       const warnsAboutWorkers = snapshot.orcaRole !== null;
-      const needsConfirmation = snapshot.status !== 'archived' || warnsAboutWorkers;
-      if (needsConfirmation && (!await confirmArchive(warnsAboutWorkers) || !canCommit())) return false;
+      if (snapshot.status === 'archived' && !warnsAboutWorkers) return canCommit();
+      if (!await confirmArchive(warnsAboutWorkers) || !canCommit()) return false;
       if (snapshot.status !== 'archived' && !warnsAboutWorkers) {
         const latest = await readChild(childId);
         if (!canCommit() || !matches(latest) || latest.status !== 'active') return false;

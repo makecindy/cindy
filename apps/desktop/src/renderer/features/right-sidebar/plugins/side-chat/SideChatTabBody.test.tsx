@@ -160,13 +160,24 @@ describe('side chat panel lifecycle', () => {
       orcaRole: 'lead', status: 'archived',
     };
     mocks.invoke.mockImplementation(async (_device, channel) => channel === 'local-db:sessions:get' ? snapshot : undefined);
-    mocks.confirm.mockResolvedValue(true);
+    mocks.confirm.mockResolvedValue(true).mockResolvedValueOnce(false);
     await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
     expect(mocks.closeTab).not.toHaveBeenCalled();
+    await expect(close!()).resolves.toBe(false);
+    expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'local-db:sessions:patch-meta')).toBe(false);
     await expect(close!()).resolves.toBe(true);
     expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', [
       'child', { status: 'archived', archiveSideChatParentId: 'parent' },
     ]);
+  });
+
+  it('does not send a close intent for an archived tab without a confirmation', async () => {
+    const archived = { id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true, orcaRole: null, status: 'archived' };
+    mocks.invoke.mockResolvedValue(archived);
+    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
+    await close!();
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'local-db:sessions:patch-meta')).toBe(false);
   });
 
   // Unit: explicitly unsupported and unknown outcomes both keep the tab. A later
