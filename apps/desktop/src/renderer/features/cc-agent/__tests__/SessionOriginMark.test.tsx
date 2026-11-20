@@ -7,7 +7,7 @@ import { registerLoadedBotProfilesReader } from '@/features/bots/botSessionOwner
 import type { BotProfile } from '@/features/bots/botStore';
 import type { Session } from '@/lib/ccAgent.types';
 
-import { SessionOriginChip, SessionOriginRowMark } from '../SessionOriginMark';
+import { SessionOriginChip, SessionOriginLead, SessionOriginMeta, SessionOriginRowMark } from '../SessionOriginMark';
 
 /**
  * 测试价值
@@ -56,14 +56,32 @@ beforeEach(() => { navigate.mockReset(); registerLoadedBotProfilesReader(() => p
 afterEach(() => registerLoadedBotProfilesReader(null));
 
 describe('tasks started by another task (#11610 acceptance chain)', () => {
+  // Each row style (single-line mark, list second line, pinned card bottom row) keeps the full
+  // 「由「X」发起」 as its accessible name and hover text; only the visible name is shortened.
+  const presentations = [SessionOriginRowMark, SessionOriginLead, SessionOriginMeta] as const;
+
   it('marks A, B and C from their own row without reading history, and leaves D unmarked', () => {
     for (const [session, origin] of [[A, 'Q4 复盘'], [B, 'task-a'], [C, 'task-a']] as const) {
-      const { unmount } = render(<SessionOriginRowMark session={session} activeForeground={false} />);
-      expect(screen.getByRole('img').getAttribute('aria-label')).toBe(`ccAgent.sessionOrigin.startedByNamed:${origin}`);
+      for (const Presentation of presentations) {
+        const { unmount } = render(<Presentation session={session} activeForeground={false} />);
+        expect(screen.getByRole('img').getAttribute('aria-label')).toBe(`ccAgent.sessionOrigin.startedByNamed:${origin}`);
+        unmount();
+      }
+    }
+    const { container } = render(<>{presentations.map((Presentation) =>
+      <Presentation key={Presentation.name} session={D} activeForeground={false} />)}<SessionOriginChip session={D} /></>);
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('shows a short source name in the list and card rows while the label stays complete', () => {
+    const long = task('task-long', { sessionId: 'task-a', title: '为下季度产品规划准备完整的用户调研与竞品分析报告' });
+    for (const Presentation of [SessionOriginLead, SessionOriginMeta]) {
+      const { unmount } = render(<Presentation session={long} activeForeground={false} />);
+      const node = screen.getByRole('img');
+      expect(node.textContent).toContain('为下季度产品规…');
+      expect(node.getAttribute('aria-label')).toContain('竞品分析报告');
       unmount();
     }
-    const { container } = render(<><SessionOriginRowMark session={D} activeForeground={false} /><SessionOriginChip session={D} /></>);
-    expect(container.innerHTML).toBe('');
   });
 
   it('returns A to its exact teammate topic, and B and C to A', () => {
