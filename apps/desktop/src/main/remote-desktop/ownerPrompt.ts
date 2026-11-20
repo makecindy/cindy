@@ -2,12 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolveDesktopInputBinary } from './inputHost';
 
 /**
- * The system's own Touch ID prompt, armed while the privacy screen keeps the display
- * awake (docs/product-rules/privacy-screen.md). Physical keys and clicks still turn into
- * the real system lock; resting a finger on the sensor is the one owner action the cover
- * answers by uncovering, and it never unlocks a locked Mac. Only fixed words cross
- * stdout: the prompt belongs to the OS, so no credential or fingerprint data reaches
- * Cindy.
+ * The owner's Touch ID check, armed while the privacy screen keeps the display awake
+ * (docs/product-rules/privacy-screen.md). Physical keys and clicks still turn into the
+ * real system lock; resting a finger on the sensor is the one owner action the cover
+ * answers by uncovering, and it never unlocks a locked Mac. The system draws a compact
+ * icon in the helper's own panel instead of the standard authentication alert; only fixed
+ * words cross stdout, so no credential or fingerprint data reaches Cindy.
  */
 export type OwnerAnswer = 'verified' | 'denied' | 'unavailable';
 
@@ -31,7 +31,7 @@ export async function watchOwnerPrompt(
   // Resolving the helper can take a while (a cold build of the native source, a slow
   // probe). A cover that let go during that wait has already marked the signal aborted,
   // and listening for the event afterwards never replays it: re-check before spawning so
-  // the system sheet cannot flash onto a screen nobody is holding awake.
+  // the Touch ID control cannot flash onto a screen nobody is holding awake.
   const binary = await runtime.resolveBinary();
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   const child = runtime.spawn(binary, ['--owner-prompt', reason]);
@@ -66,10 +66,11 @@ export async function watchOwnerPrompt(
   };
   child.stderr.resume();
   child.stdin.on('error', () => {});
-  // The system owns the sheet: only the helper's own `stop` runs `context.invalidate()`,
-  // and killing it here leaves the prompt on screen for about ten seconds. Main is gone
-  // means a closed stdin, so every path that takes a prompt down uses this protocol, also
-  // while the helper is still starting (`stop` waits in the pipe until it reads stdin).
+  // The system owns the check and draws a compact control in the helper's panel: only the
+  // helper's own `stop` runs `context.invalidate()`, and killing it here leaves a check
+  // hanging for about ten seconds. Main is gone means a closed stdin, so every path that
+  // takes a prompt down uses this protocol, also while the helper is still starting
+  // (`stop` waits in the pipe until it reads stdin).
   const requestStop = () => {
     child.stdin.write('stop\n');
     const kill = setTimeout(() => child.kill(), 2000);

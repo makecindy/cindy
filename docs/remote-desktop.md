@@ -171,21 +171,29 @@ button down, a modifier going down, or a real scroll of 30+ points within a seco
 turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
 some keypads emit them on their own (`AwayInputGate`). While the cover itself keeps the
-display awake, Main also arms the system's own Touch ID prompt (`--owner-prompt`):
-resting a finger on the sensor verifies the owner and uncovers without locking, while
-keys and clicks still turn into the lock. The prompt lives only as long as the cover
-holds the display awake, and goes when the cover locks, ends, or enters the lock-failed
-state; it never unlocks a locked Mac. It is also kept off while any Computer Use session
-is open: the Agent's full-display screenshots would otherwise include the sheet and its
-desktop clicks could hit it (`openComputerUseSessions` / `onComputerUseSessionsChange`),
-and while a remote viewer holds a lease: that viewer receives this same screen and its
-clicks are desktop coordinates (`RemoteDesktopController.hasActiveLease`). Taking the
-sheet down goes through the helper's `stop` command, including a start that is still
-waiting for `ready owner-prompt`: killing the helper instead leaves the system prompt on
-screen for about ten seconds. The greeting is versioned on purpose — an older shipped
-helper ignores the unknown switch, falls through to its generic input loop and would also
-print a bare `ready`; Main treats anything but `ready owner-prompt` as "this build cannot
-show the sheet", so touch-to-return is never promised by a helper that cannot keep it.
+display awake, Main also arms the owner's Touch ID check (`--owner-prompt`): resting a
+finger on the sensor verifies the owner and uncovers without locking, while keys and
+clicks still turn into the lock. The check lives only as long as the cover holds the
+display awake, and goes when the cover locks, ends, or enters the lock-failed state; it
+never unlocks a locked Mac.
+
+The check is not the standard authentication alert. The helper owns a 32 pt transparent
+panel (`sharingType = .none`) above the cover and puts an `LAAuthenticationView` in it
+(`LocalAuthenticationEmbeddedUI`), so the system keeps drawing and judging the prompt —
+Cindy only chooses its size and place, and the control stays out of screenshots and
+recordings the way the system alert cannot. Mounting is still suppressed while any
+Computer Use session is open (`openComputerUseSessions` / `onComputerUseSessionsChange`)
+and while a remote viewer holds a lease (`RemoteDesktopController.hasActiveLease`,
+including the few seconds after one ends, when native input may still be landing):
+those paths capture the whole display, and a bare-touch signal cannot tell the owner
+from anyone else who happens to touch the sensor.
+
+Taking the control down goes through the helper's `stop` command, including a start that
+is still waiting for `ready owner-prompt`. The greeting is versioned on purpose — an
+older shipped helper ignores the unknown switch, falls through to its generic input loop
+and would also print a bare `ready`; Main treats anything but `ready owner-prompt` as
+"this build cannot show the control", so touch-to-return is never promised by a helper
+that cannot keep it.
 The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the

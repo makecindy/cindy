@@ -6,6 +6,7 @@ import Security
 import Darwin
 import Vision
 import LocalAuthentication
+import LocalAuthenticationEmbeddedUI
 
 #if !DESKTOP_INPUT_TEST
 // This guard precedes every entrypoint, including selection and permission UI.
@@ -1081,8 +1082,40 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
   RunLoop.main.run()
   exit(2)
 }
+// A small icon-only authentication control inside a panel we own. The system still draws
+// and judges the check; we only choose where it appears, so the owner's screen is not
+// taken over by the standard authentication alert. `sharingType = .none` keeps the
+// control out of screenshots and recordings, which the standard alert cannot do.
+func ownerPromptPanel(context: LAContext) -> NSPanel {
+  let side: CGFloat = 32
+  let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
+    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+  panel.isOpaque = false
+  panel.backgroundColor = .clear
+  panel.hasShadow = false
+  panel.animationBehavior = .none
+  panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+  panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+  panel.sharingType = .none
+  let host = NSView(frame: NSRect(x: 0, y: 0, width: side, height: side))
+  let control = LAAuthenticationView(context: context, controlSize: .small)
+  control.translatesAutoresizingMaskIntoConstraints = false
+  host.addSubview(control)
+  NSLayoutConstraint.activate([
+    control.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+    control.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+  ])
+  panel.contentView = host
+  if let screen = NSScreen.main {
+    // Just above the Dock, centered: quiet enough to read as part of the cover.
+    let visible = screen.visibleFrame
+    panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
+  }
+  panel.orderFrontRegardless()
+  return panel
+}
 // `--owner-prompt <reason>`: while the privacy screen itself keeps the display awake,
-// the system's Touch ID check stays armed so the owner can rest a finger on the sensor
+// the owner's Touch ID check stays armed so a finger on the sensor uncovers the screen
 // instead of pressing a key, which locks (docs/product-rules/privacy-screen.md).
 // Main takes the prompt down with `stop` on stdin; a closed stdin means Main is gone.
 // Fixed words on stdout: `ready owner-prompt`, verified, denied, unavailable, locked, stopped.
@@ -1100,6 +1133,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     print("unavailable"); exit(0)
   }
   let reason = String(CommandLine.arguments[2].prefix(200))
+  let panel = ownerPromptPanel(context: context)
   var answered = false
   context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
     guard !answered else { return }
@@ -1119,6 +1153,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     DispatchQueue.main.async {
       answered = true
       context.invalidate()
+      panel.orderOut(nil)
       print("stopped"); fflush(stdout); exit(0)
     }
   }
