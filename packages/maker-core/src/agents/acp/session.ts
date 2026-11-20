@@ -582,7 +582,12 @@ export class AcpSession {
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
-        if (!this.turn) this.armBackgroundSegmentClose();
+        if (this.turn) return;
+        // Progress on a running call may change nothing on screen, yet it proves the agent
+        // is still working: it keeps the runtime busy and restarts the open-call quiet bound.
+        this.lastBackgroundAt = this.now();
+        this.armOpenToolCap();
+        this.armBackgroundSegmentClose();
     }
   }
 

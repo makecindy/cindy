@@ -420,6 +420,26 @@ describe('AcpSession turns', () => {
     });
   });
 
+  // PR #11776 review: progress on a running call changes nothing on screen, so it produced no
+  // event, never restarted the quiet bound, and a command still reporting progress was marked done.
+  it('treats progress on a call left running as activity, so the quiet bound restarts', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { openToolQuietCapMs: 60_000 });
+    await session.send({ type: 'user', content: 'build it' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'build', title: 'Build', status: 'in_progress' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(40_000);
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'build', status: 'in_progress' });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+  });
+
   it('bounds calls left open between turns: settled after the quiet cap, interrupted when the agent exits', async () => {
     vi.useFakeTimers();
     const quiet = createFakeAgent();
