@@ -356,10 +356,9 @@ export async function createWorkerWorktree(
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
   let resolvedSourceBranch = sourceBranch;
-  // When targeting a linked worktree with a HEAD-relative ref (e.g. HEAD or HEAD~1),
-  // resolve it inside that worktree so git worktree add in baseRepo does not silently
-  // branch from the main checkout's HEAD.
-  if (info.isWorktree && /^HEAD(?:[~^]|$)/.test(sourceBranch)) {
+  // When targeting a linked worktree, resolve the revision inside that worktree first so
+  // worktree-local refs (HEAD, @, @~1, HEAD@{1}, etc.) do not silently resolve against baseRepo.
+  if (info.isWorktree) {
     const rev = await gitExec(
       ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
       directory,
