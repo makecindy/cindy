@@ -358,6 +358,8 @@ Worker 项目历史写入时按规范化路径字符串去重，保留最近 10 
 创建流程预留名额后用 Worker 自己的 sessionId 登记 worktree，再 bootstrap。选中 checkout 根目录时
 与普通任务一致，只等待启动必读文件检出，全量 checkout 在后台继续；选中子项目时保留其相对路径，
 等待全量 checkout 后进入对应子目录，若源分支没有该目录则回退新 worktree 根并记录警告。
+插件引擎 Worker 例外：引擎一启动就读项目文件与规则，所以根目录与子项目都等全量 checkout 结束再 bootstrap；
+带 worktree 的 Worker 在建树后、bootstrap 前还会再确认一次预留名额仍有效，检出失败或名额已过期时不启动引擎，走下面的失败补偿。
 失败补偿先等待本次后台 checkout 收口，
 再在会话锁内走 cancelPrecreatedWorktree 的封存、preserveDirty 与所有权检查；保留结果写日志，绝不强删。
 正常归档继续走已有快照与回收规则；仅继承 Lead（包括模型自建）的目录时不登记所有权，不回收它。

@@ -717,10 +717,71 @@ describe('plugin engine Worker', () => {
       ok: true, workingDir: '/repo/.cindy-worktrees/worker',
       worktree: { path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker' },
     });
-    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature');
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature', { awaitFullCheckout: true });
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
       agentKind: 'acp', providerId: PROVIDER, workingDir: '/repo/.cindy-worktrees/worker',
     }));
+  });
+
+  /*
+   * Test value (docs/dev-rules/engineering-conventions.md §3.2):
+   * - Entry and observable result: createWorker with agent=acp + worktree; the plugin engine is bootstrapped only
+   *   after the worktree call has settled, and a failed checkout or expired creation lease starts no engine
+   *   and discards the worktree.
+   * - Basis: a plugin engine reads project files and agent rules as soon as it starts, so it must not see a
+   *   half-written tree (the staged checkout returns before the full checkout ends). #11823.
+   * - Gap: the test above only checks the directory handed to the engine, not the checkout wait or the failure paths.
+   * - Minimal failing input: agent=acp + worktree, with createWorkerWorktree pending / rejecting / lease renewal false.
+   * - Tier: unit (in-process fakes).
+   */
+  it('starts the plugin engine only after the full worktree checkout has finished', async () => {
+    let finishCheckout!: (path: string) => void;
+    const checkout = new Promise<string>((resolve) => { finishCheckout = resolve; });
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      createWorkerWorktree: vi.fn(() => checkout),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const pending = service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    await vi.waitFor(() => expect(deps.createWorkerWorktree).toHaveBeenCalledOnce());
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature', { awaitFullCheckout: true });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+
+    finishCheckout('/repo/.cindy-worktrees/worker');
+    await expect(pending).resolves.toMatchObject({ ok: true, workingDir: '/repo/.cindy-worktrees/worker' });
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'the full checkout fails',
+      overrides: { createWorkerWorktree: vi.fn(async () => { throw new Error('full checkout failed'); }) },
+    },
+    {
+      name: 'the creation lease expired during the checkout',
+      overrides: {
+        createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+        renewWorkerCreationReservation: vi.fn(async () => false),
+      },
+    },
+  ])('starts no plugin engine and discards the worktree when $name', async ({ overrides }) => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+      ...overrides,
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.discardWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID);
   });
 
   // 2026-11-27: plugin engine Workers support remote/shared agentDeviceId and remote execution

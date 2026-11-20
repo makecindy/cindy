@@ -363,14 +363,32 @@ export async function createWorkerWorktree(
   sessionId: string,
   directory: string,
   sourceBranch: string,
+  options?: { awaitFullCheckout?: boolean },
 ): Promise<string> {
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
   // A Worker based on the origin default starts from a freshly fetched ref, like the
   // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
+  let resolvedSourceBranch = qualifyWorkerRemoteSource(sourceBranch);
+  // When targeting a linked worktree with a HEAD-relative ref (e.g. HEAD or HEAD~1),
+  // resolve it inside that worktree so git worktree add in baseRepo does not silently
+  // branch from the main checkout's HEAD.
+  if (info.isWorktree && /^HEAD(?:[~^]|$)/.test(sourceBranch)) {
+    const rev = await gitExec(
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
+      directory,
+      { timeoutMs: 5000 },
+    );
+    const sha = rev.stdout.trim();
+    if (sha) resolvedSourceBranch = sha;
+  }
   const created = await WorktreeManager.createWorktree(
-    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: qualifyWorkerRemoteSource(sourceBranch) },
-    { trackBackgroundCheckout: true, refreshDefaultSource: true },
+    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: resolvedSourceBranch },
+    {
+      trackBackgroundCheckout: true,
+      refreshDefaultSource: true,
+      ...(options?.awaitFullCheckout ? { awaitFullCheckout: true } : {}),
+    },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.
@@ -381,8 +399,11 @@ export async function createWorkerWorktree(
   if (!relative) return created.meta.path;
 
   // Stage checkout only includes root startup files. A subproject and its rules need
-  // the full checkout; root-directory Workers keep the normal asynchronous startup.
-  await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  // the full checkout; root-directory built-in Workers keep asynchronous startup while
+  // ACP plugin-engine Workers pass awaitFullCheckout above.
+  if (!options?.awaitFullCheckout) {
+    await WorktreeManager.awaitBackgroundCheckout(sessionId);
+  }
   const subproject = path.join(created.meta.path, relative);
   try {
     const [realRoot, realSubproject] = await Promise.all([

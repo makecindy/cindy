@@ -367,7 +367,12 @@ export interface OrcaWorkerCreationDeps {
   resolveWorkerWorkingDir(dir: string, lead: OrcaLeadSessionSnapshot): Promise<string>;
   resolveWorkerWorktreeSource?(directory: string, sourceBranch?: string, leadDirectory?: string | null): Promise<string | WorkerWorktreeSourceSelection>;
   getWorkerWorktree?(sessionId: string): WorkerOwnedWorktree | undefined;
-  createWorkerWorktree?(sessionId: string, directory: string, sourceBranch: string): Promise<string>;
+  createWorkerWorktree?(
+    sessionId: string,
+    directory: string,
+    sourceBranch: string,
+    options?: { awaitFullCheckout?: boolean },
+  ): Promise<string>;
   discardWorkerWorktree?(sessionId: string): Promise<void>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
   /**
@@ -1792,7 +1797,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         const workerSessionId = deps.createSessionId();
         if (params.worktree) {
           createdWorktreeSessionId = workerSessionId;
-          workingDir = await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!);
+          // ACP plugin engines read project files and agent rules immediately on start,
+          // so wait for the full Git checkout before bootstrapping the endpoint.
+          workingDir = params.agent === 'acp'
+            ? await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!, { awaitFullCheckout: true })
+            : await deps.createWorkerWorktree!(workerSessionId, workingDir, worktreeSource!);
           // Checkout may fall back from a missing subproject to its root. Authorize
           // the final directory before any runtime starts, for both UI and tool calls.
           try {
@@ -1803,6 +1812,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           ownedWorktree = deps.getWorkerWorktree!(workerSessionId);
           if (!ownedWorktree) throw new Error('Worker worktree ownership metadata is unavailable');
           await assertCurrent?.();
+          // Verify the creation lease survived a potentially slow checkout before launching an agent endpoint.
+          const renewedBeforeBootstrap = reservationValid
+            ? await deps.renewWorkerCreationReservation(workerId, ORCA_WORKER_CREATION_RESERVATION_LEASE_MS).catch(() => false)
+            : false;
+          if (!renewedBeforeBootstrap) {
+            return { ok: false, errorCode: 'INTERNAL', message: 'worker creation reservation expired before bootstrap' };
+          }
         }
         const workerVendorOptions = {
           orcaRole: 'worker' as const,
