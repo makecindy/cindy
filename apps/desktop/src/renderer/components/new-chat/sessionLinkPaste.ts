@@ -19,6 +19,7 @@
  * ASCII 方括号会破坏 markdown 链接语法,清洗为空格。
  */
 import type { Editor } from '@tiptap/core';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import {
   boundAgentReferenceText,
   type AgentInputReference,
@@ -131,7 +132,12 @@ export async function resolveSerializedSessionMessageReferencesForSend(
  * import 图拖进测试环境;app 运行时这些模块早已被 ChatInput 加载,动态
  * import 命中缓存无额外开销。
  */
-export async function resolvePastedSessionTitle(sessionId: string): Promise<string | null> {
+export async function resolvePastedSessionTitle(sessionId: string, deviceId?: string | null): Promise<string | null> {
+  if (deviceId && isSharedTaskPeer(deviceId)) {
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const title = remoteProjectsStore.getDeviceSessions(deviceId).find(session => session.id === sessionId)?.title?.trim();
+    return title ? projectResolvedChipTitle(title) : null;
+  }
   const sessionService = await import('@/lib/sessionService');
   try {
     const session = await sessionService.get(sessionId);
@@ -257,7 +263,7 @@ export async function resolveSessionMessageReferencesForSend(
  */
 export function resolveSessionChipTitles(
   editor: Editor,
-  resolveTitle: (sessionId: string) => Promise<string | null> = resolvePastedSessionTitle,
+  resolveTitle: typeof resolvePastedSessionTitle = resolvePastedSessionTitle,
   resolveMessageText: (
     sessionId: string,
     clientId: string,
@@ -276,7 +282,7 @@ export function resolveSessionChipTitles(
     if (target && !target.messageClientId) pendingTargets.set(attrs.path, target);
   });
   for (const [path, target] of pendingTargets) {
-    void resolveTitle(target.sessionId)
+    void resolveTitle(target.sessionId, target.deviceId)
       .then((value) => {
         const display = value ? sanitizeSessionChipTitle(value) : '';
         if (!display || editor.isDestroyed) return;

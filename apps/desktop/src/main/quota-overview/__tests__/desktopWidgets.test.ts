@@ -1,18 +1,21 @@
 // Mac desktop widgets: the app holds the quota overview only while a widget is on the desktop,
 // writes what the extension reads and spends WidgetKit's daily reload budget only on changes
 // (plus an occasional refresh so a current reading never looks stale).
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MobileUsageWidgetSnapshot } from '@cindy/maker-shared/device-link-contract';
 
 vi.mock('../../appSessionState.js', () => ({ onAppSessionInvalidated: vi.fn() }));
-vi.mock('electron', () => ({ app: { isPackaged: true, getAppPath: () => '/app' } }));
+vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/app' } }));
 
 import {
   DESKTOP_WIDGETS_FRESHNESS_RELOAD_MS,
   DESKTOP_WIDGETS_MIN_RELOAD_MS,
   DESKTOP_WIDGETS_POLL_MS,
   DesktopWidgets,
+  startDesktopWidgets,
   type DesktopWidgetStore,
 } from '../desktopWidgets';
 import type { QuotaOverviewBuild } from '../service';
@@ -138,4 +141,20 @@ it('clears the old account after collection stops', () => {
   h.invalidate();
   expect(h.store()?.states).toEqual({});
   h.controller.stop();
+});
+
+it.each([
+  ['22.1.0', false], // macOS 13.0.1 from the crash report
+  ['23.0.0', true],  // macOS 14.0, the addon's deployment target
+] as const)('checks for the native addon on Darwin %s only when supported', (release, supported) => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+  vi.spyOn(os, 'release').mockReturnValue(release);
+  const probe = vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+  try {
+    const overview = { subscribe: vi.fn(), acquire: vi.fn(), latest: vi.fn() };
+    expect(startDesktopWidgets(overview)).toBeNull();
+    expect(probe).toHaveBeenCalledTimes(supported ? 1 : 0);
+  } finally {
+    vi.restoreAllMocks();
+  }
 });

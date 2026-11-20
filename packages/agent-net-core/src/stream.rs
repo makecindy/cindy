@@ -21,7 +21,7 @@ const FLAG_FIN: u8 = 1;
 const PRIORITIES: usize = 3;
 /// 同一优先级里每条流连发这么多个分片再换下一条：换流要带流头，轮得太勤开销不小。
 const ROUND_QUANTUM: u32 = 8;
-/// 高优先级连续占用这么多个分片后，让低优先级发一个，免得被彻底饿死。
+/// 高优先级连续占用这么多个分片后，让有数据的最低一档发一个，免得被彻底饿死。
 const STARVATION_LIMIT: u32 = 15;
 
 /// 流的优先级，只影响本端发送顺序。
@@ -46,6 +46,11 @@ impl Priority {
 
     pub(crate) fn is_lower_than(self, other: Priority) -> bool {
         self.rank() > other.rank()
+    }
+
+    /// 最低一档，没有比它更低的流要让着它。
+    pub(crate) fn is_lowest(self) -> bool {
+        self.rank() == PRIORITIES - 1
     }
 }
 
@@ -124,8 +129,10 @@ pub(crate) struct Scheduler {
     /// 每个优先级上一次发的流，和它这一轮还能连发几个。
     last: [Option<u32>; PRIORITIES],
     quantum_left: [u32; PRIORITIES],
-    /// 比最低的那个有数据的优先级高的流，已经连续发了几个分片。
-    high_run: u32,
+    /// 每一档有数据在等时，比它高的档已经连续发了几个分片。每一档各记各的：只记一个数的话，三档都有数据时
+    /// 让给中间一档也清不了零，之后每一次都让给中间档，最高档反而被饿住（2026-11-19：普通和后台各一条大流时，
+    /// 慢线路上交互消息的 p95 从 0.19 秒涨到 2.6 秒）。
+    waited: [u32; PRIORITIES],
 }
 
 impl Scheduler {
@@ -147,10 +154,9 @@ impl Scheduler {
         }
         let choice = |rank: usize| next_after_last[rank].or(candidates[rank]);
         let highest = (0..PRIORITIES).find(|&rank| candidates[rank].is_some())?;
-        if self.high_run >= STARVATION_LIMIT
-            && let Some(lower) = (highest + 1..PRIORITIES).find(|&rank| candidates[rank].is_some())
-        {
-            return choice(lower);
+        // 等满了的档里先让最低的：它让完清零，再轮到上面等满了的档。
+        if let Some(starved) = (highest + 1..PRIORITIES).rev().find(|&rank| candidates[rank].is_some() && self.waited[rank] >= STARVATION_LIMIT) {
+            return choice(starved);
         }
         choice(highest)
     }
@@ -158,14 +164,21 @@ impl Scheduler {
     /// 发了一个低优先级的重传。它和新分片一样算低优先级在前进：只认新分片的话，
     /// 重传队列排空之前计数清不了零，高优先级要一直让路。
     pub(crate) fn record_retransmission(&mut self) {
-        self.high_run = 0;
+        self.waited = [0; PRIORITIES];
     }
 
-    pub(crate) fn record(&mut self, id: u32, priority: Priority, higher_than_lowest: bool) {
+    /// 发了 `id` 的一个分片以后记账。`streams` 是切完这个分片以后的状态，用来看哪几档还有数据在等。
+    pub(crate) fn record(&mut self, id: u32, priority: Priority, streams: &BTreeMap<u32, SendStream>) {
         let rank = priority.rank();
         self.quantum_left[rank] = if self.last[rank] == Some(id) { self.quantum_left[rank].saturating_sub(1) } else { ROUND_QUANTUM - 1 };
         self.last[rank] = Some(id);
-        self.high_run = if higher_than_lowest { self.high_run + 1 } else { 0 };
+        let mut waiting = [false; PRIORITIES];
+        for stream in streams.values().filter(|stream| stream.has_data()) {
+            waiting[stream.priority.rank()] = true;
+        }
+        for (other, waited) in self.waited.iter_mut().enumerate() {
+            *waited = if other == rank || !waiting[other] { 0 } else if other > rank { waited.saturating_add(1) } else { *waited };
+        }
     }
 }
 

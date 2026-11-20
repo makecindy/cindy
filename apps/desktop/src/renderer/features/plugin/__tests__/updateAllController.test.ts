@@ -15,6 +15,7 @@ let installedGhosts: Array<{
   manifest: GhostManifest;
   approval?: GhostInstallApproval;
   namespace?: string | null;
+  namespaceState?: 'confirmed';
   dir?: string;
 }> = [];
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
@@ -34,7 +35,10 @@ import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { toast } from '@/lib/toast';
+import { collectUpdateConsent } from '../lib/updateAllConsent';
+import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { GhostInstallApproval, GhostManifest } from '../../../../shared/ghost';
 import type { PluginMarketDetail, PluginMarketItem } from '../../../../shared/pluginMarket';
 import {
@@ -404,5 +408,74 @@ describe('updateAllController', () => {
     resolveInstall?.();
     await waitForFinishedBatch();
     expect(installMock).toHaveBeenCalledTimes(1);
+  });
+
+  // GitHub Release rows (local plugins with `githubRelease`) join the same batch but go through
+  // Main's `ghosts:github-release` update, which re-checks the release before downloading. Before
+  // this change the banner and batch only knew market rows, so these plugins were never offered.
+  // Branches: Main pointing at a newer asset ends this attempt; a sign-in answer is a failed row
+  // with the release row's own words; the market row in the same batch is unaffected.
+  it.each([
+    {
+      name: 'leaves a newer asset for the next update attempt',
+      replies: [
+        { status: 'available', release: { version: '0.1.2', assetId: 8, sha256: 'b', size: 1, prerelease: false } },
+      ],
+      assets: [7],
+      row: { status: 'failed', toVersion: '0.1.1', errorText: 'settings.ghosts.detail.githubRelease.unavailable' },
+    },
+    {
+      name: 'fails the row with the GitHub sign-in prompt',
+      replies: [{ status: 'sign-in' }],
+      assets: [7],
+      row: { status: 'failed', errorText: 'settings.ghosts.detail.githubRelease.sign-in' },
+    },
+  ])('updates a GitHub Release row through Main: $name', async ({ replies, assets, row }) => {
+    installedGhosts.push({
+      manifest: manifest({
+        id: 'zcode',
+        name: 'ZCode',
+        version: '0.1.0',
+        githubRelease: 'example/zcode',
+        settingsHtml: 'settings.html',
+      } as Partial<GhostManifest>),
+      namespace: 'local',
+      namespaceState: 'confirmed',
+    });
+    const instanceId = installedGhostStoragePart(readInstalledGhostsSnapshot()[1]!);
+    const githubRelease = vi.fn();
+    for (const reply of replies) githubRelease.mockResolvedValueOnce(reply);
+    (window as unknown as { electronAPI: { ghosts: unknown } }).electronAPI.ghosts = {
+      githubRelease,
+      onGithubReleaseProgress: () => () => undefined,
+    };
+
+    // A mixed batch must settle the market permission review before starting a release update.
+    let approve!: (ids: Set<string>) => void;
+    const review = vi.fn(() => new Promise<Set<string>>(resolve => { approve = resolve; }));
+    installMock.mockImplementationOnce(async (_pluginId, { batchRowId }) => {
+      const accepted = await collectUpdateConsent({
+        requestId: 'market-request', batchRowId, initiator: 'user', origin: 'market',
+        facts: {
+          kind: 'update', ghostId: 'ghost-a', name: 'Ghost A', previousVersion: '1.0.0', version: '1.1.0',
+          added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: true,
+        },
+      }, new AbortController().signal, review);
+      expect(accepted).toBe(true);
+    });
+
+    startUpdateAllBatch(
+      [marketItem()],
+      [{ instanceId, ghostId: 'zcode', name: 'ZCode', fromVersion: '0.1.0', version: '0.1.1', assetId: 7 }],
+    );
+    await vi.waitFor(() => expect(review).toHaveBeenCalledTimes(1));
+    expect(githubRelease).not.toHaveBeenCalled();
+    approve(new Set(['market-request']));
+    await waitForFinishedBatch();
+
+    expect(githubRelease.mock.calls).toEqual(assets.map((asset) => ['update', instanceId, asset]));
+    expect(installMock).toHaveBeenCalledTimes(1);
+    expect(getUpdateAllBatchState().rows?.map((current) => current.status)).toEqual(['done', row.status]);
+    expect(getUpdateAllBatchState().rows?.[1]).toMatchObject(row);
   });
 });

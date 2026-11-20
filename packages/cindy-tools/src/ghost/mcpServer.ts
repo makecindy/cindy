@@ -119,7 +119,7 @@ const D_GHOST_CALL = [
   "GHOST_DISABLED_IN_WORKDIR(用户在当前工作目录停用了该插件——不要重试,改用其它方式完成)/",
   "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
   "TIMEOUT / ATTACHMENT_INVALID(附件过户失败,查 message)/",
-  "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。遇到 NOT_FOUND 类错误,已知目标时重查 ghost_info,否则用 ghost_list 看全量。",
+  "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。缺失插件时按宿主返回的恢复动作呈现安装确认；其它错误按具体原因处理。",
 ].join("\n");
 
 const D_MEDIA = [
@@ -783,10 +783,7 @@ export async function handleGhostInfo(
         {
           ok: false,
           errorCode: result.errorCode,
-          message:
-            result.errorCode === "GHOST_NOT_FOUND"
-              ? `${result.message}；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。`
-              : result.message,
+          message: result.message,
           ...("candidates" in result && result.candidates ? { candidates: result.candidates } : {}),
         },
         true,
@@ -1339,7 +1336,7 @@ export function createCindyGhostsMcpServer(
 
   if (deps.installMarket) server.tool(
     "ghost_market_install",
-    "Install one selected Cindy marketplace plugin needed for the user's request, under the current task's normal action authorization. Use the exact plugin_id and release_id returned by ghost_market_search. No arbitrary URL, credentials, source replacement or batch install. Existing installations are reused, never reinstalled or re-enabled by this tool. A changed release, account, permission or conflicting source must be resolved before retrying. Success means installed, NOT connected or task completed: inspect the returned ghost_id with ghost_info, connect_account(kind=plugin,id=ghost_id) for a requested login or use ghost_call and its setup card, then continue the ORIGINAL task. Report unavailable/failed outcomes accurately. Never substitute a model-provider Apps marketplace.",
+    "Install one selected Cindy marketplace plugin needed for the user's request, under the current task's normal action authorization. Use the exact plugin_id and release_id from the Host's missing-plugin recovery or ghost_market_search. No arbitrary URL, credentials, source replacement or batch install. Existing installations are reused, never reinstalled or re-enabled by this tool. A changed release, account, permission or conflicting source must be resolved before retrying. Success means installed, NOT connected or task completed: inspect the returned ghost_id with ghost_info, connect_account(kind=plugin,id=ghost_id) for a requested login or use ghost_call and its setup card, then continue the ORIGINAL task. Report unavailable/failed outcomes accurately. Never substitute a model-provider Apps marketplace.",
     {
       plugin_id: z.string().min(1).max(1024),
       release_id: z.string().min(1).max(1024),

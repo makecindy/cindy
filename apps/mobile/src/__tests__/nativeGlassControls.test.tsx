@@ -83,6 +83,7 @@ vi.mock("lucide-react-native", () => {
   const Icon = () => null;
   return {
     CircleAlert: Icon,
+    ListChecks: Icon,
     LogOut: Icon,
     Monitor: Icon,
     Search: Icon,

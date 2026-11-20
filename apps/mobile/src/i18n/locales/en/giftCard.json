@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Gift cards",
-  "settingsFooter": "Enter a redeem code or paste a gift card link to add the card to your promotional balance. Gift cards can only be redeemed by personal accounts.",
+  "settingsFooter": "Enter a redeem code or paste a gift card link to add the card to your balance. Gift cards can only be redeemed by personal accounts.",
   "action": "Redeem Gift Card",
   "title": "Redeem gift card",
   "inputLabel": "Redeem code",
@@ -17,7 +17,9 @@
     "validityValue_other": "{{count}} days after redeeming",
     "claimBy": "Redeem by",
     "destination": "Added to",
-    "destinationValue": "Promotional Balance"
+    "destinationValue": "Promotional Balance",
+    "destinationPurchased": "Top-up Balance",
+    "validityPermanent": "Never expires"
   },
   "doneTitle": "{{amount}} added",
   "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
@@ -33,8 +35,11 @@
     "alreadyClaimed": "This gift card has already been redeemed.",
     "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
     "voided": "This gift card has been voided.",
+    "voidedPurchased": "This gift card can't be redeemed right now.",
     "rateLimited": "Too many attempts. Try again later.",
     "failed": "Couldn't redeem the gift card. Try again later.",
     "personalRequired": "Gift cards can only be redeemed by personal accounts."
-  }
+  },
+  "doneDescriptionPurchased": "Added to your Top-up Balance. It never expires.",
+  "pendingDescriptionPurchased": "{{amount}} is being added and will appear in your Top-up Balance shortly. You do not need to redeem it again."
 }

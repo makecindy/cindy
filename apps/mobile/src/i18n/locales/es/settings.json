@@ -263,7 +263,7 @@
     "openUserAgreement": "Abrir el acuerdo de usuario",
     "appFilingNumber": "Número de registro de la aplicación",
     "analytics": "Estadísticas de uso",
-    "analyticsHint": "Nos ayuda a entender los inicios de la app y la retención. Envía información del dispositivo, como el modelo, el sistema operativo, la versión de la aplicación y un identificador de dispositivo, además de tu ID de cuenta cuando inicias sesión; nunca conversaciones, archivos ni indicaciones.",
+    "analyticsHint": "Si activas esta opción, usaremos un alias de cuenta y un identificador de dispositivo para conocer los inicios de la aplicación y las visitas recurrentes. Esto nos ayuda a mejorar el producto. Los pagos usan otro alias. Estas estadísticas no incluyen tus conversaciones, archivos ni instrucciones.\nLos registros antiguos contienen los ID de cuenta originales. Quien pueda consultarlos podría vincular un alias nuevo con esa cuenta si coincide el identificador de dispositivo.",
     "analyticsSaveFailed": "No se pudo guardar esta configuración; puede revertirse después de reiniciar.",
     "analyticsReset": "Restablecer los valores predeterminados",
     "analyticsResetAction": "Restablecer"

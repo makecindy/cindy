@@ -204,8 +204,9 @@ describe('PR popover card identity', () => {
     ingestCardPush(push('mine', { sessionId: 'task-a', html }));
     ingestCardPush(push('foreign', { sessionId: 'task-b', html }));
     ingestCardPush(push('other-pr', { sessionId: 'task-a', html: html.replace('#42', '#43') }));
-    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.callId).toBe('mine');
-    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.settingsLabel).toBe('PR 设置');
+    const mine = findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42');
+    expect(mine?.callId).toBe('mine');
+    expect(projectPrCard(mine!.html, 'Following').settingsLabel).toBe('PR 设置');
     ingestCardPush(push('mine', { html: html.replace('Following', 'Stopped') }));
     expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.html).toContain('Stopped');
     expect(findSessionPrCard(getGhostCardSnapshot(), 'task-c', 'github:github.com/octo/repo#42')).toBeNull();
@@ -229,15 +230,17 @@ describe('PR popover card identity', () => {
 describe('PR popover presentation', () => {
   it('separates the existing controls from the duplicate card header and CI', async () => {
     const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
-    const following = projectPrCard(cards['on-summary-task']);
+    const following = projectPrCard(cards['on-summary-task'], 'Following');
     const footer = document.createElement('div');
     footer.innerHTML = following.summaryHtml!;
     expect(footer.querySelector('[data-ghost-action="pr:stop"]')).not.toBeNull();
-    expect(footer.querySelector('[data-ghost-live-label]')).not.toBeNull();
+    const live = footer.querySelector('[data-ghost-live-label="Following"]');
+    expect(live?.textContent).toBe('Following');
+    expect(live?.querySelector('[data-ghost-live]')).not.toBeNull();
     expect(footer.querySelector('[data-ghost-pr-status]')).toBeNull();
     expect(footer.textContent).not.toContain('build(mobile)');
     expect(following.settingsHtml).toBeNull();
-    const settings = projectPrCard(cards['off-settings-custom']);
+    const settings = projectPrCard(cards['off-settings-custom'], 'Following');
     const panel = document.createElement('div');
     panel.innerHTML = settings.settingsHtml!;
     expect(settings.settingsLabel).toBe('PR 设置');
@@ -247,7 +250,7 @@ describe('PR popover presentation', () => {
     expect(settings.summaryHtml).not.toContain('prset:modelPick');
   });
   it('keeps a pending action visible even when the plugin temporarily removes buttons', () => {
-    const pending = projectPrCard('<div data-ghost-pr-open-only="octo/repo#42" style="margin-left:auto">正在开启跟进…</div>');
+    const pending = projectPrCard('<div data-ghost-pr-open-only="octo/repo#42" style="margin-left:auto">正在开启跟进…</div>', 'Following');
     expect(pending.summaryHtml).toContain('正在开启跟进…');
     expect(pending.settingsHtml).toBeNull();
   });
@@ -256,7 +259,7 @@ describe('PR popover presentation', () => {
   // above never reached it. Unit tier, sanitized plugin snapshot as input.
   it('shows the state and task link of a PR followed by another task', async () => {
     const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
-    const reference = projectPrCard(cards['reference-task']);
+    const reference = projectPrCard(cards['reference-task'], 'Following');
     const row = document.createElement('div');
     row.innerHTML = reference.summaryHtml!;
     expect(row.querySelector('.pr-summary-actions')?.textContent).toBe('其他任务正在跟进打开跟进任务 ↗');

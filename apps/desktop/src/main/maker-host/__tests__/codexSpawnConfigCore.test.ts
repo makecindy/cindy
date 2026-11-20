@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { setActiveCatalog } from '../active-catalog.js';
@@ -33,6 +36,12 @@ vi.mock('../codex-browser-companion.js', () => ({
 const localMcpArgs = ['-c', 'mcp_servers.local_slow.url="http://127.0.0.1:9/mcp"'];
 const browserArgs = ['-c', 'mcp_servers.node_repl.command="local-browser"'];
 
+// The launch factory now provisions native rules in its managed runtime home.
+let scratch: string;
+beforeEach(async () => { scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-codex-spawn-')); });
+afterEach(async () => { await fs.rm(scratch, { recursive: true, force: true }); });
+const fixtureHome = () => path.join(scratch, 'codex-home');
+
 function fixture() {
   const buildSessionMcpConfig = vi.fn(() => ({ 'mcp_servers.local_slow.enabled': true }));
   const getCodexExtraSpawnConfig = vi.fn(async () => ({
@@ -42,7 +51,7 @@ function fixture() {
   const scopedReady = vi.fn(() => true);
   const release = vi.fn(async () => {});
   const prepare = createCodexSpawnConfig({
-    binaryPath: 'unused-test-binary', getCodexHome: () => 'unused-test-home',
+    binaryPath: 'unused-test-binary', getCodexHome: fixtureHome,
     getCodexExtraSpawnConfig,
     broadcastCodexRuntimeRoute: vi.fn(async () => {}),
     readClaudeApiKey: () => null, isReplacedCindyGatewayKey: () => false,
@@ -111,6 +120,30 @@ describe('Codex spawn MCP ownership', () => {
     expect(localMcpArgs).not.toContain(browserArgs[1]);
   });
 
+  it('places desktop input rules in the resumed runtime home and leaves external profiles alone', async () => {
+    const historyHome = path.join(scratch, 'codex-accounts', 'a'.repeat(64), 'openai-fixture');
+    const f = fixture();
+    await f.prepare([], { runtimeCodexHome: historyHome });
+    const rules = path.join(historyHome, 'rules', 'cindy-computer-use.rules');
+    expect(await fs.readFile(rules, 'utf8')).toContain('SHELL_DESKTOP_INPUT_NOT_ALLOWED');
+    await expect(fs.stat(path.join(fixtureHome(), 'rules'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const external = path.join(scratch, '.codex');
+    await f.prepare([], { codexHome: external });
+    await expect(fs.stat(path.join(external, 'rules'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.writeFile(rules, '# owner policy');
+    await expect(f.prepare([], { runtimeCodexHome: historyHome })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    expect(await fs.readFile(rules, 'utf8')).toBe('# owner policy');
+  });
+
+  it('leaves an external directory behind a linked account parent untouched', async () => {
+    const external = path.join(scratch, 'external');
+    await fs.mkdir(external);
+    await fs.symlink(external, path.join(scratch, 'codex-accounts'), 'junction');
+    const historyHome = path.join(scratch, 'codex-accounts', 'a'.repeat(64), 'openai-fixture');
+    await expect(fixture().prepare([], { runtimeCodexHome: historyHome })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    expect(await fs.readdir(external)).toEqual([]);
+  });
+
   it('keeps Review hosts free of local MCP provisioning', async () => {
     const f = fixture();
     const result = await f.prepare([], { hostPurpose: 'review', credentialMode: 'oauth-bearer' });
@@ -142,7 +175,7 @@ function routeFixture() {
   const endpoint = vi.fn(() => ready ? 'http://127.0.0.1:12345' : 'https://fallback.invalid/v1');
   const release = vi.fn(async () => {});
   const ports: Ports = {
-    binaryPath: process.execPath, getCodexHome: () => process.cwd(),
+    binaryPath: process.execPath, getCodexHome: fixtureHome,
     getCodexExtraSpawnConfig: vi.fn(async () => ({ extraArgs: [], extraEnv: {}, bridge: null, bridgeServerNames: [] })),
     broadcastCodexRuntimeRoute: async () => {}, readClaudeApiKey: () => 'fake-key',
     isReplacedCindyGatewayKey: () => false, hasCodexOAuthLogin: async () => false,

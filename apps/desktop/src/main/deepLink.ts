@@ -55,6 +55,7 @@ import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { createLogger } from './logger';
+import { buildSessionDeepLink } from './sessionDeepLink';
 import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
@@ -314,13 +315,8 @@ function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'g
  * 注意:'new-session' 不提供 builder——它只由 --open-folder argv 产生,不进入
  * "可复制 / 可粘贴"的 URL 域,避免和现有 project deep link 在 URL 域语义混淆。
  */
-export function buildSessionDeepLink(
-  sessionId: string,
-  opts?: { deviceId?: string | null },
-): string {
-  const device = opts?.deviceId ? `?device=${encodeURIComponent(opts.deviceId)}` : '';
-  return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}${device}`;
-}
+// The builder lives in sessionDeepLink.ts (no Electron) so the Node Host builds the same links.
+export { buildSessionDeepLink };
 
 /** History tools use qualified ids for remote tasks; links always name the owning computer. */
 export function buildHistorySessionDeepLink(sessionKey: string, localDeviceId: string): string {

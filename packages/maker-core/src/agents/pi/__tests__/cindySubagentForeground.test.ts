@@ -154,6 +154,10 @@ describe('Cindy PI Subagent foreground durable path', () => {
     'waits for the runner and forwards Ask approval through the parent UI',
     async () => {
     const f = await fixture();
+    // #9705: execute the generated launch path; only shell settings may survive.
+    const shellSettings = { shellPath: '/fixture/custom shell', shellCommandPrefix: ' export PREFIX=ok\n' };
+    await writeFile(path.join(f.configHome, 'settings.json'), JSON.stringify({ ...shellSettings,
+      extensions: ['must-not-load'], apiKey: 'not-a-real-secret', compaction: { enabled: false } }));
     const cacheRules = [{ provider: 'fixture', id: 'fixture-model', baseUrl: 'https://fixture.invalid/v1' }];
     await writeFile(path.join(f.configHome, 'pi-cache-compatibility.json'), JSON.stringify(cacheRules));
     const previous = { ...process.env };
@@ -211,6 +215,7 @@ describe('Cindy PI Subagent foreground durable path', () => {
         `foreground approved result:${expectedRouteToken}`,
       );
       const [runId] = await readdir(f.runRoot);
+      expect(JSON.parse(await readFile(path.join(f.runRoot, runId, 'pi-home', 'settings.json'), 'utf8'))).toEqual(shellSettings);
       expect(JSON.parse(await readFile(path.join(f.runRoot, runId, 'pi-home', 'pi-cache-compatibility.json'), 'utf8'))).toEqual(cacheRules);
       const configText = await readFile(path.join(f.runRoot, runId, 'config.json'), 'utf8');
       const config = JSON.parse(configText);

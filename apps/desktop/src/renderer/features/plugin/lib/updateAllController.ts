@@ -1,8 +1,9 @@
 /**
  * Window-level controller for the "update all plugins" batch flow.
  *
- * The controller owns only batch progress and grouped review of verified permission changes. Main validates
- * every downloaded package against its market manifest before atomic placement.
+ * The controller owns batch progress and grouped review of market permission changes.
+ * Main validates every package against the market manifest or the freshly checked
+ * GitHub Release asset digest before placement.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -17,8 +18,10 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
+import type { GithubPluginReleaseResult } from '../../../../shared/githubPluginRelease';
 import { extractIpcError } from '@/utils/ipcError';
-import { deliveryNamespaceFields } from '../../../../shared/pluginIdentity';
+import { deliveryNamespaceFields, findInstalledGhostByInstanceId } from '../../../../shared/pluginIdentity';
+import { githubReleaseTarget, runGithubReleaseUpdate } from './githubReleaseUpdates';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import { findInstalledGhostForMarketItem } from './pluginMarketPresentation';
 import {
@@ -32,6 +35,7 @@ import {
   buildUpdateAllRows,
   isBatchFinished,
   updateRow,
+  type NamedGithubReleaseUpdate,
   type UpdateAllRow,
 } from './updateAllModel';
 
@@ -121,7 +125,10 @@ function maybeFinishToast(): void {
   );
 }
 
-export function startUpdateAllBatch(marketUpdates: readonly PluginMarketItem[]): void {
+export function startUpdateAllBatch(
+  marketUpdates: readonly PluginMarketItem[],
+  githubUpdates: readonly NamedGithubReleaseUpdate[] = [],
+): void {
   if (state.running) return;
   const installed = readInstalledGhostsSnapshot();
   const installedVersionByPluginId = new Map(
@@ -133,8 +140,32 @@ export function startUpdateAllBatch(marketUpdates: readonly PluginMarketItem[]):
   finishToastShown = false;
   batchOwner = getDataOwnerGeneration();
   const generation = beginGeneration();
-  emit({ rows: buildUpdateAllRows(marketUpdates, installedVersionByPluginId), running: false });
+  emit({
+    rows: buildUpdateAllRows(marketUpdates, installedVersionByPluginId, githubUpdates),
+    running: false,
+  });
   void runQueue(generation);
+}
+
+/** Main 对 GitHub 更新的回答 → 行结果。done 时 `updated` 区分真的装了新包还是已是最新。 */
+export function githubRowOutcome(
+  reply: GithubPluginReleaseResult,
+): { status: 'done'; updated: boolean; version?: string } | { status: 'failed'; errorText: string } {
+  if (reply.status === 'updated') return { status: 'done', updated: true, version: reply.version };
+  if (reply.status === 'current') return { status: 'done', updated: false };
+  // A changed asset refreshes the offer. This batch did not install the version the user saw.
+  const copy = reply.status === 'available' ? 'unavailable' : reply.status;
+  return { status: 'failed', errorText: i18n.t(`settings.ghosts.detail.githubRelease.${copy}`) };
+}
+
+/** GitHub 行：按当前已装实例重新取目标，交给 Main 复核 release 后下载、校验并落位。 */
+async function installGithubRow(row: UpdateAllRow): Promise<GithubPluginReleaseResult | 'gone'> {
+  const installed = row.instanceId
+    ? findInstalledGhostByInstanceId(readInstalledGhostsSnapshot(), row.instanceId)
+    : undefined;
+  const target = installed ? githubReleaseTarget(installed) : null;
+  if (!target || row.assetId === undefined) return 'gone';
+  return runGithubReleaseUpdate({ target, assetId: row.assetId, progressKey: row.pluginId });
 }
 
 /** 逐项下载；Main 挂起等待确认的更新集中审阅，每项仍提交原事务。 */
@@ -152,6 +183,17 @@ async function runQueue(generation: number): Promise<void> {
       }
       const next = state.rows?.find((row) => row.status === 'pending');
       if (!next) break;
+      if (next.source === 'github') {
+        // Finish market consent and placement before starting another update source.
+        if (installs.length) {
+          await consent.finish();
+          await Promise.all(installs);
+          installs.length = 0;
+          continue;
+        }
+        await installRow(generation, next);
+        continue;
+      }
       const row = consent.track(token => installRow(generation, next, token));
       installs.push(row.done);
       await row.ready;
@@ -163,10 +205,34 @@ async function runQueue(generation: number): Promise<void> {
   }
 }
 
-async function installRow(generation: number, next: UpdateAllRow, batchRowId: string): Promise<void> {
+async function installRow(generation: number, next: UpdateAllRow, batchRowId?: string): Promise<void> {
   patchRow(generation, next.pluginId, { status: 'installing' });
   beginPluginInstallProgress(next.pluginId);
   try {
+    if (next.source === 'github') {
+      const reply = await installGithubRow(next);
+      if (generation !== batchGeneration) return;
+      if (!batchOwnerCurrent()) {
+        voidStaleBatch();
+        return;
+      }
+      if (reply === 'gone') {
+        patchRow(generation, next.pluginId, { status: 'skipped' });
+        return;
+      }
+      const outcome = githubRowOutcome(reply);
+      if (outcome.status === 'failed') {
+        failPluginInstallProgress(next.pluginId, outcome.errorText);
+        patchRow(generation, next.pluginId, outcome);
+        return;
+      }
+      patchRow(generation, next.pluginId, {
+        status: 'done',
+        ...(outcome.version ? { toVersion: outcome.version } : {}),
+      });
+      if (outcome.updated) succeedPluginInstallProgress(next.pluginId);
+      return;
+    }
     const detail = await window.electronAPI.pluginMarket.detail(next.pluginId);
     if (generation !== batchGeneration) return;
     if (!batchOwnerCurrent()) {
@@ -254,6 +320,24 @@ export function reconcileUpdateAllBatch(marketItems: readonly PluginMarketItem[]
   let changed = false;
   for (const row of state.rows) {
     if (row.status !== 'pending') continue;
+    if (row.source === 'github') {
+      // GitHub 行不在市场快照里：只按已装实例收束——没了就跳过，已到目标版本就算完成。
+      const ghost = row.instanceId
+        ? findInstalledGhostByInstanceId(installedGhosts, row.instanceId)
+        : undefined;
+      const target = ghost ? githubReleaseTarget(ghost) : null;
+      if (!target) {
+        rows = updateRow(rows, row.pluginId, { status: 'skipped' });
+        changed = true;
+      } else if (target.installedVersion === row.toVersion) {
+        rows = updateRow(rows, row.pluginId, { status: 'done' });
+        changed = true;
+      } else if (target.installedVersion !== row.fromVersion) {
+        rows = updateRow(rows, row.pluginId, { fromVersion: target.installedVersion });
+        changed = true;
+      }
+      continue;
+    }
     const installed = findInstalledGhostForMarketItem(
       installedGhosts,
       marketByPluginId.get(row.pluginId) ?? {

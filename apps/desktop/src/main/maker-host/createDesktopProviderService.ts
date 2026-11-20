@@ -30,7 +30,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
   refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
@@ -43,6 +43,7 @@ import {
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -929,6 +930,13 @@ function getDesktopProviderModelAccessCatalog(): Catalog {
 // Reference prices shown beside models follow the same account-aware membership as the lists.
 setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
 
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
+
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
   setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
@@ -1057,6 +1065,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
     subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {

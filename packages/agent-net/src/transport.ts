@@ -329,6 +329,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     ...(options.module ? { module: options.module } : {}),
     bind: { address: options.bindAddress ?? '0.0.0.0' },
     udp,
+    udpTraffic: options.udpTraffic,
     accept: { admit },
     intercept: (datagram) => relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false),
     ...(options.tap
@@ -405,6 +406,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集。
       endpoint.localAddressChanged();
       if (udp) gather();
+    },
+    relayRoute() {
+      if (!relay || closed) return null;
+      // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。
+      return relayUdp?.up ? { via: 'udp', rttMs: relayUdp.rttMs } : { via: 'websocket', rttMs: null };
     },
     async close() {
       closed = true; stun?.close();

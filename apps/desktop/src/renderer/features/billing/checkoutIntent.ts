@@ -33,7 +33,7 @@ export function clearLegacyBillingIntentStorage(accountId: string | null): void 
 }
 
 export function newBillingIdempotencyKey(
-  kind: 'topup' | 'subscription' | 'retry' | 'plan-change',
+  kind: 'topup' | 'gift-card' | 'subscription' | 'retry' | 'plan-change',
 ): string {
   return `desktop:${kind}:${crypto.randomUUID()}`;
 }

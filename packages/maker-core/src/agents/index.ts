@@ -26,6 +26,8 @@ export {
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
 export { finalizeCodexCitationText, normalizeCodexFileCitations } from './codex/translator.js';
 export { PiAgent } from './pi/index.js';
+// Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md).
+export * from './acp/index.js';
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,

@@ -33,6 +33,11 @@ export interface PickOptions {
   roundPicks?: number;
   /** [0, 1) 随机数，按权重时使用。 */
   random?: () => number;
+  /**
+   * 读不到用量的成员是否与最急的那几台一起留给组策略。供应商组的电脑为 true(2026-11-19 用户裁决)；
+   * 账号池等其他调用方不传，仍只在全部读不到时才交给组策略。
+   */
+  keepUnknownQuota?: boolean;
 }
 
 /** 不低于最急那台的这个比例算一样急，交给组策略挑：同时开的几个任务不全压到一台。 */
@@ -79,21 +84,24 @@ export function pickProviderGroupMember(
 
 /** The same admission/quota band used by actual selection and anonymous pool summaries. */
 export function providerGroupSchedulingCandidates(members: readonly SchedulableMember[], options: PickOptions = {}) {
-  return byQuota(eligibleMembers(members, options).filter(m => m.running < m.limit));
+  return byQuota(eligibleMembers(members, options).filter(m => m.running < m.limit), options.keepUnknownQuota === true);
 }
 
 /**
  * 配额先比，对所有组策略生效(2026-10-21 用户裁决：快作废的额度最优先，其次各账号平均)：先避开 5 小时配额
- * 快满、离重置还早的(都是这样时不避开)，再只留最急的那几台(不低于最急那台的 90%)。读不到用量的电脑(别人分享的、
- * 尚未接入用量的订阅或 API 连接)排在读得到的后面；全部读不到时不筛，原样交给组策略。保持组里的顺序。
+ * 快满、离重置还早的(都是这样时不避开)，再在读得到用量的成员里只留最急的那几台(不低于最急那台的 90%)。
+ * 读不到用量的成员：`keepUnknown` 时不筛掉，与留下的几台一起交给组策略(供应商组，2026-11-19 用户裁决：未开放额度的
+ * 分享、尚未接入用量的订阅或 API 连接此前只要有一台读得到就分不到任务)；否则只有全部读不到时才原样交给组策略。
+ * 保持组里的顺序。
  */
-function byQuota(open: readonly SchedulableMember[]): readonly SchedulableMember[] {
+function byQuota(open: readonly SchedulableMember[], keepUnknown: boolean): readonly SchedulableMember[] {
   const roomy = open.filter((member) => !member.fiveHourTight);
   const pool = roomy.length > 0 ? roomy : open;
-  const known = pool.filter((member) => typeof member.urgency === 'number' && Number.isFinite(member.urgency));
-  if (known.length === 0) return pool;
-  const top = Math.max(...known.map((member) => member.urgency!));
-  return known.filter((member) => member.urgency! >= top * PROVIDER_GROUP_SIMILAR_URGENCY);
+  const known = (member: SchedulableMember) => typeof member.urgency === 'number' && Number.isFinite(member.urgency);
+  const urgencies = pool.filter(known).map((member) => member.urgency!);
+  if (urgencies.length === 0) return pool;
+  const top = Math.max(...urgencies);
+  return pool.filter((member) => known(member) ? member.urgency! >= top * PROVIDER_GROUP_SIMILAR_URGENCY : keepUnknown);
 }
 
 function eligibleMembers(members: readonly SchedulableMember[], options: Pick<PickOptions, 'exclude'>) {

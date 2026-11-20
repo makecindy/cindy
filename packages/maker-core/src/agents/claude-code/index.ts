@@ -147,6 +147,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { normalizeClaudeContextUsage } from './context-usage.js';
 import { materializeClaudeFlagSettings } from './flag-settings-file.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
@@ -7725,7 +7726,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (!getContextUsage) {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
-        return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+        const usage = await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+        return normalizeClaudeContextUsage(usage);
       },
 
       async readMcpServerTools(serverName: string) {

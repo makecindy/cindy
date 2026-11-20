@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Clock } from 'lucide-react';
+import { ChevronRight, Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
@@ -14,7 +17,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
-import { MENU_ITEM_CLASS } from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
@@ -25,28 +28,10 @@ import {
   toLocalDateTimeValue,
 } from './taskSnoozeOptions';
 
-/** Inbox action in the existing row action slot; callers apply the row's write permissions. */
-export function SessionSnoozeAction({
-  session,
-  isActive,
-  onOpenChange,
-}: {
-  session: Session;
-  isActive: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [customOpen, setCustomOpen] = useState(false);
-  const [menuNow, setMenuNow] = useState(() => new Date());
-  const [customValue, setCustomValue] = useState('');
-  const [invalidCustom, setInvalidCustom] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+export function useSessionSnooze(session: Session) {
+  const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
   const pending = useRef(false);
-  // Keep the existing row action slot visible while either overlay owns focus.
-  useEffect(() => onOpenChange(menuOpen || customOpen), [menuOpen, customOpen, onOpenChange]);
-  const customDate = parseTaskSnoozeTime(customValue, Date.now());
   const snooze = async (until: string | null) => {
     if (pending.current) return;
     pending.current = true;
@@ -61,19 +46,193 @@ export function SessionSnoozeAction({
       setSaving(false);
     }
   };
+  return session.pinnedAt == null ? { snooze, saving } : undefined;
+}
+
+export type SnoozeAction = NonNullable<ReturnType<typeof useSessionSnooze>>;
+
+function SnoozeOptions({
+  session,
+  snooze,
+  onCustom,
+}: {
+  /** The snooze fields only: a task, or a teammate's main conversation. */
+  session: TaskInboxState;
+  snooze: (until: string | null) => Promise<void>;
+  onCustom: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const [menuNow, setMenuNow] = useState(() => new Date());
+  return (
+    <>
+      {taskSnoozeUntil(session) > Date.now() && (
+        <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => void snooze(null)}>
+          {t('ccAgent.sidebar.inbox.wake')}
+        </DropdownMenuItem>
+      )}
+      {taskSnoozeOptions(menuNow).map((option) => (
+        <DropdownMenuItem
+          key={option.id}
+          className={cn(MENU_ITEM_CLASS, 'justify-between gap-4')}
+          onSelect={() => {
+            // Save exactly the time shown when the menu opened.
+            if (option.until.getTime() <= Date.now()) {
+              setMenuNow(new Date());
+              toast.error(t('ccAgent.sidebar.inbox.invalidTime'));
+              return;
+            }
+            void snooze(option.until.toISOString());
+          }}
+        >
+          <span>
+            {option.hours
+              ? t('ccAgent.sidebar.inbox.hours', { count: option.hours })
+              : t(`ccAgent.sidebar.inbox.${option.id}`)}
+          </span>
+          <time
+            dateTime={option.until.toISOString()}
+            className="shrink-0 text-[var(--text-tertiary)] tabular-nums"
+          >
+            {formatTaskSnoozeTime(option, menuNow, i18n.language)}
+          </time>
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => void snooze(INDEFINITE_SNOOZE_UNTIL)}>
+        {t('ccAgent.sidebar.inbox.indefinite')}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={onCustom}>
+        {t('ccAgent.sidebar.inbox.custom')}
+      </DropdownMenuItem>
+    </>
+  );
+}
+
+export function SessionSnoozeCustomDialog({
+  session,
+  action: { snooze, saving },
+  onDismiss,
+}: {
+  session: TaskInboxState;
+  action: SnoozeAction;
+  onDismiss: () => void;
+}) {
+  const { t } = useTranslation();
+  const [customValue, setCustomValue] = useState(() => {
+    const until = taskSnoozeUntil(session);
+    const initial =
+      Number.isFinite(until) && until > Date.now()
+        ? new Date(until)
+        : taskSnoozeOptions(new Date()).find((option) => option.id === 'tomorrow')!.until;
+    return toLocalDateTimeValue(initial);
+  });
+  const [invalidCustom, setInvalidCustom] = useState(false);
+  const customDate = parseTaskSnoozeTime(customValue, Date.now());
+  return (
+    <ConfirmDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onDismiss();
+      }}
+      title={t('ccAgent.sidebar.inbox.snooze')}
+      confirmText={t('ccAgent.sidebar.inbox.snooze')}
+      confirmDisabled={!customDate || saving}
+      onConfirm={() => {
+        const selected = parseTaskSnoozeTime(customValue, Date.now());
+        if (!selected) {
+          setInvalidCustom(true);
+          toast.error(t('ccAgent.sidebar.inbox.invalidTime'));
+          return;
+        }
+        void snooze(selected.toISOString());
+      }}
+      content={
+        <div
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <FormField
+            label={t('ccAgent.sidebar.inbox.wakeAt')}
+            hint={t('ccAgent.sidebar.inbox.timeZone', {
+              zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            })}
+            error={
+              invalidCustom || !customDate ? t('ccAgent.sidebar.inbox.invalidTime') : undefined
+            }
+          >
+            {(control) => (
+              <Input
+                {...control}
+                type="datetime-local"
+                value={customValue}
+                min={toLocalDateTimeValue(new Date(Date.now() + 60_000))}
+                max={toLocalDateTimeValue(new Date(Date.now() + 366 * 86_400_000))}
+                onChange={(value) => {
+                  setCustomValue(value);
+                  setInvalidCustom(false);
+                }}
+              />
+            )}
+          </FormField>
+        </div>
+      }
+    />
+  );
+}
+
+export function SessionSnoozeSubmenu({
+  session,
+  action: { snooze, saving },
+  onCustom,
+}: {
+  session: TaskInboxState;
+  action: SnoozeAction;
+  onCustom: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger className={MENU_ROW_CLASS} disabled={saving}>
+        <span className="flex-1">{t('ccAgent.sidebar.inbox.snooze')}</span>
+        <ChevronRight size={14} aria-hidden />
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        sideOffset={4}
+        collisionPadding={12}
+        className="w-64 max-w-[calc(100vw-24px)]"
+      >
+        <SnoozeOptions session={session} snooze={snooze} onCustom={onCustom} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+/** Inbox action in the existing row action slot; callers apply the row's write permissions. */
+export function SessionSnoozeAction({
+  session,
+  action,
+  isActive,
+  onOpenChange,
+}: {
+  session: TaskInboxState;
+  action: SnoozeAction;
+  isActive: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const { snooze, saving } = action;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Keep the existing row action slot visible while either overlay owns focus.
+  useEffect(() => onOpenChange(menuOpen || customOpen), [menuOpen, customOpen, onOpenChange]);
   return (
     <span
       className="contents"
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
     >
-      <DropdownMenu
-        open={menuOpen}
-        onOpenChange={(open) => {
-          if (open) setMenuNow(new Date());
-          setMenuOpen(open);
-        }}
-      >
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Tip text={t('ccAgent.sidebar.inbox.snooze')}>
             <button
@@ -105,104 +264,17 @@ export function SessionSnoozeAction({
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          {taskSnoozeUntil(session) > Date.now() && (
-            <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => void snooze(null)}>
-              {t('ccAgent.sidebar.inbox.wake')}
-            </DropdownMenuItem>
-          )}
-          {taskSnoozeOptions(menuNow).map((option) => (
-            <DropdownMenuItem
-              key={option.id}
-              className={cn(MENU_ITEM_CLASS, 'justify-between gap-4')}
-              onSelect={() => {
-                // Save exactly the time shown when the menu opened.
-                if (option.until.getTime() <= Date.now()) {
-                  setMenuNow(new Date());
-                  toast.error(t('ccAgent.sidebar.inbox.invalidTime'));
-                  return;
-                }
-                void snooze(option.until.toISOString());
-              }}
-            >
-              <span>
-                {option.hours
-                  ? t('ccAgent.sidebar.inbox.hours', { count: option.hours })
-                  : t(`ccAgent.sidebar.inbox.${option.id}`)}
-              </span>
-              <time
-                dateTime={option.until.toISOString()}
-                className="shrink-0 text-[var(--text-tertiary)] tabular-nums"
-              >
-                {formatTaskSnoozeTime(option, menuNow, i18n.language)}
-              </time>
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className={MENU_ITEM_CLASS}
-            onSelect={() => {
-              const initial =
-                taskSnoozeUntil(session) > Date.now()
-                  ? new Date(taskSnoozeUntil(session))
-                  : taskSnoozeOptions(new Date()).find((option) => option.id === 'tomorrow')!.until;
-              setCustomValue(toLocalDateTimeValue(initial));
-              setInvalidCustom(false);
-              setCustomOpen(true);
-            }}
-          >
-            {t('ccAgent.sidebar.inbox.custom')}
-          </DropdownMenuItem>
+          <SnoozeOptions session={session} snooze={snooze} onCustom={() => setCustomOpen(true)} />
         </DropdownMenuContent>
       </DropdownMenu>
       {customOpen && (
-        <ConfirmDialog
-          open={customOpen}
-          onOpenChange={(open) => {
-            setCustomOpen(open);
-            if (!open) triggerRef.current?.focus();
+        <SessionSnoozeCustomDialog
+          action={action}
+          session={session}
+          onDismiss={() => {
+            setCustomOpen(false);
+            triggerRef.current?.focus();
           }}
-          title={t('ccAgent.sidebar.inbox.snooze')}
-          confirmText={t('ccAgent.sidebar.inbox.snooze')}
-          confirmDisabled={!customDate || saving}
-          onConfirm={() => {
-            const selected = parseTaskSnoozeTime(customValue, Date.now());
-            if (!selected) {
-              setInvalidCustom(true);
-              toast.error(t('ccAgent.sidebar.inbox.invalidTime'));
-              return;
-            }
-            void snooze(selected.toISOString());
-          }}
-          content={
-            <div
-              onClick={(event) => event.stopPropagation()}
-              onDoubleClick={(event) => event.stopPropagation()}
-            >
-              <FormField
-                label={t('ccAgent.sidebar.inbox.wakeAt')}
-                hint={t('ccAgent.sidebar.inbox.timeZone', {
-                  zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                })}
-                error={
-                  invalidCustom || !customDate ? t('ccAgent.sidebar.inbox.invalidTime') : undefined
-                }
-              >
-                {(control) => (
-                  <Input
-                    {...control}
-                    type="datetime-local"
-                    value={customValue}
-                    min={toLocalDateTimeValue(new Date(Date.now() + 60_000))}
-                    max={toLocalDateTimeValue(new Date(Date.now() + 366 * 86_400_000))}
-                    onChange={(value) => {
-                      setCustomValue(value);
-                      setInvalidCustom(false);
-                    }}
-                  />
-                )}
-              </FormField>
-            </div>
-          }
         />
       )}
     </span>

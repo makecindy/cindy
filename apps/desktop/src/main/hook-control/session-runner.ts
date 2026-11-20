@@ -27,6 +27,8 @@
  * 正确。后续要精确区分时再与 maker-core 一起演进。
  */
 
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
+import { refineCreatedTaskTitle } from '../maker-ipc/createdTaskTitles.js';
 import { beginChannelToolScope } from '../im/shared/channelToolScope.js';
 import { getSessionRuntimeStartOverride } from '../maker-ipc/sessionRuntimeControl.js';
 
@@ -42,6 +44,7 @@ import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
+  EngineKind,
   InteractionRequest,
   PermissionMode,
   TurnPermissionOrigin,
@@ -57,6 +60,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { isPluginEngineTask, PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -165,6 +169,14 @@ import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+/** Official hooks do not run plugin-engine tasks in phase 1 (docs/plans/acp-plugin-bridge.md). */
+const OFFICIAL_CHANNEL_FEATURE = 'Official bot channels';
+
+/** Refuses only plugin-engine tasks; every other session keeps its existing hook path. */
+function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
+  return !isPluginEngineTask(value);
+}
 
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
@@ -720,6 +732,14 @@ async function collectOutboundForFinalText(
   }
 }
 
+function refineHookTaskTitle(req: HookRunRequest, subject: string): void {
+  const naming = req.topicNaming;
+  void refineCreatedTaskTitle(req.sessionId, subject, naming && {
+    initialTitle: naming.initialTitle,
+    format: topic => formatTaskTopicTitle(topic, naming.channel, naming.context ? { context: naming.context } : undefined),
+  });
+}
+
 export function createMakerHookSessionRunner(deps: {
   log: { info(msg: string): void; warn(msg: string): void };
 }): HookSessionRunner {
@@ -728,20 +748,25 @@ export function createMakerHookSessionRunner(deps: {
   const runner = {
     isBusy: (sessionId) => isSessionInTurn(sessionId),
 
-    async inspect(sessionId) {
+    async inspect(sessionId, checkArchivedDir) {
       const [meta, row] = await Promise.all([
         getMaker().getSessionMeta(sessionId),
         getSessionRowSnapshotStrict(sessionId),
       ]);
       if (!meta && !row) return null;
-      const usable =
-        !!row &&
-        row.status !== 'archived' &&
-        row.status !== 'deleted' &&
-        row.remoteHostId == null &&
-        row.orcaRole !== 'worker';
-      // workDir 以 maker meta 为权威(scheduler 同做法), row 兜底
+      const localTask = !!row && row.remoteHostId == null && row.orcaRole !== 'worker';
+      const usable = localTask && row.status !== 'archived' && row.status !== 'deleted';
       const workingDir = meta?.workDir ?? row?.workingDir ?? null;
+      if (localTask && row.status === 'archived' && !row.orcaRemoteLead && row.source !== 'bot'
+        && workingDir && checkArchivedDir?.(workingDir)) {
+        // Archive cleanup can remove a dedicated worktree. Only resume in a surviving directory.
+        try {
+          return { workingDir, usable, resumableArchive: (await fs.stat(workingDir)).isDirectory() };
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
+      }
       return { workingDir, usable };
     },
 
@@ -808,6 +833,8 @@ export function createMakerHookSessionRunner(deps: {
           workingDir = meta.workDir;
           model = meta.model;
           resumeSessionId = meta.sdkSessionId;
+          // 插件引擎任务不接官方渠道(docs/plans/acp-plugin-bridge.md):明确拒绝,不按内置引擎重开。
+          if (meta.agentKind === 'acp') throw new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE);
           effectiveAgentKind = meta.agentKind;
         }
         effort = req.companionBotId ? meta?.effort : undefined;
@@ -1010,6 +1037,7 @@ export function createMakerHookSessionRunner(deps: {
           }
           assertAccount?.();
           broadcastSessionCreated(req.sessionId);
+          refineHookTaskTitle(req, '');
           return {
             status: 'ok',
             finalText: '',
@@ -1030,7 +1058,8 @@ export function createMakerHookSessionRunner(deps: {
           const recovered = await getSessionRowSnapshotStrict(req.sessionId);
           assertAccount?.();
           if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
-          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, createOpts.agentKind, createOpts.agentDeviceId);
+          // createOpts.agentKind is effectiveAgentKind (built-in, see above).
+          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, effectiveAgentKind, createOpts.agentDeviceId);
           Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
           if (runtimeOverride.model) {
             setSessionEffort(req.sessionId, runtimeOverride.effort);
@@ -1094,6 +1123,11 @@ export function createMakerHookSessionRunner(deps: {
           }
           return fail(err instanceof Error ? err.message : String(err));
         }
+      }
+      // maker.createSession 对已活着的同 id 实例直接复用:那个实例若跑在插件引擎上,
+      // 同样明确拒绝(meta 缺失时上方的检查覆盖不到)。
+      if (!runsOnBuiltinEngine(session)) {
+        return fail(new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE).message);
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于
@@ -1706,6 +1740,8 @@ export function createMakerHookSessionRunner(deps: {
             // accepted hook turn is headless; preparation and queue wait are
             // still part of the unrelated interactive turn.
             markHeadlessTurnDispatched();
+            assertAccount?.();
+            refineHookTaskTitle(req, req.userText?.trim() || req.source?.userText?.trim() || '');
             // send 被接受才落 user 消息(与 scheduler 同序: 不让 agent 在
             // "消息没存下"的情况下空跑); 失败即整体失败
             // agentMeta 形状受 CcMeta 约束, 只放 origin(scheduleId 已携带

@@ -391,6 +391,26 @@ describe('db worker tx handlers', () => {
     workerScriptPath = await buildDbWorkerBundle(path.join(workerBundleDir, 'build'));
   });
 
+  // Both desktop worker implementations must check the owning project and protections at commit.
+  it.each([false, true])('guards confirmed project archive and restore writes (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await seedSession(client, 'member', { status: 'active', workingDir: '/project', workspaceKind: 'project' });
+      const projectGuard = { workingDir: '/project', projectDir: null, workspaceKind: 'project', remoteHostId: null };
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'member', status: 'archived', projectGuard });
+      const restore = () => client.tx('sessions.setStatus', { sessionIds: ['member'], status: 'active', projectGuard });
+      await client.exec("INSERT INTO im_bindings(channel,bot_context_id,user_id,target_session_id,attached_at) VALUES ('im','bot','u','member',1)");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("DELETE FROM im_bindings WHERE target_session_id = 'member'");
+      await expect(archive()).resolves.toMatchObject({ status: 'archived' });
+      await client.exec("UPDATE sessions SET remote_host_id='other' WHERE id='member'");
+      await expect(restore()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT status FROM sessions WHERE id='member'")).toEqual({ status: 'archived' });
+      await client.exec("UPDATE sessions SET remote_host_id=NULL WHERE id='member'");
+      await expect(restore()).resolves.toEqual([expect.objectContaining({ status: 'active' })]);
+    }, { useInlineWorker });
+  });
+
   // #10310, DB tier: ordinary terminal writes do not guard against fresh activity
   // or a concurrently enabled automation. Exercise both production transports.
   // Inbox merge regression: archive must clear both snooze fields while maintenance

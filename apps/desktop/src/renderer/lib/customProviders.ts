@@ -188,12 +188,40 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
+  // #11298: remember which saved IDs this runtime's own catalog listed. Manual rows
+  // (nameExplicit) and routed extra-catalog rows are never marked, so they can never
+  // be offered as withdrawn later.
+  const listed = new Set(discovered.map((model) => model.id));
+  const models = mergeDiscoveredRuntimeModels(prior, discovered).map((model) => {
+    if (!listed.has(model.id)) return model;
+    // Listed again: any earlier absence receipt is void.
+    const { missingUpstream: _missing, ...rest } = model;
+    return !rest.nameExplicit && !rest.route ? { ...rest, listedUpstream: true as const } : rest;
+  });
   const known = new Set(existing.map((model) => model.id));
   return {
     models,
     addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
   };
+}
+
+/**
+ * Models an earlier Settings refresh saw in this runtime's own catalog (`listedUpstream`)
+ * that a complete, fresh catalog no longer lists (#11298). Only offered for
+ * user-confirmed removal; refresh itself never deletes. Unmarked rows (manual, preset,
+ * speech reference, import, pre-upgrade) and routed rows are never candidates.
+ * `suspicious`: an empty catalog, or at least half of the marked models missing.
+ */
+export function findWithdrawnCustomProviderModels(
+  models: readonly ProviderRuntimeModelConfig[],
+  discovered: readonly DiscoveredModel[],
+): { withdrawn: ProviderRuntimeModelConfig[]; suspicious: boolean } {
+  const current = new Set(discovered.map((model) => model.id));
+  const eligible = models.filter((model) => model.listedUpstream === true && !model.nameExplicit && !model.route);
+  const withdrawn = eligible.filter((model) => !current.has(model.id));
+  const suspicious = withdrawn.length > 0
+    && (current.size === 0 || withdrawn.length * 2 >= eligible.length);
+  return { withdrawn, suspicious };
 }
 
 /**

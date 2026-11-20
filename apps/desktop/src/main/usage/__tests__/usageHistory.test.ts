@@ -33,6 +33,8 @@ vi.mock('../modelPricing', () => ({
   getGatewayModelPricing: vi.fn(),
   isModelPricingRefreshInFlight: vi.fn(() => false),
 }));
+// The subscription estimate (usageModelKeys.ts) reads the core the wrapper below re-exports: the same mock.
+vi.mock('../referenceModelPricingCore', async () => await import('../referenceModelPricing'));
 vi.mock('../referenceModelPricing', () => ({
   getReferenceModelPricing: vi.fn(() => ({})),
   readModelPriceOverridesSnapshot: vi.fn(() => ({})),

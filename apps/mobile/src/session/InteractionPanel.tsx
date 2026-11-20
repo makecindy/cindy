@@ -1,7 +1,7 @@
 import type { ScrollViewInstance } from 'react-native';
 import { IssueConfirmCard, type MobileIssueConfirmRequest } from './IssueConfirmCard';
 import { clearIssueConfirmDraft } from './interactionDraftStore';
-import { askAnswerError, askQuestionOptions, interactionPriority } from '@cindy/maker-shared/interaction';
+import { askAnswerError, askQuestionOptions } from '@cindy/maker-shared/interaction';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
@@ -80,7 +80,7 @@ import {
   remoteInteractionHandling,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
-  sortPendingInteractions,
+  selectPendingInteractionByRequestId,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -188,6 +188,7 @@ function InteractionPanelContent({
   collapse,
   deviceId,
   fillAvailableHeight = false,
+  pinPermissionActions = false,
   sessionId,
   interactions,
   activeRequestId: controlledActiveRequestId,
@@ -212,6 +213,7 @@ function InteractionPanelContent({
   };
   deviceId: string;
   fillAvailableHeight?: boolean;
+  pinPermissionActions?: boolean;
   sessionId: string;
   interactions: PendingInteraction[];
   activeRequestId?: string | null;
@@ -223,10 +225,6 @@ function InteractionPanelContent({
   const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const sortedInteractions = useMemo(
-    () => sortPendingInteractions(interactions),
-    [interactions],
-  );
   const [localActiveRequestId, setLocalActiveRequestId] = useState<string | null>(null);
   const activeRequestId = controlledActiveRequestId !== undefined
     ? controlledActiveRequestId
@@ -235,25 +233,21 @@ function InteractionPanelContent({
     if (controlledActiveRequestId !== undefined) onActiveRequestIdChange?.(requestId);
     else setLocalActiveRequestId(requestId);
   };
-  const fallbackInteraction = sortedInteractions[0] ?? null;
-  const activeInteraction = useMemo(() => {
-
-    if (!activeRequestId) return fallbackInteraction;
-    const selected = sortedInteractions.find((item) => readRequestId(item) === activeRequestId);
-    if (!selected || (fallbackInteraction && interactionPriority(fallbackInteraction) < interactionPriority(selected))) return fallbackInteraction;
-    return selected;
-  }, [activeRequestId, fallbackInteraction, sortedInteractions]);
+  const activeInteraction = useMemo(
+    () => selectPendingInteractionByRequestId(interactions, activeRequestId),
+    [interactions, activeRequestId],
+  );
   const { width: screenWidth } = usePaneViewport();
   useEffect(() => {
     if (!activeRequestId) return;
-    if (!sortedInteractions.some((item) => readRequestId(item) === activeRequestId)) {
+    if (!interactions.some((item) => readRequestId(item) === activeRequestId)) {
       setActiveRequestId(null);
     }
-  }, [activeRequestId, sortedInteractions]);
+  }, [activeRequestId, interactions]);
   if (!activeInteraction) return null;
   const kind = interactionKind(activeInteraction);
-  const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
-    maxVisible: sortedInteractions.length || 1,
+  const queuePresentation = buildPendingInteractionQueuePresentation(interactions, {
+    maxVisible: interactions.length || 1,
   }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
@@ -389,6 +383,7 @@ function InteractionPanelContent({
         sessionId={sessionId}
         item={activeInteraction}
         embedded={embedded}
+        pinPermissionActions={pinPermissionActions}
         planViewerState={planViewerState}
         onPlanViewerStateChange={onPlanViewerStateChange}
         onError={onError}
@@ -537,6 +532,7 @@ function InteractionItem({
   sessionId,
   item,
   embedded,
+  pinPermissionActions,
   planViewerState,
   onPlanViewerStateChange,
   onError,
@@ -547,6 +543,7 @@ function InteractionItem({
   sessionId: string;
   item: PendingInteraction;
   embedded: boolean;
+  pinPermissionActions: boolean;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
   onError(message: string | null): void;
@@ -686,6 +683,8 @@ function InteractionItem({
   if (kind === 'permission') {
     return (
       <PermissionCard
+        pinActions={pinPermissionActions}
+        key={readRequestId(item)}
         busy={busy}
         item={item}
         onDecision={(decision) => void submitDecision(decision)}
@@ -810,12 +809,14 @@ function PermissionCard({
   busy,
   item,
   onDecision,
+  pinActions,
   touchLayout,
 }: {
   onError(message: string | null): void;
   busy: boolean;
   item: PendingInteraction;
   onDecision(decision: Record<string, unknown>): void;
+  pinActions: boolean;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
@@ -832,6 +833,10 @@ function PermissionCard({
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
+  const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
+  const isFirstInstall = isPluginInstall && (item.request.input as { operation?: unknown } | null)?.operation === 'install';
+  const [showInstallDetails, setShowInstallDetails] = useState(false);
+  const installSummary = isPluginInstall && !showInstallDetails;
   const permissionState = buildMobilePermissionCardState({ armedDecision, presentation });
   const requestDecision = (
     action: 'allow-once' | 'always-allow',
@@ -857,7 +862,7 @@ function PermissionCard({
       variant="secondary"
     />
   );
-  const alwaysButton = permissionState.canShowAlwaysAllow ? (
+  const alwaysButton = !isPluginInstall && permissionState.canShowAlwaysAllow ? (
     <ResolveButton
       key="always"
       accessibilityLabel={t('interaction.permission.alwaysAllowAccessibility')}
@@ -878,20 +883,20 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
-      accessibilityLabel={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
+      accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
       confirmLabel={t('interaction.permission.allowOnceConfirm')}
-      label={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
-      onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
+      label={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
+      onPress={() => installSummary && !isFirstInstall ? setShowInstallDetails(true) : requestDecision('allow-once', buildPermissionDecision('allow'))}
       requestId={requestId}
       touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
       testID="interaction.permission.allowOnceButton"
       variant="primary"
     />
   );
-  return (
-    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.permission.card">
+  const details = (
+    <>
       {companion ? <>
         <View style={styles.companionCaption} testID="interaction.permission.requester">
           {!hung ? companionIdentity?.avatar : null}
@@ -901,7 +906,7 @@ function PermissionCard({
             {!hung && companionIdentity ? <Text style={styles.kind}>{permissionState.title}</Text> : null}
           </View>
         </View>
-        {presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
+        {!installSummary && presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
       </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
@@ -911,13 +916,33 @@ function PermissionCard({
         onPress={() => { void Linking.openURL(url).catch((error) => onError(formatRemoteError(error))); }}>
         {url}
       </Text> : null}
-      {isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
+      {installSummary ? <Text style={styles.body}>{presentation.description?.split('\n', 1)[0]}</Text> : isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
         input={item.request.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />}
+      {isFirstInstall && <InteractionTouchButton
+        accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
+        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
+        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+      </InteractionTouchButton>}
+    </>
+  );
+  return (
+    <View style={[cardStyle(styles, touchLayout, companion), pinActions && styles.permissionScrollable]} testID="interaction.permission.card">
+      {pinActions ? (
+        <ScrollView
+          style={styles.permissionScrollable}
+          contentContainerStyle={{ gap: companion ? spacing.sm : touchLayout.cardGap }}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          testID="interaction.permission.scroll"
+        >
+          {details}
+        </ScrollView>
+      ) : details}
       <InteractionActions touchLayout={touchLayout}>
         {[denyButton, alwaysButton, allowButton]}
       </InteractionActions>
@@ -2494,6 +2519,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
+  permissionScrollable: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
   permissionEvidence: {
     backgroundColor: colors.surface,
     borderColor: colors.border,

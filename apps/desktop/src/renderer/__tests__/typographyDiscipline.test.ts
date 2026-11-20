@@ -55,6 +55,11 @@ import { describe, expect, it } from 'vitest';
  *     单行字符串常量(单 / 双 / 反引号),而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
  *     修法是改成无单位比例(比例 = 原 px ÷ 默认字号),默认字号下渲染不变。
  *     2026-11 扩展前已存在的 rem / 数字档命中登记在 FIXED_LEADING_DEBT,只减不增。
+ *  9. renderer 里的静态内联字号(`fontSize: 13`、`fontSize: '13px'`、`el.style.fontSize = '13px'`)
+ *     即使数值在白名单内也判红(`inline-literal-size`):`applyFontSettings` 只改写 `--text-*`
+ *     变量,字面量不随「外观 → UI 字号」缩放。改用 `text-<n>` 类或 `var(--text-<n>)`。
+ *     2026-11-18 的存量登记在 INLINE_SIZE_DEBT,只减不增;登录品牌画布与分享图片生成按
+ *     DESIGN.md §3 豁免登记进 EXEMPTIONS。白名单外的值仍归规则 3(`inline-size`),不双计。
  *
  * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中/上下文及期望次数)
  *  每条豁免按具体 match 与上下文签名计数;新增 font-black 或 800 即使总数不变也红。
@@ -72,13 +77,10 @@ import { describe, expect, it } from 'vitest';
  *    跳过,不按内部 token 误判;多行三元只覆盖值首行;
  *  - fontSize 的相对比例值(em / rem / %,如编辑器标题系数)与算式派生值
  *    (`size * 0.86`、`17 / 1`,片段含 * 或 / 即跳过)—— 非静态可判;
- *  - 内联字号盲区: `style={{ fontSize: <number | 'Npx'> }}` 形式的白名单档位
- *    当前允许通过,但 `applyFontSettings` 只改写 `--text-*` 变量,这些字面量不会
- *    响应设置页的 UI 字号缩放。该缺口、2026-11-11 核对的存量与分批迁移计划登记在
- *    DESIGN.md §3「排版 non-goals」的「内联字号盲区」条(设计审核 B-06);
- *    SVG `fontSize="N"` 属性与 `xtermPool.ts` 的数字入参属于无法用 token 类表达的
- *    结构性合法用法。收紧方向是存量迁移后静态内联字号默认判红,仅为 SVG/画布/
- *    第三方 API 登记精确豁免,收紧时同步改本条与 DESIGN.md;
+ *  - 规则 9 的边界: 只扫 `src/renderer`(main 侧生成的窗口与系统图像不受 UI 字号设置
+ *    影响);JSX 属性形式 `fontSize="N"` / `fontSize={N}`(SVG 文字)、变量声明
+ *    `const fontSize = 12` 与经常量间接传入的值(`fontSize: CONTROL.fontSize`)不判;
+ *    xterm 数值入参走用户设置变量,天然无命中。见 DESIGN.md §3「内联字号守卫」条;
  *  - CSS `@apply` 排版类盲区:CSS 分支当前只扫描显式 `font-weight` / `font:`
  *    声明,不解析 `.x { @apply font-bold; }` 或字号类;Tailwind PostCSS 展开后
  *    可能产生守卫未见的字重/字号。此类形态本轮不改扫描,后续独立施工需纳入
@@ -429,12 +431,91 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/voice-input/VoiceInputOverlay.tsx', { 'leading-5': 4, 'leading-6': 2 }),
 ];
 
+/**
+ * 静态内联字号存量债务基线(DESIGN.md §3「内联字号守卫」,2026-11-12 维护者追加裁决)。
+ *
+ * 规则 9 落地时 renderer 里已有的白名单内静态内联字号,按「文件 + 具体值 + 次数」登记:
+ * 新增一处即红;迁移掉一处后实测变少也会红,提示同步下调 —— 基线只减不增。
+ */
+const inlineSizeDebt = (file: string, counts: Record<string, number>): Exemption => ({
+  file,
+  rule: 'inline-literal-size',
+  reason: 'DESIGN.md §3 内联字号存量债务,分批迁移为 text-<n>',
+  debt: true,
+  signatures: Object.entries(counts).map(([match, expected]) => ({ match, expected })),
+});
+
+const INLINE_SIZE_DEBT: Exemption[] = [
+  inlineSizeDebt('src/renderer/features/skillhub/SkillhubMarketListView.tsx', {
+    'fontSize …13': 2,
+    'fontSize …12': 2,
+    'fontSize …11': 1,
+  }),
+  inlineSizeDebt('src/renderer/features/skillhub/SkillhubMarketDetailView.tsx', { 'fontSize …11': 1 }),
+  inlineSizeDebt('src/renderer/features/maker-experimental/MakerExperimentalView.tsx', {
+    'fontSize …13': 1,
+    'fontSize …12': 1,
+    'fontSize …11': 2,
+  }),
+  inlineSizeDebt('src/renderer/components/chat/ModelLightbox.tsx', { 'fontSize …13': 1 }),
+  // CodeMirror 编辑器主题(CSS-in-JS):编辑区基础字号与图片/Mermaid 错误提示的 px 字面量,
+  // 同样不随 UI 字号缩放;em 相对的内容标题层级不在此列(§3 豁免表)。
+  inlineSizeDebt('src/renderer/components/markdown/codemirrorGithubTheme.ts', {
+    'fontSize …16': 1,
+    'fontSize …15': 1,
+    'fontSize …13': 2,
+    'fontSize …12': 2,
+  }),
+];
+
+/** 规则 9 的合法豁免:设计 px 坐标系与图片生成,不是待迁移债务(DESIGN.md §3 豁免表)。 */
+const INLINE_SIZE_EXEMPTIONS: Exemption[] = [
+  {
+    file: 'src/renderer/components/login/LoginControls.tsx',
+    rule: 'inline-literal-size',
+    reason: '登录品牌画布(§3 豁免表「登录 / Splash 品牌画布」行):设计 px 字号',
+    signatures: [
+      { match: 'fontSize …24', expected: 1 },
+      { match: 'fontSize …20', expected: 1 },
+    ],
+  },
+  {
+    file: 'src/renderer/components/auth/LegacyMigrationDialog.tsx',
+    rule: 'inline-literal-size',
+    reason: '登录品牌画布家族(680→490 缩放,§3 豁免表):设计 px 字号',
+    signatures: [
+      { match: 'fontSize …24', expected: 1 },
+      { match: 'fontSize …18', expected: 1 },
+      { match: 'fontSize …16', expected: 1 },
+    ],
+  },
+  {
+    file: 'src/renderer/components/login/LoginCaptchaOverlay.tsx',
+    rule: 'inline-literal-size',
+    reason: '登录品牌画布家族(§3 豁免表):设计 px 字号',
+    signatures: [
+      { match: 'fontSize …16', expected: 1 },
+      { match: 'fontSize …13', expected: 4 },
+    ],
+  },
+  {
+    file: 'src/renderer/lib/shareConversationImage.ts',
+    rule: 'inline-literal-size',
+    reason: '生成分享图片的离屏 DOM,按图片像素排版,不跟随 UI 字号(§3 内联字号守卫条)',
+    signatures: [{ match: 'fontSize …14', expected: 1 }],
+  },
+];
+
+const INLINE_SIZE_FIX = '改用 text-<n> 类或 var(--text-<n>),见 DESIGN.md §3「内联字号守卫」';
+
 const FIXED_LEADING_FIX =
   '(比例 = 原行高 px ÷ 默认字号 px,精度以乘回默认字号仍得原 px 为准,如 text-13 leading-5 → leading-[1.54]、' +
   'text-12 leading-5 → leading-[1.667];见 DESIGN.md §3 行高例外)';
 
 function hintFor(rule: string): string {
-  return rule === 'fixed-leading' ? ` —— 改成无单位比例${FIXED_LEADING_FIX}` : '';
+  if (rule === 'fixed-leading') return ` —— 改成无单位比例${FIXED_LEADING_FIX}`;
+  if (rule === 'inline-literal-size') return ` —— ${INLINE_SIZE_FIX}`;
+  return '';
 }
 
 // ── 预处理 ──────────────────────────────────────────────────────────
@@ -569,6 +650,36 @@ export function findInlineSizeViolations(text: string): Hit[] {
         continue;
       }
       if (!SIZE_SET.has(Number(m[1]))) hits.push({ match: `fontSize …${m[1]}`, index: seg.index });
+    }
+  }
+  return hits;
+}
+
+/** 规则 9:白名单内的静态内联字号(冒号形式,含带引号的键 `'fontSize': 13`,与 `.fontSize =` 成员赋值)。
+ *  JSX 属性 / 变量声明形式、var(...)、函数调用、em/rem/% 与算式派生值不判;
+ *  白名单外的值留给规则 3b,不双计。 */
+export function findInlineLiteralSizes(text: string): Hit[] {
+  const hits: Hit[] = [];
+  for (const m of text.matchAll(/(\.)?(['"]?)\bfontSize\b\2\s*(:|=(?!=))\s*/g)) {
+    if (m[3] === '=' && (!m[1] || m[2])) continue;
+    const rest = text.slice((m.index ?? 0) + m[0].length);
+    const first = rest[0];
+    let value: string;
+    if (first === '"' || first === "'" || first === '`') {
+      const end = rest.indexOf(first, 1);
+      value = end === -1 ? rest.slice(1) : rest.slice(1, end);
+    } else {
+      value = rest.split(/[,;}\n]/, 1)[0] ?? '';
+    }
+    if (/[*/]/.test(value)) continue;
+    let scannable = value;
+    let prev: string;
+    do {
+      prev = scannable;
+      scannable = scannable.replace(/[A-Za-z_$][\w$]*\s*\([^()]*\)/g, ' ');
+    } while (scannable !== prev);
+    for (const n of scannable.matchAll(/(?<![\w.$-])(\d+(?:\.\d+)?)(px)?(?![\w.%])/gi)) {
+      if (SIZE_SET.has(Number(n[1]))) hits.push({ match: `fontSize …${n[1]}`, index: m.index ?? 0 });
     }
   }
   return hits;
@@ -798,6 +909,9 @@ function scan(): Violation[] {
     push(rel, text, 'token-size', findOffLadderTokenSizes(text));
     push(rel, text, 'inline-weight', findInlineWeightViolations(text));
     push(rel, text, 'inline-size', findInlineSizeViolations(text));
+    if (rel.startsWith('src/renderer/')) {
+      push(rel, text, 'inline-literal-size', findInlineLiteralSizes(text));
+    }
     push(rel, text, 'string-weight', findStringWeightViolations(text));
     push(rel, text, 'font-shorthand', findFontShorthands(text));
     push(rel, text, 'fixed-leading', findFixedLeadingWithScalingToken(text));
@@ -835,7 +949,12 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
   it('keeps weights and sizes on the ladder; exemption hit counts stay exact', () => {
     const violations = scan();
     const keyOf = (file: string, rule: string) => `${file} ${rule}`;
-    const allExemptions = [...EXEMPTIONS, ...FIXED_LEADING_DEBT];
+    const allExemptions = [
+      ...EXEMPTIONS,
+      ...FIXED_LEADING_DEBT,
+      ...INLINE_SIZE_DEBT,
+      ...INLINE_SIZE_EXEMPTIONS,
+    ];
     const exemptionByKey = new Map(allExemptions.map((e) => [keyOf(e.file, e.rule), e]));
     // 债务基线与合法豁免共用一套计数;同一文件 + 规则只能有一条登记,否则后者会静默覆盖前者。
     expect(exemptionByKey.size).toBe(allExemptions.length);
@@ -878,10 +997,13 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       for (const signature of e.signatures) {
         const hits = actual.get(signatureKey(signature.match, signature.context)) ?? 0;
         if (hits !== signature.expected) {
+          const debtList = e.rule === 'inline-literal-size' ? 'INLINE_SIZE_DEBT' : 'FIXED_LEADING_DEBT';
+          const fix =
+            e.rule === 'inline-literal-size' ? INLINE_SIZE_FIX : `改无单位比例${FIXED_LEADING_FIX}`;
           const advice = e.debt
             ? hits > signature.expected
-              ? `存量债务只减不增,新增处请改无单位比例${FIXED_LEADING_FIX}`
-              : '债务已减少,请同步下调 FIXED_LEADING_DEBT 基线(归零即删整条)'
+              ? `存量债务只减不增,新增处请${fix}`
+              : `债务已减少,请同步下调 ${debtList} 基线(归零即删整条)`
             : hits > signature.expected
               ? '有人蹭豁免,新增处必须自证或归梯'
               : '豁免已过期,请同步删登记';
@@ -1042,6 +1164,18 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineSizeViolations("fontSize: '17ch',")).toHaveLength(1);
       expect(findInlineSizeViolations("fontSize: '17PX',")).toHaveLength(1);
       expect(findInlineSizeViolations("fontSize: '13pt',")).toHaveLength(1);
+      // 规则 9:白名单内的静态内联字号同样判红(不随 UI 字号缩放)
+      expect(matches(findInlineLiteralSizes('style={{ fontSize: 13 }}'))).toEqual(['fontSize …13']);
+      expect(matches(findInlineLiteralSizes("style={{ padding: 4, fontSize: '12px' }}"))).toEqual([
+        'fontSize …12',
+      ]);
+      expect(matches(findInlineLiteralSizes("marker.style.fontSize = '14px';"))).toEqual([
+        'fontSize …14',
+      ]);
+      expect(findInlineLiteralSizes('fontSize: active ? 13 : 12,')).toHaveLength(2);
+      // 带引号的键同样是合法对象属性写法,不得绕过(PR #11255 评审)
+      expect(matches(findInlineLiteralSizes("style={{ 'fontSize': 13 }}"))).toEqual(['fontSize …13']);
+      expect(matches(findInlineLiteralSizes('style={{ "fontSize": "13px" }}'))).toEqual(['fontSize …13']);
       expect(matches(findStringWeightViolations('font-weight:700;color:red'))).toEqual([
         'font-weight:700',
       ]);
@@ -1154,6 +1288,15 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineSizeViolations('fontSize: 13,')).toEqual([]);
       expect(findInlineSizeViolations("fontSize: '13px' }")).toEqual([]);
       expect(findInlineSizeViolations('fontSize: CONTROL.fontSize,')).toEqual([]);
+      // 规则 9 放行:token 变量、常量引用、相对值、算式、SVG 属性、变量声明、比较与白名单外值(归规则 3b)
+      expect(findInlineLiteralSizes("fontSize: 'var(--text-13)',")).toEqual([]);
+      expect(findInlineLiteralSizes('fontSize: CONTROL.fontSize,')).toEqual([]);
+      expect(findInlineLiteralSizes("fontSize: '0.92em',")).toEqual([]);
+      expect(findInlineLiteralSizes('fontSize: size * 0.86,')).toEqual([]);
+      expect(findInlineLiteralSizes('<text fontSize="10" />')).toEqual([]);
+      expect(findInlineLiteralSizes('const fontSize = 12;')).toEqual([]);
+      expect(findInlineLiteralSizes('if (terminal.options.fontSize === 13) {}')).toEqual([]);
+      expect(findInlineLiteralSizes('fontSize: 64,')).toEqual([]);
       // 相对比例(em/rem/%)与算式派生值属登记盲区,不误报
       expect(findInlineSizeViolations("fontSize: '2.15em',")).toEqual([]);
       expect(findInlineSizeViolations('fontSize: size * 0.86,')).toEqual([]);

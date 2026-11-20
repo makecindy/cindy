@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { buildTaskDeepLink } from '@cindy/maker-shared/brand-identity';
 import {
   HOST_ONLY_AGENT_PREFIX,
   ANNOTATED_IMAGE_NOTE,
@@ -646,6 +648,18 @@ describe('agentInputQueue', () => {
     entry.chatMessage.content = entry.text;
 
     expect(getAgentFacingText(entry)).toBe(entry.text);
+  });
+
+  // Unit through Maker input, where a pasted chip used to discard the only route to the colleague's task.
+  it('keeps the copied guest link in model input when the composer presents it as a titled chip', () => {
+    const entry = queuedMessage(undefined);
+    const href = buildTaskDeepLink('task.1', sharedTaskHostPeer('shared', 'host (QA)'));
+    const chip = `[Build](${href})`;
+    entry.text = `查看进度 ${chip}`;
+    entry.agentReferences = [{ kind: 'session', sessionId: 'task.1', title: 'Build',
+      start: entry.text.indexOf(chip), end: entry.text.length, href }];
+    expect(reconcileSessionRefsForText(entry.text, undefined, () => 'another-device')).toEqual([]);
+    expect(buildMakerUserMessage(entry)).toMatchObject({ type: 'user', content: expect.stringContaining(href) });
   });
 
   it('expands a message chip to its full semantic body instead of sending only the deep link', () => {

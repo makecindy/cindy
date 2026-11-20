@@ -266,17 +266,27 @@ export function PlanChangeTargetDialog({
                           </p>
                         )}
                         {offer.rolloverCap !== null && (
-                          <p className="text-12 text-[var(--text-secondary)]">
-                            {t('billing.comparison.rollover', {
-                              amount: formatBillingAmount(
-                                offer.rolloverCap,
-                                offer.currency,
-                                locale,
-                              ),
-                              period: t(
-                                `billing.comparison.nextPeriod.${offer.interval ?? 'OTHER'}`,
-                              ),
-                            })}
+                          <p
+                            className={cn(
+                              'text-12 text-[var(--text-secondary)]',
+                              offer.interval === 'MONTH' && 'whitespace-pre-line',
+                            )}
+                          >
+                            {t(
+                              offer.interval === 'MONTH'
+                                ? 'billing.comparison.rolloverMonthly'
+                                : 'billing.comparison.rollover',
+                              {
+                                amount: formatBillingAmount(
+                                  offer.rolloverCap,
+                                  offer.currency,
+                                  locale,
+                                ),
+                                period: t(
+                                  `billing.comparison.nextPeriod.${offer.interval ?? 'OTHER'}`,
+                                ),
+                              },
+                            )}
                           </p>
                         )}
                         {unavailable && (
