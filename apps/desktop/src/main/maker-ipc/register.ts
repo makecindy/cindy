@@ -9377,11 +9377,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A V1 teammate-to-teammate background task: not a teammate conversation to rebuild.
         return 'not-bot';
       }
-      if (
-        expectedSession.isTurnRunning() ||
+      const isRuntimeBusy = () => expectedSession.isTurnRunning() ||
         expectedSession.listBackgroundTasks().length > 0 ||
-        hasPendingAgentInteractionForSession(expectedSession.id)
-      ) {
+        expectedSession.countPendingWakeContinuations() > 0 ||
+        hasPendingAgentInteractionForSession(expectedSession.id);
+      if (isRuntimeBusy()) {
         await recordBotCompactRuntimeLifecycle({
           botId: row.botId,
           sessionId: expectedSession.id,
@@ -9476,6 +9476,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts);
             },
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
+            isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
             bootstrap: async () => (await bootstrapSession(createOpts)).session,
           });
