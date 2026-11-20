@@ -127,9 +127,9 @@ describe('sidebar shared-task archive/delete guard', () => {
 // Inbox Done on a task bound to an active automation only marks it read; without one it archives.
 // Minimal input: Done on the open task with one active binding, then with none.
 describe('sidebar inbox Done with a bound automation', () => {
-  function done(names: Map<string, string[]>) {
+  function done(names: Map<string, string[]>, readSucceeded = true) {
     const runSessionAction = vi.fn();
-    const markSessionsRead = vi.fn(async () => {});
+    const markSessionsRead = vi.fn(async () => readSucceeded);
     const session = { id: 'task', deviceLinkDeviceId: undefined };
     const handler = callback('handleActionClick', {
       window: { electronAPI: { binding: { resolveSession: async () => ({ attached: false }) } } },
@@ -148,11 +148,69 @@ describe('sidebar inbox Done with a bound automation', () => {
     expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
     expect(h.runSessionAction).not.toHaveBeenCalled();
   });
+  it('keeps Done pending if the owner could not mark the run read', async () => {
+    const h = done(new Map([['task', ['PR follow-up']]]), false);
+    expect(await h.run()).toBeUndefined();
+    expect(h.runSessionAction).not.toHaveBeenCalled();
+  });
   it('archives when no active automation is bound', async () => {
     const h = done(new Map());
     await h.run();
     expect(h.markSessionsRead).not.toHaveBeenCalled();
     expect(h.runSessionAction).toHaveBeenCalledWith('task', 'archive');
+  });
+});
+
+describe('explicit read of a remote automation result', () => {
+  function remoteRead() {
+    const remoteIndex = new Map([
+      ['task', { unreadRunIds: ['current-run'] }],
+      ['other', { unreadRunIds: ['unrelated-run'] }],
+    ]);
+    const readRemoteScheduleIndex = vi.fn().mockResolvedValue(remoteIndex);
+    const markScheduleRunsReadAndSync = vi.fn().mockResolvedValue({ processed: ['current-run'], failed: [] });
+    const toast = { error: vi.fn() };
+    const read = callback('markSessionsRead', {
+      clearSessionAttentionMany: vi.fn(), readRemoteScheduleIndex, markScheduleRunsReadAndSync,
+      remoteProjectsStore: { getSessionScheduleInfo: () => undefined },
+      scheduleSessionIndex: new Map([['task', { unreadRunIds: ['local-run'] }]]),
+      toast, t: (key: string) => key,
+    });
+    return { read: () => read(['task'], 'studio', { announce: false }), readRemoteScheduleIndex, markScheduleRunsReadAndSync, toast };
+  }
+  it('reads the owner snapshot when the completion arrives before the mirrored run', async () => {
+    const h = remoteRead();
+    expect(await h.read()).toBe(true);
+    expect(h.readRemoteScheduleIndex).toHaveBeenCalledWith('studio');
+    expect(h.markScheduleRunsReadAndSync).toHaveBeenCalledWith(['current-run'], 'studio');
+  });
+  it('returns a failed write to the Done action', async () => {
+    const h = remoteRead();
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: ['current-run'], firstError: 'offline' });
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+  });
+  // PR #11796: writes can all succeed while the controller mirror stays stale.
+  it('does not settle Done when the mirror refresh failed after a no-op', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: [], firstError: 'gave-up' });
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+  });
+  it('refreshes the controller when another device has already read the run', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: [] });
+    expect(await h.read()).toBe(true);
+    expect(h.markScheduleRunsReadAndSync).toHaveBeenCalledWith([], 'studio');
+  });
+  it('reports an unavailable owner index without acknowledging the action', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockRejectedValueOnce(new Error('offline'));
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+    expect(h.markScheduleRunsReadAndSync).not.toHaveBeenCalled();
   });
 });
 

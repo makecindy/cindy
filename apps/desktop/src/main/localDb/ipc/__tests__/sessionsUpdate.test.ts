@@ -202,6 +202,8 @@ import {
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
+  promoteSideChatLeadInDb,
+  setSideChatArchiveCleanup,
   restoreArchivedSessionForSend,
   persistSessionFields,
   registerSessionIpc,
@@ -279,6 +281,8 @@ function createDb(): void {
       forked_at_message_id TEXT,
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
@@ -323,6 +327,8 @@ function createDb(): void {
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
+    CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
+    CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
     CREATE TABLE recent_workdirs (
       path TEXT PRIMARY KEY NOT NULL,
       last_used_at INTEGER NOT NULL
@@ -432,6 +438,7 @@ afterEach(async () => {
   setSessionRestoreObserver(null);
   _setStoreForTests(null);
   setSessionRuntimeCleanup(null);
+  setSideChatArchiveCleanup(undefined);
   setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
   setSessionRouteLockImplementation(null);
@@ -454,6 +461,131 @@ it('does not persist a deferred dialogue cancelled while model admission was pen
   })).rejects.toThrow('creation cancelled');
   expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('cancelled-dialogue')).toBeUndefined();
   expect(notify).not.toHaveBeenCalled();
+});
+
+// Unit: host IPC preserves durable history and only stops the validated linked task.
+it('scopes linked archive to the raw source and parent, and retries cleanup on the persisted archive', async () => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
+  `);
+  const cleanup = vi.fn(async () => {
+    const row = h.sqlite!.prepare("SELECT status, side_chat_close_pending FROM sessions WHERE id = 'codex-local'").get();
+    expect(row).toEqual({ status: 'archived', side_chat_close_pending: 1 });
+  }).mockRejectedValueOnce(new Error('shutdown interrupted'));
+  setSideChatArchiveCleanup(cleanup);
+  const patch = (archiveSideChatParentId: string) => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId });
+  await expect(patch('wrong-parent')).rejects.toThrow('no longer matches');
+  expect(cleanup).not.toHaveBeenCalled();
+  await expect(patch('cc-local')).rejects.toThrow('shutdown interrupted');
+  expect(h.tapWindowBroadcast).not.toHaveBeenCalledWith('local-db:sessions:patched',
+    expect.objectContaining({ sessionId: 'codex-local', patch: expect.objectContaining({ status: 'archived' }) }));
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).rejects.toThrow('Finish closing the follow-up');
+  await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', parentSessionId: 'cc-local' });
+  expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched',
+    expect.objectContaining({ sessionId: 'codex-local', patch: expect.objectContaining({ status: 'archived', orcaRole: null }) }));
+  await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', orcaRole: null });
+  expect(cleanup).toHaveBeenCalledTimes(2);
+  expect(h.sqlite!.prepare("SELECT side_chat_close_pending FROM sessions WHERE id = 'codex-local'").pluck().get()).toBe(0);
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active' });
+  expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'cc-local'").get()).toEqual({ status: 'active' });
+});
+
+// DB IPC tier: generic patch-meta archives a linked team without recording a close.
+it('restores an ordinary linked-task archive and leaves its Orca Lead role intact', async () => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
+  `);
+  const cleanup = vi.fn(async () => {});
+  setSideChatArchiveCleanup(cleanup);
+  await expect(invokePatchMeta('codex-local', { status: 'archived' })).resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  await expect(invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' }))
+    .resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', orcaRole: 'lead' });
+  expect(cleanup).not.toHaveBeenCalled();
+});
+
+// DB IPC: an ordinary archive leaves the team active. A persisted tab can
+// still submit explicit close, which must commit the stop before responding.
+it.each(['local', 'device-link'])('stops an ordinarily archived follow-up on explicit close (%s)', async route => {
+  h.sqlite!.exec(`
+    CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
+      kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision));
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
+    INSERT INTO orca_teams VALUES ('team', 'codex-local', 'active');
+    INSERT INTO orca_workers VALUES ('worker', 'team');
+  `);
+  Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+  const status = () => h.sqlite!.prepare("SELECT status FROM orca_teams WHERE id = 'team'").pluck().get();
+  const intent = () => h.sqlite!.prepare("SELECT side_chat_close_pending FROM sessions WHERE id = 'codex-local'").pluck().get();
+  const cleanup = vi.fn(async () => {
+    expect(intent()).toBe(1);
+    h.sqlite!.exec("UPDATE orca_teams SET status = 'completed' WHERE id = 'team'");
+  }).mockRejectedValueOnce(new Error('shutdown interrupted'));
+  setSideChatArchiveCleanup(cleanup);
+  const archive = route === 'local' ? invokeUpdate : invokePatchMeta;
+  await expect(archive('codex-local', { status: 'archived' })).resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  expect(status()).toBe('active');
+  expect(intent()).toBe(0);
+  expect(cleanup).not.toHaveBeenCalled();
+  const close = () => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' });
+  await expect(close()).rejects.toThrow('shutdown interrupted');
+  expect(status()).toBe('active');
+  expect(intent()).toBe(1);
+  await expect(close()).resolves.toMatchObject({ status: 'archived', orcaRole: null });
+  expect(status()).toBe('completed');
+  expect(intent()).toBe(0);
+  await expect(close()).resolves.toMatchObject({ status: 'archived', orcaRole: null });
+  expect(cleanup).toHaveBeenCalledTimes(2);
+});
+
+// DB IPC tier: a close admitted while cleanup is pending must not reach a
+// replacement collaboration if restore wins the route lock first.
+it.each(['active', 'archived'])('rejects a queued close retry after a replacement team is %s', async status => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      status = 'archived', side_chat_promoted = 1, side_chat_close_pending = 1, orca_role = 'lead'
+      WHERE id = 'codex-local';
+    INSERT INTO orca_teams VALUES ('old-team', 'codex-local', 'active');
+  `);
+  const cleanup = vi.fn(async () => {});
+  setSideChatArchiveCleanup(cleanup);
+  setSessionRouteLockImplementation(async (_id, task) => {
+    h.sqlite!.exec(`
+      UPDATE orca_teams SET status = 'completed' WHERE id = 'old-team';
+      UPDATE sessions SET status = '${status}', side_chat_close_pending = 0 WHERE id = 'codex-local';
+      INSERT INTO orca_teams VALUES ('new-team', 'codex-local', 'active');
+    `);
+    return task();
+  });
+  await expect(invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' }))
+    .rejects.toThrow('changed while closing');
+  expect(cleanup).not.toHaveBeenCalled();
+  expect(h.sqlite!.prepare("SELECT status FROM orca_teams WHERE id = 'new-team'").pluck().get()).toBe('active');
+});
+
+// DB IPC regression: a committed worker promotes only its owning follow-up.
+// The production update and detail read must leave the raw provenance and native identity intact.
+it('makes a follow-up independently visible only when its worker exists', async () => {
+  h.sqlite!.exec(`
+    INSERT INTO orca_teams VALUES ('team', 'codex-local', 'active');
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      sdk_session_id = 'native-fork', orca_role = 'lead' WHERE id = 'codex-local';
+  `);
+  const read = () => h.handlers.get('local-db:sessions:get')!({}, 'codex-local');
+  await promoteSideChatLeadInDb('codex-local', 'team', 'worker');
+  expect(await read()).toMatchObject({ source: 'side-chat', sdkSessionId: 'native-fork' });
+  h.sqlite!.exec("INSERT INTO orca_workers VALUES ('worker', 'team')");
+  await promoteSideChatLeadInDb('codex-local', 'team', 'worker');
+  expect(await read()).toMatchObject({
+    id: 'codex-local', source: 'desktop', sideChatPromoted: true, parentSessionId: 'cc-local',
+    sdkSessionId: 'native-fork', orcaRole: 'lead', agentKind: 'codex',
+  });
+  const raw = h.sqlite!.prepare("SELECT source, side_chat_promoted FROM sessions WHERE id = 'codex-local'").get();
+  expect(raw).toEqual({ source: 'side-chat', side_chat_promoted: 1 });
 });
 
 // DB tier: the remote preview must cover the owning project even when only one task

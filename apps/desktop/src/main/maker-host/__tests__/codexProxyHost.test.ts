@@ -4166,6 +4166,81 @@ describe('codex proxy host', () => {
     }
   });
 
+  // #9183 / #9220: real host request adaptation followed by actual proxy HTTP
+  // delivery, including its final guard after namespace restoration.
+  it.each(['collaboration', 'multi_agent_v1', 'multi_agent_v2'])('marks restored %s collaboration calls after namespace lowering (#9183)', async namespace => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('marker-session', 'marker-thread', 'PRODUCT_PROMPT');
+    setSessionProvider('marker-session', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+      const names = ['spawn_agent', 'send_message', 'followup_task'];
+      let current: any = { model, tools: [{ type: 'namespace', name: namespace, tools: names.map(name => ({
+        type: 'function', name, parameters: { type: 'object', properties: { message: { type: 'string' } } },
+      })) }] };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1', headers: { 'thread-id': 'marker-thread' } };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current.tools.map((tool: any) => tool.name)).toEqual(names.map(name => `${namespace}__${name}`));
+      const calls = names.map((name, i) => ({ type: 'function_call', name: `${namespace}__${name}`, call_id: `c${i}`, arguments: '{"message":"task"}' }));
+      const events = calls.flatMap(item => [
+        { type: 'response.output_item.added', item }, { type: 'response.output_item.done', item },
+      ]).concat([{ type: 'response.completed', response: { output: calls } }] as any);
+      const upstream = createServer(async (req, res) => {
+        await new Promise<void>(resolve => { req.once('end', resolve); req.resume(); });
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const { createAnthropicCompatProxy } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      let delivery: Awaited<ReturnType<typeof createAnthropicCompatProxy>> | undefined;
+      let wire = '';
+      try {
+        delivery = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, transformResponse: config.transformResponse, requestGuard: config.requestGuard });
+        const response = await fetch(`${delivery.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'marker-thread' }, body: JSON.stringify(current) });
+        expect(response.ok).toBe(true);
+        wire = await response.text();
+      } finally {
+        await delivery?.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+      const output = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      const restored = output.flatMap(event => event.item ? [event.item] : event.response?.output ?? []);
+      expect(restored).toHaveLength(9);
+      for (const call of restored) {
+        expect(call).toMatchObject({ namespace, name: expect.stringMatching(/^(spawn_agent|send_message|followup_task)$/), encrypted_function_args: [], arguments: '{"message":"task"}' });
+      }
+    } finally {
+      host.unregister('marker-session'); clearSessionProvider('marker-session'); setXdGatewayModels([]);
+    }
+  });
+
+  it('keeps text-only enforcement frozen while normalizing collaboration replies (#9183)', async () => {
+    const host = await freshCodexProxyHost();
+    const { registerCodexTextOnlyPolicy } = await import('../codex-text-only-policy.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'marker-text-only' } };
+    let disabled = false;
+    const release = registerCodexTextOnlyPolicy('marker-text-only', () => disabled);
+    try {
+      expect(config.requestGuard({ ...ctx, url: '/images/generations' })).toBeNull();
+      disabled = true;
+      const guard = config.requestGuard(ctx);
+      const request = { model: 'synthetic', tools: [{ type: 'function', name: 'spawn_agent' }] };
+      expect(JSON.parse(guard.transformBody(Buffer.from(JSON.stringify(request))).toString())).toMatchObject({ tools: [], tool_choice: 'none' });
+      disabled = false; // A later permissive turn cannot relax this admitted response.
+      const stream = guard.response({ 'content-type': 'text/event-stream' });
+      const read = (async () => { for await (const chunk of stream) void chunk; })();
+      stream.end(`data: ${JSON.stringify({ type: 'response.output_item.done', item: { type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', arguments: '{"message":"task"}' } })}\n\n`);
+      await expect(read).rejects.toThrow('text-only');
+    } finally { disabled = false; release(); }
+  });
+
   it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
     const host = await freshCodexProxyHost();
     // Minimal reproduction from #4251: a third-party model behind the Responses passthrough

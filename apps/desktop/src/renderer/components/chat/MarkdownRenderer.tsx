@@ -144,7 +144,7 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
-import { activateInlineLinkFromKeyboard } from './linkInteraction';
+import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
 /**
@@ -1582,7 +1582,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = async () => {
+  const openInlineTarget = async (browserTarget?: 'external') => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1634,7 +1634,9 @@ function MarkdownTargetLink({
           return;
         }
         if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
-          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+          await openHtmlFileByPreference(
+            sidebarTargetSessionId, resolved.absPath, t, fileCtx, browserTarget,
+          );
         } else {
           await activateResolvedLocalTarget(
             resolved, { ...fileCtx, sidebarTargetSessionId },
@@ -1645,6 +1647,14 @@ function MarkdownTargetLink({
         toast.error(t('chat.markdownRenderer.openLinkFailed'));
       }
     }
+  };
+  const activate = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (target.kind === 'external') {
+      return activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
+    }
+    event.preventDefault();
+    // Preserve the browser choice while an authored file link retries path resolution.
+    return openInlineTarget(isSeparateLinkActivation(event) ? 'external' : undefined);
   };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
     label: t('chat.markdownRenderer.openLink'),
@@ -1724,24 +1734,9 @@ function MarkdownTargetLink({
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={async (e) => {
-        e.preventDefault();
-
-        if (target.kind === 'external') {
-          // 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,设置 →
-          // 个性化 → 链接打开方式);右键弹"打开方式"菜单临时选另一种。
-          // 修饰键点击(macOS ⌘ / Windows Ctrl)临时强制走系统浏览器,不改偏好。
-          // 无会话上下文(Market 预览等)保持原有直开默认浏览器。
-          await activateMessageUrl(e, sidebarTargetSessionId, target.href, t);
-          return;
-        }
-        openInlineTarget();
-      }}
+      onClick={activate}
       onAuxClick={(event) => {
-        if (event.button !== 1) return;
-        event.preventDefault();
-        if (target.kind === 'external') void activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
-        else openInlineTarget();
+        if (event.button === 1) void activate(event);
       }}
       onContextMenu={(e) => {
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
