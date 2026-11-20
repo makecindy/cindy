@@ -64,6 +64,7 @@ import { HomeMarketCard } from './components/HomeMarketCard';
 import { SkillIcon } from './components/SkillIcon';
 import { SkillPublishUpdateHint } from './SkillPublishUpdateHint';
 import { OfficialSkillBadge } from './components/OfficialSkillBadge';
+import { SkillStateBadge } from './components/SkillStateBadge';
 import { useSkillhubHomeNavigation } from './hooks/useSkillhubHomeNavigation';
 import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
 
@@ -608,6 +609,7 @@ function LocalGroup({
                   <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
                     {s.name}
                   </span>
+                  {s.kind === 'skill' && <SkillStateBadge enabled={s.cindyEnabled !== false} />}
                   {s.builtIn ? (
                     <OfficialSkillBadge />
                   ) : (
