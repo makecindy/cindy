@@ -525,6 +525,14 @@
     "chooseExistingFolder": "기존 폴더 선택",
     "changeMainDirectory": "변경"
   },
+  "composerFollowUp": {
+    "title": "메시지 전송",
+    "label": "작업 실행 중 전송",
+    "queue": "대기열에 추가",
+    "steer": "끼어들기",
+    "description": "대기열에 추가하면 현재 응답이 끝날 때까지 기다립니다. 끼어들기는 현재 응답 중에 메시지 전송을 시도합니다.",
+    "saveFailed": "설정을 저장하지 못했습니다. 다시 시도해 주세요."
+  },
   "navigation": {
     "unavailable": "대상 컴퓨터의 설정을 열 수 없습니다. 온라인 상태이고 원격 제어가 허용되어 있는지 확인하세요. 이전 버전이라면 Cindy를 업데이트하세요."
   }

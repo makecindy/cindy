@@ -61,6 +61,8 @@ export interface DurableOutboxRecord {
   /** Delivery is settled; retain the ledger solely until local cleanup succeeds. */
   cleanupOutcome?: "accepted" | "cancelled";
   sendAtMs?: number;
+  /** Try steering only while the turn observed at send time is still running. */
+  steerTurnStartedAt?: number;
   suspended?: boolean;
   template?: QueuedRemoteMessage;
   refreshUploads?: boolean;

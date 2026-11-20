@@ -525,6 +525,14 @@
     "chooseExistingFolder": "既存フォルダを選択",
     "changeMainDirectory": "変更"
   },
+  "composerFollowUp": {
+    "title": "メッセージ送信",
+    "label": "タスク実行中の送信",
+    "queue": "キューに追加",
+    "steer": "割り込み",
+    "description": "キューに追加すると現在のターンの終了を待ちます。割り込みは現在のターンへの送信を試みます。",
+    "saveFailed": "設定を保存できませんでした。もう一度お試しください。"
+  },
   "navigation": {
     "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
   }

@@ -174,6 +174,15 @@ export function MobileOutboxBridge() {
       dismissCancelled: dismissRecoveredPrecreatedSession,
       store: remoteSessionStore,
     });
+    const unarchiveAfterSend = (r: DurableOutboxRecord) => {
+      // Bind to the account owner because reconciliation may remove the outbox record.
+      void unarchiveSessionAfterSend(
+        r.item.sessionId,
+        r.deviceId,
+        ownerInvoke,
+        () => createMobileMakerTransport({ deviceId: r.deviceId, invoke: ownerInvoke }).getSession(r.item.sessionId),
+      );
+    };
     const delivery = createDurableOutboxDelivery({
       store: mobileDurableOutbox,
       isCurrent,
@@ -312,6 +321,31 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
+      steer: async (r) => {
+        const sessionId = r.item.sessionId;
+        const turnEnded = new Error("OUTBOX_STEER_TURN_ENDED");
+        const checkTurn = () => {
+          const status = remoteSessionStore.getSessionRunStatus(sessionId);
+          const projection = remoteSessionStore.getInputProjection(sessionId);
+          if (!status.isRunning || status.startedAt !== r.steerTurnStartedAt
+            || projection.queuePaused || projection.queueAbortPending || projection.queueInteractionLocks.length) {
+            throw turnEnded;
+          }
+        };
+        try {
+          checkTurn();
+          const transport = createMobileMakerTransport({ deviceId: r.deviceId, invoke: invokeOwned(r, checkTurn) });
+          const accepted = await transport.input.steer(sessionId, r.prepared!, {
+            touchUserSend: true,
+            ...(r.clearBoundaryMs !== undefined ? { expectedClearBoundaryMs: r.clearBoundaryMs } : {}),
+          });
+          if (accepted) unarchiveAfterSend(r);
+          return accepted;
+        } catch (error) {
+          if (error === turnEnded) return false;
+          throw error;
+        }
+      },
       enqueue: async (r) => {
         const projection = await maker(r).input.enqueue(
           r.item.sessionId,
@@ -323,14 +357,7 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
-        // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
-        // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
-        void unarchiveSessionAfterSend(
-          r.item.sessionId,
-          r.deviceId,
-          ownerInvoke,
-          () => createMobileMakerTransport({ deviceId: r.deviceId, invoke: ownerInvoke }).getSession(r.item.sessionId),
-        );
+        unarchiveAfterSend(r);
         return projection;
       },
       cancel: async (r) => {

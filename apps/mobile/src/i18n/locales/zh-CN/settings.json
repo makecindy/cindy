@@ -525,6 +525,14 @@
     "chooseExistingFolder": "选择已有文件夹",
     "changeMainDirectory": "更改"
   },
+  "composerFollowUp": {
+    "title": "消息发送",
+    "label": "任务运行时发送",
+    "queue": "排队",
+    "steer": "插话",
+    "description": "排队会等当前轮结束。插话会尝试把消息发到当前轮。",
+    "saveFailed": "保存失败，请重试。"
+  },
   "navigation": {
     "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
   }

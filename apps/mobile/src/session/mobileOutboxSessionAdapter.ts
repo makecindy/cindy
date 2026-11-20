@@ -60,7 +60,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
   const knownSession = (record: DurableOutboxRecord) => findOutboxSession(record, deps.getSessions());
   const hidden = (record: DurableOutboxRecord) => outboxSessionIsHidden(record, deps.getSessions());
   const invokeOwned =
-    (record: DurableOutboxRecord): RemoteInvoke =>
+    (record: DurableOutboxRecord, beforeSend?: () => void): RemoteInvoke =>
     async (deviceId, channel, args) => {
       const guardRecord = () => {
         deps.guard();
@@ -69,7 +69,10 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
       };
       guardRecord();
       const result = await deps.invoke(deviceId, channel, args, {
-        preSend: guardRecord,
+        preSend: () => {
+          guardRecord();
+          beforeSend?.();
+        },
       });
       guardRecord();
       return result as never;

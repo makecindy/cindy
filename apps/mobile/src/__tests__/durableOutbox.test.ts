@@ -820,6 +820,33 @@ describe("durable mobile outbox ownership", () => {
 });
 
 describe("app-owned delivery and reconciliation", () => {
+  // Unit: a lost steer ACK must not become a second delivery after app restart.
+  it.each(['accepted', 'declined', 'lost acknowledgement'] as const)('settles a first steer with %s', async (outcome) => {
+    const { store, deps, storage } = await setup();
+    await store.add({ ...message(), steerTurnStartedAt: 1 });
+    const steer = vi.fn(async () => {
+      if (outcome === 'lost acknowledgement') throw new Error('connection lost');
+      return outcome === 'accepted';
+    });
+    const delivery = createDurableOutboxDelivery({ ...deps, steer });
+    await delivery.run();
+    delivery.stop();
+    expect(steer).toHaveBeenCalledWith(expect.objectContaining({
+      enqueueStarted: true, retrySafe: false,
+      item: expect.objectContaining({ clientId: 'id-1' }),
+    }));
+    expect(deps.enqueue).toHaveBeenCalledTimes(outcome === 'declined' ? 1 : 0);
+    expect(store.getSnapshot()[0].state).toBe(outcome === 'lost acknowledgement' ? 'confirming' : 'host-owned');
+
+    if (outcome === 'lost acknowledgement') {
+      const restarted = await setup(storage);
+      await createDurableOutboxDelivery({ ...restarted.deps, steer }).run();
+      expect(restarted.store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
+      expect(restarted.deps.enqueue).not.toHaveBeenCalled();
+      expect(steer).toHaveBeenCalledOnce();
+    }
+  });
+
   it.each(['legacy', 'legacy-prepared'] as const)('keeps %s enqueue success uncertain across restart until history confirms it', async (host) => {
     const first = await setup();
     const legacy = { pendingQueue: [] } as unknown as DeliveryProjection;
