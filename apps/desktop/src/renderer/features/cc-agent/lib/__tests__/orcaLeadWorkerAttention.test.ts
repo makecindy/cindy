@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 import { countAppAttention } from '../appAttentionCount';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
@@ -65,6 +66,7 @@ import {
   findOrcaLeadSessionIdForWorker,
   formatOrcaWorkerNotificationTitle,
   getOrcaLeadWorkerAttention,
+  pendingOrcaWorkerQuestion,
   getSessionAttentionKindsWithOrcaLeads,
   mergeOrcaLeadAttentionKind,
   subscribeOrcaLeadWorkerAttention,
@@ -138,6 +140,35 @@ describe('deriveOrcaLeadWorkerAttention', () => {
     ).toBe(0);
     expect(deriveOrcaLeadWorkerAttention([['lead', []]], kinds([['lead', 'error']])).size).toBe(0);
   });
+});
+
+it('selects the unanswered Worker and keeps a Lead question in its own pane', () => {
+  setProjections([['lead', snapshot('first', 'second')]]);
+  setPending('second', { hasPendingAskUser: true });
+  expect(pendingOrcaWorkerQuestion('lead')).toBe('second');
+  setPending('lead', { hasPendingAskUser: true });
+  expect(pendingOrcaWorkerQuestion('lead')).toBeUndefined();
+  setPending('lead', {});
+  setPending('second', {});
+  expect(pendingOrcaWorkerQuestion('lead')).toBeUndefined();
+});
+
+it('lights and opens a remote Worker from list patches without an Island activity or an open chat', () => {
+  const device = 'question-host';
+  remoteProjectsStore.setDeviceSessions(device, 'Mac', [
+    { id: 'remote-lead', orcaRole: 'lead' },
+    { id: 'child', orcaRole: 'worker', orcaLeadSessionId: 'remote-lead' },
+  ] as Session[]);
+  try {
+    remoteProjectsStore.applyPatch(device, 'child', { orcaHasPendingQuestion: true });
+    expect(getOrcaLeadWorkerAttention().get('remote-lead')).toBe('awaiting');
+    expect(pendingOrcaWorkerQuestion('remote-lead')).toBe('child');
+    remoteProjectsStore.applyPatch(device, 'child', { orcaHasPendingQuestion: false });
+    expect(getOrcaLeadWorkerAttention().has('remote-lead')).toBe(false);
+    expect(pendingOrcaWorkerQuestion('remote-lead')).toBeUndefined();
+  } finally {
+    remoteProjectsStore.removeDevice(device);
+  }
 });
 
 describe('mergeOrcaLeadAttentionKind', () => {
