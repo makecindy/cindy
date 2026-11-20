@@ -1049,17 +1049,17 @@ function ExpandedView({
       if (!deviceId && unreadRunIds.length === 0) return true;
       // Refresh the remote mirror even on a no-op: another device may already have read the run.
       const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds, deviceId);
-      if (announce && processed.length > 0) {
+      if (announce && processed.length > 0 && firstError === undefined) {
         toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
       }
-      if (failed.length > 0) {
+      if (failed.length > 0 || firstError !== undefined) {
         toast.error(
           t('ccAgent.layout.markAllReadFailed', {
             error: firstError ?? String(failed.length),
           }),
         );
       }
-      return failed.length === 0;
+      return failed.length === 0 && firstError === undefined;
     },
     [scheduleSessionIndex, t],
   );

@@ -190,6 +190,14 @@ describe('explicit read of a remote automation result', () => {
     expect(await h.read()).toBe(false);
     expect(h.toast.error).toHaveBeenCalled();
   });
+  // PR #11796: writes can all succeed while the controller mirror stays stale.
+  it('does not settle Done when the mirror refresh failed after a no-op', async () => {
+    const h = remoteRead();
+    h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());
+    h.markScheduleRunsReadAndSync.mockResolvedValueOnce({ processed: [], failed: [], firstError: 'gave-up' });
+    expect(await h.read()).toBe(false);
+    expect(h.toast.error).toHaveBeenCalled();
+  });
   it('refreshes the controller when another device has already read the run', async () => {
     const h = remoteRead();
     h.readRemoteScheduleIndex.mockResolvedValueOnce(new Map());

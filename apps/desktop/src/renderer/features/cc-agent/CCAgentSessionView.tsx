@@ -2701,7 +2701,7 @@ function CCAgentSessionContent({
   const markCurrentUnreadFailedScheduleRun = useCallback(async (): Promise<boolean> => {
     if (!currentUnreadFailedRunId) return true;
     const { failed, firstError } = await markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined);
-    if (failed.length === 0) return true;
+    if (failed.length === 0 && firstError === undefined) return true;
     toast.error(
       t('ccAgent.layout.markAllReadFailed', {
         error: firstError ?? failed[0],
