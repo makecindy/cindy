@@ -312,5 +312,5 @@ function useRemoteRetainedModel(
   const device = target?.deviceId;
   const base = device && enabled ? catalogs.get(device) : undefined;
   const maker = useMobileMakerTransport(device ?? '');
-  return useRetainedProviderModel(device, maker, base?.status === 'ready' ? base.payload : undefined, target?.route, pickerOpen);
+  return useRetainedProviderModel(device, maker, base?.status === 'ready' ? base.payload : undefined, target?.route, pickerOpen, remoteAgentProviders);
 }

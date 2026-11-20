@@ -3,6 +3,7 @@ import { getCachedDeviceProviders, needsRetainedProviderModel, retainedProviderM
 import { getCachedProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
 import { modelNeedsReselection } from './modelReselection';
 import { isProviderShareAgentDeviceId } from './providerShareAgentDevice';
+import { remoteAgentProviders } from './remoteAgentCatalogs';
 import { effectiveAgentDeviceId, sessionAgentKind } from './sessionAgentSwitch';
 import type { RemoteSession } from './types';
 
@@ -45,7 +46,7 @@ export function blockedSessionModelAtSend(
     const key = retainedProviderModelKey(route);
     const match = retained.find(item => item && item.base === base && item.key === key);
     visibility = match ? { ...base?.modelVisibilityOverrides, ...match.payload.modelVisibilityOverrides } : base?.modelVisibilityOverrides;
-    checking = !!base && !match && needsRetainedProviderModel(base, route);
+    checking = !!base && !match && needsRetainedProviderModel(base, route, deviceId === controlledDeviceId ? undefined : remoteAgentProviders);
   }
   if (modelNeedsReselection(visibility, route.agent, route.modelId, route.providerId)) return { ...route, reason: 'hidden' };
   if (checking) return { ...route, reason: 'checking' };

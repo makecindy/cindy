@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { actualSourceIdForModel } from '@cindy/model-providers/registry';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
@@ -68,11 +69,13 @@ const receivedShare = {
 let root: Root;
 let host: HTMLDivElement;
 let latest: RemoteAgentCatalog[] = [];
+let retainedCatalog: ReturnType<typeof useRemoteAgentCatalogsWithStatus>['retainedCatalog'];
 let pendingCatalog: ReturnType<typeof useRemoteAgentCatalogsWithStatus>['pendingCatalog'];
 
 function Probe(props: Parameters<typeof useRemoteAgentCatalogsWithStatus>[0]) {
   const result = useRemoteAgentCatalogsWithStatus(props);
   latest = result.catalogs;
+  retainedCatalog = result.retainedCatalog;
   pendingCatalog = result.pendingCatalog;
   return null;
 }
@@ -91,6 +94,7 @@ beforeEach(async () => {
   clearAllDeviceProviders();
   clearAllProviderShareCatalogs();
   latest = [];
+  retainedCatalog = undefined;
   pendingCatalog = undefined;
   link.presenceVersion = 1;
   link.rosterVersion = 0;
@@ -135,6 +139,34 @@ describe('remote Agent catalogs with provider shares', () => {
     expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: route })]);
     expect(latest[0]).toMatchObject({ deviceId: 'studio', status: 'ready',
       providers: [{ id: 'off', models: { 'claude-code': [{ id: 'off-model' }] } }] });
+  });
+
+  // #11693, unit: the raw catalog can offer the saved model via OpenAI even when the
+  // execution computer does not share it. Exercise both the picker and the pre-send check.
+  it.each([
+    { enabled: false, ids: ['saved'], expected: 'off' },
+    { enabled: true, ids: ['other'], expected: 'off' },
+    { enabled: true, ids: ['saved'], expected: 'openai' },
+  ])('restores an implicit remote source with OpenAI sharing $enabled and models $ids', async ({ enabled, ids, expected }) => {
+    const session = { agentKind: 'codex' as const, model: 'saved', providerId: null, agentDeviceId: 'studio' };
+    const { running } = taskModelCatalogRoutes(session, 'controlled');
+    const source = (id: string) => ({ ...provider(id, id), agents: ['codex'],
+      models: { codex: [{ id: 'saved', name: 'Saved', contextWindow: 200_000, efforts: [] }] }, routing: { codex: {} } });
+    let finish!: (reply: unknown) => void;
+    link.invoke.mockImplementation(async (_device, _channel, args) => {
+      if (args[0]?.retainedModel) return new Promise(resolve => { finish = resolve; });
+      return { providers: [{ ...source('openai'), remoteInvocationEnabled: enabled, remoteModelIds: ids }], deferredProviderIds: ['off'] };
+    });
+    await render({ enabled: true, controlledDeviceId: 'controlled', keepOnly: true, keepDeviceIds: ['studio'], retainedModel: running });
+    expect(link.invoke).toHaveBeenCalledTimes(expected === 'off' ? 2 : 1);
+    if (expected === 'off') {
+      expect(link.invoke).toHaveBeenLastCalledWith('studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: running!.route })]);
+      expect(blockedSessionModelAtSend(session, 'controlled')?.reason).toBe('checking');
+      await act(async () => finish({ providers: [{ ...source('off'), suspended: true }] }));
+    }
+    expect(latest[0].status).toBe('ready');
+    expect(actualSourceIdForModel(latest[0].providers, null, 'saved', 'codex')).toBe(expected);
+    expect(blockedSessionModelAtSend(session, 'controlled', retainedCatalog)).toBeUndefined();
   });
 
   it('reads the pending switch on its execution computer and keeps the hidden result with that route', async () => {

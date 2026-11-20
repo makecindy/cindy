@@ -37,11 +37,16 @@ export function retainedProviderModelKey(route: ProviderPickerModel): string {
   return JSON.stringify([route.agent, route.providerId, route.modelId]);
 }
 
-export function needsRetainedProviderModel(base: DeviceProvidersPayload, route: ProviderPickerModel): boolean {
+export function needsRetainedProviderModel(
+  base: DeviceProvidersPayload,
+  route: ProviderPickerModel,
+  projectProviders?: (providers: readonly ProviderView[]) => ProviderView[],
+): boolean {
   const deferred = base.deferredProviderIds;
   if (!route.modelId || !deferred?.length) return false;
   if (route.providerId !== null) return deferred.includes(route.providerId);
-  const source = actualSourceIdForModel(base.providers, null, route.modelId, route.agent);
+  const providers = projectProviders ? projectProviders(base.providers) : base.providers;
+  const source = actualSourceIdForModel(providers, null, route.modelId, route.agent);
   if (!source) return true;
   // Even if every deferred source offered this model, could any of them win the existing route?
   // Without a complete host order, give the unknown sources the earliest possible fallback position.

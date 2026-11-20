@@ -311,6 +311,7 @@ export function useDeviceProviders(
 export function useRetainedProviderModel(
   deviceId: string | undefined, maker: MobileMakerTransport, base: DeviceProvidersPayload | undefined,
   route: ProviderPickerModel | undefined, pickerOpen = false,
+  projectProviders?: (providers: readonly ProviderView[]) => ProviderView[],
 ) {
   const { status, recoveringDeviceIds } = useDeviceLink(deviceId);
   const peerReady = !!deviceId && status === 'online' && !recoveringDeviceIds.has(deviceId);
@@ -318,7 +319,7 @@ export function useRetainedProviderModel(
   const modelId = route?.modelId;
   const providerId = route?.providerId;
   const needed = useMemo(() => !!base && !!agent && !!modelId && providerId !== undefined
-    && needsRetainedProviderModel(base, { agent, modelId, providerId }), [base, agent, modelId, providerId]);
+    && needsRetainedProviderModel(base, { agent, modelId, providerId }, projectProviders), [base, agent, modelId, providerId, projectProviders]);
   const [result, setResult] = useState<RetainedProviderCatalog | {
     base: DeviceProvidersPayload; key: string; error: string; failedPickerOpen: boolean;
   }>();
