@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { giftCardAmountArt, giftCardAmountLabel } from '../giftCardAmount';
+import { giftCardAmountArt, giftCardAmountArtForLayout, giftCardAmountLabel } from '../giftCardAmount';
 
 describe('gift card amount on the face', () => {
   it('writes the amount with the currency symbol and without trailing zeros', () => {
@@ -37,6 +37,14 @@ describe('gift card amount on the face', () => {
       expect(scaleOf(face, '$100')).toBe(scaleOf(face, '$20'));
     }
     expect(scaleOf('bell', '$1000')).toBeLessThan(scaleOf('bell', '$100'));
+  });
+
+  // 服务端下发的卡面带自己的金额印法：起点、基线与颜色都按它来，可占宽度同样限制缩放。
+  it('prints the amount where a server card face asks for it', () => {
+    const art = giftCardAmountArtForLayout({ x: 600, baseline: 300, size: 228, maxWidth: 200, color: '#112233' }, '$1000');
+    expect(art?.fill).toBe('#112233');
+    expect(art?.transform.startsWith('translate(600 300) ')).toBe(true);
+    expect(art!.width).toBeLessThanOrEqual(200);
   });
 
   it('declines faces and characters it cannot draw', () => {

@@ -5,6 +5,8 @@
  * 收敛成界面可以放心渲染的结构。
  */
 
+import type { GiftCardAmountLayout } from './giftCardAmount.js';
+
 export type GiftCardRegion = 'cn' | 'global';
 
 /**
@@ -19,11 +21,26 @@ export type GiftCardStatus = 'AVAILABLE' | 'CLAIMED' | 'CLAIMED_BY_YOU' | 'EXPIR
  */
 export type GiftCardDestination = 'PROMOTIONAL' | 'PURCHASED';
 
+/**
+ * 服务端下发的卡面：不含金额的底图（1200 × 757）与金额印法，以及各语言的卡面名称。
+ * 新卡面只在服务端登记，客户端不用发版就能显示；本版本内置的四张卡面只在服务端没给、
+ * 给得不合法或图片取不到时兜底。
+ */
+export type GiftCardFaceStyle = {
+  code: string;
+  /** 卡面名称，键是语言标签（如 zh-CN、en），按界面语言用 `giftCardFaceName` 挑。 */
+  names: Readonly<Record<string, string>>;
+  imageUrl: string;
+  amount: GiftCardAmountLayout;
+};
+
 export type GiftCard = {
   status: GiftCardStatus;
   /** 面额，按当前区域的计费币种计量（与余额同口径）。 */
   amount: string;
   faceCode: string;
+  /** 服务端下发的卡面；旧服务端没有、或不合法时为 null，按 faceCode 用内置卡面。 */
+  face: GiftCardFaceStyle | null;
   senderName: string;
   message: string | null;
   destination: GiftCardDestination;
@@ -250,6 +267,7 @@ function projectCard(value: unknown): GiftCard {
     status: status as GiftCardStatus,
     amount: amount(value.amount),
     faceCode,
+    face: projectGiftCardFaceStyle(value.face, faceCode),
     senderName,
     message: message === null ? null : message,
     destination,
@@ -257,6 +275,118 @@ function projectCard(value: unknown): GiftCard {
     validityDays: purchased ? null : validityDaysOf(value.validityDays),
     claimedAt: nullableTime(value.claimedAt),
   };
+}
+
+const CANVAS_WIDTH = 1200;
+const CANVAS_HEIGHT = 757;
+const MAX_FACE_IMAGE_URL_LENGTH = 2_048;
+const MAX_FACE_NAMES = 32;
+const MAX_FACE_NAME_LENGTH = 40;
+const MAX_FACE_CATALOG = 64;
+const LANGUAGE_TAG_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8}){0,4}$/;
+const COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function finite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** 卡面底图只接受 https；本机开发的服务端（localhost）可以是 http。不接受带账号密码的地址。 */
+function faceImageUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > MAX_FACE_IMAGE_URL_LENGTH) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password) return null;
+  const allowed = url.protocol === 'https:' || (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
+  return allowed ? url.href : null;
+}
+
+/** 金额印法必须落在卡面里：起点、基线、字号与可占宽度都在 1200 × 757 之内，颜色是 #RRGGBB。 */
+function faceAmountLayout(value: unknown): GiftCardAmountLayout | null {
+  if (!isRecord(value)) return null;
+  const { x, baseline, size, maxWidth, color } = value;
+  if (
+    !finite(x) || x < 0 || x >= CANVAS_WIDTH ||
+    !finite(baseline) || baseline <= 0 || baseline > CANVAS_HEIGHT ||
+    !finite(size) || size <= 0 || size > CANVAS_HEIGHT ||
+    !finite(maxWidth) || maxWidth <= 0 || maxWidth > CANVAS_WIDTH - x ||
+    typeof color !== 'string' || !COLOR_PATTERN.test(color)
+  ) {
+    return null;
+  }
+  return { x, baseline, size, maxWidth, color };
+}
+
+function faceNames(value: unknown): Readonly<Record<string, string>> | null {
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.length > MAX_FACE_NAMES) return null;
+  for (const [tag, name] of entries) {
+    if (!LANGUAGE_TAG_PATTERN.test(tag) || typeof name !== 'string') return null;
+    const length = Array.from(name.trim()).length;
+    if (length < 1 || length > MAX_FACE_NAME_LENGTH) return null;
+  }
+  return Object.fromEntries(entries.map(([tag, name]) => [tag, (name as string).trim()]));
+}
+
+/**
+ * 服务端下发的一个卡面。不合法时返回 null：调用方按 faceCode 用内置卡面，绝不因为卡面信息
+ * 不对就把整张卡或整个列表当成坏响应。给了 faceCode 时卡面代号必须与它相同。
+ */
+export function projectGiftCardFaceStyle(value: unknown, faceCode?: string): GiftCardFaceStyle | null {
+  if (!isRecord(value)) return null;
+  const { code } = value;
+  if (typeof code !== 'string' || !FACE_PATTERN.test(code)) return null;
+  if (faceCode !== undefined && code !== faceCode) return null;
+  const names = faceNames(value.names);
+  const imageUrl = faceImageUrl(value.imageUrl);
+  const amount = faceAmountLayout(value.amount);
+  if (!names || !imageUrl || !amount) return null;
+  return { code, names, imageUrl, amount };
+}
+
+/**
+ * 购买规则里可选卡面的详细信息（`faceCatalog`）：只留下合法、在 `faces` 里、不重复的项。
+ * 旧服务端没有这个字段时返回空数组，界面按内置卡面处理。
+ */
+export function projectGiftCardFaceCatalog(value: unknown, faces: readonly string[]): GiftCardFaceStyle[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(faces);
+  const seen = new Set<string>();
+  const catalog: GiftCardFaceStyle[] = [];
+  for (const item of value.slice(0, MAX_FACE_CATALOG)) {
+    const face = projectGiftCardFaceStyle(item);
+    if (!face || !allowed.has(face.code) || seen.has(face.code)) continue;
+    seen.add(face.code);
+    catalog.push(face);
+  }
+  return catalog;
+}
+
+/**
+ * 按界面语言挑卡面名称：完全一致 → 中文按繁简挑 zh-TW / zh-CN → 同一语言 → en → 第一项。
+ * 没有名称时返回 null，调用方用本地文案。
+ */
+export function giftCardFaceName(names: Readonly<Record<string, string>>, locale: string): string | null {
+  const tags = Object.keys(names);
+  if (tags.length === 0) return null;
+  const find = (tag: string) => tags.find((candidate) => candidate.toLowerCase() === tag.toLowerCase());
+  const wanted = locale.toLowerCase();
+  const language = wanted.split('-')[0];
+  const chinese = language === 'zh'
+    ? (/^zh-(hant|tw|hk|mo)\b/.test(wanted) ? find('zh-TW') : find('zh-CN'))
+    : undefined;
+  const tag =
+    find(locale) ??
+    chinese ??
+    tags.find((candidate) => candidate.toLowerCase().split('-')[0] === language) ??
+    find('en') ??
+    tags[0];
+  return names[tag] ?? null;
 }
 
 function projectCredit(value: unknown): GiftCardCredit {

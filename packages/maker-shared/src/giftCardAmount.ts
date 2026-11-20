@@ -6,8 +6,9 @@
  * 路径，不需要在应用里加载这款字体，也就没有字体未就绪时的闪动。
  *
  * 位置、字号、颜色都以卡面成品图的 1200 × 757 坐标为准，属于卡面图稿而不是界面
- * 主题色。分享网页（share-server 的页面脚本与 page.css）和 Platform 后台
- * （cindy-server 的 `assets/gift-cards/amount.ts`）使用同一组数值；调整时要一起改。
+ * 主题色。卡面的印法由服务端随卡面一起下发（见 `gift-card` 的 GiftCardFaceStyle），
+ * 这里内置的四张卡面的数值只在没有服务端卡面时兜底，与服务端卡面清单里同名卡面的
+ * 数值一致。
  */
 const UNITS_PER_EM = 2048;
 
@@ -65,21 +66,35 @@ const GLYPHS: Record<string, { advance: number; d: string }> = {
   ',': { advance: 484, d: 'M116 235L182 -1L55 -1L55 -299L429 -299L429 -10L327 235Z' },
 };
 
-/** maxWidth：金额从起点算起最多占多宽（卡面坐标），再宽就会压到形象或卡面分区。 */
-type Layout = { baseline: number; size: number; maxWidth: number; fill: string };
+/**
+ * 金额在卡面上的印法（卡面 1200 × 757 坐标）：从 x 起向右排，baseline 是基线，size 是字号，
+ * maxWidth 是金额最多能占的宽度（再宽就会压到形象或卡面分区，此时整体缩小），color 是图稿色
+ * （#RRGGBB）。字形固定是 Anton。
+ */
+export type GiftCardAmountLayout = {
+  x: number;
+  baseline: number;
+  size: number;
+  maxWidth: number;
+  color: string;
+};
 
 /** 象牙白印在红底与夜色卡面上，墨色印在象牙白卡面上；取自卡面图稿本身。 */
 const IVORY = '#F3EDE2';
 const INK = '#14131B';
 
-const LAYOUTS: Record<string, Layout> = {
-  cindy: { baseline: 372, size: 204, maxWidth: 430, fill: IVORY },
-  cat: { baseline: 676, size: 228, maxWidth: 480, fill: IVORY },
-  bell: { baseline: 676, size: 228, maxWidth: 440, fill: IVORY },
-  leap: { baseline: 676, size: 228, maxWidth: 500, fill: INK },
+/** 本版本内置的四张卡面的印法：没有服务端卡面（旧服务端、取不到图）时兜底。 */
+const LAYOUTS: Record<string, GiftCardAmountLayout> = {
+  cindy: { x: 80, baseline: 372, size: 204, maxWidth: 430, color: IVORY },
+  cat: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: IVORY },
+  bell: { x: 80, baseline: 676, size: 228, maxWidth: 440, color: IVORY },
+  leap: { x: 80, baseline: 676, size: 228, maxWidth: 500, color: INK },
 };
 
-const LEFT = 80;
+/** 内置卡面的金额印法；本版本不认识的卡面返回 null。 */
+export function bundledGiftCardAmountLayout(faceCode: string): GiftCardAmountLayout | null {
+  return Object.hasOwn(LAYOUTS, faceCode) ? LAYOUTS[faceCode] : null;
+}
 
 export const GIFT_CARD_VIEW_BOX = '0 0 1200 757';
 
@@ -101,18 +116,19 @@ export function giftCardAmountLabel(amount: string, currency: string): string | 
 }
 
 /**
- * 把金额排到指定卡面上。按字形的实际宽度计算：超过卡面留给金额的宽度时整体缩小，
- * 所以位数再多也不会压到形象。
- * 卡面不认识、或含有没有轮廓的字符时返回 null，调用方改用普通文字显示金额。
+ * 按给定的印法排金额。按字形的实际宽度计算：超过卡面留给金额的宽度时整体缩小，
+ * 所以位数再多也不会压到形象。含有没有轮廓的字符时返回 null，调用方改用普通文字显示金额。
  */
-export function giftCardAmountArt(faceCode: string, label: string): GiftCardAmountArt | null {
-  const layout = LAYOUTS[faceCode];
+export function giftCardAmountArtForLayout(
+  layout: GiftCardAmountLayout,
+  label: string,
+): GiftCardAmountArt | null {
   const chars = Array.from(label);
-  if (!layout || chars.length === 0) return null;
+  if (chars.length === 0) return null;
   const glyphs: GiftCardAmountArt['glyphs'] = [];
   let x = 0;
   for (const char of chars) {
-    const glyph = GLYPHS[char];
+    const glyph = Object.hasOwn(GLYPHS, char) ? GLYPHS[char] : undefined;
     if (!glyph) return null;
     glyphs.push({ d: glyph.d, x });
     x += glyph.advance;
@@ -121,9 +137,15 @@ export function giftCardAmountArt(faceCode: string, label: string): GiftCardAmou
   const size = natural > layout.maxWidth ? Math.floor((layout.size * layout.maxWidth) / natural) : layout.size;
   const scale = Number((size / UNITS_PER_EM).toFixed(5));
   return {
-    fill: layout.fill,
-    transform: `translate(${LEFT} ${layout.baseline}) scale(${scale})`,
+    fill: layout.color,
+    transform: `translate(${layout.x} ${layout.baseline}) scale(${scale})`,
     width: Math.round(x * scale),
     glyphs,
   };
+}
+
+/** 按内置卡面的印法排金额；本版本不认识的卡面返回 null。 */
+export function giftCardAmountArt(faceCode: string, label: string): GiftCardAmountArt | null {
+  const layout = bundledGiftCardAmountLayout(faceCode);
+  return layout ? giftCardAmountArtForLayout(layout, label) : null;
 }
