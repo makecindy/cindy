@@ -54,9 +54,12 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
       // 同一账号付费，门禁照常执行。
       const chargedToShareHost = isProviderShareAgentDeviceId(session.agentDeviceId);
       const model = session.model;
-      if (model) {
+      // 插件引擎(ACP)用它自己的模型与凭证,不是 Cindy 目录里的路由:没有付费 / 来源裁决可做
+      // (docs/plans/acp-plugin-bridge.md,与建任务时 admitLocalRoute 跳过同口径)。
+      const routeAgentKind = session.agentKind;
+      if (model && routeAgentKind !== 'acp') {
         const verdict = await verdictForModelRoute(
-          session.agentKind,
+          routeAgentKind,
           model,
           getSessionProvider(session.id),
         );

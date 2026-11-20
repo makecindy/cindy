@@ -30,7 +30,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
   refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
@@ -43,6 +43,7 @@ import {
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -916,10 +917,10 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
     getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
-    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include);
 }
 
 function getDesktopProviderModelAccessCatalog(): Catalog {
@@ -928,6 +929,13 @@ function getDesktopProviderModelAccessCatalog(): Catalog {
 
 // Reference prices shown beside models follow the same account-aware membership as the lists.
 setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
+
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
@@ -984,17 +992,27 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: (catalog, routingCatalog) => {
-      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog);
+    refreshPickerPools: async providers => {
+      await Promise.all(providers.map(async provider => {
+        const pool = resolveSubscriptionPoolProvider(provider.id);
+        if (!pool || !readPool(pool.kind)) return;
+        if (provider.id === pool.kind) await refreshSubscriptionPool(provider.id);
+        else await refreshSubscriptionPool(provider.id).catch(() => undefined);
+        if (pool.kind === 'openai') await refreshSubscriptionPoolCodexModels(false, provider.id);
+        else void refreshSubscriptionPoolClaudeModels(false, provider.id).catch(() => log.warn('Background Claude model discovery unavailable'));
+      }));
+    },
+    projectCatalog: (catalog, routingCatalog, include) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include);
       return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
     },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) {
+          if (!snapshotOnly && !pickerPoolsReady) {
             await refreshSubscriptionPoolsOfKind('anthropic');
             const discovery = refreshSubscriptionPoolClaudeModels();
             // Ordinary provider reads also serve Codex/API/remote tasks. Do not make
@@ -1035,9 +1053,9 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) {
+          if (!snapshotOnly && !pickerPoolsReady) {
             // Created providers of the kind are read with it (their connection state comes from it).
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
@@ -1057,6 +1075,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
     subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {

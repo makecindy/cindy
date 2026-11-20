@@ -519,15 +519,42 @@ it.each(["onPress", "onLongPress"])(
   },
 );
 
+// Exercise the real status row, which supplies managed history to the pinned card.
+it("shows recent throughput only in the pinned card while live speed is unavailable", async () => {
+  const speed = { rate: 50, average: 40, tokens: 80, elapsedMs: 2000, streaming: true, peak: 75 };
+  const renderStatus = (streaming: boolean, rate = speed.rate) => act(async () => root.render(
+    createElement(ActivityStatus, {
+      ...base, visible: true, sideTaskRunning: false, reconnectAttempt: null,
+      tokenUsage: 100, tokenSpeed: { ...speed, streaming, rate, totalOutputTokens: 5300 },
+    }),
+  ));
+  await renderStatus(true);
+  await gesture("onPress");
+  expect(card()!.textContent).toContain("50");
+  await renderStatus(false, speed.average);
+  expect(card()!.textContent).toContain("50");
+  expect(card()!.textContent).toContain("40 tok/s");
+  expect(card()!.textContent).toContain("5.3k tok");
+  expect(card()!.textContent).toContain("75 tok/s");
+  const trigger = () => host.querySelector('[data-testid="session.tokenRate.trigger"]')!;
+  expect(trigger().textContent).not.toContain("50 tok/s");
+  await renderStatus(true, 0);
+  expect(trigger().textContent).not.toContain("50 tok/s");
+  expect(card()!.textContent).toContain("50");
+  await renderStatus(true);
+  expect(card()!.textContent).toContain("50");
+});
+
 it("uses paired generation samples, expires recent speed, and isolates a different task", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1000);
   await render();
   await render({ outputTokens: 100, generationDurationMs: 1000 });
-  await render({ outputTokens: 150, generationDurationMs: 2000 });
+  await render({ outputTokens: 150, totalOutputTokens: 5300, generationDurationMs: 2000 });
   await gesture("onPress");
   expect(card()!.textContent).toContain("50");
   expect(card()!.textContent).toContain("75 tok/s");
+  expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("100 tok/s");
   await act(async () => vi.advanceTimersByTime(60_000));
   expect(card()!.textContent).toContain("—");

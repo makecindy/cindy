@@ -1,3 +1,4 @@
+import type { UsageAttribution } from './worker/opHandlers/modelUsageTx.js';
 import { sql } from 'drizzle-orm';
 
 import {
@@ -16,6 +17,7 @@ import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
+  attribution?: UsageAttribution;
   agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   money?: RegionalMoney | null;
@@ -28,6 +30,9 @@ export interface DailyModelUsageDelta {
 export interface DailyModelUsageRow {
   day: string;
   agentKind: string;
+  requestCount?: number;
+  source?: string;
+  providerId?: string;
   model: string;
   money: RegionalMoney;
   inputTokens: number;
@@ -73,45 +78,18 @@ export async function incrementDailyModelUsage(
 
   const day = localDayKey(ts);
   const model = delta.model || 'unknown';
-  const db = getDbClient().drizzle;
-  await db
-    .insert(dailyModelUsage)
-    .values({
-      day,
-      agentKind: delta.agentKind,
-      model,
-      costAmount: money?.amount ?? 0,
-      costCurrency: rowCurrency,
-      costIsApproximate: money?.approximate ?? false,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreateTokens,
-      updatedAt: ts,
-    })
-    .onConflictDoUpdate({
-      target: [
-        dailyModelUsage.day,
-        dailyModelUsage.agentKind,
-        dailyModelUsage.model,
-        dailyModelUsage.costCurrency,
-      ],
-      set: {
-        costAmount: sql`${dailyModelUsage.costAmount} + ${money?.amount ?? 0}`,
-        costIsApproximate: sql`(${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0})`,
-        inputTokens: sql`${dailyModelUsage.inputTokens} + ${inputTokens}`,
-        outputTokens: sql`${dailyModelUsage.outputTokens} + ${outputTokens}`,
-        cacheReadTokens: sql`${dailyModelUsage.cacheReadTokens} + ${cacheReadTokens}`,
-        cacheCreateTokens: sql`${dailyModelUsage.cacheCreateTokens} + ${cacheCreateTokens}`,
-        updatedAt: ts,
-      },
-    })
-    .run();
+  await getDbClient().tx('usage.recordModelUsage', {
+    day, agentKind: delta.agentKind, model, currency: rowCurrency,
+    amount: money?.amount ?? 0, approximate: money?.approximate ?? false,
+    inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens,
+    recordedAt: ts, attribution: delta.attribution,
+  });
 }
 
 export async function getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]> {
-  const rows = await getDbClient()
-    .drizzle.select({
+  const client = getDbClient();
+  const rows = await client.drizzle
+    .select({
       day: dailyModelUsage.day,
       agentKind: dailyModelUsage.agentKind,
       model: dailyModelUsage.model,
@@ -127,37 +105,47 @@ export async function getModelUsageSince(sinceDayKey: string): Promise<DailyMode
     .from(dailyModelUsage)
     .where(sql`${dailyModelUsage.day} >= ${sinceDayKey}`)
     .all();
-  return rows.map((row) => {
-    const isSubscriptionValue = row.model.endsWith('#billing=subscription');
-    const isExplicitUnpricedSubscription =
-      isSubscriptionValue && row.costAmount === 0 && Boolean(row.costIsApproximate);
-    const legacy = legacyUsdMoney(row.costUsd);
-    const current =
-      row.costCurrency && (row.costAmount > 0 || isExplicitUnpricedSubscription)
-        ? normalizeRegionalMoney({
-            amount: row.costAmount,
-            currency: row.costCurrency,
-            approximate: isSubscriptionValue || row.costIsApproximate,
-            kind: isSubscriptionValue ? 'value-estimate' : 'actual-cost',
-            ...(isSubscriptionValue
-              ? { estimateReasons: ['subscription-value', 'reference-price'] }
-              : {}),
-          })
-        : undefined;
-    return {
-      day: row.day,
-      agentKind: row.agentKind,
-      model: row.model,
-      money:
-        legacy.amount > 0 && current
-          ? legacy.currency === current.currency
-            ? addRegionalMoney([legacy, current])
-            : current
-          : (current ?? (legacy.amount > 0 ? legacy : zeroUsageMoney())),
-      inputTokens: row.inputTokens,
-      outputTokens: row.outputTokens,
-      cacheReadTokens: row.cacheReadTokens,
-      cacheCreateTokens: row.cacheCreateTokens,
-    };
-  });
+  const auxiliary = await client.query<DailyModelUsageRow>(
+    `SELECT day, 'auxiliary' AS agentKind, model, source, provider_id AS providerId, COUNT(*) AS requestCount,
+    SUM(COALESCE(input_tokens, 0)) AS inputTokens, SUM(COALESCE(output_tokens, 0)) AS outputTokens,
+    SUM(COALESCE(cache_read_tokens, 0)) AS cacheReadTokens, SUM(COALESCE(cache_create_tokens, 0)) AS cacheCreateTokens
+    FROM auxiliary_usage_receipts WHERE day >= ? GROUP BY day, model, source, provider_id`,
+    [sinceDayKey],
+  );
+  return [
+    ...rows.map((row) => {
+      const isSubscriptionValue = row.model.endsWith('#billing=subscription');
+      const isExplicitUnpricedSubscription =
+        isSubscriptionValue && row.costAmount === 0 && Boolean(row.costIsApproximate);
+      const legacy = legacyUsdMoney(row.costUsd);
+      const current =
+        row.costCurrency && (row.costAmount > 0 || isExplicitUnpricedSubscription)
+          ? normalizeRegionalMoney({
+              amount: row.costAmount,
+              currency: row.costCurrency,
+              approximate: isSubscriptionValue || row.costIsApproximate,
+              kind: isSubscriptionValue ? 'value-estimate' : 'actual-cost',
+              ...(isSubscriptionValue
+                ? { estimateReasons: ['subscription-value', 'reference-price'] }
+                : {}),
+            })
+          : undefined;
+      return {
+        day: row.day,
+        agentKind: row.agentKind,
+        model: row.model,
+        money:
+          legacy.amount > 0 && current
+            ? legacy.currency === current.currency
+              ? addRegionalMoney([legacy, current])
+              : current
+            : (current ?? (legacy.amount > 0 ? legacy : zeroUsageMoney())),
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        cacheReadTokens: row.cacheReadTokens,
+        cacheCreateTokens: row.cacheCreateTokens,
+      };
+    }),
+    ...auxiliary.map((row) => ({ ...row, money: zeroUsageMoney() })),
+  ];
 }

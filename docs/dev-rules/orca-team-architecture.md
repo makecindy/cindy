@@ -193,7 +193,9 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
   `worker_id + worker session` 归属反查唯一 Lead，调用方不能指定任意 session；只返回
   `user/assistant`、排除 rewound、限制单页数量并保持 `(createdAt,rowid)` 游标分页。它不
   create/resume Lead，也不发送消息，所以本机与 SSH Worker 都能在不唤醒 Lead 的前提下读取
-  同一份上下文。Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对范围时才查询；
+  同一份上下文。界面派单只有在「当前工作／继续／这个 PR」等信息缺失时才引导查询。
+  已有任务从最近 8 条开始；有快照的首条派单从快照时间起读 8 条。查到所需信息即可停，
+  需要更多才按同一方向使用游标。工具省略 `order` 时沿用时间正序，旧调用的分页行为不变。
   自包含任务直接执行。没有显式 Worker 任务时不会用 Lead 输入擅自起任务；该 handoff 也不
   改写 MCP `create_worker` / `create_workers` 已由 Lead 组织好的 `initial_task`。
 - device-link 只有在被控端 capability 与本次 `enableOrca` 成功响应都证明支持 deferred
@@ -391,7 +393,7 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
    用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
-   内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
+   内按多个角色并行派单时，Lead 直接使用已知且匹配的 Worker 会话 ID；目标未知、有歧义或原映射已失效时才通过 `get_workspace_info` 核实。随后按场景通过
    `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
    如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
    任务指派本身不等于创建授权。多角色请求必须在派发任何任务前解析全部 role／label；
@@ -403,6 +405,10 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
+
+   Lead 启动时可从本队的活跃成员恢复唯一 Worker 的会话地址。多个候选时只使用仍匹配的既有 ID，
+   启动提示只记录地址。角色和标签可在协同面板修改；按角色或标签选人时，本次派单尚未核实匹配项才查当前名单。按明确的 Worker 地址派单可直接发送。只读审阅直接回传发现和必要证据；实施任务按实际改动验证。
+   独立复核按任务要求执行。验证证据可以直接写进回报，用户要求日志或失败排查需要时再保存文件。
 
 2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
    Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明
@@ -982,10 +988,16 @@ Lead／Worker 可在 Claude Code、Codex、Pi 三者间双向切换并选择模�
 执行设备上的真实 Worker 同样受原地切换边界约束：切换 handler 从任务行读取 `orcaRemoteLead`，用户不能通过显式 `agentDeviceId` 将它迁到第三台电脑；同位置的三 Agent／模型切换仍允许。既有供应商组内部立即换位置例外保持不变。手机模型面板在 Orca Agent 已位于另一台电脑时，目标 Harness 的预取、能力缓存、面板加载和选中校验均从那台电脑读取；切换意图仍交给任务所属电脑执行，不因此开放换电脑。
 Desktop 与 Mobile 同时按已有的 `orcaRemoteLead` 投影隐藏换电脑入口，不把执行设备 Worker 的空 `orcaRole` 误认为普通任务，也不改变其协同角色。旧控制端仍由上述主进程拒绝迁移，不增加 wire 字段。
 
-Desktop Orca 同 Agent 选模继续复用普通任务的窗口检查与确认弹窗，将本次核对的具体窗口随本机切换意图保留。未知窗口只表示选择可以暂存，不等于同意重建；发送前需要重建时，确认窗口必须匹配当时核实的窗口（含 Pi 最终窗口）。未匹配则保留意图、停止发送；重新选择该模型会重新检查。仅调整 effort／Fast 保留同一路由的确认，换模型／来源不能继承。device-link 不接受控制端提交窗口确认数字，普通任务原有行为保持不变。回归见 `orcaModelWindowSelection.test.ts`、`orcaModelSelectionIntent.test.ts` 和 Mobile `orcaModelSelection.test.ts`。
-执行设备上只有 `orcaRemoteLead` 的 Worker 同样遵守上述窗口确认要求：初次检查与 Pi 最终窗口检查均不能使用普通任务的发送时默认确认；Pi 也不能用旧确认数字覆盖当前核实的窗口。
+Desktop Orca 同 Agent 选模只登记意图，发送边界重新核实目标窗口（含 Pi 最终窗口）。
+按 2026-11-18 用户裁决，同账号 owner 的设备互联选择在宿主核实精确窗口后自动整理；
+device-link 仍拒绝控制端提交任何窗口确认数字。桌面本机确认继续绑定具体路由及当时的窗口，
+仅调整 effort／Fast 可以保留。共享任务访客与供应商分享不获得设备互联自动整理权限。
+执行设备上只有 `orcaRemoteLead` 的 Worker 也按同一授权判断与窗口核实流程处理。
+Pi Worker 的换模若必须先退役原进程，又无从核实目标最终窗口，则保留原路线。
 
-Orca Agent 在另一台电脑时，同 Agent 选择在发送边界重读执行电脑的授权目录，按同一来源与模型的已核实窗口检查当前占用；不能把点选时的确认值当成最新窗口或默认确认。在线与冷恢复均走已有窗口交接入口，需要交接但确认值与最新窗口不符、目录不可读或交接未完成时保留意图、不落库新选择。目录仍无已核实窗口时沿用热切语义，不拿旧确认值猜测窗口并重建。窗口核实后的提交再次校验任务归属；失败只阻断该任务的本次发送，不重连、不重派，不影响共享链路上的其它任务。回归见 `orcaRemoteModelWindowSelection.test.ts`。
+Orca Agent 在另一台同账号电脑时，发送边界重读执行电脑的授权目录。
+这类远控选择若无法核实目标窗口、Pi 执行端不能提供最终窗口，或重建未完成，保留原路线和意图，
+阻止本次发送。发送失败只影响当前任务，不重连、不重派，也不影响其他 Worker。
 
 Worker 创建与默认模型继承边界对历史短 ID 做 provider-aware 兼容：优先保留目标路由上
 可用的精确 ID；只有精确匹配失败、候选来源属于 managed Gateway、且

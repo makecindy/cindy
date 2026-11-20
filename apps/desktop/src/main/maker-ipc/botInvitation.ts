@@ -417,6 +417,7 @@ async function composeOpening(
   });
   try {
     const result = await Promise.race([requestAuxiliaryText({
+      source: 'bot-opening',
       agentKind,
       maxTokens: 400,
       timeoutMs: OPENING_BUDGET_MS,

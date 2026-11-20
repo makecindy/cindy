@@ -134,10 +134,13 @@ describe('DeviceNodePopover', () => {
     render(<DeviceNodePopover node={node({ encrypted })} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
     expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
     // 2026-11-08: route details must identify the actual protocol, not just direct versus relay.
+    // 2026-11-19: 路径行末尾同时带上实际底层传输协议（UDP / WebRTC / WS）。
     const protocol = encrypted === undefined ? '' : `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · `;
-    // 2026-11-13: 协议画成图标 + 名称后文字分在两段里，完整的「协议 · 路径」在这一行的悬停提示上。
-    const pathRow = screen.getByTitle(protocol + 'settings.remoteControl.v2.path.direct');
-    expect(pathRow.textContent?.replace(/\s/g, '')).toBe((protocol + 'settings.remoteControl.v2.path.direct').replace(/\s/g, ''));
+    const transport = encrypted === undefined ? '' : ` · settings.remoteControl.v2.${encrypted ? 'relayTransport.udp' : 'linkTransport.webrtc'}`;
+    // 2026-11-13: 协议画成图标 + 名称后文字分在多段里，完整的「协议 · 路径 · 传输协议」在这一行的悬停提示上。
+    const expectedPath = protocol + 'settings.remoteControl.v2.path.direct' + transport;
+    const pathRow = screen.getByTitle(expectedPath);
+    expect(pathRow.textContent?.replace(/\s/g, '')).toBe(expectedPath.replace(/\s/g, ''));
     expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
   });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {
@@ -187,6 +190,19 @@ describe('DeviceNodePopover', () => {
     );
     expect(screen.getByText('settings.remoteControl.v2.path.offline').className).not.toContain('--warning-accent');
   });
+
+  // 2026-11-19 用户要求：每台电脑之间的链接显示实际底层传输协议（UDP / WS / WebRTC）。
+  // 生产入口:DeviceNodePopover 路径行。覆盖缺口:此前设备卡片路径行只写协议和直连/中转,没有底层传输协议。
+  // 最小失败输入:Agent-Net 直连/经中转(UDP/WS)、Device Link 直连(WebRTC)/经中转(WS)与切换重连中。tier: unit。
+  it.each([
+    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, 'settings.remoteControl.v2.relayTransport.udp'],
+    ['Agent-Net relay WS', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
+    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, 'settings.remoteControl.v2.linkTransport.webrtc'],
+    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
+  ])('设备卡片路径行显示底层传输协议: %s', (_label, partial, expectedTransport) => {
+    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+    expect(screen.getByText(`· ${expectedTransport}`)).toBeTruthy();
+  });
 });
 
 describe('HubNodePopover', () => {
@@ -230,6 +246,22 @@ describe('HubNodePopover', () => {
     render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="connecting" issue={null} standby={false} />);
     expect(screen.queryByText('settings.remoteControl.v2.popover.protocol')).toBeNull();
     expect(screen.queryByText('settings.remoteControl.v2.protocol.deviceLink')).toBeNull();
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
+  });
+
+  // 2026-11-18 用户要求：看得出中转走的是 Agent-Net 的 UDP 还是 WS,往返是那条路的。原来这一行只有状态和心跳往返。
+  // 最小失败输入:Agent-Net 主连接、transport 为 udp / websocket;连接中不写走法。tier: unit。
+  it('与中转那一行写经中转的数据走 UDP 还是 WS,连接中不写', () => {
+    const relay = { ...model.relay, protocol: 'agent-net' as const };
+    const udp = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp', rttMs: 9 } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.udp · 9 ms')).toBeTruthy();
+    udp.unmount();
+
+    const ws = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'websocket' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.websocket · 20 ms')).toBeTruthy();
+    ws.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp' } }} linkStatus="connecting" issue={null} standby={false} />);
     expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
   });
 });

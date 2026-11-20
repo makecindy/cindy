@@ -26,6 +26,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotGroupChatView } from '../BotGroupChatView';
+import { _resetComposerSendShortcutPreferenceForTests, COMPOSER_SEND_SHORTCUT_STORAGE_KEY, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
@@ -350,6 +351,7 @@ beforeEach(() => {
   resetCompanionCloudStoreForTests();
   mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
+  _resetComposerSendShortcutPreferenceForTests();
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   // 话题 reply drafts persist like the group's own; start every test without one.
   for (const root of ['u1', 'b1', 'q1', 'm']) clearDraft(botGroupThreadDraftKey('g1', root));
@@ -1816,6 +1818,87 @@ describe('BotGroupChatView', () => {
       .toEqual(['mimi', 'xiaoman']);
     expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent))
       .toEqual(['lane-mimi', 'lane-xiaoman']);
+  });
+
+  // Issue #11250 / DESIGN §14.3, unit: real page -> composer -> outbox.
+  // Existing tests only used default Enter. Minimal failure: modifier-enter + plain Enter.
+  // The matrix covers platform modifiers, live preference changes and folded input newline.
+  it.each(['win32', 'darwin'])('honors the send preference on %s without changing group delivery', async platform => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: platform });
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'first line' } });
+    for (const modifiers of [{}, { shiftKey: true }, { altKey: true }, { isComposing: true }, { keyCode: 229 }, ...(platform === 'win32' ? [{ metaKey: true }] : [])]) {
+      const event = createEvent.keyDown(input, { key: 'Enter', ...modifiers });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    }
+    const modifier = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier, repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('first line');
+  });
+
+  it('applies live send preference changes to an already mounted group composer', async () => {
+    function PreferenceControl() {
+      const { preference, setPreference } = useComposerSendShortcutPreference();
+      return <button onClick={() => setPreference(preference === 'enter' ? 'modifier-enter' : 'enter')}>Toggle send preference</button>;
+    }
+    renderView();
+    render(<PreferenceControl />);
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'keep this draft' } });
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('keep this draft');
+  });
+
+  it('uses the configured send shortcut in the topic opened from the group page', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const input = await within(panel).findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'topic draft' } });
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.reply).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
+    expect(mocks.reply.mock.calls[0][0].text).toBe('topic draft');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newline after a folded paste until the configured send shortcut', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const text = Array.from({ length: 24 }, (_, i) => `line ${i}`).join('\n');
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = screen.getByRole('textbox');
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => 'after newline' } });
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(`${text}\nafter newline`);
   });
 
   it('sends with Enter, parses mentions, and re-reads after main accepts', async () => {
@@ -3664,69 +3747,6 @@ describe('BotGroupChatView', () => {
       expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent)).toEqual(['plan-xiaoman']);
     });
 
-    it('sends a message tagged 安排分工 with division: true and clears the tag', async () => {
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      expect(screen.getByTestId('bot-group-division-tag').textContent).toContain('bots.groupChat.composer.divisionTag');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderDivision');
-
-      fireEvent.change(input, { target: { value: '做一个官网介绍页' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
-      expect(mocks.sendBotGroupMessage.mock.calls[0]![0]).toMatchObject({
-        groupId: 'g1',
-        text: '做一个官网介绍页',
-        division: true,
-      });
-      expect(screen.queryByTestId('bot-group-division-tag')).toBeNull();
-
-      // Without the tag the flag is not sent at all.
-      fireEvent.change(input, { target: { value: '谢谢' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(2));
-      expect(mocks.sendBotGroupMessage.mock.calls[1]![0]).not.toHaveProperty('division');
-    });
-
-    it('puts the draft and its tag back when main refuses a second plan', async () => {
-      mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'PLAN_OPEN', message: '' });
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      fireEvent.change(input, { target: { value: '再排一次' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.planOpen'));
-      expect(input.value).toBe('再排一次');
-      expect(screen.getByTestId('bot-group-division-tag')).toBeTruthy();
-    });
-
-    it('disables 安排分工 with a reason while a plan is under way', async () => {
-      const running = plan({
-        status: 'running',
-        currentStep: 0,
-        steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!],
-      });
-      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running) });
-      renderView();
-      const input = await screen.findByRole('textbox');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderPlanRunning:咪咪');
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      const item = await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ });
-      expect(item.getAttribute('aria-disabled')).toBe('true');
-      expect(item.textContent).toContain('bots.groupChat.composer.divisionBusy');
-    });
-
     it('re-reads the timeline on a plan change', async () => {
       renderView();
       await screen.findByText('周六 8:10 有票');
@@ -3736,7 +3756,7 @@ describe('BotGroupChatView', () => {
   });
 
   describe('附件', () => {
-    it('offers 添加文件、图片或视频… above 安排分工 and puts the picked files in the tray', async () => {
+    it('offers 添加文件、图片或视频… without a division command and puts the picked files in the tray', async () => {
       renderView();
       await screen.findByRole('textbox');
       const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -3750,7 +3770,6 @@ describe('BotGroupChatView', () => {
         const items = await screen.findAllByRole('menuitem');
         expect(items.map((item) => item.textContent)).toEqual([
           'extraDirs.addFiles',
-          expect.stringContaining('bots.groupChat.composer.division'),
         ]);
         fireEvent.click(items[0]!);
         expect(click).toHaveBeenCalledTimes(1);

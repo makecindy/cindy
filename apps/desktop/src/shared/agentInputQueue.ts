@@ -11,11 +11,13 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   formatAnnotationRegion,
@@ -727,6 +729,18 @@ export function projectionRetryText(
   return queuedMessageRetryToken(recovery.item);
 }
 
+/** Whether the pending row exposes text editing in the queue UI. */
+export function canEditQueuedMessage(
+  entry: Pick<AgentInputQueuedMessage, 'origin' | 'sourcePlugin' | 'text' | 'clientId'> & { isPendingEnqueue?: boolean },
+): boolean {
+  const origin = entry.origin?.kind;
+  return !entry.isPendingEnqueue
+    && origin !== 'orca' && origin !== 'scheduler' && origin !== 'session'
+    && !entry.sourcePlugin?.pluginId
+    && !entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    && !isAnsweredAsyncQuestionClientId(entry.clientId);
+}
+
 export function updateQueuedMessageText(
   entry: AgentInputQueuedMessage,
   newText: string,
@@ -893,6 +907,9 @@ export function reconcileSessionRefsForText(
         // Invalid parameter: treat it as absent.
       }
     }
+    // The Agent reads a guest task link with get_shared_task_progress under the
+    // active caller's authority. Do not request an account-history snapshot on paste.
+    if (!messageClientId && isSharedTaskPeer(linkDeviceId)) continue;
     const key = `${sessionId}\u0000${messageClientId ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);

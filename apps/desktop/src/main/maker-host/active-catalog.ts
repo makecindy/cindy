@@ -1,6 +1,7 @@
 import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
+import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels, projectSelectionAliases,
@@ -552,7 +553,7 @@ function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set
 /** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
 export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
-  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
+  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（运行时传给路由判定的形态）；
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
   const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
@@ -1884,7 +1885,7 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
     if (!isOpenAiSubscriptionProvider(provider) ||
         (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
         provider.imageModels?.length === 0) return provider;
-    const id = `${provider.id}/gpt-image-2`;
+    const id = subscriptionImageModelId(provider.id);
     const previous = provider.imageModels?.find((model) => model.id === id);
     const defaults: ProviderMediaModel = {
       id,

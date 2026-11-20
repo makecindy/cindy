@@ -1,10 +1,11 @@
 /**
- * Regression coverage for Plugin settings guest layout ownership and fresh-page lifecycle.
+ * Regression coverage for plugin settings layout, fresh-page lifecycle and GitHub release checks.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authState = vi.hoisted(() => ({
@@ -104,6 +105,53 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  const releaseGhost = {
+    enabled: false, dir: '/plugins/example', namespace: 'local', namespaceState: 'confirmed',
+    manifest: { id: 'example-plugin', name: 'Example', githubRelease: 'example/plugin', version: '0.2.14', settingsHtml: 'settings.html' },
+  } as InstalledGhost;
+
+  // Unit / plugin settings: opening the real release row should offer an update
+  // without a click. The previous coverage checked only the manual path.
+  it('checks once on open and installs the selected GitHub release only on click', async () => {
+    const githubRelease = vi.fn()
+      .mockResolvedValueOnce({ status: 'available', release: { version: '0.2.15', assetId: 42 } })
+      .mockResolvedValueOnce({ status: 'updated', version: '0.2.15' });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease } });
+    render(<StrictMode><GhostSettingsWebview ghost={releaseGhost} appearance="plugin" /></StrictMode>);
+    const install = await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' });
+    expect(githubRelease).toHaveBeenCalledExactlyOnceWith('check', expect.any(String), undefined);
+    fireEvent.click(install);
+    await screen.findByText('settings.ghosts.detail.githubRelease.updated');
+    expect(githubRelease).toHaveBeenLastCalledWith('update', expect.any(String), 42);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' })).toBeNull();
+  });
+
+  // Unit / request budget: a hidden detail must not start I/O, and a rapid reopen
+  // while the first check is pending should use its result and still allow retry.
+  it('defers a hidden check and shares the pending result on reopen', async () => {
+    let finish!: (value: { status: 'sign-in' }) => void;
+    const pending = new Promise<{ status: 'sign-in' }>(resolve => { finish = resolve; });
+    const githubRelease = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce({ status: 'empty' });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease } });
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const opening = render(<GhostSettingsWebview ghost={releaseGhost} />);
+    expect(githubRelease).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue('visible');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(githubRelease).toHaveBeenCalledTimes(1);
+    opening.unmount();
+    render(<GhostSettingsWebview ghost={releaseGhost} />);
+    expect(githubRelease).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ status: 'sign-in' }); });
+
+    expect(screen.getByRole('button', { name: 'settings.ghosts.detail.githubRelease.connect' })).toBeTruthy();
+    expect(githubRelease).toHaveBeenCalledExactlyOnceWith('check', expect.any(String), undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.githubRelease.check' }));
+    await screen.findByText('settings.ghosts.detail.githubRelease.empty');
+    expect(githubRelease).toHaveBeenCalledTimes(2);
+  });
+
   // Unit / UX-05: the theme/layout readiness barrier may exceed 300ms. Existing
   // opacity/height cases did not verify a readable wait inside that same space.
   it.each([true, false])('shows delayed loading only while a settings guest is still preparing: slow=%s', async slow => {

@@ -240,6 +240,12 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('matches a Pi invocation alias while preserving the short selection name', () => {
+    const command = { kind: 'agent-skill' as const, name: 'poteto-mode', source: 'skill' as const,
+      runtimeCommandName: 'skill:poteto-mode' };
+    expect(filterSlashCommands([command], 'skill:poteto')).toEqual([command]);
+  });
+
   it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
     const prefixed = Array.from({ length: 30 }, (_, i) => ({
       kind: 'desktop' as const, name: `draw-${i}`, description: '',

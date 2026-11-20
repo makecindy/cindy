@@ -4,6 +4,7 @@ import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from 
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { parseGhostHarnesses, type GhostHarnessDecl } from './pluginHarnesses.js';
 import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
@@ -390,7 +391,7 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
  * 就没法只授权其中一样。
  */
-export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank', 'media_request'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
 
 /** Historical unknown data can be retained without being interpreted as a capability. */
@@ -1040,6 +1041,8 @@ export interface GhostManifest {
    * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
    */
   imEntrance?: boolean;
+  /** Optional GitHub.com owner/repository for local plugin updates. */
+  githubRelease?: unknown;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1062,6 +1065,11 @@ export interface GhostManifest {
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;
+  /**
+   * Task engines this plugin provides (v3 only). Each names a `node.entries` file Cindy starts in
+   * raw stdio mode; availability is published at runtime through `PUT /harnesses`.
+   */
+  harnesses?: GhostHarnessDecl[];
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -1272,6 +1280,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'harnesses',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -1294,6 +1303,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHeight',
   'showTaskPreferences',
   'imEntrance',
+  'githubRelease',
   'slots',
   'card',
   'mail',
@@ -1367,6 +1377,15 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   iosSimulator: 'ios-simulator',
   liveScreen: 'live-screen',
 };
+
+/** Select only a supported GitHub.com repository; stored historical declarations remain opaque. */
+export function getGhostGithubReleaseRepository(manifest: { githubRelease?: unknown; settingsHtml?: unknown }): string | undefined {
+  const { githubRelease, settingsHtml } = manifest;
+  if (typeof settingsHtml !== 'string' || typeof githubRelease !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/i.test(githubRelease) ||
+      /\/(?:\.|\.\.)$/.test(githubRelease)) return;
+  return githubRelease.toLowerCase();
+}
 
 type PreparedGhostManifest = {
   raw: Record<string, unknown>;
@@ -1870,6 +1889,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
   // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
+    return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
+  }
   if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
     if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
     const imAgent = raw.agent as Record<string, unknown> | undefined;
@@ -3565,6 +3587,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   if (slots.includes('live-screen') && node === undefined) {
     return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
   }
+  // 插件提供的任务执行引擎(v3 only;v2 slots 不映射)。历史快照里本 Host 认识之前就写下、
+  // 但不合本规则的值只丢弃,不让已装插件失效。
+  let harnesses: GhostHarnessDecl[] | undefined;
+  if (prepared.schemaVersion === 3 && raw.harnesses !== undefined) {
+    const parsed = parseGhostHarnesses(raw.harnesses, node);
+    if (parsed.ok) harnesses = parsed.harnesses;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {
@@ -4064,6 +4094,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
       ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined
@@ -4078,6 +4109,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(harnesses !== undefined ? { harnesses } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),

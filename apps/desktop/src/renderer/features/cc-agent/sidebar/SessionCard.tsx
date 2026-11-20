@@ -1,6 +1,6 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
-import { SessionSnoozeAction } from './SessionSnoozeAction';
+import { SessionSnoozeAction, useSessionSnooze, type SnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -132,7 +132,7 @@ function getNeutralAwaitingKind(
   return '';
 }
 
-/** SessionCard 与 SessionItem 共用同一份 props 契约（indented 在卡片流中无意义，忽略）。
+/** SessionCard 与 SessionItem 共用同一份 props 契约。
  *  variant:
  *    - 'card'(默认):白底描边卡片(瀑布流),标题 1 行 + 正文 2 行 + 右下角时间。
  *    - 'list':满宽扁平行(类 Telegram / 对话列表),无卡片描边底色;标题 + 右上角
@@ -178,6 +178,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const snoozeAction = useSessionSnooze(session);
   const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
@@ -862,6 +863,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                snoozeAction={snoozeAction}
                 session={session}
                 inboxMode={inboxMode}
                 navigationOnly={navigationOnly}
@@ -1186,6 +1188,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
+            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => cardRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}
@@ -1214,6 +1217,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  snoozeAction,
   session,
   inboxMode = false,
   navigationOnly = false,
@@ -1238,6 +1242,7 @@ function TimeActionsSlot({
   session: Session;
   inboxMode?: boolean;
   navigationOnly?: boolean;
+  snoozeAction?: SnoozeAction;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1261,7 +1266,7 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive;
+  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1352,6 +1357,7 @@ function TimeActionsSlot({
               {inboxMode ? (
                 canSnooze && (
                   <SessionSnoozeAction
+                    action={snoozeAction}
                     session={session}
                     isActive={isActive}
                     onOpenChange={setSnoozeOpen}
@@ -1380,6 +1386,7 @@ function TimeActionsSlot({
                 <CardAction
                   variant="list"
                   isActive={isActive}
+                  inboxComplete
                   label={t('ccAgent.sidebar.inbox.complete')}
                   onClick={() => onComplete()}
                 >
@@ -1407,20 +1414,24 @@ function TimeActionsSlot({
 function CardAction({
   variant = 'card',
   isActive = false,
+  inboxComplete,
   label,
   onClick,
   children,
 }: {
   variant?: 'card' | 'list';
   isActive?: boolean;
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
 }) {
   return (
     <Tip text={label}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        tone="quiet"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
@@ -1431,22 +1442,22 @@ function CardAction({
         className={cn(
           variant === 'list'
             ? cn(
-                'shrink-0 size-5 flex items-center justify-center rounded-md',
+                'shrink-0 size-5 p-0 flex items-center justify-center',
                 'focus:outline-none',
                 isActive
-                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-                  : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                  : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
               )
             : cn(
-                'flex size-6 items-center justify-center rounded-[7px]',
-                'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-                'border border-sidebar-border',
-                'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+                'flex size-6 p-0 items-center justify-center',
+                '[--button-face-bg:var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+                '[--button-face-border:hsl(var(--sidebar-border))]',
+                'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground focus:outline-none',
               ),
         )}
       >
         {children}
-      </button>
+      </Button>
     </Tip>
   );
 }

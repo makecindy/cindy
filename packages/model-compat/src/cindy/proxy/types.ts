@@ -73,8 +73,8 @@ export interface RecoveryRule {
   strip: (body: Buffer) => Buffer | null;
   /** Classify a matched terminal rejection from the actual sent body, after safe retries. */
   unrecoverableCode?: (body: Buffer) => string | null;
-  /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
-  onRetry?: (threadId: string, model: string) => void;
+  /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。upstreamBase 是实际出站地址。 */
+  onRetry?: (threadId: string, model: string, upstreamBase?: string) => void;
   /** Use the final wire model for retry markers; its active strip must run after model rewrites. */
   useUpstreamModel?: boolean;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */

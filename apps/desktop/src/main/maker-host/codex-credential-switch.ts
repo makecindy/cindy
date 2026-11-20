@@ -8,6 +8,7 @@ import {
   resolveAgentCredentialMode as resolveBaseCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
+  type EngineKind,
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
@@ -77,7 +78,8 @@ function credentialFamilyFromAuthInjection(
 interface LocalAgentSession {
   codexHostKey?: string;
   id: string;
-  agentKind: AgentKind;
+  // Only compared with 'codex'; plugin-engine tasks are never Codex hosts.
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }

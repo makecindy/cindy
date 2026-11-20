@@ -23,7 +23,7 @@ vi.mock('@/cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered() {}, 
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { initGlobalListeners() {} } }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut() {} }));
 vi.mock('@/hooks/useCloseWindowShortcut', () => ({ useCloseShortcutShellOwner() {} }));
-vi.mock('@/hooks/useLocale', () => ({ useLocale: () => ({ effectiveLocale: 'en', setLocale() {} }) }));
+vi.mock('@/hooks/useLocale', () => ({ useLocale: () => ({ setDisplayLocale() {} }) }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 vi.mock('@/cindy-brain/GhostMediaLightboxHost', () => ({ GhostMediaLightboxHost: () => null }));
