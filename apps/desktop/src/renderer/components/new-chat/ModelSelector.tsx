@@ -69,6 +69,7 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -438,7 +439,18 @@ function modelDisplayProvider(
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;
 // 列表行前缀通过 colorClass / withMargin 改用 secondary 色 + 由 flex gap 控间距。
-export function ProviderMark({
+export function ProviderMark(props: Parameters<typeof DefaultProviderMark>[0] & {
+  customIcon?: string;
+}) {
+  return (
+    <CustomProviderIcon svg={props.customIcon} size={props.dense ? 12.3 : 13}
+      className={cn(props.withMargin !== false && 'mr-1.5', 'shrink-0')}>
+      <DefaultProviderMark {...props} />
+    </CustomProviderIcon>
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   name,
   routing,
@@ -492,11 +504,12 @@ export function ProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染对应厂牌 mark;缺省或未知值
- * 回落该行来源供应商标(ProviderMark)。禁止在客户端按 model id 猜厂牌。
+ * 来源的自定义图标优先；缺省或加载失败时，沿用模型目录的厂牌 `icon` 或来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
   icon,
+  customIcon,
   providerId,
   name,
   routing,
@@ -507,6 +520,7 @@ export function ModelIconMark({
 }: {
   /** 模型条目的展示图标 id(CatalogModel.icon);undefined = 未设定。 */
   icon?: string;
+  customIcon?: string;
   /** 回落用的来源供应商 id / 展示名(与 ProviderMark 同语义)。 */
   providerId: string;
   name?: string;
@@ -520,13 +534,11 @@ export function ModelIconMark({
   if (kind) {
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;
-    if (kind === 'claude') return <AnthropicMark size={markSize} className={common} />;
-    if (kind === 'codex') return <OpenAIMark size={markSize} className={common} />;
+    const Mark = kind === 'claude' ? AnthropicMark : kind === 'codex' ? OpenAIMark : CindyMark;
     return (
-      <CindyMark
-        size={markSize}
-        className={common}
-      />
+      <CustomProviderIcon svg={customIcon} size={markSize} className={common}>
+        <Mark size={markSize} className={common} />
+      </CustomProviderIcon>
     );
   }
   return (
@@ -535,6 +547,7 @@ export function ModelIconMark({
       name={name}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       colorClass={colorClass}
       withMargin={withMargin}
       dense={dense}
@@ -3318,6 +3331,7 @@ function ModelSelectorContentView({
                     name={provider.name}
                     routing={provider.routing}
                     logoKind={provider.logoKind}
+                    customIcon={provider.customIcon}
                     colorClass="text-[var(--text-secondary)]"
                     withMargin={false}
                     dense
@@ -5310,6 +5324,7 @@ export function ModelSelector({
             name={disconnectedProvider?.name}
             routing={disconnectedProvider?.routing}
             logoKind={disconnectedProvider?.logoKind}
+            customIcon={disconnectedProvider?.customIcon}
             colorClass={issueColor}
           />
           {agentIdentityPrefix}
@@ -5372,6 +5387,7 @@ export function ModelSelector({
                 name={triggerActiveProvider?.name}
                 routing={triggerActiveProvider?.routing}
                 logoKind={triggerActiveProvider?.logoKind}
+                customIcon={triggerActiveProvider?.customIcon}
                 colorClass="text-current"
                 withMargin={false}
               />
@@ -5383,6 +5399,7 @@ export function ModelSelector({
               name={triggerActiveProvider?.name}
               routing={triggerActiveProvider?.routing}
               logoKind={triggerActiveProvider?.logoKind}
+              customIcon={triggerActiveProvider?.customIcon}
               colorClass={
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }

@@ -1,4 +1,7 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 import {
@@ -10,6 +13,10 @@ const themeState = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
 
 // User request 2026-10-29. Unit: no existing test renders the real mobile provider
 // mark. The regression is source-host identity combined with theme color.
+vi.mock("expo-image", () => ({
+  Image: ({ source, onError }: { source: { uri: string }; onError: () => void }) =>
+    createElement("img", { src: source.uri, alt: "", onError }),
+}));
 vi.mock("react-native", () => ({
   View: ({ children }: any) => createElement("div", null, children),
   StyleSheet: { create: (styles: unknown) => styles },
@@ -35,7 +42,7 @@ vi.mock("@/session/RemoteSourceMark", () => ({
     createElement("div", { "data-remote": true }, children),
 }));
 
-// These marks are stateless; render the real components without a DOM environment.
+// Static artwork assertions use React’s server renderer.
 const firstPath = (markup: string) => markup.match(/<path d="([^"]+)"/)?.[1];
 
 // Unit: provider ID alone cannot distinguish personal and XD organization.
@@ -112,4 +119,34 @@ it("renders independent spectrum marks and follows the active light/dark theme",
   expect(dark.match(/stop-color="[^"]+"/g)).not.toEqual(light.match(/stop-color="[^"]+"/g));
   expect(dark.match(/opacity="[^"]+"/g)).not.toEqual(light.match(/opacity="[^"]+"/g));
   themeState.mode = "light";
+});
+
+// Unit: the real picker mark needs to replace a failed native image with the
+// existing brand, retaining the remote indicator and resetting for a new image.
+it("falls back to the same remote spectrum mark when expo-image reports an error", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const icon = '<svg><title>图</title></svg>';
+  const mark = (customIcon?: string) => (
+    <MobileModelIconMark name="Enterprise Codex" providerId="byok-test" logoKind="openai-spectrum"
+      customIcon={customIcon} remote />
+  );
+  try {
+    act(() => root.render(mark(icon)));
+    const image = container.querySelector("img")!;
+    const uri = `data:image/svg+xml;base64,${Buffer.from(icon).toString("base64")}`;
+    expect(image.getAttribute("src")).toBe(uri);
+    expect(image.closest("[data-remote]")).toBeTruthy();
+    act(() => { image.dispatchEvent(new Event("error")); });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-remote] linearGradient")).toBeTruthy();
+    act(() => root.render(mark(icon.replace("图", "标"))));
+    expect(container.querySelector("img")).toBeTruthy();
+    act(() => root.render(mark()));
+    expect(container.querySelector("[data-remote] linearGradient")).toBeTruthy();
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
 });

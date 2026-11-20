@@ -332,14 +332,19 @@ describe('ProvidersSection — 双栏管理', () => {
 
   // Unit: an opaque enterprise UUID has no inferred brand. The settings rail
   // must still render the host-supplied artwork instead of a name initial.
-  it('renders explicit organization artwork in the provider list', async () => {
+  it.each([undefined, '<svg/>'])('renders organization artwork in the provider list (custom icon %s)', async (customIcon) => {
     providerSnapshotState.customOverride = {
       id: 'byok-test', name: 'Enterprise Codex', source: 'organization',
       auth: { method: 'managed' }, agents: ['codex'], routing: {}, models: { codex: [] },
-      connected: true, logoKind: 'openai-spectrum',
+      connected: true, logoKind: 'openai-spectrum', customIcon,
     };
     render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
     const row = await screen.findByRole('button', { name: /Enterprise Codex/ });
+    if (customIcon) {
+      const image = row.querySelector('img')!;
+      expect(image.getAttribute('src')).toBe('data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E');
+      fireEvent.error(image);
+    }
     const gradient = row.querySelector('linearGradient');
     expect(gradient).not.toBeNull();
     expect(row.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);

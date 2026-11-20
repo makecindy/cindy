@@ -5,7 +5,9 @@
  * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { Image } from 'expo-image';
+import { utf8Bytes } from '@cindy/device-link';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
@@ -93,6 +95,7 @@ export interface MobileProviderMarkProps {
   routing?: ProviderLogoRouting;
   /** 被控端剥离 routing 前解析出的非敏感品牌;device-link 场景优先使用。 */
   logoKind?: string;
+  customIcon?: string;
   /** 供应商展示名(monogram 取首字母;官方 mark 分支不消费)。 */
   name: string;
   /** mark 单色;缺省 textSecondary(列表行口径,trigger 场景可传 textPrimary)。 */
@@ -102,7 +105,48 @@ export interface MobileProviderMarkProps {
 }
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
-export function MobileProviderMark({
+export function MobileProviderMark(props: MobileProviderMarkProps) {
+  return (
+    <MobileCustomProviderIcon svg={props.customIcon} color={props.color} remote={props.remote}>
+      <DefaultProviderMark {...props} />
+    </MobileCustomProviderIcon>
+  );
+}
+
+function MobileCustomProviderIcon({ svg, children, color, remote }: {
+  svg?: string;
+  children: ReactNode;
+  color?: string;
+  remote?: boolean;
+}) {
+  if (typeof svg !== 'string' || !svg) return children;
+  return <MobileProviderImage key={svg} svg={svg} fallback={children} color={color} remote={remote} />;
+}
+
+function MobileProviderImage({ svg, fallback, color, remote }: {
+  svg: string;
+  fallback: ReactNode;
+  color?: string;
+  remote?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  if (failed) return fallback;
+  // expo-image's native data URL loaders support base64 on both platforms.
+  const uri = `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
+  return withRemote(
+    <View accessible={false} style={styles.markBox}>
+      <Image source={{ uri }} contentFit="contain" style={{ width: GLYPH_SIZE, height: GLYPH_SIZE }}
+        onError={() => setFailed(true)} />
+    </View>,
+    remote,
+    GLYPH_INSET,
+    color ?? colors.textSecondary,
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   routing,
   logoKind,
@@ -192,6 +236,7 @@ export interface MobileModelIconMarkProps {
   providerId?: string;
   routing?: ProviderLogoRouting;
   logoKind?: string;
+  customIcon?: string;
   name: string;
   color?: string;
   /** 同 MobileProviderMark.remote。 */
@@ -200,10 +245,18 @@ export interface MobileModelIconMarkProps {
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染
- * 对应厂牌 mark;缺省或未知值回落来源供应商标。禁止在客户端按 model id 猜厂牌。
+ * resolveModelIconKind 口径):来源的自定义图标优先；缺省或加载失败时，
+ * 沿用模型目录的厂牌 `icon` 或来源供应商标。禁止在客户端按 model id 猜厂牌。
  */
-export function MobileModelIconMark({
+export function MobileModelIconMark(props: MobileModelIconMarkProps) {
+  return (
+    <MobileCustomProviderIcon svg={props.customIcon} color={props.color} remote={props.remote}>
+      <DefaultModelIconMark {...props} />
+    </MobileCustomProviderIcon>
+  );
+}
+
+function DefaultModelIconMark({
   icon,
   providerId,
   routing,

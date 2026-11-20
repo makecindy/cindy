@@ -122,9 +122,10 @@ it('search spans all sources and clearing preserves the selected filter',async()
 });
 
 it('preserves remote provider branding in model rows and source choices',async()=>{
-  await mount(undefined,{providers:[{id:'account',name:'OpenAI · account',models:{},connected:true,logoKind:'openai'}]});
-  expect(test.view.groups[0].rows[0].providerMark).toMatchObject({providerId:'account',name:'OpenAI · account',logoKind:'openai'});
-  expect(test.view.filters.find((item:any)=>item.id==='account').providerMark).toMatchObject({logoKind:'openai'});
+  const customIcon = '<svg/>';
+  await mount(undefined,{providers:[{id:'account',name:'OpenAI · account',models:{},connected:true,logoKind:'openai',customIcon}]});
+  expect(test.view.groups[0].rows[0].providerMark).toMatchObject({providerId:'account',name:'OpenAI · account',logoKind:'openai',customIcon});
+  expect(test.view.filters.find((item:any)=>item.id==='account').providerMark).toMatchObject({logoKind:'openai',customIcon});
 });
 
 it('attaches account remaining quota only to the matching source filter',async()=>{
