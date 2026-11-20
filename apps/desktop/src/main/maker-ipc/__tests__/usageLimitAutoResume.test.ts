@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
+// 本机目录(供应商列表)是「来源是不是智谱 GLM Coding Plan」的判据;这里给一份可控的目录。
+const catalog = vi.hoisted(() => ({
+  providers: [] as Array<{ id: string; routing: Record<string, { upstream?: string }> }>,
+}));
+vi.mock('../../maker-host/active-catalog.js', () => ({
+  getActiveCatalog: () => ({ providers: catalog.providers }),
+}));
+
 import {
   USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS,
   USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
@@ -226,6 +234,83 @@ describe('UsageLimitAutoResume', () => {
     expect(h.deps.continueSession).not.toHaveBeenCalled();
     await h.fireLast();
     expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
+  // #9194: 智谱 GLM Coding Plan 的 1308 原文写明了周期额度的重置时刻,但任务侧此前拿不到它
+  // ——来源不是订阅账号(family 为空),入口在解析之前就 return 了,任务只能停在
+  // 「usage-limit auto-resume skipped: no usable reset time」。
+  describe('GLM Coding Plan cycle quota (普通 / 定时任务入口)', () => {
+    // now 取目标日期之前几天,保证在任何时区下目标时刻都还没到(跨时区稳定)。
+    const NOW = Date.parse('2026-11-01T00:00:00.000Z');
+    const RESET_AT = new Date(2026, 10, 6, 18, 54, 3).getTime();
+    const GLM_ERROR = {
+      sdkError: 'rate_limit',
+      errorStatus: 429,
+      message:
+        'API Error: Request rejected (429) · [1308][已达到 5 小时的使用上限。您的限额将在 2026-11-06 18:54:03 重置。]',
+    };
+
+    function glmRoute(providerId: string, overrides: Partial<SessionUsageRoute> = {}) {
+      catalog.providers = [{ id: providerId, routing: {} }];
+      const route: SessionUsageRoute = {
+        agentKind: 'claude-code', providerId, modelId: 'glm-5.3[1m]',
+        agentDeviceId: null, remoteHostId: null, sdkSessionId: null,
+        ...overrides,
+      };
+      const deps = {
+        now: () => NOW,
+        scopeKey: () => 'owner',
+        localFamilyOf: vi.fn<SessionUsageResetDeps['localFamilyOf']>(() => null),
+        readRemoteProviders: vi.fn(async () => []),
+        readLocalLimit: vi.fn(async () => null),
+        readRemoteLimit: vi.fn<SessionUsageResetDeps['readRemoteLimit']>(async () => null),
+        unavailable: vi.fn(),
+      } satisfies SessionUsageResetDeps;
+      return { route, deps };
+    }
+
+    it('enters the wait on the quoted reset time and continues when it fires', async () => {
+      const { route, deps } = glmRoute('zhipu-coding-plan-cn');
+      const h = harness({
+        now: () => NOW,
+        resolveResetAt: (_id, signals) => resolveSessionUsageReset(route, signals, deps),
+      });
+      expect(await h.guard.onTurnError('glm-cycle', GLM_ERROR)).toBe(true);
+      expect(h.deps.arm).toHaveBeenCalledWith('glm-cycle', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+      // 这条路径没有订阅账号窗口,不读账号快照。
+      expect(deps.readLocalLimit).not.toHaveBeenCalled();
+      await h.fireLast();
+      expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    });
+
+    it('does not schedule the same wording on another API key provider', async () => {
+      const { route, deps } = glmRoute('deepseek');
+      const h = harness({
+        now: () => NOW,
+        resolveResetAt: (_id, signals) => resolveSessionUsageReset(route, signals, deps),
+      });
+      expect(await h.guard.onTurnError('other-key', GLM_ERROR)).toBe(false);
+      expect(h.deps.arm).not.toHaveBeenCalled();
+      expect(h.timers).toHaveLength(0);
+    });
+
+    it('does not treat a plain 429 as a cycle quota', async () => {
+      const { route, deps } = glmRoute('zhipu-coding-plan-cn');
+      expect(
+        await resolveSessionUsageReset(
+          route,
+          { sdkError: 'rate_limit', errorStatus: 429, message: 'API Error: Request rejected (429) · Too many requests' },
+          deps,
+        ),
+      ).toBeNull();
+    });
+
+    it('does not read a zone-less wall clock over SSH', async () => {
+      const { route, deps } = glmRoute('zhipu-coding-plan-cn', { remoteHostId: 'ssh' });
+      deps.localFamilyOf.mockReturnValue('claude');
+      // 报错来自远端主机:不带时区的时刻不按本机时区换算,也不因 GLM 例外而排期。
+      expect(await resolveSessionUsageReset(route, GLM_ERROR, deps)).toBeNull();
+    });
   });
 
   // Unit: real quota classifier + timer callback, using the Fable SDK envelope.

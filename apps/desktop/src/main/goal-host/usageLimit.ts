@@ -15,7 +15,9 @@ import {
   extractUsageLimitRecoveryHint,
   isBillingDepletionError,
   isClaudeUsageLimitMessage,
+  isGlmCycleQuotaExhausted,
   type UsageLimitRecoveryParseOptions,
+  type UsageLimitResetSource,
 } from '../../shared/usageLimitRecovery.js';
 
 /** turn error 的 data 是否表示"账号用量/限流"。 */
@@ -37,7 +39,12 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
   const msg = typeof d.message === 'string' ? d.message : '';
-  return isClaudeUsageLimitMessage(msg) || /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
+  if (isClaudeUsageLimitMessage(msg) || /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg)) {
+    return true;
+  }
+  // 智谱 GLM Coding Plan 的周期额度文案(5 小时 / 每周窗口用尽)不是英文 rate limit 措辞,
+  // 但同样是可恢复的账号额度上限。分钟级速率限制不命中(文案里没有周期窗口的说法)。
+  return isGlmCycleQuotaExhausted(data);
 }
 
 /**
@@ -56,18 +63,62 @@ export function readStructuredUsageResetAt(data: unknown): number | null {
  * 都没有时返回 null,调用方再退回账号快照。
  *
  * 只对订阅账号的会话调用:API key / Coding Plan / 网关等来源报错里的重试时刻是分钟级请求
- * 限流,不是周期额度重置。
+ * 限流,不是周期额度重置。唯一的例外是智谱 GLM Coding Plan,走
+ * `readGlmCodingPlanCycleResetAt`。
  */
 export function readTurnUsageResetAt(
   data: unknown,
   nowMs = Date.now(),
   opts?: UsageLimitRecoveryParseOptions,
 ): number | null {
-  return (
-    readStructuredUsageResetAt(data) ??
-    extractUsageLimitRecoveryHint(data, nowMs, opts)?.resetAtMs ??
-    null
-  );
+  return readTurnUsageReset(data, nowMs, opts)?.resetAtMs ?? null;
+}
+
+/**
+ * 重置时刻 + 它来自哪条解析分支。
+ *
+ * 入口层靠 `source` 区分「本来就只对订阅账号生效」的分支(ISO / 数字偏移 / 相对时长等)
+ * 与「不带时区的裸本地时刻」这条——后者是智谱 GLM Coding Plan 的唯一例外。
+ */
+export interface TurnUsageReset {
+  resetAtMs: number;
+  source: UsageLimitResetSource;
+}
+
+export function readTurnUsageReset(
+  data: unknown,
+  nowMs = Date.now(),
+  opts?: UsageLimitRecoveryParseOptions,
+): TurnUsageReset | null {
+  const structured = readStructuredUsageResetAt(data);
+  if (structured !== null) return { resetAtMs: structured, source: 'structured' };
+  const hint = extractUsageLimitRecoveryHint(data, nowMs, opts);
+  if (!hint || hint.resetAtMs === null) return null;
+  return { resetAtMs: hint.resetAtMs, source: hint.resetAtSource ?? 'unknown' };
+}
+
+/**
+ * 智谱 GLM Coding Plan 的周期额度例外 ——「Coding Plan 默认不采信报错原文里的时刻」的唯一例外。
+ *
+ * 四个条件全满足才给时刻：
+ *  - 本轮实际用的来源是 GLM Coding Plan（API key，没有 `auth.native`）；
+ *  - 报错原文表明周期额度用尽（5 小时 / 每周窗口），不是分钟级速率限制；
+ *  - 时刻来自「不带时区的裸本地时刻」这条分支——其余分支本来就只对订阅账号生效；
+ *  - 报错来自本机（本机时区可信），SSH / 远程 Agent 的原文不按本机时区理解。
+ *
+ * 不读账号快照：这条路径没有订阅账号窗口可言，也不改变账号快照的适用范围。
+ */
+export function readGlmCodingPlanCycleResetAt(
+  data: unknown,
+  nowMs: number,
+  opts: { isGlmCodingPlan: boolean; localTimeZoneTrusted?: boolean },
+): number | null {
+  if (!opts.isGlmCodingPlan) return null;
+  // 本机时区不可信(SSH / 远程 Agent)时报错来自那台机器,不带时区的时刻不按本机时区理解。
+  if (opts.localTimeZoneTrusted === false) return null;
+  if (!isGlmCycleQuotaExhausted(data)) return null;
+  const reset = readTurnUsageReset(data, nowMs);
+  return reset?.source === 'local-wall-clock' ? reset.resetAtMs : null;
 }
 
 /**
