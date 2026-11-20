@@ -23,7 +23,8 @@ function planLines(plan) {
 function isPlanHeader(line) {
   const title = line.trim().replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '');
   return /^(?:(?:implementation|execution|action|work)\s+)?plan\s*[:：]?$/i.test(title)
-    || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title);
+    || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title)
+    || /^(?:final\s+(?:plan|steps)|最终(?:计划|步骤))\s*[:：]?$/i.test(title);
 }
 function selectPlanText(content) {
   const visible = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
@@ -32,8 +33,13 @@ function selectPlanText(content) {
   // the last actual plan section or a fenced example.
   const visibleLines = planLines(visible);
   const visibleHeader = visibleLines.findLastIndex(line => isPlanHeader(line.text));
-  const hasVisibleBody = visibleLines.slice(visibleHeader + 1).some(line => line.text.trim());
-  if ((visibleHeader >= 0 && hasVisibleBody) || extractTodoItems(visible).length) return visible;
+  // Valid whole plans need not have parseable ids. Only a bare introduction
+  // (with no actual body) should defer to a plan carried in thinking.
+  const substantiveVisible = visibleLines.slice(visibleHeader + 1).some(line => {
+    const text = line.text.trim();
+    return text && !/^(?:here(?:'s| is) (?:the|my|a) plan|计划如下|以下是计划)[.!:：。]?$/i.test(text);
+  });
+  if (substantiveVisible) return visible;
   // A dangling visible heading is not a plan. Do not let it become the last
   // header of the combined response and hide the actual thinking steps.
   let nativeVisible = visible;
@@ -56,7 +62,19 @@ function selectPlanText(content) {
   if (numbered.length) {
     const indent = line => line.text.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
     const minimum = numbered.reduce((minimum, line) => Math.min(minimum, indent(line)), Infinity);
-    return native.slice(numbered.find(line => indent(line) === minimum).start);
+    const roots = numbered.filter(line => indent(line) === minimum);
+    let start = 0;
+    for (let i = 1; i < roots.length; i++) {
+      const previous = roots[i - 1];
+      const gap = native.slice(previous.start + previous.text.length, roots[i].start);
+      const restarts = i - start >= 2 && i + 1 < roots.length
+        && Number(roots[i].text.trim().match(/^\d+/)[0]) === 1;
+      // Separate Markdown lists can restart numbering, or be divided by an
+      // outer paragraph. Blanks/continuations within one list stay intact.
+      if ((restarts && /\n[ \t]*\n/.test(gap))
+        || /\n[ \t]*\n[^\s\n][^\n]*\n[ \t]*\n/.test(gap)) start = i;
+    }
+    return native.slice(roots[start].start);
   }
   return visible;
 }

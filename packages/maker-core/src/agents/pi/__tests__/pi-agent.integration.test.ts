@@ -2300,6 +2300,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-separated', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
     ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],
+    ['thinking-visible-prose', 'Plan:\n1. Investigate alternatives', ['先验证，再交付。']],
+    ['thinking-final-lists', 'Options:\n1. A\n2. B\n\nFinal steps:\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-final-headerless', 'Options:\n1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;
@@ -2315,9 +2319,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       if (String(_name).startsWith('thinking')) {
         response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
           .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
-        if (_name === 'thinking-visible' || _name === 'thinking-empty-heading') response = response.replace('event: message_delta', sse([
+        if (['thinking-visible', 'thinking-empty-heading', 'thinking-visible-whole', 'thinking-visible-prose'].includes(String(_name))) response = response.replace('event: message_delta', sse([
           { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
-          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : 'Here is the plan.' } } },
+          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : _name === 'thinking-visible-whole' ? '1. 实现\n1. 验证' : _name === 'thinking-visible-prose' ? '先验证，再交付。' : 'Here is the plan.' } } },
           { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
         ]) + 'event: message_delta');
       }
@@ -2451,12 +2455,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       handle.setInteractionResolver!(async request => request.kind === 'ask_user_question'
         ? { kind: 'ask_user_question', answers: { [request.questions[0]!.question]: 'Execute the plan (track progress)' } }
         : { kind: 'permission', behavior: 'deny' });
-      scriptedResponses.push(anthropicStreamBody(plan), anthropicStreamBody('Continuing the complete plan.'));
+      scriptedResponses.push(anthropicStreamBody(plan), anthropicStreamBody('Completed the whole plan. [DONE:1]'));
       const before = seenRequests.length;
       await handle.send({ type: 'user', content: 'Prepare the complete plan.' });
       await vi.waitFor(() => expect(seenRequests.length).toBe(before + 2), { timeout: 20_000 });
       await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
       expect(seenRequests[before + 1]!.body).toContain(jsonStringContent(plan));
+      expect(seenRequests[before + 1]!.body.includes('[DONE:1]')).toBe(true);
       expect(handle.getExecutionPlanMode!()).toBe(false);
       const next = seenRequests.length;
       await handle.send({ type: 'user', content: 'Continue normally.' });
@@ -2464,6 +2469,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
       expect(seenRequests).toHaveLength(next + 1);
       expect(JSON.parse(seenRequests[next]!.body).tools.map((tool: { name: string }) => tool.name)).toContain('write');
+      expect(seenRequests[next]!.body).not.toContain('Remaining steps:');
+      const nativeId = handle.id;
+      await handle.close();
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'large-unparsed-plan-resume', workingDir, model: 'pi-test-model', resumeSessionId: nativeId,
+      });
+      const resumed = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Continue after resuming.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBe(resumed + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(seenRequests[resumed]!.body).not.toContain('Remaining steps:');
     } finally {
       scriptedResponses.length = 0;
       await handle?.close();

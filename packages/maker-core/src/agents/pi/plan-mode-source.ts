@@ -55,7 +55,8 @@ export default function cindyPlanMode(pi) {
         if (message.customType === 'plan-mode-execute' && pending) {
           // Preserve every detail, including text outside the numbered titles.
           message = { ...message, content: 'Execute the plan in full:\n\n' + pending.plan
-            + (pending.wholePlan ? '' : '\n\nAfter completing a step, include a [DONE:n] tag using its original number.') };
+            + (pending.wholePlan ? '\n\nAfter completing the entire plan, include [DONE:1] to complete its single tracked item. The numbers inside the plan are not tracking ids.'
+              : '\n\nAfter completing a step, include a [DONE:n] tag using its original number.') };
         }
         return target.sendMessage(message, options);
       };

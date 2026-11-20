@@ -26,6 +26,18 @@ describe('Pi plan title extraction', () => {
       .toBe('1. 验证\n2. 交付');
   });
 
+  it.each(['1. 实现\n1. 验证', '先验证，再交付。', '9007199254740992. 验证'])('prefers the visible whole plan: %s', visible => {
+    expect(selectPlan([{ type: 'thinking', thinking: 'Plan:\n1. Investigate alternatives' }, { type: 'text', text: visible }]))
+      .toBe(visible);
+  });
+
+  it.each([
+    ['Options:\n1. A\n2. B\n\nFinal steps:\n3. 验证\n\nDetails...\n7. 交付', 'Final steps:\n3. 验证\n\nDetails...\n7. 交付'],
+    ['1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', '1. 验证\n\nDetails...\n2. 交付'],
+  ])('uses the final thinking list: %s', (thinking, expected) => {
+    expect(selectPlan([{ type: 'thinking', thinking }])).toBe(expected);
+  });
+
   it.each(['Plan:', '## **计划：**', 'Plan:\n```\n1. Example\n```', 'Plan:\n\n计划：'])('ignores a visible heading without a plan body: %s', visible => {
     for (const plan of ['Plan:\n1. 验证\n2. 交付', '1. 验证\n\nDetails...\n2. 交付']) {
       const selected = selectPlan([{ type: 'thinking', thinking: plan }, { type: 'text', text: visible }]);
