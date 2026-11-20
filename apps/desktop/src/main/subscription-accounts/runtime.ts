@@ -216,7 +216,7 @@ interface OwnerRuntime {
   claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; confirmedAt?: number; failedAt?: number }>;
   claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   claudeCatalogs?: Map<string, readonly CatalogModel[]>;
-  publishedClaudeCatalog?: Record<string, readonly CatalogModel[] | null> | null;
+  publishedClaudeCatalog?: Record<string, { models: readonly CatalogModel[] | null; unavailable: boolean }> | null;
   defaultClaudeAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
@@ -241,7 +241,9 @@ function publishClaudeCatalogChange(state: OwnerRuntime): void {
   const pool = readPool('anthropic');
   const providers = new Set(['anthropic', ...pool?.accounts.map(account => accountProviderId('anthropic', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, readSubscriptionPoolClaudeModels(providerId)])) : null;
+    // Readability is part of the snapshot: an account read that only loses or regains the sign-in
+    // still has to reach open pickers, even when the confirmed list itself is unchanged.
+    [providerId, { models: readSubscriptionPoolClaudeModels(providerId), unavailable: hasUnavailableSubscriptionPoolAccount(providerId) }])) : null;
   if (isDeepStrictEqual(state.publishedClaudeCatalog ?? null, models)) return;
   state.publishedClaudeCatalog = models;
   for (const listener of claudeModelListeners) {

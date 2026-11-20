@@ -242,6 +242,7 @@ import {
   readSubscriptionPoolClaudeModels,
   setSubscriptionPoolClaudeModelProbe,
   onSubscriptionPoolCodexModelsChanged,
+  onSubscriptionPoolClaudeModelsChanged,
   onSubscriptionAccountsChanged,
   readSubscriptionPoolCodexModels,
   resetDefaultSubscriptionCodexDiscovery,
@@ -1300,10 +1301,21 @@ describe('pooled Claude model discovery', () => {
     h.pools.anthropic!.accounts = [account('second')];
     const probe = vi.fn(async () => [model('claude-owned')]);
     setSubscriptionPoolClaudeModelProbe(probe);
+    const availability: boolean[] = [];
+    const stop = onSubscriptionPoolClaudeModelsChanged(() => {
+      availability.push(hasUnavailableSubscriptionPoolAccount('anthropic'));
+    });
     try {
       await refreshSubscriptionPoolClaudeModels();
+      availability.length = 0;
       h.read.mockRejectedValueOnce(new Error('CLI read unavailable'));
       await refreshSubscriptionPool('anthropic', true);
+      // PR #11754, unit: an account-only read must notify the picker even when the
+      // previously discovered models are identical. Repeated failures stay quiet.
+      expect(availability).toEqual([true]);
+      h.read.mockRejectedValueOnce(new Error('CLI read still unavailable'));
+      await refreshSubscriptionPool('anthropic', true);
+      expect(availability).toEqual([true]);
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(false);
       // 2026-11-20: the picker keeps the last confirmed list with its time while the account is
       // unreadable; the routing catalog still requires a current sign-in.
@@ -1311,10 +1323,14 @@ describe('pooled Claude model discovery', () => {
       expect(lastConfirmedSubscriptionModelsAt('anthropic')).toEqual(expect.any(Number));
       expect(readSubscriptionPoolClaudeModels('anthropic', { includeBoundAccounts: true })).toEqual([]);
       await refreshSubscriptionPool('anthropic', true);
+      expect(availability).toEqual([true, false]);
       expect(await refreshSubscriptionPoolClaudeModels()).toBe(true);
       expect(probe).toHaveBeenCalledOnce();
       expect(readSubscriptionPoolClaudeModels()?.map(m => m.id)).toEqual(['claude-owned']);
-    } finally { setSubscriptionPoolClaudeModelProbe(null); }
+    } finally {
+      stop();
+      setSubscriptionPoolClaudeModelProbe(null);
+    }
   });
 
   it('discovers each account on its own profile with the built-in disconnected and survives provider renames', async () => {
