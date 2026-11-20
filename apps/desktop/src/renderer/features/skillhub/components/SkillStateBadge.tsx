@@ -1,29 +1,25 @@
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
-
 /**
- * SkillStateBadge — 技能启用状态的常驻标识。
+ * SkillStateBadge — 技能启用状态，跟在卡片名称行末尾的来源文字旁。
  *
- * 技能列表卡片原本只显示来源（官方 / SkillHub / 本地），停用的技能与启用中的技能外形
- * 完全一致，用户必须逐个进入详情才能知道这个技能当前会不会被新任务加载。这里补一个
- * 列表上就能看到的启停状态：停用比启用更值得注意，因此停用带填充底，启用只留弱化文字。
- * 文案始终存在，颜色不单独承载状态。
+ * 技能列表卡片原本只显示来源（官方 / SkillHub / 本地），停用的技能和启用中的技能外形
+ * 完全一致，必须逐个进入详情才知道它当前会不会被新任务加载。这里补一个列表上就能读到
+ * 的状态文字。
+ *
+ * 它与同一行的来源文字同尺寸、同色、同一基线，用「·」与来源分隔，读起来是一句
+ * 「已启用 · 本地」而不是额外的徽标；状态靠文字区分，不靠底色或颜色。
  */
-export function SkillStateBadge({ enabled, className }: { enabled: boolean; className?: string }) {
+export function SkillStateBadge({ enabled }: { enabled: boolean }) {
   const { t } = useTranslation();
   return (
-    <span
-      className={cn(
-        'inline-flex h-5 shrink-0 items-center rounded-full px-2 text-11 font-medium leading-none',
-        enabled
-          ? 'text-[var(--text-tertiary)]'
-          : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]',
-        className,
-      )}
-      title={t(enabled ? 'skillhub.home.stateEnabledHint' : 'skillhub.home.stateDisabledHint')}
-    >
-      {t(enabled ? 'skillhub.home.stateEnabled' : 'skillhub.home.stateDisabled')}
-    </span>
+    <>
+      <span className="shrink-0" title={t(enabled ? 'skillhub.home.stateEnabledHint' : 'skillhub.home.stateDisabledHint')}>
+        {t(enabled ? 'skillhub.home.stateEnabled' : 'skillhub.home.stateDisabled')}
+      </span>
+      <span aria-hidden="true" className="shrink-0">
+        ·
+      </span>
+    </>
   );
 }

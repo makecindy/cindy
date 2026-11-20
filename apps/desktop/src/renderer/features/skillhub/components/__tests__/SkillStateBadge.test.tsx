@@ -21,17 +21,14 @@ describe('SkillStateBadge', () => {
     expect(screen.getByTitle('skillhub.home.stateDisabledHint')).toBeTruthy();
   });
 
-  it('停用比启用更醒目：停用带填充底，启用只有弱化文字', () => {
-    const { container } = render(
-      <>
-        <SkillStateBadge enabled />
-        <SkillStateBadge enabled={false} />
-      </>,
-    );
-    const [on, off] = [...container.querySelectorAll('span')];
-    expect(on.className).not.toContain('surface-chip');
-    expect(off.className).toContain('surface-chip');
-    expect(on.className).toContain('text-tertiary');
-    expect(off.className).toContain('text-secondary');
+  it('以文字形式紧跟来源，不额外增加徽标或底色', () => {
+    const { container } = render(<SkillStateBadge enabled={false} />);
+    const [label, separator] = [...container.querySelectorAll('span')];
+    expect(label.textContent).toBe('skillhub.home.stateDisabled');
+    expect(separator.textContent).toBe('·');
+    expect(separator.getAttribute('aria-hidden')).toBe('true');
+    // 尺寸与颜色由同一行的来源文字提供，组件自身不画底、不加圆角。
+    expect(container.querySelector('[class*="surface-chip"]')).toBeNull();
+    expect(container.querySelector('[class*="rounded"]')).toBeNull();
   });
 });
