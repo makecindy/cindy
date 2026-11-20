@@ -26,16 +26,35 @@
 
 const registered = new Set<HTMLMediaElement>();
 
+function pauseMedia(el: HTMLMediaElement): void {
+  if (el.paused) return;
+  try {
+    el.pause();
+  } catch {
+    /* 元素已 detach / 销毁中 — 静默 */
+  }
+}
+
+/** 已脱离页面的播放器 pause 后仍可能留着解码管线；只清这类元素的源。 */
+function releaseDetachedPipeline(el: HTMLMediaElement): void {
+  if (el.isConnected) return;
+  try {
+    el.srcObject = null;
+  } catch {
+    /* 已脱离文档或浏览器不接受清空 */
+  }
+  el.removeAttribute('src');
+  for (const source of el.querySelectorAll('source')) source.removeAttribute('src');
+  try {
+    el.load();
+  } catch {
+    /* 销毁中的元素可能没有 load */
+  }
+}
+
 function pauseOthers(active: HTMLMediaElement): void {
   for (const el of registered) {
-    if (el === active) continue;
-    if (!el.paused) {
-      try {
-        el.pause();
-      } catch {
-        /* 元素已 detach / 销毁中 — 静默 */
-      }
-    }
+    if (el !== active) pauseMedia(el);
   }
 }
 
@@ -51,6 +70,9 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   registered.add(el);
   el.addEventListener('play', onPlay);
   return () => {
+    // 先停播再移出注册表。否则 stopAllMedia 再也找不到它，Chromium 会继续走时钟。
+    pauseMedia(el);
+    releaseDetachedPipeline(el);
     el.removeEventListener('play', onPlay);
     registered.delete(el);
   };
@@ -63,13 +85,7 @@ export function registerMedia(el: HTMLMediaElement): () => void {
  */
 export function stopAllMedia(): void {
   for (const el of registered) {
-    if (!el.paused) {
-      try {
-        el.pause();
-      } catch {
-        /* 元素已 detach — 静默 */
-      }
-    }
+    pauseMedia(el);
   }
 }
 
