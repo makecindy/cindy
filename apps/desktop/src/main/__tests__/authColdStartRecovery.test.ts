@@ -138,6 +138,7 @@ return {
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
   useProductionCandidates: () => { readStoredRefreshTokenCandidates = productionReadStoredRefreshTokenCandidates; },
+  useProductionPassport: () => { refreshPassportSessionSingleFlight = productionRefreshPassportSessionSingleFlight; },
   vaultRecovery: () => runColdStartRefreshFlow('test-refresh', 'global', {
     expectedActiveVaultAccountKey: accountVaultKey('global', 'original'),
   }),
@@ -193,7 +194,11 @@ function setup(random = 0) {
   const clear = vi.fn(async () => {
     saved.session.refreshToken = '';
   });
-  const authClient = { discover: vi.fn(), exchangeAccountMembership: vi.fn(async () => ok.data) };
+  const authClient = {
+    discover: vi.fn(),
+    refreshAccount: vi.fn(async () => ({ accountToken: 'test-passport-access', accountRefreshToken: 'test-passport-rotated' })),
+    exchangeAccountMembership: vi.fn(async () => ok.data),
+  };
   const deps = {
     saved,
     vault,
@@ -1111,19 +1116,48 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     },
   );
 
-  it.each(['passport', 'exchange'] as const)(
-    'reports a disabled account when %s rejects recovery',
-    async stage => {
+  it.each([['passport', 403], ['passport', 401], ['exchange', 403]] as const)(
+    'reports the disabled member but keeps its sibling Passport when %s rejects recovery (%s)',
+    async (stage, status) => {
       const { h, exchange } = recoverySetup();
-      const error = new AuthApiError('MEMBERSHIP_DISABLED', 403, 'disabled');
+      const passportKey = passportVaultKey('global', 'passport-original');
+      h.vault.passports[passportKey].accountRefreshToken = 'test-passport-old';
+      h.vault.passports[passportKey].memberships = ['original', 'sibling'].map(id => ({
+        id, kind: 'personal', displayName: id, email: null, avatarUrl: null,
+        role: 'member', orgId: null, orgName: null, orgLogoUrl: null,
+      }));
+      h.useProductionPassport();
+      const error = new AuthApiError('MEMBERSHIP_DISABLED', status, 'disabled');
       if (stage === 'passport') {
-        h.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(error);
+        h.authClient.refreshAccount.mockRejectedValueOnce(error);
       } else {
         exchange.mockRejectedValueOnce(error);
       }
       await rejectAfterLoss(h);
       expect(h.deps.expireRuntimeAuth).toHaveBeenCalledWith('original', 'account-unavailable');
       expect(h.saved.session).toBeNull();
+      expect(h.vault.passports[passportKey]?.accountRefreshToken).toBe(
+        stage === 'passport' ? 'test-passport-old' : 'test-passport-rotated',
+      );
+      expect(h.vault.passports[passportKey]?.memberships).toHaveLength(2);
+    },
+  );
+
+  it.each(['INVALID_REFRESH_TOKEN', 'REFRESH_TOKEN_EXPIRED', 'ACCOUNT_UNAVAILABLE', 'DEVICE_MISMATCH'])(
+    'only removes a rejected Passport when its own credential is unusable (%s)',
+    async code => {
+      const { h } = recoverySetup();
+      const passportKey = passportVaultKey('global', 'passport-original');
+      h.vault.passports[passportKey].accountRefreshToken = 'test-passport-old';
+      const client = { refreshAccount: vi.fn(async () => {
+        throw new AuthApiError(code, 401, 'rejected');
+      }) };
+      await expect(h.renewPassport(client)).rejects.toMatchObject({ code });
+      if (code === 'DEVICE_MISMATCH') {
+        expect(h.vault.passports[passportKey]?.accountRefreshToken).toBe('test-passport-old');
+      } else {
+        expect(h.vault.passports[passportKey]).toBeUndefined();
+      }
     },
   );
 

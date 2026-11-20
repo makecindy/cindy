@@ -1755,7 +1755,10 @@ async function refreshPassportSessionSingleFlight(
       // A device mismatch only proves that this process is using a different
       // device identity. The encrypted Passport can still be valid for the
       // device that owns the shared vault, so it cannot authorize deletion.
-      if (error instanceof AuthApiError && error.code === 'DEVICE_MISMATCH') {
+      // A disabled membership likewise does not invalidate its Passport or
+      // the saved credentials for sibling memberships.
+      if (error instanceof AuthApiError &&
+        (error.code === 'DEVICE_MISMATCH' || error.code === 'MEMBERSHIP_DISABLED')) {
         throw error;
       }
       if (isDefinitiveRefreshError(error)) {
