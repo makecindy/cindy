@@ -86,6 +86,7 @@ import { MachineTabStrip } from './sidebar/MachineSwitcherMenu';
 import { SidebarMainTabs } from './sidebar/SidebarMainTabs';
 import { useSidebarMainTab, type SidebarMainTab } from './sidebar/sidebarMainTab';
 import { getAutomationSidebarGroupInfo } from './lib/automationSidebarGrouping';
+import { useAgentIslandWaitingSessionKey } from '@/state/agentIslandActivity';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
@@ -2362,12 +2363,20 @@ function ExpandedView({
   // 侧栏顶部标签(2026-11-19):每次只显示一类;别的标签里有需要你看的就把标签字加粗。
   const [mainTab, setMainTab] = useSidebarMainTab();
   const [buddiesAttention, setBuddiesAttention] = useState(false);
+  // 「在等你」多数不是未读通知，而是会话的实时状态(等你回复 / 授权 / 出错),本机来自
+  // 灵动岛活动、远程来自活动镜像;两者都要算进标签加粗，否则停在别的标签上永远看不到。
+  const islandWaitingKey = useAgentIslandWaitingSessionKey();
   const mainTabAttention = useMemo<Record<SidebarMainTab, boolean>>(() => {
     const result = { tasks: false, buddies: buddiesAttention, chats: false, automations: false };
-    if (sidebarNotifications.size === 0) return result;
+    const flagged = new Set<string>([
+      ...projectPriorityContext.attentionSessionIds,
+      ...(projectPriorityContext.waitingSessionIds ?? []),
+      ...(islandWaitingKey ? islandWaitingKey.split('\n') : []),
+    ]);
+    if (flagged.size === 0) return result;
     const dialogueIds = new Set(visibleDialogues.map((session) => session.id));
     const consider = (session: Session) => {
-      if (!sidebarNotifications.has(session.id)) return;
+      if (!flagged.has(session.id)) return;
       if (getAutomationSidebarGroupInfo(session, automationGroupingIndex)) result.automations = true;
       else if (dialogueIds.has(session.id)) result.chats = true;
       else result.tasks = true;
@@ -2378,7 +2387,8 @@ function ExpandedView({
     return result;
   }, [
     buddiesAttention,
-    sidebarNotifications,
+    projectPriorityContext,
+    islandWaitingKey,
     visibleDialogues,
     visibleProjectsWithVendor,
     visibleUnclassified,
