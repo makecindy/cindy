@@ -29,6 +29,7 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import {
   stableInternalWebCitationBoundary,
+  stableLeakedSystemNotificationBoundary,
   stableStandaloneModelStopTokenBoundary,
   stripInternalWebCitations,
 } from '@cindy/maker-shared/internal-citation';
@@ -1483,17 +1484,23 @@ export function finalizeCodexCitationText(text: string): string {
 
 export function stableCitationBoundary(text: string): number {
   const stopTokenEnd = stableStandaloneModelStopTokenBoundary(text);
+  const leakedNotificationEnd = stableLeakedSystemNotificationBoundary(text);
+  const sharedEnd = Math.min(
+    stableInternalWebCitationBoundary(text),
+    stopTokenEnd,
+    leakedNotificationEnd,
+  );
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return Math.min(open, stableInternalWebCitationBoundary(text), stopTokenEnd);
+    return Math.min(open, sharedEnd);
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
     if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
-      return Math.min(text.length - k, stableInternalWebCitationBoundary(text), stopTokenEnd);
+      return Math.min(text.length - k, sharedEnd);
     }
   }
-  return Math.min(stableInternalWebCitationBoundary(text), stopTokenEnd);
+  return sharedEnd;
 }
 
 function hasOverlappingCitationSyntax(text: string): boolean {
@@ -1543,13 +1550,24 @@ function emitAgentMessageProgress(
   // File attributes and opaque web payloads may contain each other's syntax.
   // The legacy transforms can then rewrite an earlier prefix, so keep their
   // full-text semantics for these unusual mixed tails (including partial web opens).
-  if (!progress.fullScan && hasOverlappingCitationSyntax(progress.pending)) {
+  if (
+    !progress.fullScan
+    && (
+      hasOverlappingCitationSyntax(progress.pending)
+      || rawText.indexOf('```', Math.max(0, progress.rawOffset - 2)) !== -1
+      || rawText.indexOf('~~~', Math.max(0, progress.rawOffset - 2)) !== -1
+    )
+  ) {
     progress.fullScan = true;
   }
   // A committed prefix already contains real prose. The sentinel carries
   // that context through BOTH raw and normalized stop-token checks, so a
   // later literal <|eos|> is not mistaken for a standalone control message.
-  const prefix = progress.rawOffset > 0 ? 'x' : '';
+  // Preserve line-start context when the committed prefix ended with `\n`,
+  // so line-anchored leaked system notifications are still recognized.
+  const prefix = progress.rawOffset > 0
+    ? (rawText[progress.rawOffset - 1] === '\n' ? 'x\n' : 'x')
+    : '';
   let end = 0;
   let normalized = '';
   if (!progress.fullScan) {
@@ -1559,7 +1577,12 @@ function emitAgentMessageProgress(
     // Cutting at a partial file opener can expose a partial web opener BEFORE
     // that cut. Do not commit raw text that the subsequent web transform holds:
     // deleting a path-less citation later may join it into a complete web marker.
-    if (stableInternalWebCitationBoundary(normalized) < normalized.length) progress.fullScan = true;
+    if (
+      stableInternalWebCitationBoundary(normalized) < normalized.length
+      || stableLeakedSystemNotificationBoundary(normalized) < normalized.length
+    ) {
+      progress.fullScan = true;
+    }
   }
   let delta: string;
   let emittedLength: number;
