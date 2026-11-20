@@ -137,6 +137,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
 | 任务运行 | `control_session` 暂停 / 恢复 / 重试 / 压缩，Agent 与插件共用执行暂停锁、错误恢复与原生压缩事务；送达未知不自动重放 | 有（执行电脑本机；Claude 原 `/compact` 队列、Codex/Pi 原生手动压缩；不打断在途模型和工具） | 无 |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
+| 飞书本机 CLI | `feishu-local-cli`：`status` 非秘密投影、`read_cells`、`set_cell_image`、`clear_cells`、`connect`；写入用覆盖目标的整行 `expected_row_hash`、dry-run token 与按 scope 回读校验；解析 / 空矩阵 / 截断失败不冒充可验证行；工具描述和回执写清错误码，不扩大 system prompt | 有（一等公民 Host tool；能力索引第一步可发现；凭证按账号隔离，token 由 Host 保管，不扫描 PATH） | 第一版无；非本机 `device_id` 明确返回 `TARGET_DEVICE_UNAVAILABLE`，不静默假装远端执行 |
 | 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（整体安装授予的 control 声明；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
 | 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（整体安装授予的 control 声明；持有 admission 的任务修改自身权限含混合请求，在所有写入前返回 `UNSUPPORTED_CAPABILITY`，其余原判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
 | 任务     | 代用户确认权限或回答提问   | 无   | 无               |

@@ -25,6 +25,7 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
+import type { GhostSetupAssessment } from '../../shared/ghost.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
 import { installedGhostStoragePart, installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -39,9 +40,12 @@ import { toReauthInteractionAssessment } from '../cindy-brain/ghostSetupCoordina
 import { initBotAuthorizationService } from './botAuthorizationService.js';
 import { botAuthorizationImChannel, readBotAuthorizationCard } from '../../shared/botAuthorization.js';
 import { createBotImAuthorizationAdapter } from './botImAuthorization.js';
-import type { BotAuthorizationCard } from '../../shared/botAuthorization.js';
+import type { BotAuthorizationCard, BotAuthorizationTarget } from '../../shared/botAuthorization.js';
 import { sanitizeGhostSetupSnapshotForDesktop } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { createLogger } from '../logger.js';
+import type { FeishuLocalHostPort } from '@cindy/mcps/feishu-local';
+import { FEISHU_LOCAL_REQUIRED_SCOPES } from '@cindy/mcps/feishu-local';
+import { isHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 const log = createLogger('bot-authorization');
 
 export { isBotAuthorizationSession } from './botAuthorizationIdentity.js';
@@ -51,17 +55,37 @@ import { isBotAuthorizationSession, readBotAuthorizationBot } from './botAuthori
 export function initializeBotAuthorizationHost(
   resume: (card: BotAuthorizationCard, validate: () => Promise<void>, assertCurrent: () => void) => Promise<void>,
   captureInputGuard: (sessionId: string) => () => void = () => () => {},
+  getFeishuLocalPort: () => FeishuLocalHostPort | Promise<FeishuLocalHostPort> = () => {
+    throw new Error('Feishu Local CLI port unavailable');
+  },
 ) {
   const ownerScopes = new Map<string, ReturnType<typeof captureDataOwnerBroadcastScope>>();
-  const assertSession = async (sessionId: string) => {
+  let feishuLocalCredentialGeneration = 0;
+  const isLocalDesktopHostCapabilitySession = async (sessionId: string): Promise<boolean> => {
+    if (isHeadlessGhostSetupTurn(sessionId)) return false;
+    const [row] = await getDbClient()
+      .drizzle.select({ id: sessions.id })
+      .from(sessions)
+      .where(and(
+        eq(sessions.id, sessionId),
+        isNull(sessions.remoteHostId),
+        ne(sessions.status, 'deleted'),
+        ne(sessions.status, 'archived'),
+      ))
+      .limit(1);
+    return !!row;
+  };
+  const assertSession = async (sessionId: string, target?: BotAuthorizationTarget) => {
     const scope = ownerScopes.get(sessionId);
-    if (
-      !scope ||
-      !isDataOwnerBroadcastScopeCurrent(scope) ||
-      !(await isBotAuthorizationSession(sessionId)) ||
-      !isDataOwnerBroadcastScopeCurrent(scope)
-    )
+    if (!scope || !isDataOwnerBroadcastScopeCurrent(scope)) {
       throw new Error('Authorization owner or buddy is unavailable');
+    }
+    const allowed = target?.kind === 'host-capability'
+      ? await isLocalDesktopHostCapabilitySession(sessionId)
+      : await isBotAuthorizationSession(sessionId);
+    if (!allowed || !isDataOwnerBroadcastScopeCurrent(scope)) {
+      throw new Error('Authorization owner or buddy is unavailable');
+    }
   };
   const service: Parameters<typeof initBotAuthorizationService>[0] = {
     async adapter(sessionId, target) {
@@ -71,7 +95,7 @@ export function initializeBotAuthorizationHost(
       if (known && !isDataOwnerBroadcastScopeCurrent(known))
         throw new Error('Authorization owner changed');
       ownerScopes.set(sessionId, scope);
-      await assertSession(sessionId);
+      await assertSession(sessionId, target);
       const bus = getGhostSetupChangeBus();
       const imChannel = target.kind === 'host' ? botAuthorizationImChannel(target.id) : null;
       if (imChannel) {
@@ -80,7 +104,7 @@ export function initializeBotAuthorizationHost(
         return createBotImAuthorizationAdapter({
           channel: imChannel,
           bot,
-          assertSession: () => assertSession(sessionId),
+          assertSession: () => assertSession(sessionId, target),
           currentBotId: async () => (await readBotAuthorizationBot(sessionId))?.id ?? null,
         });
       }
@@ -90,7 +114,7 @@ export function initializeBotAuthorizationHost(
         return {
           identity: { id: 'grok', name: 'Grok' },
           async assess() {
-            await assertSession(sessionId);
+            await assertSession(sessionId, target);
             let ready = false;
             if (
               hasGrokOAuthLogin() &&
@@ -103,7 +127,7 @@ export function initializeBotAuthorizationHost(
                 /* offer login */
               }
             }
-            await assertSession(sessionId);
+            await assertSession(sessionId, target);
             if (target.reauthorize && credentialGeneration === getGrokOAuthCredentialGeneration())
               ready = false;
             return {
@@ -130,7 +154,7 @@ export function initializeBotAuthorizationHost(
           },
           subscribe: (wake) => bus.subscribe('host:grok', wake),
           async execute(_action, _sender, _value, onAuthorizationUrl, assertCurrent, beforeCommit) {
-            await assertSession(sessionId);
+            await assertSession(sessionId, target);
             assertCurrent?.();
             const result = await runGrokOAuthLogin({ onAuthorizationUrl, assertCurrent, beforeCommit });
             assertCurrent?.();
@@ -146,13 +170,63 @@ export function initializeBotAuthorizationHost(
           },
         };
       }
+      if (target.kind === 'host-capability') {
+        if (target.id !== 'feishu-local-cli') throw new Error('Unsupported Host capability');
+        const port = await getFeishuLocalPort();
+        const credentialGeneration = feishuLocalCredentialGeneration;
+        return {
+          identity: { id: 'feishu-local-cli', name: 'Feishu Local CLI' },
+          async assess(): Promise<GhostSetupAssessment> {
+            await assertSession(sessionId, target);
+            const [probe, auth] = await Promise.all([port.probeBinary(), port.readAuth()]);
+            await assertSession(sessionId, target);
+            const ready = probe.installed && probe.version_supported && auth.state === 'ready'
+              && FEISHU_LOCAL_REQUIRED_SCOPES.every(scope => auth.scopes.includes(scope))
+              && (!target.reauthorize || feishuLocalCredentialGeneration !== credentialGeneration);
+            const label = t('remoteDesktop.connect');
+            return {
+              state: ready ? ('ready' as const) : ('required' as const),
+              revision: bus.currentRevision('host-capability:feishu-local-cli'),
+              groups: ready ? [] : [{
+                id: 'feishu-local-cli-user',
+                mode: 'any_of' as const,
+                items: [{
+                  ref: 'feishu-local-cli-user',
+                  kind: 'oauth' as const,
+                  label,
+                  description: label,
+                  state: 'missing' as const,
+                  actions: [{ id: 'connect-feishu-local-cli', kind: 'oauth_connect' as const }],
+                }],
+              }],
+            };
+          },
+          subscribe: (wake) => bus.subscribe('host-capability:feishu-local-cli', wake),
+          async execute(_action, _sender, _value, onAuthorizationUrl, assertCurrent, beforeCommit) {
+            await assertSession(sessionId, target);
+            assertCurrent?.();
+            const result = await port.connect({
+              ...(onAuthorizationUrl ? { onAuthorizationUrl } : {}),
+              ...(assertCurrent ? { assertCurrent } : {}),
+              ...(beforeCommit ? { beforeCommit } : {}),
+            });
+            assertCurrent?.();
+            if (result.ok) {
+              feishuLocalCredentialGeneration += 1;
+              bus.emit('host-capability:feishu-local-cli', { source: 'oauth' });
+              return { ok: true as const };
+            }
+            return { ok: false as const, errorCode: 'AUTH_FAILED' as const };
+          },
+        };
+      }
       const [session] = await getDbClient()
         .drizzle.select({ workingDir: sessions.workingDir })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       const validate = async (expectedTarget?: string | null) => {
-        await assertSession(sessionId);
+        await assertSession(sessionId, target);
         const result = classifyGhostVisibility(target.id, session?.workingDir ?? null, {
           listGhosts: () => getGhostManager().list(),
           isAvailableForActiveSession: isGhostAvailableForActiveSession,
@@ -246,7 +320,7 @@ export function initializeBotAuthorizationHost(
     async save(card, assertCurrent) {
       return withSendToSessionLock(card.sessionId, async () => {
         assertCurrent?.();
-        await assertSession(card.sessionId);
+        await assertSession(card.sessionId, card.target);
         const [row] = await getDbClient()
           .drizzle.select({ clearedAt: sessions.clearedAt })
           .from(sessions)
@@ -280,7 +354,7 @@ export function initializeBotAuthorizationHost(
             expectedClearBoundaryMs: row.clearedAt,
           },
         );
-        await assertSession(card.sessionId);
+        await assertSession(card.sessionId, card.target);
         await updateMessageContent(card.sessionId, clientId, fallback);
         await patchMessageAgentMeta(card.sessionId, clientId, { botAuthorization: card });
         await broadcastMessageAgentMetaUpdate(
@@ -308,7 +382,7 @@ export function initializeBotAuthorizationHost(
       return card?.snapshot.requestId === requestId ? card : null;
     },
     async findPending(sessionId, target) {
-      await assertSession(sessionId);
+      await assertSession(sessionId, target);
       const rows = await getDbClient()
         .drizzle.select({ sessionId: messages.sessionId, meta: messages.agentMeta })
         .from(messages)
@@ -322,7 +396,7 @@ export function initializeBotAuthorizationHost(
           ),
         )
         .orderBy(desc(messages.createdAt));
-      await assertSession(sessionId);
+      await assertSession(sessionId, target);
       for (const row of rows) {
         const card = readStoredAuthorization(row);
         if (
@@ -339,7 +413,7 @@ export function initializeBotAuthorizationHost(
     },
     async resume(card, assertCurrent) {
       await resume(card, async () => {
-        await assertSession(card.sessionId);
+        await assertSession(card.sessionId, card.target);
         if (card.target.kind === 'plugin') {
           const adapter = await service.adapter(card.sessionId, { ...card.target, reauthorize: false });
           if ((await adapter.assess()).state !== 'ready') throw new Error('Plugin is not ready');
@@ -358,7 +432,7 @@ export function initializeBotAuthorizationHost(
           )
           .limit(1);
         if (!row) throw new Error('Authorization card is no longer visible');
-        await assertSession(card.sessionId);
+        await assertSession(card.sessionId, card.target);
       }, assertCurrent);
     },
     onDisposing: () => cancelGrokOAuthLogin(),

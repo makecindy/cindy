@@ -599,6 +599,7 @@ export type LiziMcpId =
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
+  | 'cindy_feishu_local'
   | 'cindy_wechat'
   | 'cindy_slack'
   | 'cindy_scheduler'

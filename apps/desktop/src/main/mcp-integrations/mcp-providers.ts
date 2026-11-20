@@ -169,6 +169,8 @@ import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
+import { getFeishuLocalDesktopPort } from '../feishu-local/desktopPort.js';
+import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import {
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
@@ -458,6 +460,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
+    feishuLocal: getFeishuLocalDesktopPort(),
+    feishuLocalSetupSessionId: ghostSetupInteractionSessionId,
     android: getAndroidMcpDeps({
       isAndroidAutomationEnabled: (context) =>
         // Codex provider presence is the bridge-creation enablement snapshot.

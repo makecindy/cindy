@@ -26,6 +26,8 @@ import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desk
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
+import { activeOwnerScopeKey } from '../../../desktop/src/main/appSessionState.js';
+import { createFeishuLocalHostPort } from '../feishu-local/hostPort.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
 import { parseTypedError } from '../typed-error.mjs';
 import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
@@ -160,6 +162,16 @@ export function createHostToolService(options: Options) {
   // Agent providers remain unchanged; plugins fail before setup.
   const supportsPluginServer = (server: string) => server !== 'cindy_computer';
   const providers = createLiziMcpProviders({
+    feishuLocal: createFeishuLocalHostPort({
+      profileDir: options.profileDir,
+      ownerId: options.ownerId,
+      confirmations: options.confirmations,
+      current,
+      ownerScope: () => activeOwnerScopeKey(),
+      t: options.t,
+      ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+    }),
+    feishuLocalSetupSessionId: context => context?.sessionId ?? null,
     xdtHelper: { authorizeCall, ...projectTools,
       hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost, supportsPluginServer }),
       // The product help the desktop gives get_capabilities({ scope: 'help' }) (mcp-providers.ts productHelpDocs).

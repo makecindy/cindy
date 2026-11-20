@@ -280,6 +280,18 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     ].join(' '),
   },
   {
+    key: 'feishu-local-cli',
+    title: 'Feishu Local CLI',
+    oneLiner: 'First-party local lark-cli capability: status, sheet cell reads, embedded cell images, true cell clears and native user setup.',
+    detail: [
+      'This is a Cindy Host toolset, not the XD Feishu plugin and not a project script. The plugin remains the account connection and curated OpenAPI subset; the local CLI supplies the additional sheet operations through registered command schemas.',
+      'Discovery: get_capabilities({key:"feishu-local-cli"}), get_capabilities({scope:"control",key:"tools.feishu-local-cli"}) and the runtime provider catalog expose the cindy_feishu_local toolset. The status projection contains only non-secret facts: device_id, installed, binary_source, version, min_supported_version, identity_alias, auth_state, scopes, capabilities, target_device and reason_code.',
+      'Execution: status, read_cells, set_cell_image and clear_cells. Writes require an expected_row_hash from read_cells over a row_range that covers every target cell, a dry_run confirmation_token, and readback verification. clear_cells maps to +cells-clear, verifies formats by style readback when scope=formats, and never writes an empty string as a substitute. Unparseable, empty or truncated CLI output fails closed instead of looking like a verified row. Image inputs are managed Cindy media references handed off by the Host; raw absolute paths are rejected.',
+      'Authorization uses a Host-owned native setup card around the CLI user device flow, including an owner-bound Node Host confirmation; Desktop rejects headless or remote setup surfaces. Verification URLs are origin-pinned to Feishu/Lark domains. Tokens and refresh tokens stay in account-scoped Host credential stores; a captured owner binding and compare-and-swap commit prevent stale commands from overwriting a newer reauthorization. Device codes, raw CLI output and internal paths never enter chat, logs or the repository. The first version is local-device only: a non-local device_id returns TARGET_DEVICE_UNAVAILABLE instead of pretending to execute on another computer.',
+      'Version checks are cached; upstream update checks run only on explicit refresh. The first-party descriptor is pinned in built-in code with a version range, command schemas and a signature slot so a future generic local-CLI framework can reuse the shape.',
+    ].join(' '),
+  },
+  {
     key: 'mobile-takeover',
     title: 'IM 移动办公(/ctr 接管桌面任务)',
     oneLiner: '在飞书 / Telegram / Discord 等机器人里发 /ctr 接管桌面端的任务,两端同屏推进、不互锁;/exctr 退出。',

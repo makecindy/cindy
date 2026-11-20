@@ -14,6 +14,8 @@ import type {
   LspMcpDeps,
 } from './types.js';
 import { createFeishuBotMcpServer } from './cindy_feishuBotMcpServer.js';
+import { createFeishuLocalMcpServer } from './cindy_feishuLocalMcpServer.js';
+import type { FeishuLocalHostPort } from './feishu-local/types.js';
 import { createWechatMcpServer } from './cindy_wechatMcpServer.js';
 import { createSlackMcpGatewayServer } from './cindy_slackMcpServer.js';
 import { createSchedulerMcpServer } from './cindy_schedulerMcpServer.js';
@@ -40,6 +42,10 @@ export interface CreateLiziMcpProvidersOptions {
   /** Local desktop computer-use tools backed by a host-managed external driver. */
   computer?: ComputerMcpDeps;
   feishuBot?: FeishuBotMcpHostDeps;
+  /** First-party Host-owned Feishu local CLI toolset; injected by Desktop Main and Node Host. */
+  feishuLocal?: FeishuLocalHostPort;
+  /** Resolve a session that actually has an interactive setup surface. Omitted hosts fail closed. */
+  feishuLocalSetupSessionId?: (context: LiziMcpSessionContext | undefined) => string | null;
   wechatBot?: WechatBotMcpHostDeps;
   /**
    * cindy_slack: Slack 网关工具(经 hook 通道由 slack-hook-server 以托管
@@ -266,6 +272,25 @@ export function createLiziMcpProviders(
           // slack-hook 会话里按来源在构建期注入渠道路由提示,
           // 把「发给我」的默认通道钉死在会话自身渠道(规则 9)。
           sessionSource: readSessionSource(ctx),
+        }),
+      }),
+    });
+  }
+
+  if (opts.feishuLocal && selected(enabled, 'cindy_feishu_local')) {
+    providers.push({
+      name: 'cindy_feishu_local',
+      capability: {
+        title: 'Feishu Local CLI',
+        description: 'First-party local Feishu CLI status, cell reads, embedded cell images, true cell clears and native setup, with fixed command schemas and per-device availability.',
+        source: 'builtin',
+      },
+      toClaudeSdkConfig: (ctx) => ({
+        type: 'sdk',
+        name: 'cindy_feishu_local',
+        instance: createFeishuLocalMcpServer({
+          port: opts.feishuLocal!,
+          getSessionId: () => opts.feishuLocalSetupSessionId?.(resolveLiziMcpSessionContext(ctx)) ?? undefined,
         }),
       }),
     });

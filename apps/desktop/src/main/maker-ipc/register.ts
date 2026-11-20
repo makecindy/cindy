@@ -111,6 +111,7 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getFeishuLocalDesktopPort } from '../feishu-local/desktopPort.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
@@ -13141,7 +13142,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!inputCoordinator.isGenerationCurrent(sessionId, generation))
         throw new Error('Authorization request input boundary changed');
     };
-  });
+  }, getFeishuLocalDesktopPort);
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
     directory: createTeammateDirectory({

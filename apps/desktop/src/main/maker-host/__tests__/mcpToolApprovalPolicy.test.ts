@@ -15,6 +15,18 @@ describe('desktop Claude read-only allowlist', () => {
     for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
     for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
   });
+  // First-party Feishu local CLI: status/cell reads are exact read-only schemas,
+  // while setup, image writes and true clears must never inherit that grant.
+  it('keeps Feishu local CLI reads quiet and setup/writes per-call', () => {
+    for (const toolName of ['status', 'read_cells']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_feishu_local', toolName })).toBe('auto-approve');
+    }
+    for (const toolName of ['connect', 'set_cell_image', 'clear_cells', undefined]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_feishu_local', toolName, toolParams: {} })).toBe('prompt-each-time');
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).toContain('mcp__cindy_feishu_local__status');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).toContain('mcp__cindy_feishu_local__read_cells');
+  });
   // PR #11126 security: clone/private credentials and directory expansion used to
   // inherit trusted-server silence. Unit public policy; existing write cases did
   // not cover project profiles, nested/stringified arguments or missing outer names.
@@ -187,6 +199,8 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy_telegram_bot__get_chat',
       'mcp__cindy_feishu_bot__get_chat',
       'mcp__cindy_feishu_bot__get_message',
+      'mcp__cindy_feishu_local__status',
+      'mcp__cindy_feishu_local__read_cells',
     ]);
   });
 

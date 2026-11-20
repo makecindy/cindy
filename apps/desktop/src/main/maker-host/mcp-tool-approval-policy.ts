@@ -76,6 +76,10 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 只读当前飞书对话的信息 / 某条消息(chat 由逐轮作用域钉死, message_id 需在本 chat 内)。
   'cindy_feishu_bot::get_chat',
   'cindy_feishu_bot::get_message',
+  // Host-owned Feishu local CLI: status and cell reads are fixed, read-only command schemas.
+  // Writes and setup remain below in the per-call policy.
+  'cindy_feishu_local::status',
+  'cindy_feishu_local::read_cells',
 ]);
 
 /**
@@ -359,6 +363,13 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   // 飞书同口径: 任意 Open API 与撤回按次审批; 省略 toolName 时无法分辨是不是这两个, fail closed。
   if (serverName === 'cindy_feishu_bot' && (!toolName || toolName === 'call_api' || toolName === 'recall_message')) {
+    return 'prompt-each-time';
+  }
+  // Host-owned Feishu local CLI writes are irreversible or external. Reuse the task's
+  // approval mode for every call; a prior status/read grant must never authorize a
+  // later setup, image write or true clear. Codex omitting toolName fails closed.
+  if (serverName === 'cindy_feishu_local' &&
+    (!toolName || toolName === 'connect' || toolName === 'set_cell_image' || toolName === 'clear_cells')) {
     return 'prompt-each-time';
   }
   // Orca mutations use the same per-call runtime flow as helper task writes.
