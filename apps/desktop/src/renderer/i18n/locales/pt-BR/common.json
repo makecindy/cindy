@@ -13193,6 +13193,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. Tentando novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em “Tentar novamente” no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
         },
+        "audioInputUnavailable": "Esta conexão com o modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente vezes demais, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
           "consecutive": "O modelo chamou a mesma ferramenta {{n}} vezes seguidas, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",

@@ -13086,6 +13086,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
           "consecutive": "Das Modell hat dasselbe Tool {{n}}-mal hintereinander aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",

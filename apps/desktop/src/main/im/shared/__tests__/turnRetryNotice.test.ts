@@ -30,6 +30,23 @@ it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-acc
   },
 );
 
+// Telegram regression (unit): a provider rejection arrived as a serialized response body.
+it('explains unsupported audio input without hiding other unsupported parameters', () => {
+  const unsupported = 'Audio input is not supported for this request.';
+  const failure = (message: string, code: string | null = 'unsupported_parameter') => ({
+    message: JSON.stringify({
+      type: 'error',
+      error: { message, type: 'invalid_request_error', param: 'input', code },
+      status: 400,
+    }),
+  });
+  expect(terminalErrorText(failure(unsupported))).toContain('转成文字');
+  expect(terminalErrorText(failure('Audio input is not available.', null))).toContain('转成文字');
+  expect(terminalErrorText({ message: unsupported })).toContain('转成文字');
+  const other = failure('Audio output is not supported for this request.');
+  expect(terminalErrorText(other)).toBe(other.message);
+});
+
 describe('turnRetryNotice', () => {
   // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
   it.each(['telegram', 'wechat'])('localizes missing review models for %s without widening permissions', (channel) => {
