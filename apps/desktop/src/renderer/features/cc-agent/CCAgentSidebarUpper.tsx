@@ -2654,9 +2654,9 @@ function ExpandedView({
       if (target?.orcaRole === 'lead') {
         const worker = pendingOrcaWorkerQuestion(id);
         if (worker) {
-          makerChatStore.setAskUserViewerState(worker, 'expanded');
+          makerChatStore.setAskUserViewerState(worker.chatSessionId, 'expanded');
           const search = target.deviceLinkDeviceId ? new URLSearchParams({ device: target.deviceLinkDeviceId }).toString() : '';
-          navigate(orcaWorkerSessionRoute(id, worker, search));
+          navigate(orcaWorkerSessionRoute(id, worker.workerSessionId, search));
           return;
         }
         if (makerChatStore.getRunningSnapshot().get(id)?.hasPendingAskUser) {

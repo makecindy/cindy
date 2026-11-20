@@ -145,7 +145,7 @@ describe('deriveOrcaLeadWorkerAttention', () => {
 it('selects the unanswered Worker and keeps a Lead question in its own pane', () => {
   setProjections([['lead', snapshot('first', 'second')]]);
   setPending('second', { hasPendingAskUser: true });
-  expect(pendingOrcaWorkerQuestion('lead')).toBe('second');
+  expect(pendingOrcaWorkerQuestion('lead')).toEqual({ workerSessionId: 'second', chatSessionId: 'second' });
   setPending('lead', { hasPendingAskUser: true });
   expect(pendingOrcaWorkerQuestion('lead')).toBeUndefined();
   setPending('lead', {});
@@ -162,7 +162,7 @@ it('lights and opens a remote Worker from list patches without an Island activit
   try {
     remoteProjectsStore.applyPatch(device, 'child', { orcaHasPendingQuestion: true });
     expect(getOrcaLeadWorkerAttention().get('remote-lead')).toBe('awaiting');
-    expect(pendingOrcaWorkerQuestion('remote-lead')).toBe('child');
+    expect(pendingOrcaWorkerQuestion('remote-lead')).toEqual({ workerSessionId: 'child', chatSessionId: 'child' });
     remoteProjectsStore.applyPatch(device, 'child', { orcaHasPendingQuestion: false });
     expect(getOrcaLeadWorkerAttention().has('remote-lead')).toBe(false);
     expect(pendingOrcaWorkerQuestion('remote-lead')).toBeUndefined();
@@ -421,4 +421,25 @@ describe('Worker 通知', () => {
       'Worker · developer',
     );
   });
+});
+
+// Regression: a remote Lead can execute its Worker here. The task selector uses
+// the proxy ID; the answer panel and live status belong to the actual chat ID.
+// Existing tests only covered Workers without executionDevice. Unit tier.
+it('tracks actual chat questions and their settle events while retaining the proxy selection', () => {
+  const workers = snapshot('proxy');
+  workers.workers[0].executionDevice = { deviceId: 'here', deviceName: 'Here', remoteSessionId: 'actual', reachable: true, workingDir: null };
+  setProjections([['remote-lead', workers]]);
+  const listener = vi.fn();
+  const off = subscribeOrcaLeadWorkerAttention(listener);
+  setPending('actual', { hasPendingAskUser: true });
+  expect(listener).toHaveBeenCalled();
+  expect(getOrcaLeadWorkerAttention().get('remote-lead')).toBe('awaiting');
+  expect(pendingOrcaWorkerQuestion('remote-lead')).toEqual({ workerSessionId: 'proxy', chatSessionId: 'actual' });
+  listener.mockClear();
+  setPending('actual', {});
+  expect(listener).toHaveBeenCalled();
+  expect(getOrcaLeadWorkerAttention().has('remote-lead')).toBe(false);
+  expect(pendingOrcaWorkerQuestion('remote-lead')).toBeUndefined();
+  off();
 });

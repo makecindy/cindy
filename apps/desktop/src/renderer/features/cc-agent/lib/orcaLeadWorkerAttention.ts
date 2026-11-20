@@ -11,7 +11,7 @@
  * ⚠️ 汇总结果**不写回** sessionAttentionStore:那份会同步到 Main(Dock / 灵动岛 / 远端),
  * 还会被「导航即已读」的被动清除抹掉,破坏 Lead 自己的 attention 生命周期与完成保持判定。
  *
- * 远端提问只读设备活动镜像；完成和出错沿用原有本机汇总规则。
+ * 提问按真实聊天任务读取本机状态或设备活动镜像；完成和出错沿用原有本机汇总规则。
  */
 
 import { useSyncExternalStore } from 'react';
@@ -73,7 +73,7 @@ export function deriveOrcaLeadWorkerAttention(
 }
 
 /** Resolve on activation: a question can be answered while its Lead is visible. */
-export function pendingOrcaWorkerQuestion(leadId: string): string | undefined {
+export function pendingOrcaWorkerQuestion(leadId: string): { workerSessionId: string; chatSessionId: string } | undefined {
   refreshCache();
   if (cachedStatuses?.get(leadId)?.hasPendingAskUser ||
     remoteQuestionPending(leadId, remoteProjectsStore.getSessionDeviceId(leadId))) return undefined;
@@ -145,7 +145,7 @@ let cachedLocalSessions: readonly Session[] | null = null;
 let cachedRemoteSessions: readonly Session[] | null = null;
 let listedWorkers: readonly Session[] = [];
 let cachedRemoteRevision = -1;
-let cachedQuestionTargets = new Map<string, string>();
+let cachedQuestionTargets = new Map<string, { workerSessionId: string; chatSessionId: string }>();
 
 function remoteQuestionPending(id: string, device?: string): boolean {
   const activity = getRemoteSessionActivity(id, device);
@@ -170,14 +170,20 @@ function refreshCache(): void {
     return;
   }
   const leads: LeadWorkerSessions[] = [];
-  const targets = new Map<string, string>();
+  const targets = new Map<string, { workerSessionId: string; chatSessionId: string }>();
   for (const [leadId, snapshot] of listRetainedWorkerProjections()) {
     const localIds = localOrcaWorkerSessionIds(snapshot.workers, leadId);
     leads.push([leadId, localIds]);
-    const localTarget = localIds.find(id => statuses.get(id)?.hasPendingAskUser);
-    const worker = localTarget ?? snapshot.workers.find(({ executionDevice }) =>
-      executionDevice && remoteQuestionPending(executionDevice.remoteSessionId, executionDevice.deviceId))?.sessionId;
-    if (worker) targets.set(leadId, worker);
+    const worker = snapshot.workers.find(worker => {
+      if (!worker.executionDevice && !localIds.includes(worker.sessionId)) return false;
+      const chatId = worker.executionDevice?.remoteSessionId ?? worker.sessionId;
+      return statuses.get(chatId)?.hasPendingAskUser ||
+        (worker.executionDevice && remoteQuestionPending(chatId, worker.executionDevice.deviceId));
+    });
+    if (worker) targets.set(leadId, {
+      workerSessionId: worker.sessionId,
+      chatSessionId: worker.executionDevice?.remoteSessionId ?? worker.sessionId,
+    });
   }
   if (localSessions !== cachedLocalSessions || remoteSessions !== cachedRemoteSessions) {
     const isWorker = (session: Session) => session.status === 'active' && session.orcaRole === 'worker';
@@ -188,7 +194,7 @@ function refreshCache(): void {
     if (!leadId || targets.has(leadId)) continue;
     const waiting = worker.orcaHasPendingQuestion ?? remoteQuestionPending(worker.id, worker.deviceLinkDeviceId);
     if (waiting && remoteProjectsStore.getSessionDeviceId(leadId) === worker.deviceLinkDeviceId) {
-      targets.set(leadId, worker.id);
+      targets.set(leadId, { workerSessionId: worker.id, chatSessionId: worker.id });
     }
   }
   cachedLocalSessions = localSessions;
@@ -235,8 +241,8 @@ function subscribeDerived(listeners: Set<() => void>, listener: () => void): () 
     const unsubscribeProjections = subscribeAllWorkerProjections(onUpstreamChange);
     const unsubscribePending = subscribeOrcaWorkerPendingInteractions(
       () =>
-        listRetainedWorkerProjections().flatMap(([leadId, snapshot]) =>
-          localOrcaWorkerSessionIds(snapshot.workers, leadId),
+        listRetainedWorkerProjections().flatMap(([, snapshot]) =>
+          snapshot.workers.map(worker => worker.executionDevice?.remoteSessionId ?? worker.sessionId),
         ),
       onUpstreamChange,
     );
