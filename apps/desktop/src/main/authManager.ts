@@ -2523,6 +2523,8 @@ async function withAccountFreeOwnerCommit(opts: {
   shouldClearOnFailure?: () => boolean;
   /** 本次收敛是冷启动启动闸超时兜底;转发给 clearAuth 以便同步登记兜底代际。 */
   coldStartTimeoutRecovery?: boolean;
+  /** Retain consumed-token evidence during local startup failure cleanup. */
+  preserveResourceRefreshUncertainty?: boolean;
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
@@ -2550,6 +2552,7 @@ async function withAccountFreeOwnerCommit(opts: {
         credentialStoreUnavailable: opts.credentialStoreUnavailable,
         deferSessionCommit: true,
         coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
+        preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
       });
       authCleared = true;
     }
@@ -2600,6 +2603,7 @@ async function withAccountFreeOwnerCommit(opts: {
             credentialStoreUnavailable: opts.credentialStoreUnavailable,
             deferSessionCommit: true,
             coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
+            preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
           });
           authCleared = true;
         }
@@ -2625,6 +2629,7 @@ async function withAccountFreeOwnerCommit(opts: {
           credentialStoreUnavailable: opts.credentialStoreUnavailable,
           deferSessionCommit: true,
           coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
+          preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
         });
         authCleared = true;
       }
@@ -2661,8 +2666,9 @@ async function recoverAccountFreeOwnerAtStartup(
   /**
    * 本次收敛是冷启动启动闸超时兜底。必须由调用方显式声明并透传到 clearAuth:
    * 兜底代际要在推进代际的同一同步时刻登记,不能等本函数返回(PR #6273 review P1)。
+   * 本地提交失败仅保留轮换证据,不把清理代际当作超时兜底接续。
    */
-  opts: { coldStartTimeoutRecovery?: boolean } = {},
+  opts: { coldStartTimeoutRecovery?: boolean; preserveResourceRefreshUncertainty?: boolean } = {},
 ): Promise<void> {
   const ownerId = mode === 'local' ? LOCAL_DATA_OWNER_ID : null;
   if (isGhostSkillProjectionBoundaryStableForOwner(ownerId)) {
@@ -2685,6 +2691,7 @@ async function recoverAccountFreeOwnerAtStartup(
     clearOnFailure: mode === 'signed-out',
     preservePersistedRefreshToken: true,
     coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
+    preserveResourceRefreshUncertainty: opts.preserveResourceRefreshUncertainty,
   });
 }
 
@@ -2911,8 +2918,9 @@ async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Pr
 async function finishColdStartSignedOut(
   reason: string,
   credentialStoreUnavailable = false,
+  opts: { preserveResourceRefreshUncertainty?: boolean } = {},
 ): Promise<AuthState> {
-  await recoverAccountFreeOwnerAtStartup('signed-out', reason, credentialStoreUnavailable);
+  await recoverAccountFreeOwnerAtStartup('signed-out', reason, credentialStoreUnavailable, opts);
   return snapshotLoggedOutAuthState();
 }
 
@@ -3939,6 +3947,8 @@ function clearAuth(
      * 见 authStartupGate 的 ColdStartAuthFallbackRegistry。
      */
     coldStartTimeoutRecovery?: boolean;
+    /** Local startup cleanup must retain evidence of a possibly consumed token. */
+    preserveResourceRefreshUncertainty?: boolean;
   } = {},
 ): void {
   const notify = opts.notify ?? true;
@@ -3954,7 +3964,7 @@ function clearAuth(
     // when no refresh guard ran between that action and a sibling window timeout.
     coldStartTimeoutFallbacks.clear();
     coldStartRetryWait?.(true);
-    uncertainResourceRefreshTokens.clear();
+    if (!opts.preserveResourceRefreshUncertainty) uncertainResourceRefreshTokens.clear();
   }
   refreshBackoff.clear();
   loginFlowEpoch += 1;
@@ -5354,7 +5364,7 @@ async function runColdStartRefreshFlow(
   } catch (err) {
     // 网络类失败都在 apiFetch 内部消化(返回 status 0),能走到这里的是 refresh 成功
     // **之后**的本地状态同步代码(writeSafe / provider owner reconcile 等)抛异常——
-    // 此时新 refresh token 已轮换并落盘,删除它只会把有效凭据丢掉。保留 token、记录
+    // 此时新 refresh token 已轮换,但本地提交可能尚未落盘。保留现存 token 与轮换证据、记录
     // 错误,本次以未登录返回,留待下次启动自愈。
     log.error(
       'cold-start auth initialize threw after refresh — keeping persisted refresh token',
@@ -5371,7 +5381,9 @@ async function runColdStartRefreshFlow(
       resetActiveAuthRealmToBuild();
     }
     if (epochChanged('catch-return')) return snapshotAuthState();
-    await finishColdStartSignedOut('cold-start-local-state-sync-failed');
+    await finishColdStartSignedOut('cold-start-local-state-sync-failed', false, {
+      preserveResourceRefreshUncertainty: true,
+    });
     return snapshotLoggedOutAuthState();
   }
 }

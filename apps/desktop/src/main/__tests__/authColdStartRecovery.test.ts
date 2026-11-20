@@ -49,6 +49,7 @@ const source = ts.createSourceFile(
 const names = new Set([
   'apiFetch',
   'clearAuth',
+  'finishColdStartSignedOut',
   'recoverActiveResourceSession',
   'refreshPassportSessionSingleFlight',
   'replacePassportSessionIfCurrent',
@@ -116,13 +117,13 @@ const readPersistedAuthSession = () => saved.session;
 const readStoredRefreshTokenCandidates = () => [saved.session?.refreshToken];
 const hasPotentiallyPersistedAuthCredentials = () => !!saved.session;
 const assertLoginFlowCurrent = (epoch) => { if (epoch !== loginFlowEpoch) throw new Error('superseded'); };
-const finishColdStartSignedOut = async () => snapshotAuthState();
 const recoverAccountFreeOwnerAtStartup = async (mode, reason, unavailable, options = {}) => {
   onStartupFallback();
   // Exercise the real cleanup reached by the production owner transition. Its
   // timeout flag must preserve uncertainty while the minute-long retry waits.
   clearAuth({ notify: false, nextMode: mode, preservePersistedRefreshToken: true,
-    coldStartTimeoutRecovery: options.coldStartTimeoutRecovery });
+    coldStartTimeoutRecovery: options.coldStartTimeoutRecovery,
+    preserveResourceRefreshUncertainty: options.preserveResourceRefreshUncertainty });
 };
 const reconcileDesktopActiveAuthSession = async () => saved.session;
 ${source.statements
@@ -134,6 +135,7 @@ return {
   fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  clearRuntimeAuth: () => clearAuth({ preservePersistedRefreshToken: true }),
   renewPassport: (client) => productionRefreshPassportSessionSingleFlight(client, 'global', 'passport-original'),
   hostAuth: (reader) => { authRefreshOverride = reader; },
   receiveHostAuthState,
@@ -1160,6 +1162,35 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
       h.vault.passports[passportKey].accountRefreshToken = 'test-concurrent-newer';
       await h.renewPassport(client);
       expect(client.refreshAccount).toHaveBeenLastCalledWith('test-concurrent-newer');
+    }
+  });
+
+  it.each([false, true])('preserves cold-start write-failure evidence unless explicitly cleared (clear=%s)', async explicitClear => {
+    const { h } = recoverySetup();
+    const fresh = setup();
+    fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+    fresh.vault.passports = h.vault.passports;
+    fresh.request.mockResolvedValueOnce(fresh.ok).mockResolvedValue({
+      ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+    });
+    fresh.transaction.mockRejectedValueOnce(new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE', 503, 'disk'));
+    const first = fresh.start();
+    await vi.advanceTimersByTimeAsync(1_250);
+    await first;
+    expect(fresh.deps.onStartupFallback).toHaveBeenCalledTimes(1);
+    expect(fresh.saved.session?.refreshToken).toBe('test-refresh');
+    if (explicitClear) fresh.clearRuntimeAuth();
+    const second = fresh.start();
+    await vi.advanceTimersByTimeAsync(1_250);
+    await second;
+    if (explicitClear) {
+      expect(fresh.state().isAuthenticated).toBe(false);
+      expect(fresh.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
+      expect(fresh.clear).toHaveBeenCalled();
+    } else {
+      expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+      expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+      expect(fresh.clear).not.toHaveBeenCalled();
     }
   });
 
