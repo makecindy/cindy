@@ -16018,7 +16018,6 @@
       "opened": "打开了一个预览页面"
     },
     "sideChat": {
-      "openPage": "打开完整任务页",
       "returnMain": "返回主任务",
       "new": "新建侧边追问",
       "mainWindowDescription": "侧边追问目前在主窗口中使用。追问记录仍然保留。",
@@ -16026,8 +16025,8 @@
       "commandDescription": "基于主任务打开侧边追问。可在命令后附上问题，作为追问草稿。",
       "title": "侧边追问",
       "context": "在这里接着问，主任务会继续运行。",
-      "collaborationTitle": "在独立任务中开启协同",
-      "workerPromotionNotice": "创建首个 Worker 后，追问会从侧栏移到任务列表。对话记录会保留。",
+      "viewCollaboration": "查看协同",
+      "returnToSideChat": "回到侧边追问",
       "opening": "正在打开…",
       "notReady": "请先等待主任务完成一次回答。",
       "unsupported": "此任务的 Agent 运行在其他执行环境中，暂不支持侧边追问。",

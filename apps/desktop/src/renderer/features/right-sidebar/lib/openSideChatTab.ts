@@ -14,6 +14,9 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCu
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isSharedTaskPeer, remoteAgentErrorCode } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { readSessionBatch } from '@/lib/sessionBatchRead';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import type { NavigateFunction } from 'react-router-dom';
 import { addTab, closeTab, ensureHydrated, getBucket, setActiveTab, subscribe } from '../store';
 import { mergeSidebarWindowBack } from './mergeSidebarWindowBack';
 import { requestRightSidebarVisibility } from './sidebarCommands';
@@ -85,12 +88,19 @@ export function restoreSideChatTabs(sessionId: string, isActive: () => boolean =
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) return;
     if (!valid()) return;
     const childIds = new Set(children.map(child => child.id));
-    for (const tab of previousTabs) {
-      if (!valid()) return;
+    const unlisted = previousTabs.flatMap(tab => {
       const childId = (tab.state as { sessionId?: string } | null)?.sessionId;
-      if (childId && !childIds.has(childId)) {
-        // The host already removed this branch. Do not ask to delete it again.
-        await closeTab(sessionId, tab.id, { skipBeforeClose: true });
+      return childId && !childIds.has(childId) ? [{ tabId: tab.id, childId }] : [];
+    });
+    // The recovery list intentionally omits linked tasks so a closed tab stays closed.
+    // Check only existing unmatched tabs before treating that omission as deletion.
+    const details = new Map((await readSessionBatch(unlisted.map(tab => tab.childId), deviceId ?? undefined))
+      .map(result => [result.sessionId, result]));
+    for (const { tabId, childId } of unlisted) {
+      if (!valid()) return;
+      const result = details.get(childId);
+      if (result?.value?.status === 'deleted' || result?.errorCode === 'NOT_FOUND') {
+        await closeTab(sessionId, tabId, { skipBeforeClose: true });
       }
     }
     for (const child of children) {
@@ -119,7 +129,8 @@ export function watchSideChatTabs(sessionId: string): () => void {
   };
   const changed = (patch?: Partial<Session>) => {
     // Usage/title/streaming changes cannot affect branch membership.
-    if (!patch || patch.status !== undefined || patch.parentSessionId !== undefined || patch.source !== undefined) refresh();
+    if (!patch || patch.status !== undefined || (patch.sideChatPromoted !== true
+      && (patch.parentSessionId !== undefined || patch.source !== undefined))) refresh();
   };
   const off = deviceId
     ? [window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
@@ -151,6 +162,33 @@ export function watchSideChatTabs(sessionId: string): () => void {
   }));
   refresh();
   return () => { disposed = true; off.forEach(unsubscribe => unsubscribe()); };
+}
+
+/** Return to the original parent's existing tab, or reopen that same task there. */
+export async function reopenLinkedSideChat(
+  parentId: string, childId: string, deviceId: string | null, navigate: NavigateFunction,
+): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  const [parent] = await readSessionBatch([parentId], deviceId ?? undefined);
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  if (!parent?.value || parent.value.status === 'deleted') throw new Error('Side chat parent unavailable');
+  if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
+    await mergeSidebarWindowBack(parentId);
+  }
+  await ensureHydrated(parentId);
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  if (deviceId) {
+    remoteProjectsStore.pinSessionOrigin(deviceId, parentId);
+    remoteProjectsStore.pinSessionOrigin(deviceId, childId);
+  }
+  const existing = getBucket(parentId).tabs.find(tab => tab.kind === 'side-chat'
+    && (tab.state as { sessionId?: string } | null)?.sessionId === childId);
+  if (existing) await setActiveTab(parentId, existing.id);
+  else await addTab(parentId, 'side-chat', { sessionId: childId, deviceId });
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  requestRightSidebarVisibility('open', { sessionId: parentId, userInitiated: false });
+  navigate(standardSessionRoute(parentId, deviceId));
 }
 
 /** Open an independent follow-up on the parent's execution host. */

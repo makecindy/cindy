@@ -165,7 +165,7 @@ const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUnt
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
-/** Only a committed worker for this lead can detach a side chat from its parent. */
+/** Only a committed worker for this lead can make the side chat independently visible. */
 export async function promoteSideChatLeadInDb(sessionId: string, teamId: string, workerId: string): Promise<void> {
   const dbClient = getDbClient();
   const ownerScope = captureOwnerScope();

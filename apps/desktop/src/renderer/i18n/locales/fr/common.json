@@ -16205,7 +16205,6 @@
       "opened": "Page d'aperçu ouverte"
     },
     "sideChat": {
-      "openPage": "Ouvrir la page complète de la tâche",
       "returnMain": "Retour à la tâche principale",
       "new": "Nouvelle conversation annexe",
       "mainWindowDescription": "Les conversations annexes s'exécutent actuellement dans la fenêtre principale. Votre conversation est enregistrée.",
@@ -16213,8 +16212,8 @@
       "commandDescription": "Ouvrir une conversation annexe avec le contexte de cette tâche. Le texte facultatif devient une question en brouillon.",
       "title": "Conversation annexe",
       "context": "Posez votre question ici pendant que la tâche principale se poursuit.",
-      "collaborationTitle": "Collaborer dans une tâche distincte",
-      "workerPromotionNotice": "À la création du premier Worker, cet échange quitte le panneau latéral et rejoint votre liste de tâches avec tout son historique.",
+      "viewCollaboration": "Voir la collaboration",
+      "returnToSideChat": "Revenir à la question latérale",
       "opening": "Ouverture…",
       "notReady": "Attendez que la tâche principale ait terminé sa première réponse.",
       "unsupported": "L'Agent de cette tâche s'exécute dans un autre environnement d'exécution. La conversation annexe n'est pas encore disponible ici.",

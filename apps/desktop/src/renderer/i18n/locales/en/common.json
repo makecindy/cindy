@@ -16092,7 +16092,6 @@
       "opened": "Opened a preview page"
     },
     "sideChat": {
-      "openPage": "Open full task page",
       "returnMain": "Back to main task",
       "new": "New side chat",
       "mainWindowDescription": "Side chats currently run in the main window. Your conversation is saved.",
@@ -16100,8 +16099,8 @@
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
       "context": "Ask a follow-up here while the main task continues.",
-      "collaborationTitle": "Start collaborating in a separate task",
-      "workerPromotionNotice": "Creating the first worker moves this follow-up and its conversation history from the sidebar to a separate task in your task list.",
+      "viewCollaboration": "View collaboration",
+      "returnToSideChat": "Back to side chat",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",
       "unsupported": "This task's agent runs in another execution environment. Side chat is not available here yet.",

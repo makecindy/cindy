@@ -16205,7 +16205,6 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
-      "openPage": "Abrir página completa de la tarea",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
@@ -16213,8 +16212,8 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Haz tu consulta aquí mientras continúa la tarea principal.",
-      "collaborationTitle": "Colaborar en una tarea independiente",
-      "workerPromotionNotice": "Al crear el primer Worker, esta consulta pasará con todo su historial del panel lateral a la lista de tareas como tarea independiente.",
+      "viewCollaboration": "Ver colaboración",
+      "returnToSideChat": "Volver a la consulta lateral",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",

@@ -84,6 +84,8 @@ import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { reopenLinkedSideChat } from '@/features/right-sidebar/lib/openSideChatTab';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 
 const log = createLogger('SessionContentHeader');
 
@@ -551,7 +553,14 @@ export function SessionContentHeader({
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
-      {session.source === 'side-chat' && session.parentSessionId && (
+      {session.sideChatPromoted && session.parentSessionId && !sharedGuest ? (
+        <Button variant="secondary" tone="quiet" size="sm" className="shrink-0" style={WINDOW_NO_DRAG_STYLE}
+          onClick={() => void reopenLinkedSideChat(session.parentSessionId!, session.id,
+            session.deviceLinkDeviceId ?? getStickySessionDeviceId(session.id) ?? null, navigate)
+            .catch(() => toast.error(t('chat.sideChat.failed')))}>
+          <ArrowLeft aria-hidden="true" size={14} />{t('chat.sideChat.returnToSideChat')}
+        </Button>
+      ) : session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
             aria-label={t('chat.sideChat.returnMain')}

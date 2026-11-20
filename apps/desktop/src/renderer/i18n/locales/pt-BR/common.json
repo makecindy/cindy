@@ -16205,7 +16205,6 @@
       "opened": "Uma página de prévia foi aberta"
     },
     "sideChat": {
-      "openPage": "Abrir página completa da tarefa",
       "returnMain": "Voltar à tarefa principal",
       "new": "Nova conversa paralela",
       "mainWindowDescription": "As conversas paralelas são executadas na janela principal no momento. Sua conversa está salva.",
@@ -16213,8 +16212,8 @@
       "commandDescription": "Abra uma conversa paralela com o contexto desta tarefa. O texto opcional vira um rascunho de pergunta.",
       "title": "Conversa paralela",
       "context": "Continue a conversa aqui enquanto a tarefa principal está em andamento.",
-      "collaborationTitle": "Colaborar em uma tarefa independente",
-      "workerPromotionNotice": "Ao criar o primeiro Worker, esta conversa e seu histórico sairão da barra lateral e aparecerão como uma tarefa independente na lista de tarefas.",
+      "viewCollaboration": "Ver colaboração",
+      "returnToSideChat": "Voltar à pergunta lateral",
       "opening": "Abrindo…",
       "notReady": "Aguarde a tarefa principal concluir a primeira resposta.",
       "unsupported": "O Agent desta tarefa é executado em outro ambiente de execução. A conversa paralela ainda não está disponível aqui.",

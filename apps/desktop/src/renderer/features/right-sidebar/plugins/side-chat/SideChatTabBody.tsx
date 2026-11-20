@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GitBranch } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -12,6 +12,7 @@ import { discardDraft } from '@/lib/composerDraftStore';
 import { setStatus } from '@/lib/sessionService';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import type { Session } from '@/lib/ccAgent.types';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
@@ -50,15 +51,20 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const viewVisible = Boolean(active && shellVisible && windowVisible);
   const chatRealtime = Boolean(active && shellVisible && documentVisible);
   const childId = state.sessionId;
-  const visibleRef = useRef(viewVisible);
-  visibleRef.current = viewVisible;
   const retiredChildRef = useRef<string | null>(null);
+  const linkedChildRef = useRef<string | null>(null);
+  const readChildRef = useRef<string | null>(null);
+  const [linkedChild, setLinkedChild] = useState<string | null>(null);
+  const [collaborationChild, setCollaborationChild] = useState<string | null>(null);
   const [remoteSession, setRemoteSession] = useState<Session | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [unavailableChild, setUnavailableChild] = useState<string | null>(null);
   // Register before mounting the child: hidden branches are absent from the ordinary task list.
   const [registeredChild, setRegisteredChild] = useState<string | null>(null);
+  const readChild = useCallback(async (id: string) => (state.deviceId
+    ? await window.electronAPI.deviceLink.invoke(state.deviceId, 'local-db:sessions:get', [id])
+    : await window.electronAPI.localDb.sessions.get(id)) as Session | null, [state.deviceId]);
   useEffect(() => {
     if (childId && state.deviceId) remoteProjectsStore.pinSessionOrigin(state.deviceId, childId);
     setRegisteredChild(childId);
@@ -71,34 +77,33 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     let unavailable = false;
     let bufferedPatch: Partial<Session> = {};
     const valid = () => !disposed && isDataOwnerGenerationCurrent(owner);
-    const dismiss = (promoted = false) => {
+    const dismiss = () => {
       if (!valid() || unavailable) return;
       unavailable = true;
       retiredChildRef.current = childId;
       // Unmount the composer immediately, even while tab persistence settles.
       setUnavailableChild(childId);
-      if (promoted) {
-        if (visibleRef.current) {
-          navigate(sideChatTaskRoute(childId, deviceId), {
-            state: { orcaWorkersReveal: { leadSessionId: childId } },
-          });
-        }
-      } else {
-        makerChatStore.closeSessionQuery(childId);
-        makerChatStore.purgeSession(childId);
-        discardDraft(childId);
-      }
+      makerChatStore.closeSessionQuery(childId);
+      makerChatStore.purgeSession(childId);
+      discardDraft(childId);
       void closeTab(ctx.sessionId, ctx.tabId, { skipBeforeClose: true })
         .catch(() => { if (valid()) toast.error(t('chat.sideChat.closeFailed')); });
+    };
+    const updateCollaboration = (snapshot: Partial<Session>) => {
+      if (snapshot.sideChatPromoted) {
+        linkedChildRef.current = childId;
+        setLinkedChild(childId);
+      }
+      if (snapshot.orcaRole !== undefined) setCollaborationChild(snapshot.orcaRole === 'lead' ? childId : null);
     };
     const applyPatch = (payload: { sessionId?: string; patch?: Partial<Session> } | null) => {
       if (!valid() || unavailable || payload?.sessionId !== childId || !payload.patch) return;
       bufferedPatch = { ...bufferedPatch, ...payload.patch };
       if (payload.patch.status === 'deleted') { dismiss(); return; }
-      if (payload.patch.sideChatPromoted === true) { dismiss(true); return; }
+      updateCollaboration(bufferedPatch);
       if (deviceId) {
         setRemoteSession(previous => previous?.id === childId
-          ? { ...previous, ...payload.patch, id: childId, source: 'side-chat', deviceLinkDeviceId: deviceId }
+          ? { ...previous, ...payload.patch, id: childId, deviceLinkDeviceId: deviceId }
           : previous);
       }
     };
@@ -113,20 +118,19 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     setLoadFailed(false);
     const read = async () => {
       if (!active) return;
-      const value = (deviceId
-        ? await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [childId])
-        : await window.electronAPI.localDb.sessions.get(childId)) as Session | null;
+      const value = await readChild(childId);
       if (!valid() || unavailable) return;
       if (!value) { dismiss(); return; }
       if (value.id !== childId || value.parentSessionId !== ctx.sessionId) {
         throw new Error('Side chat owner mismatch');
       }
       if (value.status === 'deleted') { dismiss(); return; }
-      if (value.sideChatPromoted) { dismiss(true); return; }
-      if (value.source !== 'side-chat') throw new Error('Side chat owner mismatch');
+      if (value.source !== 'side-chat' && !value.sideChatPromoted) throw new Error('Side chat owner mismatch');
+      readChildRef.current = childId;
+      const merged = { ...value, ...bufferedPatch };
+      updateCollaboration(merged);
       if (!deviceId) return;
-      const snapshot: Session = { ...value, ...bufferedPatch, id: childId, source: 'side-chat', deviceLinkDeviceId: deviceId };
-      if (snapshot.status === 'deleted') { dismiss(); return; }
+      const snapshot: Session = { ...merged, id: childId, deviceLinkDeviceId: deviceId };
       // The shared editor also reads metadata from the remote task store. Restore
       // hidden branches there before mounting it, without changing the main route.
       remoteProjectsStore.mergeDeviceSessions(deviceId,
@@ -135,16 +139,24 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     };
     void read().catch(() => { if (valid() && !unavailable) setLoadFailed(true); });
     return () => { disposed = true; off(); };
-  }, [active, childId, ctx.sessionId, ctx.tabId, navigate, retry, state.deviceId, t]);
+  }, [active, childId, ctx.sessionId, ctx.tabId, readChild, retry, state.deviceId, t]);
   const close = useCallback(async () => {
     if (!childId) return true;
     if (retiredChildRef.current === childId) return false;
+    if (linkedChildRef.current === childId) return true;
     const owner = getDataOwnerGeneration();
+    if (readChildRef.current !== childId) {
+      const latest = await readChild(childId).catch(() => null);
+      if (retiredChildRef.current === childId || !isDataOwnerGenerationCurrent(owner)) return false;
+      if (linkedChildRef.current === childId || (latest?.id === childId
+        && latest.parentSessionId === ctx.sessionId && latest.sideChatPromoted)) return true;
+    }
     if (!await confirm({
       title: t('chat.sideChat.closeTitle'), description: t('chat.sideChat.closeDescription'),
       confirmText: t('chat.sideChat.closeConfirm'),
     })) return false;
     if (retiredChildRef.current === childId || !isDataOwnerGenerationCurrent(owner)) return false;
+    if (linkedChildRef.current === childId) return true;
     try {
       await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' },
         undefined, 'side-chat');
@@ -152,21 +164,30 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       makerChatStore.purgeSession(childId);
       discardDraft(childId);
       return true;
-    } catch {
+    } catch (error) {
+      if (extractIpcError(error)?.code === 'PRECONDITION_FAILED' && isDataOwnerGenerationCurrent(owner)) {
+        // The host won a race with an older confirmation. Verify the same branch;
+        // the failed conditional delete is never retried.
+        const latest = await readChild(childId).catch(() => null);
+        if (isDataOwnerGenerationCurrent(owner) && latest?.id === childId
+          && latest.parentSessionId === ctx.sessionId && latest.sideChatPromoted && latest.status !== 'deleted') return true;
+      }
       if (retiredChildRef.current !== childId) toast.error(t('chat.sideChat.closeFailed'));
       return false;
     }
-  }, [childId, confirm, state.deviceId, t]);
+  }, [childId, confirm, ctx.sessionId, readChild, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
   if (unavailableChild && unavailableChild === childId) return null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
-      <div className="mx-4 border-b border-[var(--border-default)] py-3">
+      <div className="mx-4 flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
         <p className="text-13 leading-5 text-[var(--text-primary)]">{t('chat.sideChat.context')}</p>
-        <p className="mt-1 flex items-start gap-2 text-12 leading-5 text-[var(--text-secondary)]">
-          <GitBranch aria-hidden="true" size={14} className="mt-[3px] shrink-0" />
-          <span>{t('chat.sideChat.workerPromotionNotice')}</span>
-        </p>
+        {childId && linkedChild === childId && collaborationChild === childId && <Button size="sm" variant="secondary" tone="quiet" className="shrink-0"
+          onClick={() => navigate(sideChatTaskRoute(childId, state.deviceId), {
+            state: { orcaWorkersReveal: { leadSessionId: childId } },
+          })}>
+          {t('chat.sideChat.viewCollaboration')}<ArrowUpRight aria-hidden="true" size={14} />
+        </Button>}
       </div>
       <div className="min-h-0 flex-1">
         {state.deviceId && (loadFailed || remoteSession?.id !== childId) ? <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">

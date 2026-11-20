@@ -16055,7 +16055,6 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
-      "openPage": "Vollständige Aufgabenseite öffnen",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",
@@ -16063,8 +16062,8 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Hier können Sie nachfragen, während die Hauptaufgabe weiterläuft.",
-      "collaborationTitle": "Zusammenarbeit in einer eigenen Aufgabe starten",
-      "workerPromotionNotice": "Mit dem ersten Worker wechselt diese Rückfrage samt Gesprächsverlauf aus der Seitenleiste als eigene Aufgabe in die Aufgabenliste.",
+      "viewCollaboration": "Zusammenarbeit anzeigen",
+      "returnToSideChat": "Zurück zur Rückfrage",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",

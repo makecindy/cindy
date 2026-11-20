@@ -16010,7 +16010,6 @@
     },
     "sessionLoading": "差事方载",
     "sideChat": {
-      "openPage": "启全差事页",
       "returnMain": "归主差事",
       "new": "增旁问",
       "mainWindowDescription": "旁问今于主窗中用之。所问之录犹存。",
@@ -16018,8 +16017,8 @@
       "commandDescription": "依主差事开旁问。可于命令后附问，以为追问草稿。",
       "title": "旁问",
       "context": "于此续问，主事照行。",
-      "collaborationTitle": "另立任务以协同",
-      "workerPromotionNotice": "首位 Worker 建成，此问与往来记录一并移出侧栏，独列于任务表。",
+      "viewCollaboration": "观协同",
+      "returnToSideChat": "返回侧栏追问",
       "opening": "方启…",
       "notReady": "主差事尚未答一回，且稍安勿躁。",
       "unsupported": "此 Agent 之远程差事暂不支持旁问。",

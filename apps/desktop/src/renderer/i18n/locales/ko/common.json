@@ -16018,7 +16018,6 @@
       "opened": "미리보기 페이지를 열었습니다"
     },
     "sideChat": {
-      "openPage": "전체 작업 페이지 열기",
       "returnMain": "기본 작업으로 돌아가기",
       "new": "새 사이드 채팅",
       "mainWindowDescription": "사이드 채팅은 현재 메인 창에서 사용할 수 있습니다. 대화 내용은 저장되어 있습니다.",
@@ -16026,8 +16025,8 @@
       "commandDescription": "메인 작업의 맥락으로 사이드 채팅을 엽니다. 명령 뒤의 질문은 초안으로 입력됩니다.",
       "title": "사이드 채팅",
       "context": "기본 작업이 진행되는 동안 여기에서 이어서 질문할 수 있습니다.",
-      "collaborationTitle": "독립된 작업에서 협업 시작",
-      "workerPromotionNotice": "첫 Worker를 만들면 이 추가 질문이 대화 기록과 함께 사이드바에서 작업 목록으로 이동해 독립된 작업이 됩니다.",
+      "viewCollaboration": "협업 보기",
+      "returnToSideChat": "사이드바의 추가 질문으로 돌아가기",
       "opening": "여는 중…",
       "notReady": "메인 작업의 첫 답변이 완료될 때까지 기다려 주세요.",
       "unsupported": "이 작업의 Agent는 다른 실행 환경에서 실행됩니다. 여기서는 아직 사이드 채팅을 사용할 수 없습니다.",

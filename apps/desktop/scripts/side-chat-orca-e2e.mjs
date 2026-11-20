@@ -2,6 +2,7 @@
 // drives both through the real renderer and verifies the same SQLite-backed
 // task can be reopened from the list after its first worker becomes visible.
 // Requires agent-browser and a checkout without a running Desktop dev instance.
+// --preview leaves the checked app and its loopback fixture alive until Electron exits.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -22,8 +23,10 @@ const model = 'sidechat-orca-e2e-model';
 const providerId = 'sidechat-orca-e2e-fixture';
 const fakeKey = 'sidechat-orca-fixture-not-a-credential';
 const parentRequest = 'E2E parent request';
+const sideRequest = 'E2E follow-up request';
 const workerRequest = 'E2E worker request';
 const parentReply = 'E2E_FIXTURE_PARENT_REPLY';
+const sideReply = 'E2E_FIXTURE_FOLLOWUP_REPLY';
 const workerReply = 'E2E_FIXTURE_WORKER_REPLY';
 
 async function listen(server) {
@@ -64,12 +67,14 @@ function modelFixture(requests) {
         return;
       }
       const input = JSON.stringify(payload.input);
-      const turn = input.includes(workerRequest) ? 'worker' : input.includes(parentRequest) ? 'parent' : 'other';
+      const turn = input.includes(workerRequest) ? 'worker'
+        : input.includes(sideRequest) ? 'side-chat' : input.includes(parentRequest) ? 'parent' : 'other';
       requests.push(turn);
       const id = `resp_${requests.length}`;
       const item = {
         id: `msg_${requests.length}`, type: 'message', role: 'assistant', status: 'completed',
-        content: [{ type: 'output_text', text: turn === 'worker' ? workerReply : turn === 'parent' ? parentReply : 'E2E_FIXTURE_REPLY', annotations: [] }],
+        content: [{ type: 'output_text', text: turn === 'worker' ? workerReply
+          : turn === 'side-chat' ? sideReply : turn === 'parent' ? parentReply : 'E2E_FIXTURE_REPLY', annotations: [] }],
       };
       const events = [
         { type: 'response.created', response: { id, status: 'in_progress', output: [] } },
@@ -178,7 +183,7 @@ async function verifyCdp(pid, port) {
   }
 }
 
-async function captureNotice(ui, evidenceDir, name) {
+async function captureAppearance(ui, evidenceDir, name) {
   for (const mode of ['light', 'dark']) {
     await ui.cli('set', 'media', mode);
     await until(mode + ' appearance', () => ui.evaluate(expected =>
@@ -235,14 +240,33 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   assert.ok(side.sdkId, 'The native fork was not created');
   assert.equal(await evaluate(() => location.hash), `#/cc-agent/${parentId}`);
 
-  await captureNotice(ui, evidenceDir, 'side-chat');
+  const onRoute = id => evaluate(sessionId => location.hash.split('?')[0] === '#/cc-agent/' + sessionId, id);
+  const rowSelector = id => `[data-sidebar-session-row][data-session-id="${id}"]`;
+  const tabSelector = id => `[data-tab-pill="${id}"]`;
+  const openCollaboration = () => clickControl('view collaboration', /button "(查看协同|View collaboration)"/);
+  const returnToSideChat = () => clickControl('return to side chat', /button "(回到侧边追问|Back to side chat)"/);
+  const readActiveSideChat = () => evaluate(async (id, childId) => {
+    if (location.hash.split('?')[0] !== '#/cc-agent/' + id) return null;
+    const tabs = await window.electronAPI.localDb.rightSidebarTabs.list({ sessionId: id });
+    const tab = tabs.tabs.find(tab => tab.id === tabs.activeTabId && tab.kind === 'side-chat' && tab.state.sessionId === childId);
+    return tab && document.querySelector(`[data-tab-pill="${tab.id}"]`)?.closest('aside:not([data-pane-collapsed])') ? tab.id : null;
+  }, parentId, side.id);
+
+  assert.equal(await evaluate(async (id, prompt, workdir, model) => {
+    const result = await window.electronAPI.maker.send(id, prompt, {
+      agentKind: 'codex', workingDir: workdir, model, permissionMode: 'ask',
+    }, { throwOnStartFailure: true });
+    return result.accepted;
+  }, side.id, sideRequest, workdir, model), true);
+  await until('follow-up answer in the parent sidebar', () => evaluate((tabId, reply) =>
+    document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')?.innerText.includes(reply), side.tabId, sideReply));
+  const beforeCollaboration = await evaluate(async id => {
+    const row = await window.electronAPI.localDb.sessions.get(id);
+    return { sdkId: row.sdkSessionId, agentKind: row.agentKind };
+  }, side.id);
+
   await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
   await clickControl('turn on collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
-  await until('promotion notice is visible before starting collaboration', () => evaluate(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    return /追问会从侧栏移到任务列表。对话记录会保留|moves this follow-up and its conversation history from the sidebar/.test(dialog?.innerText ?? '');
-  }));
-  await captureNotice(ui, evidenceDir, 'before-collaboration');
   await until('dialog uses the loopback model and automatic approval', async () => {
     const snapshot = await ui.snapshot();
     return snapshot.includes(`当前：${model}`) || snapshot.includes(`Current: ${model}`)
@@ -252,43 +276,75 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
     /textbox "(?:初始任务|Initial task)"[^\n]*\bref=(e\d+)\]/i.exec(await ui.snapshot())?.[1]);
   await cli('fill', `@${taskField}`, workerRequest);
   await clickControl('start collaboration', /button "(开启协同|Start Collaboration|Start collab)"/i);
+  await until('linked task row and view control appear while still on the parent', async () =>
+    await readActiveSideChat() === side.tabId
+    && await evaluate(selector => Boolean(document.querySelector(selector)), rowSelector(side.id))
+    && /button "(查看协同|View collaboration)"/.test(await ui.snapshot()));
+  const promoted = await evaluate(async id => {
+    const { source, sideChatPromoted, parentSessionId, orcaRole, status, sdkSessionId, agentKind } = await window.electronAPI.localDb.sessions.get(id);
+    return { source, sideChatPromoted, parentSessionId, orcaRole, status, sdkId: sdkSessionId, agentKind };
+  }, side.id);
+  assert.deepEqual(promoted, { source: 'desktop', sideChatPromoted: true, parentSessionId: parentId,
+    orcaRole: 'lead', status: 'active', ...beforeCollaboration });
+  const sidebarDraft = 'E2E shared draft';
+  const sidebarEditor = `aside:has(${tabSelector(side.tabId)}) .tiptap[contenteditable="true"]`;
+  await cli('fill', sidebarEditor, sidebarDraft);
+  await captureAppearance(ui, evidenceDir, 'side-chat');
+
+  await openCollaboration();
   await until('main view opens the original child ID', () => evaluate(id => location.hash.split('?')[0] === '#/cc-agent/' + id, side.id));
-  const worker = await until('real worker, collaboration tab, and displayed fixture reply', () => evaluate(async (leadId, reply) => {
+  const readCollaboration = () => evaluate(async (leadId, reply) => {
     const api = window.electronAPI;
+    if (location.hash.split('?')[0] !== '#/cc-agent/' + leadId) return null;
     const [worker] = await api.localDb.orcaWorkflows.listWorkersByLead(leadId);
     const tabs = await api.localDb.rightSidebarTabs.list({ sessionId: leadId });
     const active = tabs.tabs.find(tab => tab.id === tabs.activeTabId && tab.kind === 'orca-workers');
     if (!worker || !active) return null;
-    const chat = document.querySelector(`[data-tab-pill="${active.id}"]`)?.closest('aside');
+    const chat = document.querySelector(`[data-tab-pill="${active.id}"]`)?.closest('aside:not([data-pane-collapsed])');
     if (!chat?.innerText.includes(reply) || !chat.innerText.includes(worker.label)) return null;
     const task = await api.localDb.sessions.get(worker.sessionId);
     return { id: worker.sessionId, label: worker.label, provider: task.providerId };
-  }, side.id, workerReply), 40_000);
+  }, side.id, workerReply);
+  const worker = await until('real worker, collaboration tab, and displayed fixture reply', readCollaboration, 40_000);
   assert.equal(worker.provider, providerId);
-  await cli('screenshot', path.join(evidenceDir, 'collaboration.png'));
+  assert.deepEqual(await evaluate(id => window.electronAPI.localDb.orcaWorkflows.listWorkersByLead(id), parentId), []);
+  await until('full page shows the same follow-up answer and draft', () => evaluate((reply, draft) =>
+    document.body.innerText.includes(reply) && [...document.querySelectorAll('.tiptap[contenteditable="true"]')]
+      .some(editor => !editor.closest('aside') && editor.textContent.includes(draft)), sideReply, sidebarDraft));
+  await captureAppearance(ui, evidenceDir, 'collaboration');
+  await clickControl('close the collaboration sidebar with its existing control', /button "(关闭侧栏|Close Sidebar)"/i);
+  await until('collaboration sidebar is collapsed', async () => !await readCollaboration());
+  await returnToSideChat();
+  await until('return selects the existing side chat', async () => await readActiveSideChat() === side.tabId);
+  await openCollaboration();
+  assert.deepEqual(await until('explicit view reopens collapsed collaboration', readCollaboration), worker);
 
-  const rowSelector = id => `[data-sidebar-session-row][data-session-id="${id}"]`;
-  await cli('click', rowSelector(parentId));
-  await until('parent route with stale side-chat tab removed', () => evaluate(async (parentId, side) => {
+  await returnToSideChat();
+  await until('return before closing tab', async () => await readActiveSideChat() === side.tabId);
+  await cli('click', `${tabSelector(side.tabId)} button[data-no-drag]`);
+  await until('only the parent tab closes', () => evaluate(async (parentId, side, workerId) => {
     const api = window.electronAPI;
     if (location.hash.split('?')[0] !== '#/cc-agent/' + parentId) return false;
     const tabs = await api.localDb.rightSidebarTabs.list({ sessionId: parentId });
-    const sideChats = await api.maker.listSideChats(parentId);
-    return !tabs.tabs.some(tab => tab.id === side.tabId) && !sideChats.some(child => child.id === side.id)
-      && !document.querySelector(`[data-tab-pill="${side.tabId}"]`);
-  }, parentId, side));
+    const [worker] = await api.localDb.orcaWorkflows.listWorkersByLead(side.id);
+    return !tabs.tabs.some(tab => tab.id === side.tabId) && !document.querySelector(`[data-tab-pill="${side.tabId}"]`)
+      && !document.querySelector('[role="alertdialog"]') && worker?.sessionId === workerId
+      && (await api.localDb.sessions.get(side.id)).status === 'active';
+  }, parentId, side, worker.id));
 
   await cli('click', rowSelector(side.id));
-  await until('independent task opens from task list', () => evaluate(id => location.hash.split('?')[0] === '#/cc-agent/' + id, side.id));
-  const promoted = await evaluate(async id => {
-    const { source, sideChatPromoted, parentSessionId, orcaRole, status } = await window.electronAPI.localDb.sessions.get(id);
-    return { source, sideChatPromoted, parentSessionId, orcaRole, status };
-  }, side.id);
-  assert.deepEqual(promoted, { source: 'desktop', sideChatPromoted: true, parentSessionId: parentId, orcaRole: 'lead', status: 'active' });
-  return { parentId, sideChatId: side.id, worker, oldTabRemoved: true, reopenedFromTaskList: true };
+  await until('independent task opens from task list', () => onRoute(side.id));
+  await returnToSideChat();
+  const reopenedTab = await until('explicit return reopens the same follow-up', readActiveSideChat);
+  assert.notEqual(reopenedTab, side.tabId, 'The dismissed tab should be newly opened for the same task');
+  await until('reopened editor still has the same draft', () => evaluate((tabId, draft) =>
+    document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')
+      ?.querySelector('.tiptap[contenteditable="true"]')?.textContent.includes(draft), reopenedTab, sidebarDraft));
+  return { parentId, sideChatId: side.id, worker, stayedOnParent: true, sharedDraft: true, sidebarRevealedAgain: true, reopenedTab };
 }
 
 const evidenceDir = await mkdtemp(path.join(tmpdir(), 'cindy-sidechat-orca-e2e-'));
+const preview = process.argv.includes('--preview');
 const sandbox = `sidechat-orca-e2e-${path.basename(evidenceDir).slice(-6).toLowerCase()}`;
 const profile = defaultIsolatedUserDataDir(sandbox, region);
 const workdir = path.join(evidenceDir, 'project');
@@ -334,6 +390,15 @@ try {
   });
   assert.deepEqual(recordedModels, [model], 'The sandbox recorded usage outside the fixture model');
   await writeFile(path.join(evidenceDir, 'result.json'), JSON.stringify({ ...result, requests, recordedModels, desktopPid: pid }, null, 2));
+  if (preview) {
+    await ui.cli('set', 'media', 'light');
+    console.log(`PREVIEW_READY pid=${pid} cdpPort=${port} modelPort=${modelPort} parent=${result.parentId} child=${result.sideChatId} tab=${result.reopenedTab}`);
+    console.log(`REPORT=${evidenceDir}`);
+    await new Promise(resolve => {
+      connection.browser.once('disconnected', resolve);
+      if (!connection.browser.isConnected()) resolve();
+    });
+  }
 } catch (error) {
   console.error(error);
   if (startedAgentBrowser) {
@@ -359,7 +424,7 @@ try {
     process.exitCode = 1;
   }
   if (!process.exitCode) {
-    console.log('PASS Side chat opened the same task with its worker and can be reopened from the task list.');
+    console.log('PASS The linked follow-up stays in the parent and can open, reveal and return to the same task.');
   }
   console.log(`REPORT=${evidenceDir}`);
 }
