@@ -15,6 +15,8 @@
  *  - 计划模式：只允许读取、抓取网页和静态可证只读的命令，其余同样要本机用户批准过；
  *  - 供应商分享的受邀者任务：内容会经过分享者的电脑，凭证类的读写与读取凭证的命令即使在全权下
  *    也要本机用户确认；用户可明确允许当前任务后续的凭证操作(credentials.ts)。
+ * Agent 所在电脑不一定会先问本机用户：「自动」档下它的自动审查可能已经放行(本机任务同样只经自动审查)。
+ * 所以上限拦下的操作由执行器在本机补弹确认卡(executor.ts)，不能没有卡就拒绝。
  * 批准记录只在短时间内有效；命令与抓取的批准用一次即失效，路径批准在有效期内覆盖同一路径的读写
  * (编辑会先读后写)。
  */
@@ -204,23 +206,32 @@ export class ExecutorGate {
   }
 
   authorize(action: ExecutorAction): ExecutorGateDecision {
+    return this.evaluate(action, true);
+  }
+
+  /** 与 authorize 同一判定，但不用掉一次性的批准：判断要不要在本机补弹确认卡时用。 */
+  wouldAllow(action: ExecutorAction): boolean {
+    return this.evaluate(action, false).ok;
+  }
+
+  private evaluate(action: ExecutorAction, take: boolean): ExecutorGateDecision {
     let credential = this.needsCredentialConsent(action);
-    if (credential && this.consumeCredentialExemption(action) && this.credentialGitReads(action) !== null) credential = false;
+    if (credential && this.consumeCredentialExemption(action, take) && this.credentialGitReads(action) !== null) credential = false;
     if (this.mode === 'full' && !credential) return { ok: true, elevated: true };
     // 抓取网页：本机用户批准过这个地址就放开内网。公网样式的域名也可能解析到内网(公司内网域名)，
     // 只看地址文本判定为不必问，但抓取时会按 DNS 结果被拦下。
-    if (action.kind === 'fetch' && this.consume(action)) return { ok: true, elevated: true };
+    if (action.kind === 'fetch' && this.consume(action, false, take)) return { ok: true, elevated: true };
     if (!credential && !this.requiresApproval(action)) return { ok: true };
-    if (this.consume(action, credential)) return { ok: true, elevated: true };
+    if (this.consume(action, credential, take)) return { ok: true, elevated: true };
     return { ok: false, reason: this.deniedReason(action) };
   }
 
   private deniedReason(action: ExecutorAction): string {
     return action.kind === 'exec'
-      ? 'This command needs the user\'s confirmation on the computer where the task runs, and it was not confirmed.'
+      ? 'The user did not allow this command on the computer where the task runs. No confirmation is waiting there now.'
       : action.kind === 'fetch'
-        ? `Fetching ${action.url} needs the user's confirmation on the computer where the task runs, and it was not confirmed.`
-        : `Access to ${action.path} needs the user's confirmation on the computer where the task runs, and it was not confirmed.`;
+        ? `The user did not allow fetching ${action.url} on the computer where the task runs. No confirmation is waiting there now.`
+        : `The user did not allow access to ${action.path} on the computer where the task runs. No confirmation is waiting there now.`;
   }
 
   private requiresApproval(action: ExecutorAction): boolean {
@@ -248,22 +259,22 @@ export class ExecutorGate {
     return action.scope === 'tree' && !this.workspace.contains(action.path);
   }
 
-  private consume(action: ExecutorAction, credential = false): boolean {
+  private consume(action: ExecutorAction, credential = false, take = true): boolean {
     this.prune();
     const { kind, key } = approvalOf(action);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key
       && (!credential || approval.credential));
     if (index < 0) return false;
-    if (kind !== 'path') this.approvals.splice(index, 1);
+    if (take && kind !== 'path') this.approvals.splice(index, 1);
     return true;
   }
 
-  private consumeCredentialExemption(action: ExecutorAction): boolean {
+  private consumeCredentialExemption(action: ExecutorAction, take = true): boolean {
     this.prune();
     const { kind, key } = approvalOf(action);
     const index = this.credentialExemptions.findIndex((approval) => approval.kind === kind && approval.key === key);
     if (index < 0) return false;
-    this.credentialExemptions.splice(index, 1);
+    if (take) this.credentialExemptions.splice(index, 1);
     return true;
   }
 

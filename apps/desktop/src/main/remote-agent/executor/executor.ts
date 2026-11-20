@@ -7,7 +7,8 @@
  *    NotebookEdit(Claude Code 的自带文件与命令工具关掉后由它顶替)；供应商分享的受邀者任务另有
  *    WebFetch(自带的 WebFetch 对受邀者关闭，改在本机抓取)。
  * 写文件前通知「每轮改动对比」抓取改前内容；命令执行后登记一次无法预知范围的改动。
- * 供应商分享的受邀者任务里，凭证类操作没有本机批准时由这里直接在本机弹确认卡(confirm)。
+ * 权限上限拦下、又没有本机批准的操作由这里直接在本机弹确认卡(confirm)：Agent 所在电脑的自动审查
+ * 可能已放行而没有问过本机用户；供应商分享的受邀者任务里，凭证类操作也走这张卡。
  */
 import path from 'node:path';
 
@@ -63,8 +64,9 @@ export interface RemoteExecutorOptions {
   /** 提供 WebFetch(在本机抓取网页)所用的出站通道；缺省时不提供这个工具。 */
   webFetch?: GuardedFetch;
   /**
-   * 在本机弹确认卡问本机用户(供应商分享的受邀者任务)：凭证类操作没有本机批准时用它补问，允许后
-   * 默认只放行这一个操作；用户明确选择会话级允许后免除后续的分享凭证确认。缺省时直接拒绝。
+   * 在本机弹确认卡问本机用户：权限上限拦下、又没有本机批准的操作(含供应商分享的受邀者任务里的凭证类
+   * 操作)用它补问，允许后默认只放行这一个操作；凭证卡上用户明确选择会话级允许后免除后续的分享凭证确认。
+   * 缺省时直接拒绝。
    */
   confirm?(action: ExecutorAction, signal: AbortSignal): Promise<ExecutorConfirmation>;
   /** 与 confirm 一起提供：git 查看内容、打出 git 配置的命令先在本机核实，读不到凭证时不弹卡。 */
@@ -126,8 +128,8 @@ export class RemoteExecutor {
   private readonly writeHooks: FileWriteHooks;
   private closed = false;
   private permissionGeneration = 0;
-  private credentialConfirmationAbort = new AbortController();
-  private credentialConfirmationTail?: Promise<void>;
+  private confirmationAbort = new AbortController();
+  private confirmationTail?: Promise<void>;
   private readonly unwatchCredentialGrant?: () => void;
 
   constructor(private readonly opts: RemoteExecutorOptions) {
@@ -166,8 +168,8 @@ export class RemoteExecutor {
    */
   cancelPendingConfirmations(): void {
     this.permissionGeneration += 1;
-    const previous = this.credentialConfirmationAbort;
-    this.credentialConfirmationAbort = new AbortController();
+    const previous = this.confirmationAbort;
+    this.confirmationAbort = new AbortController();
     previous.abort();
   }
 
@@ -183,34 +185,38 @@ export class RemoteExecutor {
   }
 
   /**
-   * 凭证类操作在本机补问一次(供应商分享的受邀者任务)；本机用户允许后登记批准，调用方再检查一次即可
-   * 放行。git 查看内容、打出 git 配置的命令在本机核实过读不到凭证时不弹卡，直接登记批准。不是凭证类、
-   * 没有确认通道或任务已结束时返回 false。
+   * 权限上限拦下的操作在本机补问一次；本机用户允许后登记批准，调用方再检查一次即可放行。凭证类操作用
+   * 分享凭证卡(git 查看内容、打出 git 配置的命令在本机核实过读不到凭证时不弹卡，直接登记豁免)，其余用
+   * 普通确认卡。上限本就放行、没有确认通道、任务已结束或用户没有允许时返回 false。
    */
   async confirm(action: ExecutorAction, signal?: AbortSignal): Promise<boolean> {
-    if (this.closed || signal?.aborted || !this.opts.confirm || !this.gate.needsCredentialConsent(action)) return false;
+    if (this.closed || signal?.aborted || !this.opts.confirm) return false;
+    // 凭证类操作照旧先核实(已登记的豁免可能因链接改变而失效)；其余操作上限本就放行时不必问。
+    const credential = this.gate.needsCredentialConsent(action);
+    if (!credential && this.gate.wouldAllow(action)) return false;
     signal = signal
-      ? AbortSignal.any([signal, this.credentialConfirmationAbort.signal])
-      : this.credentialConfirmationAbort.signal;
+      ? AbortSignal.any([signal, this.confirmationAbort.signal])
+      : this.confirmationAbort.signal;
     const permissionGeneration = this.permissionGeneration;
     // 只有要核实的 git 命令才在弹卡前等核实结果；核实通过不弹卡，也不必排在其他确认卡后面。
-    const gitCheck = this.gitReadsCheck(action, signal);
+    const gitCheck = credential ? this.gitReadsCheck(action, signal) : null;
     if (gitCheck && await gitCheck) {
       // 核实期间任务结束、请求被取消或权限已切换：同样不放行。
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
       this.gate.recordCredentialExemption(action);
-      return true;
+      // 豁免只免掉凭证确认；普通上限仍要本机批准时接着弹普通确认卡。
+      if (this.gate.wouldAllow(action)) return true;
     }
     // 核实需要时间：期间请求被取消就不再排队(abort 事件不会重放给之后登记的监听)。
     if (gitCheck && (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration)) return false;
-    // 同一任务可能并行调用工具。只排队确认，不排队执行；前一张卡建立任务授权后，
-    // 后续请求重新检查，避免已经弹出的多张卡仍逐一等待用户回答。
+    // 同一任务可能并行调用工具，界面一次只显示一张确认卡。只排队确认，不排队执行；前一张卡建立任务
+    // 授权或改变权限后，后续请求重新检查，避免已经弹出的多张卡仍逐一等待用户回答。
     // 排队位置要等前一个位置放行、且自己的卡处理完才放行。
-    const previous = this.credentialConfirmationTail;
+    const previous = this.confirmationTail;
     let settle!: () => void;
     const settled = new Promise<void>((resolve) => { settle = resolve; });
     const slot = previous ? previous.then(() => settled) : settled;
-    this.credentialConfirmationTail = slot;
+    this.confirmationTail = slot;
     // 自己的请求取消后立即让出：还在排队就不再等(后面的请求仍等前一张卡)；
     // 卡已弹出就不再挡住后面的请求，这张卡之后的回答会被丢弃。
     let onAbort: (() => void) | undefined;
@@ -221,8 +227,8 @@ export class RemoteExecutor {
     try {
       if (previous) await Promise.race([previous, aborted]);
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
-      // 调用方仍会重新检查普通权限上限；这里只免除已授权的分享凭证确认。
-      if (!this.gate.needsCredentialConsent(action)) return true;
+      // 排队期间前一张卡已建立任务授权：不再弹卡，调用方重新检查即可放行。
+      if (this.gate.wouldAllow(action)) return true;
       const allowed = await Promise.race([
         this.opts.confirm(action, signal).catch(() => false),
         aborted.then(() => false as const),
@@ -230,18 +236,19 @@ export class RemoteExecutor {
       // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
       if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
         || permissionGeneration !== this.permissionGeneration) return false;
-      if (allowed === 'session') {
+      if (allowed === 'session' && this.gate.needsCredentialConsent(action)) {
         this.gate.allowCredentialsForSession();
         this.opts.credentialGrant?.remember();
-        if (this.gate.getMode() === 'full') return true;
+        if (this.gate.wouldAllow(action)) return true;
       }
+      // 同一张卡同时满足凭证确认与普通上限(批准记录按操作是否凭证类登记)。
       this.gate.recordApproval(action);
       return true;
     } finally {
       if (onAbort) signal?.removeEventListener('abort', onAbort);
       settle();
       void slot.then(() => {
-        if (this.credentialConfirmationTail === slot) this.credentialConfirmationTail = undefined;
+        if (this.confirmationTail === slot) this.confirmationTail = undefined;
       });
     }
   }
@@ -505,7 +512,7 @@ export class RemoteExecutor {
     if (url.username || url.password) return textResult('URLs with a user name or password cannot be fetched.', true);
     const startIndex = Math.max(0, Math.floor(optionalNumber(args, 'start_index') ?? 0));
     // 按 Agent 给的原样地址核对：本机用户在确认卡上批准的就是这个地址。
-    const decision = this.gate.authorize({ kind: 'fetch', url: raw });
+    const decision = await this.decide({ kind: 'fetch', url: raw }, signal);
     if (!decision.ok) throw new ExecutorDenied(decision.reason ?? 'Not allowed.');
     return fetchWebPage(fetchImpl, { url, startIndex, allowPrivateNetwork: decision.elevated === true, signal });
   }

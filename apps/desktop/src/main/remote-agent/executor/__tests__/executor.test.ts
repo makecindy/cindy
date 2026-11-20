@@ -26,7 +26,13 @@ let opaque: number;
 
 function makeExecutor(
   mode: ReturnType<typeof executorGateModeFor> = 'normal',
-  extra: { aliases?: Array<{ from: string; to: string }>; now?: () => number; extractPdfText?: PdfTextExtractor; webFetch?: GuardedFetch } = {},
+  extra: {
+    aliases?: Array<{ from: string; to: string }>;
+    now?: () => number;
+    extractPdfText?: PdfTextExtractor;
+    webFetch?: GuardedFetch;
+    confirm?: RemoteExecutorOptions['confirm'];
+  } = {},
 ) {
   const workspace = new ExecutorWorkspace({ workingDir: project, aliases: extra.aliases });
   const gate = new ExecutorGate(workspace, mode, extra.now);
@@ -37,6 +43,7 @@ function makeExecutor(
     tempDir: path.join(root, 'tmp'),
     ...(extra.extractPdfText ? { extractPdfText: extra.extractPdfText } : {}),
     ...(extra.webFetch ? { webFetch: extra.webFetch } : {}),
+    ...(extra.confirm ? { confirm: extra.confirm } : {}),
     capture: {
       beforeWrite: async (p) => {
         captured.push(p);
@@ -369,13 +376,49 @@ describe('Claude Code style file tools', () => {
     fs.writeFileSync(env, 'TOKEN=1');
     const denied = await executor.callTool('Read', { file_path: env });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     gate.recordApproval({ kind: 'read', path: env });
     expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
   });
 });
 
 describe.runIf(posix)('Claude Code style Bash', () => {
+  it('asks on this computer before refusing an ordinary operation the Agent computer did not ask about', async () => {
+    // 回归(2026-11-20)：「自动」档下 Agent 所在电脑的自动审查放行了 `grep -rn`，没有弹卡；本机上限
+    // 却按「必问」直接拒绝，用户找不到任何可点的确认。现在上限拦下的普通操作也在本机补问一次。
+    let answer: ExecutorConfirmation = true;
+    const asked: ExecutorAction[] = [];
+    const { executor } = makeExecutor('normal', {
+      confirm: async (action) => {
+        asked.push(action);
+        return answer;
+      },
+    });
+    fs.writeFileSync(path.join(project, 'a.txt'), 'needle');
+    const search = { command: 'grep -rn needle .' };
+    try {
+      expect(text(await executor.callTool('Bash', search))).toContain('a.txt:1:needle');
+      expect(asked).toEqual([{ kind: 'exec', command: search.command, cwd: project }]);
+      // 只放行这一次；用户不允许时如实说明，不让 Agent 去找不存在的确认。
+      answer = false;
+      const denied = await executor.callTool('Bash', search);
+      expect(denied.isError).toBe(true);
+      expect(text(denied)).toContain('did not allow');
+      expect(asked).toHaveLength(2);
+      // 区外写同样补问，允许后写入。
+      answer = true;
+      const target = path.join(outside, 'x.txt');
+      expect((await executor.callTool('Write', { file_path: target, content: 'x' })).isError).not.toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toBe('x');
+      // 上限本就放行的操作不弹卡。
+      asked.length = 0;
+      expect(text(await executor.callTool('Bash', { command: 'cat a.txt' }))).toBe('needle');
+      expect(asked).toEqual([]);
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('keeps the working directory between calls, but resets it when it leaves the project', async () => {
     const { executor } = makeExecutor();
     fs.mkdirSync(path.join(project, 'sub'));
@@ -609,7 +652,7 @@ describe('cindy_exec MCP endpoint', () => {
 
     const denied = await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     expect(calls).toHaveLength(1);
     gate.recordApproval({ kind: 'fetch', url: 'http://10.0.0.5/wiki' });
     expect((await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' })).isError).toBeUndefined();
@@ -964,21 +1007,9 @@ describe('shared provider credentials', () => {
     fs.writeFileSync(production, 'TOKEN=2');
     const denied = await executor.callTool('Read', { file_path: production });
     expect(denied.isError).toBe(true);
-    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(text(denied)).toContain('did not allow');
     await expect(executor.handle('fs.read', { path: production })).rejects.toMatchObject({ code: 'EACCES' });
     expect(asked).toHaveLength(3);
-  });
-
-  it('does not ask about operations that are not credentials', async () => {
-    const asked: ExecutorAction[] = [];
-    const { executor } = sharedExecutor('normal', async (action) => {
-      asked.push(action);
-      return true;
-    });
-    // 区外写在普通档要本机批准，但不是凭证类：不在这里补问，照旧拒绝。
-    const result = await executor.callTool('Write', { file_path: path.join(outside, 'x.txt'), content: 'x' });
-    expect(result.isError).toBe(true);
-    expect(asked).toEqual([]);
   });
 
   it('remembers an explicit credential grant across different operations only in this task', async () => {
@@ -1148,8 +1179,10 @@ describe('shared provider credentials', () => {
       expect(await other.confirm(first)).toBe(false);
       expect(otherConfirm).toHaveBeenCalledTimes(1);
       answer('session');
-      expect(await Promise.all(pending)).toEqual([true, true]);
-      expect(confirm).toHaveBeenCalledTimes(1);
+      // 任务级凭证授权不放宽计划模式：排在后面的写入改问普通确认，用户不允许就不放行。
+      await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+      answer(false);
+      expect(await Promise.all(pending)).toEqual([true, false]);
       expect(executor.check(first).ok).toBe(true);
       expect(executor.check(second).ok).toBe(false);
       expect(other.check(first).ok).toBe(false);
@@ -1306,9 +1339,10 @@ describe('shared provider credentials', () => {
     const action: ExecutorAction = { kind: 'exec', command: 'git remote show origin', cwd: project };
     try {
       expect(gate.authorize(action).ok).toBe(false);
-      expect(await executor.confirm(action)).toBe(true);
+      // 核实只免掉凭证确认：计划模式仍要本机批准，于是弹普通确认卡，用户不允许就不放行。
+      expect(await executor.confirm(action)).toBe(false);
+      expect(asked).toHaveBeenCalledOnce();
       expect(gate.authorize(action).ok).toBe(false);
-      expect(asked).not.toHaveBeenCalled();
       gate.recordApproval(action);
       expect(gate.authorize(action).ok).toBe(true);
     } finally {
