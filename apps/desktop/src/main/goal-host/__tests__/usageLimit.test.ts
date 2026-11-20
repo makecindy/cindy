@@ -5,6 +5,7 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readGlmCodingPlanCycleResetAt,
   readStructuredUsageResetAt,
   readTurnUsageResetAt,
 } from '../usageLimit';
@@ -181,5 +182,65 @@ describe('readStructuredUsageResetAt', () => {
   it('only reads the structured field, never the error text', () => {
     expect(readStructuredUsageResetAt({ usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
     expect(readStructuredUsageResetAt({ errorStatus: 429, message: 'Try again in ~2 min.' })).toBeNull();
+  });
+});
+
+// 目标模式入口(goal-host/index.ts 的 getAccountLimit)用它判智谱 GLM Coding Plan
+// 的周期额度例外:5 小时 / 每周窗口用尽时,报错原文写明的重置时刻按例外采信。
+describe('readGlmCodingPlanCycleResetAt', () => {
+  // now 取目标日期之前几天,保证在任何时区下目标时刻都还没到(跨时区稳定)。
+  const NOW = Date.parse('2026-11-01T00:00:00.000Z');
+  const RESET_AT = new Date(2026, 10, 6, 18, 54, 3).getTime();
+  const GLM_ERROR = {
+    sdkError: 'rate_limit',
+    errorStatus: 429,
+    message:
+      'API Error: Request rejected (429) · [1308][已达到 5 小时的使用上限。您的限额将在 2026-11-06 18:54:03 重置。]',
+  };
+
+  it('采信报错原文里的裸本地时刻(按本机时区)', () => {
+    expect(readGlmCodingPlanCycleResetAt(GLM_ERROR, NOW, { isGlmCodingPlan: true })).toBe(RESET_AT);
+  });
+
+  it('别的来源不采信', () => {
+    // Coding Plan 默认不采信报错原文里的时刻,GLM 是唯一例外。
+    expect(readGlmCodingPlanCycleResetAt(GLM_ERROR, NOW, { isGlmCodingPlan: false })).toBeNull();
+  });
+
+  it('普通 429 不是周期额度,不排期', () => {
+    expect(
+      readGlmCodingPlanCycleResetAt(
+        { errorStatus: 429, message: 'API Error: Request rejected (429) · Too many requests' },
+        NOW,
+        { isGlmCodingPlan: true },
+      ),
+    ).toBeNull();
+  });
+
+  it('本机时区不可信时不按本机时区换算', () => {
+    // SSH / 远程 Agent 的报错用的是那台机器的本地时间。
+    expect(
+      readGlmCodingPlanCycleResetAt(GLM_ERROR, NOW, {
+        isGlmCodingPlan: true,
+        localTimeZoneTrusted: false,
+      }),
+    ).toBeNull();
+  });
+
+  it('带时区的时刻不走这条分支(其余分支仍只对订阅账号生效)', () => {
+    expect(
+      readGlmCodingPlanCycleResetAt(
+        {
+          errorStatus: 429,
+          message: '已达到 5 小时的使用上限。您的限额将在 2026-11-06T18:54:03Z 重置。',
+        },
+        NOW,
+        { isGlmCodingPlan: true },
+      ),
+    ).toBeNull();
+  });
+
+  it('这条报错文案算账号限额(目标模式落 usageLimited 而不是 blocked)', () => {
+    expect(classifyTurnUsageLimit(GLM_ERROR)).toBe(true);
   });
 });
