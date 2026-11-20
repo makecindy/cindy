@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetch = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: fetch, ServerApiError: class extends Error { constructor(public code: string, public statusCode: number) { super(code); } } }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: fetch, ServerApiError: class extends Error { constructor(public code: string, public statusCode: number) { super(code); } } }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://models.example.test' }));
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { readOrganizationAccountUsage } from '../organizationAccountUsage';
 const valid = { spend: 12, maxBudget: 100, currency: 'CNY', budgetResetAt: '2026-11-01T00:00:00Z' };
 beforeEach(() => { fetch.mockReset().mockResolvedValue(valid); });
@@ -30,9 +30,9 @@ describe('organization account usage', () => {
     fetch.mockResolvedValue({ ...valid, todaySpend: 1.25, dailyLimitEnabled });
     expect(await readOrganizationAccountUsage()).toMatchObject({ ...valid, todaySpend: null, dailyLimitEnabled: false });
   });
-  it.each([[404, 'NOT_FOUND'], [501, 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED']])('allows legacy fallback only for an unavailable capability', async (status, code) => {
+  it.each([[404, 'NOT_FOUND'], [501, 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED']])('treats unsupported quota capabilities as unavailable', async (status, code) => {
     fetch.mockRejectedValue(new ServerApiError(code, status, 'safe'));
-    expect(await readOrganizationAccountUsage()).toBeUndefined();
+    expect(await readOrganizationAccountUsage()).toBeNull();
   });
   it.each([401, 403, 429, 500, 503])('never falls back after status %s', async status => {
     fetch.mockRejectedValue(new ServerApiError('ERROR', status, 'safe'));

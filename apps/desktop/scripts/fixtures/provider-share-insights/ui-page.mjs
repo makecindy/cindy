@@ -4,20 +4,26 @@ export default {
   name: 'provider-share-insights',
   entry: './provider-share-insights-fixture.tsx',
   viewport: { width: 1220, height: 900 },
-  real: 'ProviderShareManagePage, ProviderShareReceivedDetail, visibility switches, quota cards, ProviderUsageSection, translations and themes',
+  real: 'ProviderShareManagePage, ProviderShareReceivedDetail, visibility switches, quota cards, ProviderUsageSection, ToastContainer, translations and themes',
   notCovered:
-    'Live cross-account transport, persisted permissions, real upstream quota, Windows. All numbers and names are fixture data.',
+    'Live cross-account transport, persisted permissions, real upstream quota, native save dialogs and filesystem publication. All numbers and names are fixture data.',
   stubs: {
     'src/renderer/hooks/useProviders': {
-      partial: 'export const useProviders = () => ({ providers: [], loading: false });',
+      partial: `export const useProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, routing: {}, models: {}, subscriptionFastPolicy: { allowFast: true } }], loading: false });`,
     },
     'src/renderer/hooks/useDeviceProviders': {
-      partial: `export const useDeviceProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', routing: {}, models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }], codex: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] } }], loading: false, error: null, unsupported: false });`,
+      partial: `export const useDeviceProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, subscriptionFastPolicy: { allowFast: true }, routing: {}, models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }], codex: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] } }], loading: false, error: null, unsupported: false });`,
     },
   },
   cases: {
     owner: {
-      about: 'Owner detail with two independent switches; writes affect fixture memory only',
+      about: 'Owner detail with a two-computer subscription group and independent visibility switches; writes affect fixture memory only',
+    },
+    'owner-export-error': {
+      about: 'Owner roster save failure uses the real toast with synthetic API failure',
+    },
+    'owner-remote': {
+      about: 'Same-account remote group management retains a visible, uncompressed account Fast setting',
     },
     default: { about: 'Both capabilities; usage collapsed, models visible at desktop height' },
     expanded: {
@@ -48,6 +54,7 @@ export default {
     'usage-only': { about: 'Only usage details shared' },
     closed: { about: 'Both permissions disabled without disabling model use' },
     group: { about: 'Two anonymous own accounts; borrowed accounts excluded' },
+    'subscription-pool': { about: 'Each account of a shared multi-account subscription lists all of its own windows' },
   },
   async ready(page) {
     await page
@@ -56,7 +63,23 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
-    if (ui.case === 'owner') {
+    if (ui.case.startsWith('owner')) {
+      const exportRoster = page.getByRole('button', { name: await ui.t('providerShare.manage.exportRoster') });
+      if (ui.case !== 'owner-remote') await exportRoster.waitFor({ state: 'visible' });
+      else assert.equal(await exportRoster.count(), 0);
+      // 2026-11-11: a duplicate account Fast card shrank into a line below the page title.
+      // Render the real page with a subscription group (previous fixture had no provider).
+      // UI tier: local account control stays in provider details; remote management keeps its account control.
+      const fast = page.getByRole('switch', { name: await ui.t('subscriptionFastPolicy.label'), exact: true });
+      assert.equal(await fast.count(), ui.case === 'owner-remote' ? 2 : 1);
+      if (ui.case === 'owner-remote') {
+        // A switch inside the collapsed card still has a box, but cannot actually be hit.
+        assert.equal(await fast.first().evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return hit === element || element.contains(hit);
+        }), true);
+      }
       // The owner page reads run limits (including idle reclaim) on mount. A missing fixture
       // reply would turn that read into a forbidden operation and render an error.
       const idleMinutes = page.getByTestId('remote-agent-limit-idleMinutes');
@@ -87,6 +110,13 @@ export default {
       assert.equal(await usage.getAttribute('aria-checked'), 'true');
       await quota.click();
       await ui.capture('owner-switches');
+      if (ui.case === 'owner-export-error') {
+        await exportRoster.click();
+        const error = page.getByText(await ui.t('providerShare.manage.exportRosterFailed'), { exact: true });
+        await error.waitFor();
+        await error.hover();
+        await ui.capture('export-error');
+      }
     } else {
       const body = await page.getByTestId('provider-share-insights').textContent();
       assert.ok(!body.includes('Private device name'));
@@ -147,6 +177,12 @@ export default {
       if (ui.case === 'organization')
         assert.equal(await progress.first().getAttribute('aria-valuenow'), '65');
       if (ui.case === 'group') assert.equal(await progress.count(), 5);
+      if (ui.case === 'subscription-pool') {
+        assert.equal(await progress.count(), 5);
+        for (const number of [1, 2])
+          await page.getByText(await ui.t('providerShare.insights.account', { number }), { exact: true }).waitFor();
+        await page.getByText('Fable', { exact: false }).first().waitFor();
+      }
       if (ui.case === 'unknown') assert.equal(await progress.count(), 0);
       if (ui.case === 'zero')
         assert.equal(await progress.first().getAttribute('aria-valuenow'), '0');

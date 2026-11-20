@@ -97,13 +97,14 @@ export function buildOrcaDispatchCard(toolName: string, input: unknown): OrcaCol
 export function parseOrcaPersistedMessage(
   content: unknown,
   senderLabel?: string,
+  autoBridgeBatchCount?: number,
 ): OrcaCollabCard | null {
   const record = parseMaybeJsonObject(content);
   if (!record || (record.orcaSource !== 'worker' && record.orcaSource !== 'lead')) return null;
   const body = readString(record.content);
   return {
     variant: record.orcaSource === 'lead' ? 'lead' : 'report',
-    title: orcaMessageTitle(record.orcaSource, senderLabel),
+    title: orcaMessageTitle(record.orcaSource, senderLabel, autoBridgeBatchCount),
     body: body ?? i18n.t('interaction.collab.emptyMessageBody'),
   };
 }

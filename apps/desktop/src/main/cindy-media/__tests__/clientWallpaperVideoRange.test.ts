@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({ dir: '', handle: vi.fn(), touch: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => h.dir }, protocol: { handle: h.handle } }));
 vi.mock('../ledger', () => ({ touchBlob: h.touch }));
 import { registerCindyMediaProtocolHandler } from '../cindyMediaProtocol';
-import { openClientWallpaperVideo } from '../blobStore';
+import { openClientWallpaperVideo } from '../blobStore.desktop';
 
 const hash = 'a'.repeat(64);
 const url = `cindy-media://client-wallpaper/${hash}.mp4`;

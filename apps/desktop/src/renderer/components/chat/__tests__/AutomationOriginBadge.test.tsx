@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'local-device' }));
+vi.mock('@/lib/makerTransport', () => ({ getSessionFor: async () => null }));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -74,17 +76,23 @@ describe('AutomationOriginBadge', () => {
     expect(screen.getByText('chat.userMessage.sessionSent')).toBeTruthy();
   });
 
-  it('shows a task on another computer as a source without offering a broken jump', () => {
-    const { container } = render(
+  // Regression: cross-device source labels were inert. Exercise the real link routing hook.
+  it.each(['dev-A', 'local-device'])('opens a device-qualified source on %s', async (deviceId) => {
+    const pin = vi.spyOn(remoteProjectsStore, 'pinSessionOrigin');
+    pin.mockClear();
+    render(
       <AutomationOriginBadge
-        automationOrigin={{ kind: 'session', senderSessionId: 'dev-A::source-task', senderSessionTitle: 'Source' }}
+        automationOrigin={{ kind: 'session', senderSessionId: `${deviceId}::source-task`, senderSessionTitle: 'Source' }}
       />,
     );
-    expect(screen.queryByRole('button')).toBeNull();
-    expect(screen.getByText('chat.userMessage.sessionSentNamed:Source')).toBeTruthy();
-    expect(container.querySelector('[title]')?.getAttribute('title')).toBe(
-      'chat.userMessage.sourceIds.session:dev-A::source-task',
+    const button = screen.getByRole('button');
+    expect(button.getAttribute('title')).toBe(
+      `chat.userMessage.sessionViewSource\nchat.userMessage.sourceIds.session:${deviceId}::source-task`,
     );
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/source-task', undefined));
+    if (deviceId === 'local-device') expect(pin).not.toHaveBeenCalled();
+    else expect(pin).toHaveBeenCalledWith(deviceId, 'source-task');
   });
 
   it('lists the source session id under the existing tooltip line', () => {

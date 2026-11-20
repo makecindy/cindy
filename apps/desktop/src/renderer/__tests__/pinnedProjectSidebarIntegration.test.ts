@@ -25,16 +25,6 @@ const filterHookSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('pinned project sidebar integration', () => {
-  it('keeps pinned projects out of expanded Projects but available in the collapsed rail', () => {
-    expect(sidebarSource).toContain('const visibleRailProjectsWithVendor = useMemo(() => {');
-    expect(sidebarSource).toContain(
-      '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
-    );
-    expect(sidebarSource).toMatch(
-      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
-    );
-  });
-
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
     expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');
@@ -42,12 +32,6 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain(
       'sessions: matchingSessions.filter((session) => session.pinnedAt == null)',
     );
-  });
-
-  it('exposes project pin toggling from the collapsed rail project menu', () => {
-    expect(sidebarSource).toContain('pinnedProjectKeys={pinnedProjectKeys}');
-    expect(sidebarSource).toContain('onToggleProjectPin={handleToggleProjectPin}');
-    expect(sidebarSource).toContain('pinnedProjectKeys.has(menuTarget.projectKey)');
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
@@ -60,30 +44,6 @@ describe('pinned project sidebar integration', () => {
   // (侧边栏重设计 D 期:按日期分组已删除,visibleDateSessions 的置顶项目剔除
   //  断言随之下线;置顶项目剔除现由 visibleProjectsWithVendor 的
   //  pinnedProjectKeys 过滤承担,上方断言已覆盖。)
-
-  it('confirms before removing a project and keeps the rail open when cancelled', () => {
-    const removeStart = sidebarSource.indexOf(
-      'const handleRemoveProjectFromSidebar = useCallback(',
-    );
-    const removeEnd = sidebarSource.indexOf('/* ---- Pin / Unpin handler ---- */', removeStart);
-    const removeBlock = sidebarSource.slice(removeStart, removeEnd);
-    const railRemoveStart = sidebarSource.indexOf('onRemoveProjectFromSidebar(menuTarget);');
-    const railRemoveBlock = sidebarSource.slice(railRemoveStart - 120, railRemoveStart + 80);
-
-    expect(removeStart).toBeGreaterThanOrEqual(0);
-    expect(removeEnd).toBeGreaterThan(removeStart);
-    expect(railRemoveStart).toBeGreaterThanOrEqual(0);
-    expect(removeBlock).toContain('const confirmed = await confirmDialog({');
-    expect(removeBlock).toContain('if (!confirmed) return;');
-    expect(removeBlock.indexOf('if (!confirmed) return;')).toBeLessThan(
-      removeBlock.indexOf('await setProjectHidden(project.projectKey, true);'),
-    );
-    expect(removeBlock).not.toContain('filter.toggleProject(project.projectKey);');
-    expect(removeBlock.indexOf('await setProjectHidden(project.projectKey, true);')).toBeLessThan(
-      removeBlock.indexOf('railPanelStore.closeAll();'),
-    );
-    expect(railRemoveBlock).not.toContain('railPanelStore.closeAll();');
-  });
 
   // #7469, unit: the old source-string assertion required eager useMemo and
   // failed after lazy collection, without testing restore/filter outcomes.

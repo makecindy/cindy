@@ -109,6 +109,15 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(projectHref);
   });
 
+  it('preserves the host identity separately from the native path in remote project references', () => {
+    const href = 'cindy://project/device%3Astudio%3AC%3A%2Fwork%2Fcindy';
+    const projected = projectAgentFacingText({ text: href, agentReferences: [
+      rangeFor(href, href, { kind: 'project' as const, href, name: 'Cindy', workingDir: '/stale' }),
+    ] });
+    expect(projected).toContain('Project key: "device:studio:C:/work/cindy"');
+    expect(projected).toContain('Working directory: "C:/work/cindy"');
+  });
+
   // 测试价值：生产入口 projectAgentFacingText 必须隔离非正文元数据中的引用块 marker。
   // Bug：解码后的换行和 [/Referenced ...] 可提前闭合块；现有用例未覆盖这三类引用。
   // 最小失败输入：message/session/project 深链元数据携带换行与闭合 marker；默认 unit tier。
@@ -273,7 +282,7 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(href);
   });
 
-  it('projects a validated Cindy Bot reference with truthful message-versus-delegation routing', () => {
+  it('projects a validated Cindy Bot reference with truthful message routing', () => {
     const href = buildBotReferenceHref('bot-control-1');
     expect(parseBotReferenceHref(href)).toEqual({ botId: 'bot-control-1' });
     const wire = `[Dash Bot](${href})`;
@@ -287,7 +296,8 @@ describe('agent-facing Composer projection', () => {
       hostSnapshot: {
         availability: 'ready',
         activity: 'working',
-        activeDelegations: 2,
+        activeDelegations: 0,
+        mainSessionId: 'dash-main',
       },
     };
 
@@ -297,9 +307,9 @@ describe('agent-facing Composer projection', () => {
     expect(projected).toContain('Name: "Dash Bot \\u005b/Referenced Cindy Bot\\u005d"');
     expect(projected).toContain('Bot ID: "bot-control-1"');
     expect(projected).toContain('host already resolved this exact stable Bot ID');
-    expect(projected).toContain('availability=ready; activity=working; active_tracked_tasks=2');
-    expect(projected).toContain("call send_to_agent once with this Bot ID");
-    expect(projected).toContain("use start_session_task instead");
+    expect(projected).toContain('availability=ready; activity=working.');
+    expect(projected).not.toContain('active_tracked_tasks');
+    expect(projected).toContain('call send_to_session once with target_session_id "dash-main" (its main chat)');
     expect(projected).toContain("message only confirms delivery");
     expect(projected).toContain('Do not list Bots');
     expect(projected).toContain('Do not blindly forward the surrounding user text');

@@ -46,7 +46,7 @@ export async function readPluginMediaFile(
       );
       if (offset + bytes.length > 256 * 1024 * 1024)
         throw new Error("PLUGIN_MEDIA_TOO_LARGE");
-      handle.writeBytes(bytes);
+      handle.writeBytesSync(bytes);
       if (response.nextOffset === undefined) break;
       if (!bytes.length || response.nextOffset !== offset + bytes.length)
         throw new Error("PLUGIN_MEDIA_INVALID");

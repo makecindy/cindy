@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../../shared/providerGroup';
-import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState } from '../directory';
 import { ProviderGroupLocalCapacityError } from '../localCapacity';
 import { createProviderGroupRouter } from '../router';
@@ -125,7 +125,7 @@ function harness(options: {
       released.set(id, group);
     }),
     readSessionRow: vi.fn(async () => row),
-    resolveImplicitProvider: vi.fn(async () => 'anthropic'),
+    resolveImplicitProvider: vi.fn<ProviderGroupServiceDeps['resolveImplicitProvider']>(async () => 'anthropic'),
     persistRoute: vi.fn(async (_id: string, route: { agentDeviceId: string | null; providerId: string | null }) => {
       row.agentDeviceId = route.agentDeviceId;
       row.providerId = route.providerId;
@@ -160,6 +160,105 @@ async function flush() {
 const START = { sessionId: 's1', agentKind: 'claude-code' as const, model: MODEL };
 
 describe('assigning through a group on another computer', () => {
+  // #11088, unit: the real assignment/failure entry must resolve an implicit
+  // remote route before binding or switching. Previous cases only used explicit IDs.
+  it('assigns an implicit remote source using the target default, not the local default', async () => {
+    const providerId = 'remote-subscription';
+    const h = harness({ row: { providerId: null }, config: {
+      strategy: 'least', autoSwitch: true, members: [{ ...OWNER_LOCAL, providerId }, STUDIO],
+    } });
+    h.deps.resolveImplicitProvider.mockImplementation(async (_agent, _model, device) => device === OWNER ? providerId : 'local-subscription');
+    const context = await h.service.assignBeforeStart(START);
+    expect(context?.route).toEqual({ agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId });
+    expect(h.bindings.get('s1')).toMatchObject({ providerId, groupDeviceId: OWNER });
+    expect(h.remote.pick).toHaveBeenCalledWith(OWNER, expect.objectContaining({ providerId }));
+  });
+
+  it('adopts an already running implicit source and switches after a limit', async () => {
+    const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    expect(h.row).toMatchObject({ agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId });
+    expect(h.bindings.get('s1')).toMatchObject({ groupDeviceId: OWNER, memberKey: STUDIO.key });
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it.each(['unknown', 'disabled', 'unavailable', 'released', 'all-limited'] as const)(
+    'hands an implicit route back without moving it when %s', async (state) => {
+      const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' },
+        ...(state === 'unavailable' ? { config: undefined } : {}),
+        ...(state === 'all-limited' ? { picks: ['unavailable' as const] } : {}) });
+      if (state === 'unknown') h.deps.resolveImplicitProvider.mockResolvedValue(null);
+      if (state === 'disabled') h.config!.autoSwitch = false;
+      if (state === 'released') h.released.set('s1', { providerId: 'anthropic', groupDeviceId: OWNER });
+      await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+      expect(h.row).toMatchObject({ agentDeviceId: OWNER, providerId: null });
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledOnce();
+      if (state === 'unknown' || state === 'released') expect(h.bindings.size).toBe(0);
+    },
+  );
+
+  it('does not adopt a late implicit route after the user takes over', async () => {
+    const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+    let resolve!: (provider: string) => void;
+    h.deps.resolveImplicitProvider.mockReturnValue(new Promise(r => { resolve = r; }));
+    const pending = h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    h.deps.isLeaseCurrent.mockReturnValue(false);
+    resolve('anthropic');
+    await pending;
+    expect(h.bindings.size).toBe(0);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+
+  it('does not bind after the implicit route lookup exceeded the adoption deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+      let resolve!: (provider: string) => void;
+      h.deps.resolveImplicitProvider.mockReturnValue(new Promise(r => { resolve = r; }));
+      const pending = h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
+      await pending;
+      resolve('anthropic');
+      await flush();
+      expect(h.bindings.size).toBe(0);
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('preserves an existing binding when the implicit target route cannot be resolved', async () => {
+    const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+    const binding = { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 };
+    h.bindings.set('s1', binding);
+    h.deps.resolveImplicitProvider.mockResolvedValue(null);
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    expect(h.bindings.get('s1')).toEqual(binding);
+    expect(h.released.size).toBe(0);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  // §9.4: confirmed deletion wins over an unknown implicit route. Previously
+  // deletion tests only covered explicit providers; rebuilding must not re-adopt.
+  it('releases a deleted group even when its implicit provider cannot be resolved', async () => {
+    const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
+    h.remote.readGroup.mockResolvedValue(null);
+    h.deps.resolveImplicitProvider.mockResolvedValue(null);
+    expect(await h.service.assignBeforeStart(START)).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
+
+    h.remote.readGroup.mockResolvedValue(h.config!);
+    h.deps.resolveImplicitProvider.mockResolvedValue('anthropic');
+    expect(await h.service.assignBeforeStart(START)).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.remote.pick).not.toHaveBeenCalled();
+  });
+
   it('asks the group computer and connects straight to the chosen computer', async () => {
     const h = harness();
     const context = await h.service.assignBeforeStart(START);
@@ -225,7 +324,7 @@ describe('assigning through a group on another computer', () => {
     expect(switchedIn.remote.pick).not.toHaveBeenCalled();
     expect(switchedIn.bindings.get('s1')).toMatchObject({ memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER });
 
-    for (const row of [{ agentDeviceId: 'share:s9' }, { providerId: null }]) {
+    for (const row of [{ agentDeviceId: 'share:s9' }]) {
       const h = harness({ row });
       expect(await h.service.assignBeforeStart(START)).toBeNull();
       expect(h.remote.pick).not.toHaveBeenCalled();
@@ -264,6 +363,29 @@ describe('assigning through a group on another computer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Review #11092, unit: resolving the implicit provider and reading its group
+  // share the documented startup budget; the old explicit-only timeout case missed this.
+  it('shares one startup adoption deadline between the implicit directory and group reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' }, live: false });
+      h.deps.now = () => Date.now();
+      h.deps.resolveImplicitProvider.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve('anthropic'), 2_000)));
+      let finishGroup!: (config: ProviderGroupConfig) => void;
+      h.remote.readGroup.mockImplementation(() => new Promise(resolve => { finishGroup = resolve; }));
+      const done = vi.fn();
+      void h.service.assignBeforeStart(START).then(done);
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS - 1);
+      expect(done).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toHaveBeenCalledWith(expect.objectContaining({ pendingGroupAdoption: true }));
+      finishGroup(h.config!);
+      await flush();
+      expect(h.bindings.size).toBe(0);
+      expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('keeps the binding while the group computer is unreachable and drops it once the group is gone', async () => {
@@ -352,6 +474,43 @@ describe('assigning through a group on another computer', () => {
     expect(await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
     expect(h.bindings.get('s1')).toMatchObject({ memberKey: OWNER_LOCAL.key });
     expect(h.remote.pick).not.toHaveBeenCalled();
+  });
+
+  // Test value: assignBeforeStart must respect a committed move while the old
+  // group owner is offline (2026-11-13: remote Claude -> local Codex kept failing
+  // against the old device). Existing outage cases keep the original route.
+  // Minimal input: persisted route changed, old binding remains, readGroup is
+  // unavailable. Unit tier; also verify later reconciliation within/outside the group.
+  // Single-file Windows wall time: 8.30s (55 cases; test bodies 57ms).
+  it.each([
+    { name: 'local Codex', route: { agentDeviceId: null, providerId: 'openai' },
+      agentKind: 'codex' as const, model: 'gpt-fixture', expectedMember: null },
+    { name: 'another group member', route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId },
+      agentKind: 'claude-code' as const, model: MODEL, expectedMember: STUDIO.key },
+  ])('keeps the user-selected $name route when the old group cannot be read', async ({ route, agentKind, model, expectedMember }) => {
+    const h = harness({ live: false, row: { ...route, agentKind, model } });
+    h.deps.hasAssistantHistory.mockResolvedValue(true);
+    const binding = { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 };
+    h.bindings.set('s1', binding);
+    h.remote.readGroup.mockResolvedValue(undefined);
+
+    expect(await h.service.assignBeforeStart({ ...START, agentKind, model })).toBeNull();
+    expect(h.row).toMatchObject(route);
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    expect(h.remote.pick).not.toHaveBeenCalled();
+    // A missing directory cannot prove the new location is outside the group.
+    expect(h.bindings.get('s1')).toEqual(binding);
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
+
+    h.remote.readGroup.mockResolvedValue(h.config);
+    const restored = await h.service.assignBeforeStart({ ...START, agentKind, model });
+    if (expectedMember) {
+      expect(restored?.route).toEqual(route);
+      expect(h.bindings.get('s1')?.memberKey).toBe(expectedMember);
+    } else {
+      expect(restored).toBeNull();
+      expect(h.bindings.has('s1')).toBe(false);
+    }
   });
 
   it('does not bind or route when the verified config is refused at admission', async () => {

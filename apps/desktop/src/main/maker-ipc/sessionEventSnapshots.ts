@@ -1,4 +1,4 @@
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import type { Session } from '@cindy/maker-core';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 import { recordCodexAccountUsageSnapshot } from '../usageBroadcaster.js';

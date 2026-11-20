@@ -13,13 +13,14 @@
  * (后者仅 devDependencies),故手写小型 tokenizer(规则 9:代码确定性)。
  */
 
-import { parseGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { parseGhostCardForm, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
   isGhostCardIconName,
   isGhostCardModelSelection,
+  isGhostCardCopyLinkAllowed,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
 
@@ -358,6 +359,14 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
       parts.push(` data-ghost-link="${escapeAttr(linkDecl)}"`);
     }
   }
+  // Progressive task navigation: old hosts retain the ordinary action; new clients
+  // may replace it with native navigation. Never combine it with an input action.
+  const sessionLink = attrs['data-ghost-session-link'] ?? '';
+  if (tag === 'button' && actionValid && !audioSlot && ghostCardSessionLinkId(sessionLink) &&
+      attrs['data-ghost-prompt'] === undefined && attrs['data-ghost-submit'] === undefined &&
+      attrs['data-ghost-model-select'] === undefined) {
+    parts.push(` data-ghost-session-link="${escapeAttr(sessionLink)}"`);
+  }
   // 归档任务按钮(data-ghost-task-archive="owner/repo#123"):只挂没有动作、没有外链的 button。
   // 点击不回传插件,由宿主走与侧边栏相同的归档流程,只作用于卡片所在的任务;PR 已合并或
   // 关闭时宿主才把它露出来(插件写 display:none,旧版宿主不认属性就一直藏着)。
@@ -371,6 +380,13 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
       if (state === 'merged' || state === 'closed') parts.push(` data-ghost-task-archive-state="${state}"`);
       if (attrs['data-ghost-task-archive-auto'] !== undefined) parts.push(' data-ghost-task-archive-auto=""');
     }
+  }
+  // 复制链接按钮(data-ghost-copy-link="https://…"):只挂没有动作、外链和归档标记的 button。
+  // 点击不回传插件,由宿主把这串链接写进剪贴板;插件写 display:none,宿主认得才露出来,
+  // 旧版宿主丢掉属性后按钮一直藏着,不会留一颗点不动的按钮。值只认整串 http/https。
+  if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link=') || p.startsWith(' data-ghost-task-archive='))) {
+    const copyLink = (attrs['data-ghost-copy-link'] ?? '').trim();
+    if (isGhostCardCopyLinkAllowed(copyLink)) parts.push(` data-ghost-copy-link="${escapeAttr(copyLink)}"`);
   }
   if (tag === 'button') {
     // type 强制 button(挡 submit 语义);可选无障碍名与禁用态。

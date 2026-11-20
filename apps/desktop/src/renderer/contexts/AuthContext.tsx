@@ -1,3 +1,4 @@
+import { closeFirstRunGuide } from '@/features/first-run-guide/firstRunGuideStore';
 import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
@@ -27,6 +28,7 @@ import {
   type DesktopAccountSwitcherSnapshot,
   type User,
 } from '@/lib/authService';
+import type { HostStartFailureReason } from '../../shared/hostStartFailure';
 import {
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
   reconcileSessionsAfterDataOwnerRollback,
@@ -100,6 +102,8 @@ export interface AuthContextValue {
   /** 当前账号是否加入 Canary 发布通道。 */
   isCanary: boolean;
   isInitializing: boolean;
+  /** A temporary Main-owned account boundary, distinct from the first startup decision. */
+  ownerBoundaryPending: boolean;
   /** SkillHub 跨设备识别：本机 deviceId（machineIdSync），登录前后都有值；初始化前为 null */
   deviceId: string | null;
   /** Renderer-safe login screen state; auth tickets remain in main. */
@@ -112,12 +116,15 @@ export interface AuthContextValue {
   switchAccount: (accountKey: string) => Promise<void>;
   beginAddAccount: () => Promise<DesktopLoginActionResult>;
   cancelAddAccount: () => Promise<void>;
-  enterLocalMode: () => Promise<void>;
+  /** null explicitly marks clients that cannot create a local identity. */
+  enterLocalMode: (() => Promise<void>) | null;
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
   accountDeletionRestored: boolean;
   /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);全局警示条据此显隐。 */
   credentialStoreUnavailable: boolean;
+  /** Client mode only: why the Host serving this window did not start; null otherwise. */
+  hostUnavailableReason: HostStartFailureReason | null;
   getAccountDeletionAvailability: ReturnType<
     typeof createAuthService
   >['getAccountDeletionAvailability'];
@@ -144,6 +151,7 @@ function publishDataOwnerGeneration(
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
+    closeFirstRunGuide();
     resetTaskTagCatalogCache();
     invalidateRemoteCatalogSnapshots();
   }
@@ -176,10 +184,12 @@ export function AuthProvider({
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCanary, setIsCanary] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [ownerBoundaryPending, setOwnerBoundaryPending] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
+  const [hostUnavailableReason, setHostUnavailableReason] = useState<HostStartFailureReason | null>(null);
   const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
   // Main rejects superseded credentials; this also prevents late IPC responses
   // from repainting a login page the user has already left.
@@ -388,6 +398,11 @@ export function AuthProvider({
       setHasAccountDeletionReceipt(state.hasAccountDeletionReceipt);
       setAccountDeletionRestored(state.accountDeletionRestored);
       setCredentialStoreUnavailable(state.credentialStoreUnavailable);
+      setHostUnavailableReason(state.hostUnavailable?.reason ?? null);
+      setOwnerBoundaryPending(state.ownerBoundaryPending === true);
+      // An IPC completion is not a stable auth decision while Main is changing owners.
+      // Once resolved, runtime boundaries keep their own flag without replaying startup.
+      if (!state.ownerBoundaryPending) setIsInitializing(false);
       if (state.user) {
         setLoginState(null);
         if (ownerChanged) {
@@ -409,6 +424,7 @@ export function AuthProvider({
   useEffect(() => {
     const service = authServiceRef.current!;
     const initializeVersion = authStateVersionRef.current;
+    let disposed = false;
 
     const unsubscribe = service.onAuthStateChange((state: AuthState) => {
       authStateVersionRef.current += 1;
@@ -421,7 +437,7 @@ export function AuthProvider({
       .initialize()
       .then(async (state) => {
         // A pushed auth event is newer than this initialize response.
-        if (authStateVersionRef.current !== initializeVersion) return;
+        if (disposed || authStateVersionRef.current !== initializeVersion) return;
         applyIncomingState(state);
         setHasAccountDeletionReceipt(state.hasAccountDeletionReceipt);
         setAccountDeletionRestored(state.accountDeletionRestored);
@@ -431,9 +447,9 @@ export function AuthProvider({
         // then/finally,真实 reject 会产生 unhandled rejection 且 auth 快照悬空。
         // 统一 logger 记录 + 清为 unauthenticated snapshot,不新增视觉分支
         // (handoff 走正常 unauthenticated 冷启动)。
-        log.error('auth initialize failed, fall back to unauthenticated', error);
         // 推送事件比本次 initialize 响应新时不覆盖(与 then 分支同守卫)。
-        if (authStateVersionRef.current !== initializeVersion) return;
+        if (disposed || authStateVersionRef.current !== initializeVersion) return;
+        log.error('auth initialize failed, fall back to unauthenticated', error);
         setIsAuthenticated(false);
         setIsCanary(false);
         setCanEnterApp(false);
@@ -446,12 +462,13 @@ export function AuthProvider({
         clearWorkersCache();
         setUser(null);
         setCredentialStoreUnavailable(false);
-      })
-      .finally(() => setIsInitializing(false));
+        setOwnerBoundaryPending(false);
+        setIsInitializing(false);
+      });
 
     return () => {
+      disposed = true;
       unsubscribe();
-      service.dispose();
     };
   }, [applyIncomingState]);
 
@@ -687,6 +704,7 @@ export function AuthProvider({
       isAuthenticated,
       isCanary,
       isInitializing,
+      ownerBoundaryPending,
       deviceId,
       loginState,
       loadLoginState,
@@ -697,11 +715,13 @@ export function AuthProvider({
       switchAccount,
       beginAddAccount,
       cancelAddAccount,
-      enterLocalMode,
+      // The web shim synthesizes methods, so method presence is not a capability.
+      enterLocalMode: window.electronAPI?.hostConnection?.client === 'browser' ? null : enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,
       accountDeletionRestored,
       credentialStoreUnavailable,
+      hostUnavailableReason,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,
@@ -719,6 +739,7 @@ export function AuthProvider({
       isAuthenticated,
       isCanary,
       isInitializing,
+      ownerBoundaryPending,
       deviceId,
       loginState,
       loadLoginState,
@@ -734,6 +755,7 @@ export function AuthProvider({
       hasAccountDeletionReceipt,
       accountDeletionRestored,
       credentialStoreUnavailable,
+      hostUnavailableReason,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,

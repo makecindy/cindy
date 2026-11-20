@@ -5,6 +5,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp/cindy-codex-guest-test'), getAppPath: vi.fn(() => process.cwd()) },
 }));
@@ -29,13 +35,14 @@ vi.mock('../logger-adapter', () => ({
 import { buildUserProvider } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import { getActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
-import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
+import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host.desktop';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
-import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
+import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { createUsagePricingObserver } from '../model-usage-pricing';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 function ctx(url: string, headers: Record<string, string> = {}, method = 'POST') {
   return { reqId: 1, method, url, headers } as never;
@@ -51,6 +58,30 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  // Unit: follow the real guest guard's HTTP refusal into the common group
+  // policy. Earlier tests asserted only 403, missing the automatic relocation.
+  it('keeps a rejected request outside the shared provider out of group failover', async () => {
+    const guard = createCodexGuestRoutingGuard('shared-a', 'env-key', 'guest-session');
+    // The registered guest session now belongs to another provider. This is
+    // explicit scope evidence, unlike a missing model in the shared catalog.
+    setSessionProvider('guest-session', 'other-b');
+    const decision = await guard({ model: 'other-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }));
+    let status = 0;
+    let body = '';
+    await decision!.localHandler!({ res: {
+      writeHead: (value: number) => { status = value; },
+      end: (value: string) => { body = value; },
+    } } as never);
+    const error = JSON.parse(body).error;
+    expect(status).toBe(403);
+    expect(error.code).toBe('shared_provider_only');
+    expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+    expect(body).not.toContain('other-model');
+    expect(body).not.toContain('other-b');
+    expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run'))
+      .toEqual({ action: 'stay', why: 'policy' });
+  });
+
   // A missing MIME header must not drop the only token source in receipt mode.
   // The actual guest binding/receipt parser must also count a duplicate terminal
   // frame only once, and reject a response belonging to a replaced binding.
@@ -127,6 +158,46 @@ describe('Codex proxy guard for shared-provider guests', () => {
   it('lets a guest request for a shared model continue to the session route', async () => {
     const guard = createCodexGuestRoutingGuard('shared-a', 'env-key');
     expect(await guard({ model: 'shared-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }))).toBeUndefined();
+  });
+
+  // Unit regression: provider-group admission sees the account pool, but the
+  // outbound proxy previously checked only default-account discovery. Existing
+  // guard fixtures put every model in that default catalog and missed this 403.
+  // Minimum: a valid guest/session grant and one model found only in the pool.
+  // The existing proxy graph is imported once; this case adds no process, I/O,
+  // or real wait. Standalone timings are recorded in the PR validation.
+  it('uses live pooled membership for guest inference without bypassing model grants', async () => {
+    const model = { id: 'pool-only-model', name: 'Pool only model', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    let pooledModels = [model];
+    let allowed = true;
+    setDiscoveredCodexModels([]);
+    const authorize = vi.fn((candidate: string) => allowed && candidate === model.id);
+    registerGuestProviderRoute('guest-session', 'openai', authorize, () => true);
+    const guard = createCodexGuestRoutingGuard('openai', 'oauth-bearer', 'guest-session');
+    const request = () => guard({ model: model.id }, ctx('/responses', { 'thread-id': 'guest-thread' }));
+
+    // Reproduce the old reader: authorization succeeds, catalog membership fails.
+    setGuestProviderModelCatalogReader(getActiveCatalog);
+    expect(await statusOf(request())).toBe(403);
+    expect(authorize).toHaveReturnedWith(true);
+
+    setGuestProviderModelCatalogReader(() => getActiveCatalogWithCodexModels(pooledModels));
+    expect(await request()).toBeUndefined();
+    allowed = false;
+    expect(await statusOf(request())).toBe(403);
+    allowed = true;
+    expect(await request()).toBeUndefined();
+    pooledModels = [];
+    const unavailable = await request();
+    let status = 0;
+    let body = '';
+    await unavailable!.localHandler!({ res: {
+      writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; },
+    } } as never);
+    expect(status).toBe(403);
+    expect(decideProviderGroupFailure({ errorStatus: status, message: JSON.parse(body).error.message }, 'run'))
+      .toEqual({ action: 'switch', cause: 'failed', connection: null, cool: false });
   });
 
   it('refuses a model the shared provider does not offer, even from the guest session', async () => {

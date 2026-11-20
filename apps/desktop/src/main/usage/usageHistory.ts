@@ -1,3 +1,5 @@
+import { setAuxiliaryUsageChangedListener } from './auxiliaryUsage.js';
+import { rebroadcastTodaySpend } from '../usageBroadcaster.js';
 /**
  * usageHistory — 首页用量仪表盘的聚合查询 (main 侧, renderer 只渲染)。
  *
@@ -37,11 +39,7 @@ import {
   type ModelPricingMap,
 } from './modelPricing';
 import {
-  getClaudeSubscriptionValuePrice,
-  getCodexProviderSubscriptionValuePrice,
-  getCodexSubscriptionValuePrice,
   getReferenceModelPricing,
-  getSubscriptionDirectValuePrice,
   readModelPriceOverridesSnapshot,
   type ModelPriceOverridesSnapshot,
 } from './referenceModelPricing';
@@ -52,18 +50,31 @@ import {
   type UsageDeviceSummary,
 } from './peerUsageSync';
 import type { UsageDeviceRows } from './usageDeviceRows';
+import {
+  displayModelName,
+  getSubscriptionValuePriceFor,
+  isSubscriptionUsageModel,
+} from './usageModelKeys.js';
+export {
+  claudeSubscriptionUsageModelKey,
+  codexApiUsageModelKey,
+  codexSubscriptionUsageModelKey,
+  getSubscriptionValuePriceFor,
+  piSubscriptionUsageModelKey,
+} from './usageModelKeys.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
+  toLedgerCurrency,
   USD_TO_CNY_FIXED_RATE,
-  type ModelPriceQuote,
   type MoneyCurrency,
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('usageHistory');
+setAuxiliaryUsageChangedListener(() => { void rebroadcastTodaySpend(); });
 
 /** 活跃日判定阈值: 当日花费 ≥ $0.01 才算"用过"。 */
 const ACTIVE_DAY_MIN_USD = 0.01;
@@ -77,11 +88,11 @@ const MODEL_WINDOW_DAYS = 30;
 // v5:日账改为按币种分行后折叠口径变了；v4 快照是用「按区域猜出来的账本币种」折叠出来
 //    的聚合值，直接沿用会让升级后的首页继续显示按错币种算出的历史。整份作废重算。
 // v4:恢复 CN usage 的 CNY 账本口径，并让订阅 USD 估值按 6.7 投影到 CNY。
-const DISK_CACHE_VERSION = 5;
+// v6：重算每日展示投影，避免迁移前的 USD 历史继续沿用已归零的旧缓存。
+const DISK_CACHE_VERSION = 7;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
-const CODEX_BILLING_MODEL_SUFFIX_RE = /#billing=(api|subscription)$/;
 
 export interface UsageHistoryDay {
   day: string;
@@ -91,11 +102,11 @@ export interface UsageHistoryDay {
 }
 
 function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
-  return value === 'codex' || value === 'pi' || value === 'media' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -109,8 +120,11 @@ export interface UsageHistoryModel {
 
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
+  requestCount?: number;
+  source?: string;
+  providerId?: string;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -184,6 +198,7 @@ export const LOCAL_TASK_DEVICE = 'local';
 
 /** 「最耗 token 的任务」的每日 × 任务一行。taskKey = `${deviceId}:${sessionId}`。 */
 export interface UsageHistoryTaskDay {
+  auxiliaryTokens?: number;
   day: string;
   taskKey: string;
   tokens: number;
@@ -223,7 +238,7 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
       spendByDay.set(row.day, monies);
     }
     for (const row of source.modelRows) {
-      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind].join('\u0000');
+      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind, row.source ?? '', row.providerId ?? ''].join('\u0000');
       const existing = modelByKey.get(key);
       if (!existing) {
         modelByKey.set(key, { ...row });
@@ -231,6 +246,7 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
       }
       existing.money =
         addCompatibleRegionalMoney([existing.money, row.money], row.money.currency) ?? existing.money;
+      if (row.requestCount !== undefined) existing.requestCount = (existing.requestCount ?? 0) + row.requestCount;
       existing.inputTokens += row.inputTokens;
       existing.outputTokens += row.outputTokens;
       existing.cacheReadTokens += row.cacheReadTokens;
@@ -363,6 +379,7 @@ function tagTaskUsage(
       day: row.day,
       taskKey: usageTaskKey(deviceId, row.sessionId),
       tokens: row.tokens,
+      ...(row.auxiliaryTokens !== undefined ? { auxiliaryTokens: row.auxiliaryTokens } : {}),
     })),
     tasks: usage.tasks.map((task) => ({
       ...task,
@@ -486,72 +503,6 @@ function stalePayload(payload: UsageHistoryPayload): UsageHistoryPayload {
 
 function isMemoryFresh(payload: UsageHistoryPayload): boolean {
   return Date.now() - payload.generatedAt < MEMORY_FRESH_MS;
-}
-
-function displayModelName(model: string): string {
-  return model.replace(CODEX_BILLING_MODEL_SUFFIX_RE, '');
-}
-
-/** `#billing=subscription` 标记行 —— Claude / Codex 订阅共用同一后缀语义。 */
-function isSubscriptionUsageModel(model: string): boolean {
-  return model.endsWith('#billing=subscription');
-}
-
-export function codexApiUsageModelKey(model: string): string {
-  return `${displayModelName(model)}#billing=api`;
-}
-
-export function codexSubscriptionUsageModelKey(model: string): string {
-  return `${displayModelName(model)}#billing=subscription`;
-}
-
-/** Claude 订阅轮的按模型记账 key(register.ts 消费)—— 与 codex 同一订阅标记后缀。 */
-export function claudeSubscriptionUsageModelKey(model: string): string {
-  return `${displayModelName(model)}#billing=subscription`;
-}
-
-/** Pi 订阅轮与其它 agent 共用 billing 后缀，但保留独立 agentKind。 */
-export function piSubscriptionUsageModelKey(model: string): string {
-  return `${displayModelName(model)}#billing=subscription`;
-}
-
-/**
- * 订阅行的估算价选取,按 agent 分流:
- *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
- *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
- *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
- *   - pi → 先按订阅直连估价(agent=pi,才能命中设置里的 Pi 价格覆盖),
- *     再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
- *     (Pi 可跨三类 provider,按模型 id 路由,依次尝试不会串价)
- *   - claude-code → Anthropic registry 参考价
- * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
- */
-export function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media',
-  model: string,
-  pricing: ModelPricingMap | null,
-  at?: string | Date,
-  overrides?: ModelPriceOverridesSnapshot,
-): ModelPriceQuote | undefined {
-  if (agentKind === 'media') return undefined;
-  if (agentKind === 'codex') {
-    return (
-      getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
-      getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
-      getCodexProviderSubscriptionValuePrice('anthropic', model, pricing, at, overrides)
-    );
-  }
-  if (agentKind === 'pi') {
-    return (
-      getSubscriptionDirectValuePrice(model, 'pi', pricing, at, overrides) ??
-      getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
-      getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
-    );
-  }
-  return (
-    getSubscriptionDirectValuePrice(model, 'claude-code', pricing, at, overrides) ??
-    getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
-  );
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -686,12 +637,13 @@ export async function readUsageHistoryWith(
   const modelWindowDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const todayKey = deps.todayKey();
 
-  // 历史聚合只有一个金额口径:兼容当前账本币种的金额保留,无法确定换算语义的
-  // 异币种金额在入口丢弃为 0。token 等非金额统计仍保留。
+  // 每日展示统一到账本币种：USD→CNY 按既有固定汇率投影，不新增展示标记。
+  // XD 切换结算源后不会再切回 USD，不能把这些历史行永久显示为 0。
+  // 不支持的 CNY→USD 仍保持原有过滤规则；原始账本与 token 均不改动。
   //
   // 账本币种与写入侧同一事实源(currentLedgerCurrency)：由服务端按账号所属租户下发，
   // 不保证等于发行区域。按区域取会把以 USD 结算的账号在 CN 构建上的每一行判成异币种、
-  // 整段归零成不计费。历史遗留的异币种行(换号 / 跨区)仍按 keepCompatibleMoney 归零。
+  // 整段归零成不计费。此投影仅服务用量展示，不回写任何金额。
   const [spendDayRows, , pricing] = await Promise.all([
     deps.getAllSpendDays(),
     // Gateway 报价只读内存或账号作用域内的磁盘快照，不发网络请求。必须等它完成，
@@ -717,22 +669,25 @@ export async function readUsageHistoryWith(
     kind: 'value-estimate',
     estimateReasons: ['subscription-value'],
   });
-  const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney =>
-    money.currency === ledgerCurrency
-      ? money
-      : { ...money, amount: 0, currency: ledgerCurrency };
+  const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney => {
+    const projected = toLedgerCurrency(money, ledgerCurrency);
+    return projected.currency === ledgerCurrency
+      ? projected
+      : { ...projected, amount: 0, currency: ledgerCurrency };
+  };
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
     addCompatibleRegionalMoney(
-      values.filter((value) => value.currency === ledgerCurrency),
+      values.map(value => toLedgerCurrency(value, ledgerCurrency))
+        .filter(value => value.currency === ledgerCurrency),
       ledgerCurrency,
     ) ?? (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
   // 日账按币种拆开取回，折叠推迟到这里 —— 与上面等 pricing 是同一个理由：折叠依赖账本
   // 币种，而它要等报价快照恢复才确定。若在 getAllSpendDays 内部折叠，冷启动时会先按
   // 兜底币种把本账号那一行丢掉，等到这里再怎么等也拿不回来。
-  // 与 model 行共用 addOrZero，异币种同样归零，两条链路口径一致。
+  // 与 model 行使用同一展示换算，日总额、模型分段和小组件保持一致。
   const allDays = spendDayRows.map((row) => ({
     day: row.day,
     money: addOrZero(row.monies),
@@ -891,6 +846,9 @@ export async function readUsageHistoryWith(
     return {
       day: row.day,
       agentKind,
+      requestCount: row.requestCount,
+      source: row.source,
+      providerId: row.providerId,
       model,
       money,
       apiMoney,

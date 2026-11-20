@@ -22,6 +22,8 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { isPluginEngineEffort } from '../../../../shared/pluginEngines';
 import {
   DEFAULT_SCHEDULE_WEBHOOK_PRESET,
   parseWebhookFormat,
@@ -148,17 +150,27 @@ export interface ScheduleFormState {
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
   /** undefined = 这次编辑不涉及 Webhook，保存时不动已有配置。 */
+  prEnabled?: boolean;
+  prUrl?: string;
+  prChange?: import('@cindy/maker-scheduler/pr-trigger').PrChange;
   webhookEnabled?: boolean;
   /** 逗号分隔的事件筛选，原样保留用户输入。 */
   webhookEvents?: string;
   /** 发送方预设 id，或 custom。 */
   webhookPreset?: string;
+  webhookRepositories?: string;
   /** 是否验证签名；只对预设生效，自定义格式在 JSON 里写。 */
   webhookSigned?: boolean;
   /** 自定义格式的 JSON 文本，原样保留用户输入。 */
   webhookFormat?: string;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  /**
+   * 选中的插件引擎(docs/plans/acp-plugin-bridge.md)。和新建任务草稿一样单独保存在内置引擎的选择旁边：
+   * 有值时保存为 agentKind / modelAgentKind = 'acp'，内置的 agentKind / model 只是切回内置引擎时的初值。
+   * 只用于每次新建任务、在本机运行的自动任务；绑定 / 持续会话 / 脚本 / worktree 都会清掉它。
+   */
+  pluginEngine?: PluginEngineSelection | null;
   modelAgentDeviceId?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
@@ -596,6 +608,37 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
 }
 
 /** Preserve a binding's baseline when saving; unbound tasks use the selected Harness. */
+/**
+ * 已保存的自动任务 → 表单的引擎字段。插件引擎任务('acp')放进 pluginEngine，内置引擎的字段回到默认
+ * (切回内置引擎时由表单的默认模型回填)；其余与旧版一致。
+ */
+export function scheduleEngineFormFields(
+  s: Schedule,
+): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
+  if (s.agentKind === 'acp' || s.modelAgentKind === 'acp') {
+    return {
+      agentKind: 'claude-code',
+      modelAgentKind: undefined,
+      boundAgent: undefined,
+      model: '',
+      providerId: '',
+      pluginEngine: {
+        providerId: s.providerId ?? '',
+        modelId: s.model?.trim() || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(s.effort) ? { effort: s.effort } : {}),
+      },
+    };
+  }
+  return {
+    agentKind: s.modelAgentKind ?? s.agentKind,
+    modelAgentKind: s.modelAgentKind,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
+    model: s.model ?? '',
+    providerId: s.providerId ?? '',
+    pluginEngine: null,
+  };
+}
+
 export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormState['agentKind'] {
   return form.executionMode !== 'script' && hasRealBinding(form) &&
     form.boundAgent?.sessionId === form.targetSessionId.trim()
@@ -605,7 +648,10 @@ export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormS
 /** 编辑已有任务时，从它的发送方得到表单初值。 */
 export function webhookSourceFormFields(
   source: ScheduleWebhookSource | undefined,
-): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat'> {
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories'> {
+  if (source?.preset === 'github-app') {
+    return { webhookPreset: 'github-app', webhookRepositories: source.repositories.join('\n'), webhookSigned: true, webhookFormat: '' };
+  }
   if (source?.preset === 'custom') {
     return { webhookPreset: 'custom', webhookSigned: true, webhookFormat: JSON.stringify(source.format, null, 2) };
   }
@@ -635,6 +681,7 @@ export function parseWebhookFormatText(text: string | undefined): ScheduleWebhoo
 function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhookSource } {
   const preset = form.webhookPreset;
   if (preset === undefined) return {};
+  if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
   if (preset === 'custom') {
     const source = parseWebhookFormatText(form.webhookFormat);
     return source ? { source } : {};
@@ -642,6 +689,16 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
   const known = scheduleWebhookPreset(preset);
   if (!known) return {};
   return { source: form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id } };
+}
+
+export function parseGithubRepositories(text: string | undefined): string[] {
+  return [...new Set((text ?? '').split(/[\s,]+/).filter(Boolean).map(repo => repo.toLowerCase()))];
+}
+
+export function validGithubRepositories(text: string | undefined): boolean {
+  const repositories = parseGithubRepositories(text);
+  return repositories.length > 0 && repositories.length <= 50
+    && repositories.every(repo => /^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo));
 }
 
 export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput {
@@ -676,6 +733,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     persistentSession: !isScript && form.persistentSession,
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: hasRealBinding(form) ? form.targetSessionId.trim() : undefined,
+    ...(form.prEnabled === undefined ? {} : { prTrigger: form.prEnabled
+      ? { url: form.prUrl?.trim() ?? '', change: form.prChange ?? 'any' } : null }),
     preRunHook: buildPreRunHook(form),
     preRunPlugin: buildPreRunPlugin(form),
     // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
@@ -735,6 +794,21 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
+  if (form.pluginEngine && !form.persistentSession) {
+    // 插件引擎：每次新建任务、在本机运行；没有 Fast、worktree 与运行位置。
+    return {
+      ...base,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      model: form.pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+      providerId: form.pluginEngine.providerId,
+      effort: form.pluginEngine.effort,
+      fastMode: false,
+      useWorktree: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: undefined,
+    };
+  }
   return base;
 }
 

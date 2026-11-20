@@ -6,6 +6,7 @@ import {
   HStack,
   Picker,
   RNHostView,
+  Spacer,
   VStack,
   Text,
   TextField,
@@ -26,6 +27,7 @@ import {
   autocorrectionDisabled,
   textInputAutocapitalization,
   lineLimit,
+  id,
 } from "@expo/ui/swift-ui/modifiers";
 import {
   Check,
@@ -49,6 +51,7 @@ import { MobileModelIconMark, MobileProviderMark } from "./MobileProviderMark";
 import { groupSourceFilters } from "./remoteSourceFilters";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
 import type { UnifiedMobilePickerViewProps } from "./UnifiedModelPickerSheet";
+import { PluginEngineMark } from "./PluginEngineMark";
 
 function NativeMark({ children }: { children: ReactNode }) {
   return (
@@ -170,15 +173,97 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           <NativeErrorNotice message={p.error} />
         </Section>
       ) : null}
-      {p.groups.map((group) => (
+      {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
+      {(p.pluginEngines?.groups ?? []).map((group) => (
         <Section key={group.key} title={group.title}>
+          {group.rows.flatMap((row) => [
+            <ComposerNativeRow
+              key={row.key}
+              modifiers={[id(`${group.key}:${row.key}`)]}
+              title={row.title}
+              subtitle={[row.effortLabel, row.subtitle, row.notice].filter(Boolean).join(" · ")}
+              subtitleContent={row.subtitle || row.notice ? (
+                <VStack alignment="leading" spacing={2}>
+                  {row.subtitle ? (
+                    <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                      {row.subtitle}
+                    </Text>
+                  ) : null}
+                  {row.notice ? (
+                    <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                      {row.notice}
+                    </Text>
+                  ) : null}
+                </VStack>
+              ) : undefined}
+              titleAccessory={row.effortLabel ? (
+                <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                  {row.effortLabel}
+                </Text>
+              ) : undefined}
+              leading={
+                <RNHostView matchContents>
+                  <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                    <PluginEngineMark iconDataUrl={row.iconDataUrl} size={iconSize.action} />
+                  </View>
+                </RNHostView>
+              }
+              selectionIcon={mark(Check)}
+              selected={row.selected}
+              disabled={p.busy || row.disabled}
+              onPress={() => p.pluginEngines?.onSelect(row)}
+              testID={`${p.testID}.pluginEngine.${row.key}`}
+            />,
+            row.selected && row.efforts.length ? (
+              <Picker
+                key={`${row.key}:effort`}
+                label={t("models.options.reasoningEffort")}
+                selection={row.effort ?? row.efforts[0]!}
+                onSelectionChange={(effort: string) => {
+                  const next = row.efforts.find((item) => item === effort);
+                  if (next) p.pluginEngines?.onSelect(row, next);
+                }}
+                modifiers={[pickerStyle("menu"), disabled(p.busy)]}
+                testID={`${p.testID}.pluginEngine.${row.key}.effort`}
+              >
+                {row.efforts.map((effort) => (
+                  <Text key={effort} modifiers={[tag(effort)]}>
+                    {level(effort)}
+                  </Text>
+                ))}
+              </Picker>
+            ) : null,
+          ])}
+        </Section>
+      ))}
+      {p.groups.map((group) => (
+        <Section key={group.key} title={group.title} header={group.quota?.summary ? (
+          <HStack spacing={8}>
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textTertiary)]}>{group.title}</Text>
+            <Spacer/>
+            <Button onPress={() => setPage('sources')} testID={`${p.testID}.group.${group.key}.quota`}
+              modifiers={[buttonStyle('plain'), accessibilityLabel([group.quota.summary, group.quota.resetSoon ? t('models.unified.quotaResetSoon') : null, group.quota.resetDescription].filter(Boolean).join(' · '))]}>
+              <HStack spacing={4}>
+                <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{typeof group.quota.remaining === 'number' ? `${group.quota.remaining}%` : group.quota.summary}</Text>
+                {group.quota.reset && <HStack spacing={4}>
+                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>· {group.quota.reset.remaining}%</Text>
+                  {!!group.quota.resetParts?.[0] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[0]}</Text>}
+                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(group.quota.reset.level === 'crit' ? colors.quotaBarCrit : group.quota.reset.level === 'warn' ? colors.quotaBarWarn : colors.textSecondary)]}>{group.quota.reset.time}</Text>
+                  {!!group.quota.resetParts?.[1] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[1]}</Text>}
+                </HStack>}
+              </HStack>
+            </Button>
+          </HStack>
+        ) : undefined}>
           {group.rows.map((row) => (
             <ComposerNativeRow
               key={row.key}
+              modifiers={[id(`${group.key}:${row.key}`)]}
               title={row.entry.displayName}
               subtitle={[
                 mobileAgentLabel(row.config.agent),
                 row.subtitle,
+                row.sourceUnavailableReason,
                 row.quotaLabel,
               ]
                 .filter(Boolean)
@@ -236,6 +321,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   >
                     {row.subtitle}
                   </Text>
+                  {row.sourceUnavailableReason ? (
+                    <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                      {row.sourceUnavailableReason}
+                    </Text>
+                  ) : null}
                   {row.quotaLabel ? (
                     <Text
                       modifiers={[
@@ -281,7 +371,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           ))}
         </Section>
       ))}
-      {!p.groups.length ? (
+      {!p.groups.length && !p.pluginEngines?.groups.length ? (
         <Section>
           <Text modifiers={[foregroundStyle(colors.textSecondary)]}>
             {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
@@ -294,7 +384,17 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <ComposerNativeRow
       key={item.id}
       title={item.remote?.providerLabel ?? item.label}
-      subtitle={item.quota?.label}
+      subtitle={[item.quota?.label, item.sourceUnavailableReason].filter(Boolean).join(" · ")}
+      subtitleContent={item.sourceUnavailableReason ? (
+        <VStack alignment="leading" spacing={2}>
+          {item.quota?.label ? (
+            <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>{item.quota.label}</Text>
+          ) : null}
+          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+            {item.sourceUnavailableReason}
+          </Text>
+        </VStack>
+      ) : undefined}
       testID={`${p.testID}.source.${item.id}`}
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
@@ -304,7 +404,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             <NativeMark>
               <ProviderSourceMark filter={item} />
             </NativeMark>
-            {item.quota ? (
+            {typeof item.quota?.remaining === 'number' ? (
               <RNHostView matchContents>
                 <ModelQuotaBar
                   remaining={item.quota.remaining}
@@ -313,6 +413,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 />
               </RNHostView>
             ) : null}
+            {item.quota?.members?.map((member, index) => typeof member.remaining === 'number' ? (
+              <RNHostView matchContents key={index}>
+                <ModelQuotaBar remaining={member.remaining} label={member.label}
+                  testID={`${p.testID}.source.${item.id}.quota.${index}`} />
+              </RNHostView>
+            ) : null)}
           </VStack>
         ) : (
           mark(
@@ -349,6 +455,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         active: !options && !page,
         header: listHeader,
         content: listContent,
+        initialScrollTargetId: p.groups.flatMap(group =>
+          group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+        )[0],
       }}
     >
       {p.error ? (

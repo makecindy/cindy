@@ -475,8 +475,8 @@ describe('XD 网关权威模型清单重建', () => {
     // With no server declaration, the version-matched local table beats Gateway hints.
     expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('anthropic-messages');
     expect(resolveXdPiGatewayApi('gpt-5.6-sol')).toBe('openai-responses');
-    expect(resolveXdPiGatewayApi('google/gemini-3.7-flash')).toBe('google-generative-ai');
-    expect(resolveXdPiGatewayWireProtocol('google/gemini-3.7-flash')).toBeNull();
+    expect(resolveXdPiGatewayApi('google/gemini-3.7-flash')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('google/gemini-3.7-flash')).toBe('openai-responses');
     // Gateway is consulted only when both higher-priority sources are absent.
     expect(resolveXdPiGatewayApi('future-unmapped-model')).toBe('openai-responses');
     expect(resolveXdPiGatewayApi('future-unsupported-api')).toBeNull();
@@ -485,7 +485,7 @@ describe('XD 网关权威模型清单重建', () => {
       { id: 'moonshot/kimi-k3', piApi: 'anthropic-messages' },
       { id: 'claude-opus-5', piApi: 'anthropic-messages' },
       { id: 'gpt-5.6-sol', piApi: 'openai-responses' },
-      { id: 'google/gemini-3.7-flash', piApi: 'google-generative-ai' },
+      { id: 'google/gemini-3.7-flash', piApi: 'openai-responses' },
       { id: 'future-unmapped-model', piApi: 'openai-responses' },
       { id: 'future-unsupported-api' },
     ]);
@@ -819,10 +819,10 @@ describe('XD 网关权威模型清单重建', () => {
     expect(resolveXdPiGatewayApi('meta/muse-wonder-1.0')).toBe('openai-responses');
   });
 
-  // Regression: the temporary Argon Responses exception mislabeled Google's native API.
-  // A conflicting Gateway hint must not replace Cindy's verified Gemini protocol (unit tier).
+  // Regression: the execution route must not relabel Google's native model identity.
+  // Global Pi follows the declared Gateway Responses route while preserving native metadata.
   it.each(['google/gemini-4-argon', 'gemini-4-argon'])(
-    'Gemini 4 Argon %s keeps Google native Pi routing despite a Responses Gateway hint',
+    'Gemini 4 Argon %s keeps Google identity while Pi uses the declared Responses route',
     (id) => {
       setActiveCatalog(BUNDLED_CATALOG);
       setXdGatewayModels([{
@@ -841,10 +841,10 @@ describe('XD 网关权威模型清单重建', () => {
           efforts: ['low', 'medium', 'high'],
           defaultEffort: 'medium',
         });
-        // Pi keeps Gemini's native API; the Gateway serves the other harnesses' own APIs.
+        // The model identity and visibility remain independent of the execution API.
         expect(model?.defaultEnabled).not.toBe(false);
       }
-      expect(resolveXdPiGatewayApi(id)).toBe('google-generative-ai');
+      expect(resolveXdPiGatewayApi(id)).toBe('openai-responses');
     },
   );
 
@@ -975,7 +975,7 @@ describe('gateway cross-harness defaults', () => {
   });
 
   it.each([1, 2, 3] as const)(
-    'retains local native APIs with a sparse Server V%s catalog and misleading Gateway hints',
+    'retains native identities with a sparse Server V%s catalog and uses the Global Gemini execution route',
     (schemaVersion) => {
       const next = structuredClone(BUNDLED_CATALOG);
       next.modelRegistry = { schemaVersion, updatedAt: '2099-02-01T00:00:00.000Z', models: [] };
@@ -1009,11 +1009,11 @@ describe('gateway cross-harness defaults', () => {
         const pi = xdModels('pi').find((m) => m.id === id)!;
         expect(pi).toMatchObject({
           nativeApi: api,
-          piApi: api,
+          piApi: api === 'google-generative-ai' ? 'openai-responses' : api,
           defaultEnabled: true,
           contextWindow: 123_456,
         });
-        expect(resolveXdPiGatewayApi(id)).toBe(api);
+        expect(resolveXdPiGatewayApi(id)).toBe(api === 'google-generative-ai' ? 'openai-responses' : api);
         // Native APIs stay local knowledge; the Gateway's own engine APIs are not local conversion.
         expect(xdModels('claude-code').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,
@@ -1048,7 +1048,8 @@ describe('gateway cross-harness defaults', () => {
     });
     expect(xdModels('codex')[0].defaultEnabled).toBe(true);
     expect(xdModels('pi')[0]).toMatchObject({
-      piApi: 'google-generative-ai',
+      nativeApi: 'google-generative-ai',
+      piApi: 'openai-responses',
       defaultEnabled: true,
     });
     const next = structuredClone(BUNDLED_CATALOG);
@@ -1075,7 +1076,7 @@ describe('gateway cross-harness defaults', () => {
     next.modelRegistry!.models = [];
     setActiveCatalog(next, { authorityCatalog: next });
     expect(xdModels('pi')[0].nativeApi).toBe('google-generative-ai');
-    expect(xdModels('pi')[0].piApi).toBe('google-generative-ai');
+    expect(xdModels('pi')[0].piApi).toBe('openai-responses');
   });
 
   it('prefers a usable route over a more discounted route with every harness disabled', () => {

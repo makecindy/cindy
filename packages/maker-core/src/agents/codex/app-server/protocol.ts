@@ -143,6 +143,8 @@ export interface CodexModelListParams {
 export interface CodexMcpServerStatus {
   name: string;
   tools: Record<string, unknown>;
+  /** Native thread state; absent on older runtimes, null after config changes. */
+  runtimeStatus?: 'notStarted' | 'starting' | 'connected' | 'authenticationRequired' | 'failed' | 'cancelled' | 'disabled' | null;
   [k: string]: unknown;
 }
 
@@ -632,6 +634,9 @@ export interface SkillsListResponse {
 //   - FileChange:        { threadId, turnId, itemId, reason?, grantRoot? }
 
 export interface CommandExecutionRequestApprovalParams {
+  kind?: 'command' | 'humanCommand' | 'writeStdin';
+  environmentId?: string | null;
+  networkApprovalContext?: { host: string; protocol: string } | null;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -682,7 +687,7 @@ export type McpServerElicitationRequestParams = {
   serverName: string;
 } & (
   | {
-      mode: 'form';
+      mode: 'form' | 'openai/form' | 'openaiForm';
       _meta: unknown | null;
       message: string;
       requestedSchema: unknown;
@@ -753,6 +758,9 @@ export interface ToolRequestUserInputParams {
   turnId: string;
   itemId: string;
   questions: ToolRequestUserInputQuestion[];
+  /** Missing on older servers; only explicit false permits idle resolution. */
+  isBlocking?: boolean;
+  autoResolutionMs?: number | null;
 }
 
 export interface ToolRequestUserInputAnswer {
@@ -827,7 +835,17 @@ export interface TurnStartedNotification {
 
 export interface TurnDiffUpdatedNotification {
   method: 'turn/diff/updated';
-  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+  params: {
+    threadId: string;
+    turnId: string;
+    diff: string;
+    /**
+     * Cindy 本地字段, app-server 不会发送: 这次累计 diff 超过单行上限, 已由 AppServerHost
+     * 丢弃正文, `diff` 为空串, 只表示「该线程本轮 diff 未知」。
+     */
+    cindyOmitted?: 'oversized';
+    [k: string]: unknown;
+  };
 }
 
 /**
@@ -1222,6 +1240,12 @@ export type ServerNotification =
   | WarningNotification
   | ErrorNotification;
 
+/** v2 ThreadBackgroundTerminalsListResponse — only the field idle reclamation reads. */
+export interface ThreadBackgroundTerminalsListResponse {
+  data: Array<{ itemId: string; processId: string }>;
+  nextCursor: string | null;
+}
+
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
 
 export const Method = {
@@ -1234,8 +1258,11 @@ export const Method = {
   ThreadInjectItems: 'thread/inject_items',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadCompactStart: 'thread/compact/start',
   ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  /** EXPERIMENTAL (experimentalApi is always on). Lists unified-exec processes still alive for a thread. */
+  ThreadBackgroundTerminalsList: 'thread/backgroundTerminals/list',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

@@ -34,6 +34,9 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/lib/sessionAttentionStore', () => ({
   clearSessionAttentionMany: vi.fn(),
 }));
+vi.mock('../../hooks/useProjectLabel', () => ({
+  useProjectLabel: () => (workingDir: string) => workingDir,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }),
@@ -127,10 +130,10 @@ describe('RunHistoryCard 会话引用状态', () => {
 describe('RunHistoryCard 前置检查结果', () => {
   // A failed model selection is persisted in errorMsg, not an agent message.
   // Verify this separate consumer also hides technical text behind details.
-  it('shows switch guidance with expandable diagnostics in failed run history', () => {
+  it.each(['', 'scheduled task auto-resume failed: '])('shows switch guidance with expandable diagnostics in failed run history (%s)', (prefix) => {
     renderRun({ id: 'run-selection', scheduleId: 'schedule-1', firedAt: 1,
       finishedAt: 2, status: 'failed', readAt: 2,
-      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
+      errorMsg: prefix + '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
     expect(screen.getByText('chat.remoteError.MODEL_SELECTION_UNAVAILABLE')).toBeTruthy();
     expect(screen.queryByText(/Scheduled model test/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));

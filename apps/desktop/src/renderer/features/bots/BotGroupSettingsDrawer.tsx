@@ -3,7 +3,7 @@
  * 回复方式、发言方式、删除群聊。
  *
  * 与 BotSettingsDrawer 同一个外壳：由路由上的 `?groupSettings=1` 打开，群聊页留在下面；
- * 点遮罩不关闭，Esc（IME 组合中除外）与右上角关闭按钮关闭。每项改动立即提交给 main，
+ * 点遮罩与右上角关闭按钮关闭；Esc（IME 组合中除外）先返回子页，再关闭。每项改动立即提交给 main，
  * 群数据以 botGroupStore 的列表摘要为准（main 推送后自动刷新），失败就地提示并保持
  * 原值。成员数 2–6 由 main 最终校验，这里只把不会成立的操作提前禁用。
  */
@@ -16,6 +16,7 @@ import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-rout
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsDrawerScope } from '@/components/ui/settings-rows';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -34,7 +35,6 @@ import { GROUP_MASK_SETTINGS_PARAM, useGroupMask } from './groupMaskPresentation
 import { ChatGroupSettings, chatGroupSettingsPageTitle, resolveChatGroupSettingsPage } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
-import { BotGroupOrganizerTag } from './BotGroupPlan';
 import {
   BOT_GROUP_MAX_MEMBERS,
   BOT_GROUP_MIN_MEMBERS,
@@ -89,7 +89,6 @@ export function BotGroupSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
@@ -118,10 +117,12 @@ export function BotGroupSettingsDrawer() {
                 </Dialog.Close>
               </Tip>
             </header>
+            <SettingsDrawerScope>
             <div className={maskOpen ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
             {group.serverBacked ? <ChatGroupSettings key={group.id} group={group} /> : <BotGroupSettingsBody key={group.id} group={group} />}
             </div>
             {maskOpen && <GroupMaskSettings groupId={group.id} />}
+            </SettingsDrawerScope>
           </Dialog.Content>
         </Dialog.Overlay>
       </Dialog.Portal>
@@ -142,7 +143,7 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
   const [projectDirError, setProjectDirError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [busy, setBusy] = useState<
-    'members' | 'organizer' | 'projectDir' | 'replyMode' | 'speakingMode' | 'delete' | null
+    'members' | 'projectDir' | 'replyMode' | 'speakingMode' | 'delete' | null
   >(null);
   const [picking, setPicking] = useState(false);
   const nameFocusedRef = useRef(false);
@@ -215,18 +216,6 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
     if (!failure) setPicking(false);
   };
 
-  const setOrganizer = async (organizerBotId: string) => {
-    if (busy || organizerBotId === group.organizerBotId) return;
-    setBusy('organizer');
-    setMembersError(null);
-    const failure = await mutate(
-      (api) => api.updateBotGroup({ groupId: group.id, organizerBotId }),
-      'bots.groupChat.settings.organizerSaveFailed',
-    );
-    setBusy(null);
-    setMembersError(failure);
-  };
-
   const setProjectDir = async (projectDir: string | null) => {
     setBusy('projectDir');
     setProjectDirError(null);
@@ -291,7 +280,6 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
   const deleteGroup = async () => {
     if (busy) return;
     const confirmed = await confirm({
-      presentation: 'standard',
       title: t('bots.groupChat.settings.deleteConfirmTitle', { name: group.name }),
       description: t('bots.groupChat.settings.deleteNote'),
       confirmText: t('bots.groupChat.settings.delete'),
@@ -364,22 +352,7 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
                 <BotAvatar bot={member} size="sm" className={isActiveBotGroupMember(member) ? undefined : 'opacity-60'} />
                 <span className="flex min-w-0 flex-1 items-center gap-2">
                   <span className="min-w-0 truncate">{member.name}</span>
-                  {member.botId === group.organizerBotId ? <BotGroupOrganizerTag /> : null}
                 </span>
-                {member.botId !== group.organizerBotId && isActiveBotGroupMember(member) ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    tone="quiet"
-                    size="xs"
-                    compact
-                    disabled={busy !== null}
-                    aria-label={t('bots.groupChat.settings.setOrganizerNamed', { name: member.name })}
-                    onClick={() => void setOrganizer(member.botId)}
-                  >
-                    {t('bots.groupChat.settings.setOrganizer')}
-                  </Button>
-                ) : null}
                 {!isActiveBotGroupMember(member) ? (
                   <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
                     {t(
@@ -453,9 +426,6 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
               </div>
             ) : null}
           </div>
-          <p className="text-12 leading-normal text-[var(--text-tertiary)]">
-            {t('bots.groupChat.settings.organizerNote')}
-          </p>
           {membersError ? (
             <p role="alert" className="text-12 text-[var(--error-fg)]">
               {membersError}

@@ -18,9 +18,11 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
-vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ generation: owner.generation }),
-  ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  ownerScopedPath: (name: string) => path.join(tmpDir, owner.current, name),
+  ownerGeneration: () => owner.generation,
+  hasCommittedOwner: () => true,
 }));
 
 const {
@@ -41,6 +43,23 @@ function writeOwnerFile(value: unknown): string {
 }
 
 describe('model-catalog-override-store', () => {
+  // #11023, unit with isolated filesystem: the launch override must survive a
+  // cold owner read and an unrelated settings write, unlike temporary models.json.
+  it('retains an explicit Pi store capability when another setting is saved', async () => {
+    owner.current = 'owner-pi-store';
+    const key = 'custom-connection:gemini-4-hydrogen';
+    const file = writeOwnerFile({ version: 1, patches: {
+      [key]: { perAgent: { pi: { supportsStore: false, maxToolCallIdLength: 64 } } },
+    } });
+    expect(readModelCatalogOverrides().patches[key]?.perAgent?.pi?.supportsStore).toBe(false);
+    await writeModelImageInputOverride([{ providerId: 'custom-connection', modelId: 'gemini-4-hydrogen', agent: 'pi' }], true, async () => {});
+    owner.current = 'owner-pi-store-other';
+    expect(readModelCatalogOverrides().patches).toEqual({});
+    owner.current = 'owner-pi-store';
+    expect(readModelCatalogOverrides().patches[key]?.perAgent?.pi).toEqual({ supportsStore: false, maxToolCallIdLength: 64, supportsImageInput: true });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).patches[key].perAgent.pi.supportsStore).toBe(false);
+  });
+
   it('读取显式 v1 文件', () => {
     owner.current = 'owner-valid';
     writeOwnerFile({ version: 1, patches: { 'openai:gpt-6': patchEntry } });

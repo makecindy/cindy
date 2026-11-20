@@ -62,8 +62,11 @@ function setStatusInOrder(
   sessionId: string,
   status: SessionStatus,
   target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
+  discardWorktreeChanges?: true,
 ): Promise<Session> {
-  const write = () => sessionService.setStatus(sessionId, status, target);
+  const write = () => discardWorktreeChanges
+    ? sessionService.setStatus(sessionId, status, target, true)
+    : sessionService.setStatus(sessionId, status, target);
   if (target.kind !== 'device-link') return write();
   const previous = remoteStatusWrites.get(sessionId);
   const next = previous ? previous.then(write, write) : write();
@@ -77,7 +80,7 @@ function setStatusInOrder(
 
 export interface RunSessionActionOptions {
   /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
-  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean>;
+  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean | 'discard'>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -121,7 +124,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       const archivedRowStaysInList = listFilter === 'all';
       const leaveArchivedSession = () => {
         if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
         }
       };
       if (archivedRowStaysInList) flushSync(leaveArchivedSession);
@@ -156,6 +159,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // remoteProjectsStore 的状态迁移叠加层乐观换桶,写库成功即落被控端返回的行,不等
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
+      let discardWorktreeChanges: true | undefined;
 
       if (action === 'archive' && prepareArchive) {
         if (isDeviceLinkSession) {
@@ -169,6 +173,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
             if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
             return;
           }
+          if (confirmed === 'discard') discardWorktreeChanges = true;
           // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
           if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
         } catch (err) {
@@ -183,7 +188,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         if (!remoteStatus) {
           remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
         } else if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
         }
       } else if (action === 'archive') {
         // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
@@ -212,7 +217,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
           if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
-            navigate('/cc-agent/new');
+            navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
           }
         };
         statusTransition = await sessionsStore.beginStatusTransitionWhenReady(
@@ -248,7 +253,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
@@ -289,11 +294,10 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // MEM-1: Free all in-memory state (messages, base64 images, listeners)
       // for the deleted/archived session now that the server update succeeded.
       makerChatStore.purgeSession(sessionId);
-      // composer-draft-per-session: drop any leftover composer draft (text /
-      // attachments) for this session — without this the draft Map would
-      // hold an orphan entry forever.
-      discardComposerDraft(sessionId);
       if (action === 'delete') {
+        // 未发送草稿(正文 + 附件暂存副本)只随删除丢弃。归档可恢复且不弹草稿确认，
+        // 草稿必须留在 composerDraftStore：恢复或直接打开归档任务时输入框照常回填。
+        discardComposerDraft(sessionId);
         void window.electronAPI.cleanupSessionImages(sessionId).catch((err: unknown) => {
           log.warn('[session delete] cleanup images failed', err);
         });
@@ -327,7 +331,12 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // 上下文时会传入按当前可见顺序解析好的 route；否则回落到 /cc-agent
       // 让 CCAgentIndexRedirect 做默认恢复。
       if (action === 'delete' && sessionId === activeSessionId) {
-        navigate(deleteRedirectRoute ?? '/cc-agent');
+        const route = deleteRedirectRoute ?? '/cc-agent';
+        if (route === '/cc-agent/new') {
+          navigate(route, { state: { workspacePrompt: 'generic' } });
+        } else {
+          navigate(route);
+        }
       }
       // 写库成功:需要知道结果的调用方(如合并后自动归档的撤销提示)据此继续。
       return true;

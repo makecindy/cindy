@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificações",
+    "read": "Ler estado das notificações",
+    "busy": "Lendo…",
+    "failed": "Não foi possível ler o estado. Tente novamente.",
+    "copyFailed": "Não foi possível copiar o token.",
+    "copied": "Token copiado.",
+    "bundle": "ID do app",
+    "build": "Compilação",
+    "environment": "Ambiente APNs",
+    "permission": "Permissão do sistema",
+    "alerts": "Alertas",
+    "lockScreen": "Tela bloqueada",
+    "notificationCenter": "Central de Notificações",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconhecido",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Lê apenas quando solicitado. O token APNs aparece só nesta tela, sem ser salvo no diagnóstico ou enviado por esta ferramenta. Fica oculto ao sair ou ir para segundo plano. Copie apenas para o console de notificações da Apple; o texto copiado permanece na área de transferência.",
+    "permissions": {
+      "granted": "Permitida",
+      "denied": "Negada",
+      "undetermined": "Não solicitada",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Enviar logs",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "Os logs ficam neste celular por até 7 dias ou 8 MB e nunca são enviados automaticamente. Os logs exportados não incluem o texto das conversas nem credenciais; os envios incluem apenas registros de execução filtrados e informações de versão."
   },
   "title": "Configurações",
+  "promptRecommendation": {
+    "label": "Sugestões de entrada",
+    "description": "Sugerir o que escrever após uma resposta. Aplica-se apenas a este celular.",
+    "saveFailed": "A configuração está ativa por enquanto, mas não pôde ser salva.",
+    "reset": "Restaurar padrão"
+  },
   "appearance": {
     "title": "Aparência",
     "modeLabel": "Modo de aparência",
@@ -52,6 +85,16 @@
       "reset": "Restaurar padrão",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone do app",
+      "saveFailed": "Não foi possível alterar o ícone do app. Tente novamente.",
+      "options": {
+        "default": "Padrão",
+        "cat": "Gato preto",
+        "wordmark": "Logotipo do Cindy",
+        "mark": "Símbolo do Cindy"
+      }
     }
   },
   "language": {
@@ -81,7 +124,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clássica (padrão)",
+        "prose": "Prosa clássica",
         "tang-poetry": "Poesia Tang",
         "song-ci": "Ci dos Song",
         "yuan-qu": "Qu dos Yuan",
@@ -135,11 +178,20 @@
     "permissionDenied": "Permita notificações do Cindy nas configurações do sistema.",
     "unregisterQueued": "Desativado. O cancelamento do registro será concluído quando você voltar a ficar online.",
     "preview": "Mostrar prévias das conversas",
-    "background": "Manter a conversa conectada em segundo plano",
-    "backgroundActive": "Recebendo mensagens de conversas em segundo plano",
+    "background": "Notificações em segundo plano",
+    "backgroundActive": "Recebendo notificações em segundo plano",
     "backgroundStop": "Parar de receber",
-    "backgroundHint": "A conexão em segundo plano funciona sem o Google e exibe uma notificação permanente. Você pode interrompê-la nessa notificação.",
-    "googleUnavailable": "As notificações push do Google estão indisponíveis. Ative a conexão de conversas em segundo plano para receber mensagens."
+    "backgroundHint": "O Cindy mantém automaticamente uma conexão em segundo plano quando o Google Push pode estar indisponível. Uma notificação permanente aparece durante a conexão.",
+    "googleUnavailable": "O Google Push está indisponível. A conexão em segundo plano segue suas configurações de notificações.",
+    "backgroundModes": {
+      "auto": "Automático",
+      "on": "Sempre ativadas",
+      "off": "Desativadas"
+    },
+    "actionReplyPlaceholder": "Digite uma resposta",
+    "actionNotDelivered": "Isso não chegou ao seu computador. Abra o Cindy para responder.",
+    "actionReplyNotDelivered": "Sua resposta não foi enviada. Abra o Cindy para enviá-la novamente: {{text}}",
+    "actionRequestEnded": "Esta solicitação já foi respondida ou expirou."
   },
   "about": {
     "sectionTitle": "Sobre este celular",
@@ -151,7 +203,7 @@
   "relay": {
     "online": "Conectado ao Relay",
     "connecting": "Conectando ao Relay",
-    "stopped": "Retransmissor desconectado",
+    "stopped": "Relay desconectado",
     "lastSynced": "Última sincronização: {{time}}",
     "canSync": "As sessões remotas podem ser sincronizadas.",
     "reconnectHint": "As sessões remotas retomarão as assinaturas automaticamente quando a rede for restabelecida.",
@@ -211,7 +263,7 @@
     "openUserAgreement": "Abrir o contrato do usuário",
     "appFilingNumber": "Número de registro do app",
     "analytics": "Estatísticas de uso",
-    "analyticsHint": "Ajuda a entender as inicializações e a retenção. Envia informações do dispositivo, como modelo, sistema operacional e versão do app, um identificador do dispositivo e, após o login, o ID da sua conta; nunca conversas, arquivos ou prompts.",
+    "analyticsHint": "Se você ativar esta opção, usaremos um pseudônimo de conta e um identificador do dispositivo para entender as aberturas do aplicativo e as visitas recorrentes. Isso nos ajuda a melhorar o produto. Os pagamentos usam outro pseudônimo. Essas estatísticas não incluem suas conversas, arquivos ou prompts.\nRegistros antigos contêm os IDs originais das contas. Quem tem acesso a eles pode conseguir associar um novo pseudônimo à conta pelo mesmo identificador de dispositivo.",
     "analyticsSaveFailed": "Não foi possível salvar esta configuração; ela pode ser revertida após reiniciar.",
     "analyticsReset": "Restaurar padrão",
     "analyticsResetAction": "Redefinir"
@@ -237,7 +289,7 @@
     "screenTitle": "Dicionário de voz",
     "entryCount": "{{count}} termos",
     "aliasSeparator": ", ",
-    "aliases": "Frequentemente reconhecido como: {{aliases}}",
+    "aliases": "Frequentemente reconhecido incorretamente como: {{aliases}}",
     "refresh": "Atualizar",
     "refreshing": "Atualizando…",
     "refreshAccessibility": "Atualizar dicionário",
@@ -388,7 +440,92 @@
       "voice": "Segurar para falar",
       "scrollKeys": "Analógico direito",
       "scroll": "Rolar",
-      "page": "Mudar de página"
+      "page": "Mudar de página",
+      "triggerScrollKeys": "L2 / R2 + direcional cima/baixo",
+      "triggerScroll": "Rolar conteúdo visível",
+      "sendText": "Enviar texto digitado",
+      "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
+  },
+  "projectInfo": {
+    "automatic": "Usar ícone do projeto",
+    "autoLoading": "Buscando ícone…",
+    "autoNone": "Usando as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Configurações do projeto",
+    "name": "Nome de exibição",
+    "saveName": "Salvar nome",
+    "reset": "Restaurar padrão",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível salvar. Tente novamente.",
+    "unavailable": "Configurações indisponíveis. Conecte um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Salvar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Enviar imagem",
+    "imageHint": "PNG, JPG ou WebP · corte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG menor.",
+    "search": "Buscar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não salvas?",
+    "keepEditing": "Continuar editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Padrão (seguir tema)"
+    },
+    "directories": "Diretórios do projeto",
+    "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
+    "removeDirectory": "Remover diretório",
+    "directoryPath": "Caminho completo do diretório",
+    "addDirectory": "Adicionar diretório",
+    "browseDirectory": "Procurar diretórios",
+    "mainDirectory": "Diretório principal",
+    "createTitle": "Novo projeto",
+    "createAction": "Criar projeto",
+    "repository": "URL do repositório",
+    "repositoryHint": "Compatível com GitHub, GitLab e outros repositórios Git via HTTPS ou SSH.",
+    "autoDirectory": "Sem selecionar diretório, será criado em {{path}}. Nomes repetidos recebem um número.",
+    "cloning": "Clonando repositório…",
+    "invalidRepository": "Insira uma URL válida de repositório GitHub, GitLab ou Git.",
+    "createFailed": "Não foi possível criar o projeto. Verifique a permissão de escrita, a URL e o acesso Git deste computador. O destino da clonagem deve estar vazio.",
+    "createNamePlaceholder": "Nome do projeto",
+    "createNameHint": "Dê um nome ao projeto para começar.",
+    "createFromRepository": "Criar de um repositório de código",
+    "createBlank": "Mudar para um projeto vazio",
+    "source_blank": "Projeto vazio",
+    "source_existing": "Abrir pasta existente",
+    "source_repository": "Importar repositório",
+    "sourceHint_blank": "Digite um nome. A pasta será criada automaticamente.",
+    "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
+    "sourceHint_repository": "Cole o link do repositório para baixar neste computador.",
+    "source": "Origem do projeto",
+    "sourceShort_blank": "Novo",
+    "sourceShort_existing": "Pasta",
+    "sourceShort_repository": "Repositório",
+    "automaticMain": "Principal · Automático",
+    "source_local": "Pasta local",
+    "sourceShort_local": "Pasta local",
+    "sourceHint_local": "Digite um nome para criar uma pasta ou escolha uma existente.",
+    "chooseExistingFolder": "Escolher pasta existente",
+    "changeMainDirectory": "Alterar"
+  },
+  "navigation": {
+    "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
   }
 }

@@ -1,8 +1,12 @@
 # 插件渐进式发现与花名册注入（Ghost Progressive Discovery）
 
-> **适用**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
-> 插件运行期可见性门禁、FORGE_GUIDE 作者契约前先读本文。插件基座红线、沙箱与
-> 权限规则的正本仍是 `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
+> **读取时机**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
+> 插件运行期可见性门禁、FORGE_GUIDE 作者契约之前
+> **适用路径**：`apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/cindy-brain/**/{ghostVisibility,ghostManual,forgeGuide}*`、
+> `apps/desktop/src/main/plugin-market/**/agentTools*`、`packages/cindy-tools/src/ghost/**`
+> **关系**：插件基座红线、沙箱与权限规则的正本仍是
+> `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
 
 ## 1. 目标
 
@@ -84,7 +88,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 `ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
 
-- 省略：同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- 省略：按下述日常版本规则选择 public/local 副本；其它同名实例仍须明确寻址。
+  同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
 - `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
 - `"local"`：本地开发副本；其它字符串为企业 orgSlug。
 
@@ -100,6 +105,23 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 `ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
 
 同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，local 副本为字符串 local，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
+### 2.2 日常调用的 public/local 版本选择
+
+同一逻辑 id 同时存在已确认的 public（`namespace: null`）与 local 副本时，
+花名册、`ghost_list` 和省略 namespace 的默认查询／调用只选择版本较新的一份。
+按 SemVer 比较数值段和预发布标识，build metadata 不影响版本优先级；版本相同选 public。
+不是本地优先，也不是公开版永久优先。每次实时查询重新选择，更新／启停／工作目录变化
+后不沿用旧胜者。已停用、下线或当前账号／工作目录不可用的副本不遮挡可用副本。
+
+企业 namespace、尚未确认的旧身份、无法比较的历史版本和重复物理身份不按名字强行合并，
+保持原来的明确寻址／歧义处理。显式 namespace 或物理实例键仍精确指向原安装，供明确指定
+来源的调试、历史页面与在途调用使用；不得静默把已绑定的请求、凭据或文件授权换给另一副本。
+管理列表保留所有安装，不改启用设置、不搬凭据和数据、不删除旧包。
+
+生产判据为 `ghostVisibility.ts` 的 `preferLatestLocalOrPublicGhosts`；
+花名册与实时清单在现有可见性过滤后复用它，默认名称解析也复用同一判据。
+回归见 `ghostVisibility.test.ts` 与 `ghostWorkdirGate.test.ts`。
 
 ## 3. 花名册（roster）
 
@@ -148,6 +170,22 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
 `agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
 
+#### 插件安装提示入口
+
+| 用户在哪里遇到提示 | 安装目标和后续动作 |
+| --- | --- |
+| 任务查询插件、读手册、调用工具或连接插件账号 | 网关先分类当前任务可见性。确实缺失时返回精确身份和恢复指引，由 Agent 按需调用既有市场搜索工具，核对来源完整且唯一的条目后调用安装工具，在任务内呈现宿主确认卡。桌面和手机首装卡标明执行电脑、市场提供的作者（如有）、版本和来源。点击「安装」即确认本次首装；「查看详情」可单独展开权限清单。安装后重新检查并继续中断的步骤。 |
+| 首页任务建议、插件技能入口（包括 `/pr`） | 用户点击后由 `usePluginInPlace` 安装或启用。原请求仍有效时填回输入框，由用户发送。 |
+| 「我的浏览器」设置 | 同一入口安装或启用 root 身份的浏览器插件，然后重新读取连接状态。浏览器本体和扩展分别使用各自的安装入口。 |
+| 远程任务的实时设备侧栏 | 同一入口处理**查看端**插件，保留远程查看能力和兼容更新的检查。任务执行端的插件安装确认始终指向**执行端**。 |
+| 定时检查失败横幅 | 本机任务复用同一入口处理检查脚本所属插件，下轮检查自然恢复。手机和远程历史横幅说明执行端缺少的依赖。 |
+| 定时任务编辑器、伙伴市场的工具说明 | 展示预期依赖或当前可用性。选择脚本权限、浏览或导入伙伴时不会连带安装一批插件。 |
+| 插件市场详情、文件导入、迁移助理和更新 | 用户已选定安装来源或迁移范围，使用相应宿主安装事务与权限确认；更新仍检查权限变化。 |
+
+`GHOST_NOT_FOUND` 也可能来自账号不可用、插件未暴露工具或未声明手册。仅在实际安装清单中缺失的合法插件 ID 才返回市场搜索指引；任务页面的工具票据不能触发该查询。来源冲突、查询不完整或宿主没有市场工具时，引导到任务电脑的插件设置。查询插件可见性自身不读取市场；并发 info/manual/call 没有额外市场请求。就地安装遇到来源异常时，已知市场条目打开其详情，否则进入插件页查看来源。不会根据展示名选择一个同名来源。
+
+同一账号、同一电脑上同时请求同一市场版本时只保留一个进行中的安装。重复请求收到进行中状态，仍需重查插件可用性；确认成功不会代表业务操作已经完成。拒绝后结束此次安装，用户明确再次请求时可重新发起。
+
 ### 3.3 快照语义
 
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
@@ -170,7 +208,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
   `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
   从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
-  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  否则对方会回退到它自己的插件；隔离运行的伙伴（本机同样不注入）带空串，V2 伙伴在自己项目里的
+  对话按普通任务生成。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
   Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
   与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
   回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。

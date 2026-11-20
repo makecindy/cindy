@@ -27,7 +27,18 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-devices',
     titleKey: 'settings.remoteControl.sections.myDevices',
     sectionKey: 'settings.sections.remoteControl',
-    aliases: ['device link', 'devices', '设备互联', '我的设备'],
+    keywordKeys: ['settings.devices.delete', 'settings.devices.deleteTitle'],
+    aliases: ['device link', 'devices', '设备互联', '我的设备', '设备列表'],
+  },
+  v2: {
+    id: 'remoteControl.v2',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-v2',
+    titleKey: 'settings.remoteControl.v2.switch.title',
+    descriptionKey: 'settings.remoteControl.v2.switch.hint',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
+    aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
   },
   ssh: {
     id: 'remoteControl.ssh',
@@ -35,6 +46,7 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-ssh',
     titleKey: 'settings.remoteControl.sections.ssh',
     sectionKey: 'settings.sections.remoteControl',
+    keywordKeys: ['settings.remote.importedAgentHint'],
     aliases: ['SSH', 'SSH host', 'SSH hosts', 'SSH主机', 'remote host', '远程主机', '主机'],
   },
   remoteControl: {

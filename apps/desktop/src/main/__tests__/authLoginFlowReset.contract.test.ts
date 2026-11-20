@@ -1,3 +1,4 @@
+import { AUTH_ACCOUNT_VAULT_KEY, LEGACY_ACCOUNT_REFRESH_TOKEN_KEY, AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY } from '../authCredentialKeys';
 // Guard tier: engineering-conventions section 3.2. Existing cross-file
 // credential, permission, protocol, race, and design contracts are isolated
 // from runtime unit tests. No new input or assertion is introduced here.
@@ -6,12 +7,21 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { ColdStartAuthFallbackRegistry, commitColdStartRefreshIfCurrent } from '../authStartupGate';
+import { AUTH_ACCOUNT_VAULT_VERSION } from '../authRefreshCommit';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
     /\r\n/g,
     '\n',
+  );
+  // The vault types and the refreshed-session commit rule moved here from authManager.ts.
+  const refreshCommitSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authRefreshCommit.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const refreshCommitRule = refreshCommitSource.slice(
+    refreshCommitSource.indexOf('export function applyRefreshedCredentialsToVault('),
   );
   const logoutPolicySource = readFileSync(
     resolve(process.cwd(), 'src/main/authAccountLogoutPolicy.ts'),
@@ -133,6 +143,38 @@ describe('auth login-flow reset', () => {
     expect(confirmBody).toContain("type: 'discovery-loaded'");
     expect(confirmBody).not.toContain('soleAutoStartSsoMethod');
     expect(confirmBody).not.toContain("type: 'start-browser'");
+
+    const cancelStart = source.indexOf("if (action.type === 'cancel-sso-realm') {");
+    const cancel = source.slice(cancelStart, source.indexOf('if (!providerConfig)', cancelStart));
+    expect(cancel).toContain('pendingAuthRealm = null;');
+    expect(cancel).toContain('discoveredMethods = [];');
+    expect(cancel).toContain("type: 'providers-loaded'");
+    expect(cancel).toContain('providers: confirmation.providers');
+    expect(cancel).not.toContain('activateClientEndpointRealm');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：discover-sso-org 可使用单区有效命中；邮箱与登录后提示仍严格查询。
+  // - Bug／规则依据：418 回归的修复范围只限显式企业入口，凭证与区域边界不得随共享函数扩散。
+  // - 现有覆盖缺口：SDK 行为测试覆盖合并策略，不能验证 Electron main 选择哪种策略。
+  // - 最小失败输入：共享 lookup 默认放宽会改变邮箱登录；显式入口未传选项仍拒绝国内成功+国际418。
+  // - tier：guard；入口绑定 Electron main 私有状态，用静态调用契约核对选项传递，行为由 SDK 单测覆盖。
+  // - 实测耗时：单文件 1.38 秒。
+  it('opts only the explicit organization entry into partial realm discovery', () => {
+    const orgStart = source.indexOf("if (action.type === 'discover-sso-org') {");
+    const org = source.slice(orgStart, source.indexOf("if (action.type === 'request-code')", orgStart));
+    expect(org).toContain('{ allowPartialSuccess: true }');
+    expect(source.match(/allowPartialSuccess: true/g)).toHaveLength(1);
+    const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
+    const lookup = source.slice(lookupStart, source.indexOf('export async function getLoginState(', lookupStart));
+    expect(lookup).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(lookup).toContain('}, options);');
+    const wrapperStart = source.indexOf('async function discoverOrganizationRealm(');
+    const wrapper = source.slice(wrapperStart, lookupStart);
+    expect(wrapper).toContain('options: { allowPartialSuccess?: boolean } = {}');
+    expect(wrapper).toContain('lookupOrganizationRealm(org, expectedLoginFlowEpoch, options)');
+    expect(source).toContain('discoverOrganizationRealm(domain, actionLoginFlowEpoch)');
+    expect(source).toContain('lookupOrganizationRealm(domain, expectedLoginFlowEpoch)');
   });
 
   it('pins personal login to the build realm and clears stale realm before organization discovery', () => {
@@ -197,12 +239,10 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps account access tokens in memory while persisting only encrypted refresh sessions', () => {
-    expect(source).toContain(
-      "const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';",
-    );
+    expect(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY).toBe('cindy_auth_account_refresh_token');
     expect(source).toContain('let pendingAccountToken: string | null = null;');
     expect(source).toContain('client.exchangeAccountMembership(accountToken, action.accountId)');
-    expect(source).toContain("const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';");
+    expect(AUTH_ACCOUNT_VAULT_KEY).toBe('cindy_auth_accounts_v1');
     expect(source).toContain('client.refreshAccount(current.accountRefreshToken)');
     expect(source).toContain('client.logoutAccount(pair.accountToken)');
     expect(source).toContain('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY');
@@ -231,10 +271,8 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
-    expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
-    expect(source).toContain(
-      "const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';",
-    );
+    expect(AUTH_ACCOUNT_VAULT_VERSION).toBe(2);
+    expect(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY).toBe('cindy_auth_account_logout_tombstones_v1');
     expect(source).toContain('const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;');
     expect(source).toContain('const logoutAuthEpoch = authStateEpoch;');
     expect(source).toContain("'Logout was superseded by a newer auth action'");
@@ -640,7 +678,8 @@ describe('auth login-flow reset', () => {
       commitStart,
     );
     const commitBody = source.slice(commitStart, commitEnd);
-    expect(commitBody).toContain('vault.resources[key]?.refreshToken === requestedRefreshToken');
+    expect(commitBody).toContain('applyRefreshedCredentialsToVault(vault');
+    expect(refreshCommitRule).toContain('vault.resources[key]?.refreshToken === requestedRefreshToken');
 
     const deadStart = source.indexOf('async function clearConfirmedDeadRefreshTokens');
     const deadEnd = source.indexOf('\n}\n\n/**\n * replacement-retry', deadStart);
@@ -669,7 +708,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps a durable signed-out owner across a crash between vault and session cleanup', () => {
-    expect(source).toContain('signedOutAt?: number;');
+    expect(refreshCommitSource).toContain('signedOutAt?: number;');
 
     const clearStart = source.indexOf('async function clearAuthAccountVault(');
     const clearEnd = source.indexOf('\n}\n\nfunction persistLogoutTombstoneOnly', clearStart);
@@ -713,18 +752,19 @@ describe('auth login-flow reset', () => {
       refreshCommitStart,
     );
     const refreshCommitBody = source.slice(refreshCommitStart, refreshCommitEnd);
-    expect(refreshCommitBody).toContain("typeof vault.signedOutAt !== 'number'");
-    expect(refreshCommitBody).toContain('!loggedOutAccountKeySet(vault).has(key)');
-    expect(refreshCommitBody.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
-      refreshCommitBody.indexOf('options.allowUnclaimedVault === true'),
+    expect(refreshCommitBody).toContain('allowUnclaimedVault: options.allowUnclaimedVault');
+    expect(refreshCommitRule).toContain("typeof vault.signedOutAt !== 'number'");
+    expect(refreshCommitRule).toContain('!loggedOutAccountKeySet(vault).has(key)');
+    expect(refreshCommitRule.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
+      refreshCommitRule.indexOf('input.allowUnclaimedVault === true'),
     );
 
-    const resourceWriteStart = source.indexOf('function writeResourceSessionToVault(');
-    const resourceWriteEnd = source.indexOf(
-      '\n}\n\nasync function rememberPassportSession',
+    const resourceWriteStart = refreshCommitSource.indexOf('export function writeResourceSessionToVault(');
+    const resourceWriteEnd = refreshCommitSource.indexOf(
+      '\n}\n\n/**\n * Commit a refreshed resource session',
       resourceWriteStart,
     );
-    const resourceWriteBody = source.slice(resourceWriteStart, resourceWriteEnd);
+    const resourceWriteBody = refreshCommitSource.slice(resourceWriteStart, resourceWriteEnd);
     expect(resourceWriteBody).toContain('if (options.markActive !== false) {');
     expect(resourceWriteBody).toContain('delete vault.signedOutAt;');
     expect(resourceWriteBody).toContain(
@@ -765,7 +805,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('logs out only the current saved account and advances to the next restorable account', () => {
-    expect(source).toContain('loggedOutAccountKeys?: string[];');
+    expect(refreshCommitSource).toContain('loggedOutAccountKeys?: string[];');
 
     const removalStart = logoutPolicySource.indexOf('export function removeLoggedOutVaultAccount<');
     const removalBody = logoutPolicySource.slice(removalStart);
@@ -999,12 +1039,12 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function commitDesktopRefreshCredentials(');
     const helperEnd = source.indexOf('\n}\n\n/** Persist a rotated Passport', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('vault.activeAccountKey === key');
+    expect(refreshCommitRule).toContain('vault.activeAccountKey === key');
     expect(helperBody).toContain('options.validateBeforeWrite?.()');
-    expect(helperBody).toContain('canClaimUninitializedVault');
-    expect(helperBody).toContain('Object.keys(vault.resources).length === 0');
+    expect(refreshCommitRule).toContain('canClaimUninitializedVault');
+    expect(refreshCommitRule).toContain('Object.keys(vault.resources).length === 0');
     expect(helperBody).toContain('readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)');
-    expect(helperBody).toContain('markActive: stillOwnsActiveSession');
+    expect(refreshCommitRule).toContain('markActive: stillOwnsActiveSession');
     expect(helperBody).toContain("if (commit === 'active') {");
     expect(helperBody).toContain('writePersistedAuthSessionOrThrow(pair.refreshToken, realm);');
   });
@@ -1180,10 +1220,13 @@ describe('auth login-flow reset', () => {
       'reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId)',
     );
     expect(reserveBody).toContain(
-      "throw new Error('local profile and native provider ownership reservations disagree')",
+      "if (nativeOwner.status !== 'owned')",
     );
     expect(reserveBody).toContain(
-      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId)',
+      'nativeOwnerId = nativeOwner.ownerId;',
+    );
+    expect(reserveBody).toContain(
+      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId, nativeOwnerId)',
     );
 
     const migrationStart = source.indexOf(

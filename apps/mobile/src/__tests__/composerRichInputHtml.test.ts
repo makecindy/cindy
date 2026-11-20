@@ -4,8 +4,8 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import ts from 'typescript';
-import { detectComposerTrigger } from '@/session/composerPalette';
-import { replaceComposerTextRange, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
+import { composerSlashInvocationName, detectComposerTrigger } from '@/session/composerPalette';
+import { composerDocumentProjectedText, mentionComposerNode, replaceComposerTextRange, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
@@ -28,7 +28,7 @@ it.each([false, true])('atomically applies a selected slash command while queue 
   const bindings = { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: '/he' },
     composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing }, messageEditingRef: { current: null },
     composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: placeCaret, focus } },
-    applyComposerDocument: apply, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
+    applyComposerDocument: apply, composerSlashInvocationName, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
   pageCallback('selectSlashCommand', bindings)({ name: 'help', kind: 'agent-skill' });
   const document = apply.mock.calls[0][0];
   expect(document.nodes).toEqual([{ type: 'text', text: '/help', slashCommand: '/help' }, { type: 'text', text: ' ' }]);
@@ -36,6 +36,24 @@ it.each([false, true])('atomically applies a selected slash command while queue 
   expect(placeCaret).toHaveBeenCalledExactlyOnceWith(document);
   expect(focus).not.toHaveBeenCalled();
   expect(bindings.pendingSkillSelectionRef.current).toEqual({ name: 'help', sid: 's1' });
+});
+
+// Regression: type `/`, quote a message, type `com`, pick `compact`. The quote has no
+// projected text, so replacing the trigger token used to drop it with the token.
+it.each([
+  ['selectSlashCommand', '/', 'com', { name: 'compact', kind: 'agent-builtin' }, '/compact '],
+  ['selectAtResource', 'read @', 'ses', { type: 'file', name: 'sessions.ts', relPath: 'src/sessions.ts' }, 'read @src/sessions.ts '],
+])('%s keeps a quote that sits inside the trigger token', (handler, head, tail, item, expectedText) => {
+  const apply = vi.fn();
+  const quote = { type: 'quote' as const, quote: { text: 'quoted' } };
+  pageCallback(handler, { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: head + tail },
+    composerDocumentRef: { current: { version: 1, nodes: [{ type: 'text', text: head }, quote, { type: 'text', text: tail }] } },
+    queueEditingRef: { current: false }, messageEditingRef: { current: null },
+    composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: vi.fn() } },
+    applyComposerDocument: apply, composerSlashInvocationName, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode, mentionComposerNode })(item);
+  const document = apply.mock.calls[0][0];
+  expect(composerDocumentProjectedText(document)).toBe(expectedText);
+  expect(document.nodes.at(-1)).toEqual(quote);
 });
 
 it.each([false, true])('routes touch and accessibility activation through the actual dictation overlay (native=%s)', (nativeComposerAvailable) => {
@@ -258,7 +276,9 @@ describe('mobile composer rich input HTML', () => {
         detach(node);
         return node;
       },
+      clientHeight: 264,
       scrollHeight: 0,
+      scrollTop: 0,
       setAttribute() {},
       style: {
         paddingBottom: '',
@@ -389,14 +409,37 @@ describe('mobile composer rich input HTML', () => {
     root.scrollHeight = 500;
     const beforeResize = messages.length;
     for (let frame = 0; frame < 100; frame += 1) onResize();
-    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    expect(messages.slice(beforeResize)).toEqual([
+      { type: 'height', height: 264 },
+      // Native decides from these edges whether a drag on the text scrolls or resizes.
+      { type: 'scroll-edge', atTop: true, atBottom: false },
+    ]);
+    const beforeScroll = messages.length;
+    root.scrollTop = 120;
+    listeners.get('scroll')?.();
+    root.scrollTop = 236;
+    listeners.get('scroll')?.();
+    listeners.get('scroll')?.();
+    expect(messages.slice(beforeScroll)).toEqual([
+      { type: 'scroll-edge', atTop: false, atBottom: false },
+      { type: 'scroll-edge', atTop: false, atBottom: true },
+    ]);
+    // Replacing the draft can reset scrollTop without a scroll event or a resize.
+    const beforeReplace = messages.length;
+    root.scrollTop = 0;
+    windowStub.cindyComposer?.applyDocument({ version: 1, nodes: [{ type: 'text', text: 'replaced' }] }, false);
+    expect(messages.slice(beforeReplace)).toContainEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
     windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
     expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
     root.scrollHeight = 80;
+    root.scrollTop = 0;
     const beforeContentShrink = messages.length;
     onResize();
     onResize();
-    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
+    expect(messages.slice(beforeContentShrink)).toEqual([
+      { type: 'height', height: 80 },
+      { type: 'scroll-edge', atTop: true, atBottom: true },
+    ]);
     children[0].nodeValue = 'hello world';
     listeners.get('input')?.();
     expect(messages).toContainEqual({
@@ -672,6 +715,9 @@ describe('mobile composer rich input HTML', () => {
 
   it('rejects malformed image messages at the WebView boundary', () => {
     expect(parseComposerWebMessage(JSON.stringify({ type: 'paste-images-start', count: '2' }))).toBeNull();
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: true, atBottom: false })))
+      .toEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: 'yes', atBottom: false }))).toBeNull();
     expect(parseComposerWebMessage(JSON.stringify({
       type: 'paste-images-start',
       requestId: 'images-1',

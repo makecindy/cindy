@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
@@ -7,6 +8,7 @@ import {
   effectiveContextWindow,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  holdsContextRecoveryBroadcast,
   hasModelWindowContextToProtect,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
@@ -71,6 +73,26 @@ describe('isContextOverflowErrorData', () => {
           'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
       }),
     ).toBe(false);
+  });
+});
+
+// The broadcast hold the desktop's delivery and the Node Host share: only a terminal overflow-class
+// error of a local task is held for recovery; a remote task, a retried error or another error is not.
+describe('holdsContextRecoveryBroadcast', () => {
+  const local = { remoteHostId: null };
+  const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
+  it.each([
+    ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+    ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+    ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
+  ])('holds a terminal %s error of a local task', (_kind, data) => {
+    expect(holdsContextRecoveryBroadcast(local, error(data))).toBe(true);
+  });
+  it('does not hold a remote task, a retried error or another error', () => {
+    const overflow = { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' };
+    expect(holdsContextRecoveryBroadcast({ remoteHostId: 'ssh-host' }, error(overflow))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ ...overflow, willRetry: true }))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ message: 'boom', reason: 'sdk_crash' }))).toBe(false);
   });
 });
 
@@ -374,6 +396,48 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
+  // Unit, PR #11352: a 200K BYOK display/default window in the row and live
+  // snapshot is not proof of route capacity. A restart must keep the 16K cap.
+  it('does not enlarge rebuild history from an unverified snapshot window', async () => {
+    const deps = makeDeps([
+      msg('user', 'Keep the long reply', 'u1'),
+      msg('assistant', 'ordinary ASCII output\n'.repeat(1_500), 'a1'),
+    ]);
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 0, contextWindow: 200_000 }),
+    });
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    const commit = deps.commitRebuild.mock.calls[0] as unknown as [string, string, { handoffCoverage: string }];
+    expect(commit[1].length).toBeLessThanOrEqual(16_000);
+    expect(commit[2].handoffCoverage).toBe('condensed');
+  });
+
+  // Unit, 2026-11-11: a paused account needs handoff even with a healthy or
+  // empty context. Existing tests required overflow. Verify no replay/close while busy.
+  it.each([false, true])('hands off a paused account before sending (empty=%s)', async empty => {
+    const deps = makeDeps(empty ? [] : [msg('user', 'Keep this goal', 'u1'), msg('assistant', 'Finished step one', 'a1')]);
+    const needsNativeSessionHandoff = vi.fn(async () => true);
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(needsNativeSessionHandoff).not.toHaveBeenCalled();
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({ reason: 'native-session-recovery' }), expect.any(AbortSignal));
+    if (!empty) expect(deps.setPendingHandoff.mock.calls[0][1]).toContain('Finished step one');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original runtime if no replacement account is available', async () => {
+    const deps = makeDeps([msg('user', 'Keep working', 'u1')]);
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => { throw new Error('No subscription account is available'); } });
+    await expect(rollover.prepareUnhealthySession('s1')).rejects.toThrow('No subscription account');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
   it.each(['cc', 'pi'])('recovers a full %s companion through the ordinary Session guard, retaining outcomes without replay', async (agentKind) => {
     const deps = makeDeps([
       msg('user', 'Keep the game keyboard accessible', 'u1'),
@@ -572,6 +636,17 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Unit: first dispatch can select another account before there is anything to hand off.
+  it('keeps a first account selection out of empty task history', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), sdkSessionId: null, contextTokens: 0 });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
@@ -606,7 +681,53 @@ describe('createContextOverflowRollover', () => {
     }));
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    // A remote budget lookup can suspend the transaction after close. Recheck
+    // the selection between close and the durable route/history write.
+    const closeAt = deps.closeSession.mock.invocationCallOrder[0]!;
+    const commitAt = deps.commitRebuild.mock.invocationCallOrder[0]!;
+    expect(assertCurrent.mock.invocationCallOrder.some(at => closeAt < at && at < commitAt)).toBe(true);
+  });
+
+  // Unit: disabling an account carries ordinary task context, including completed
+  // tools, without replay; earlier recovery coverage only allowed Bot restart or a route change.
+  it.each(['native-a', null])('retains ordinary task history for an account switch with native id %s', async sdkSessionId => {
+    const deps = makeDeps([
+      msg('user', 'continue building the game', 'u1'),
+      { ...msg('tool_result', { fullText: 'Saved zombie model successfully' }, 'r1'), toolUseId: 'save-1' },
+      msg('assistant', 'Next: verify the scene', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'desktop', sdkSessionId });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1];
+    expect(handoff).toContain('continue building the game');
+    expect(handoff).toContain('Saved zombie model successfully');
+    expect(handoff).toContain('Next: verify the scene');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String),
+      expect.not.objectContaining({ replacementRoute: expect.anything() }), expect.any(AbortSignal));
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Regression #9964: an idle root turn can still own background builds/tests.
+  // Earlier recovery tests only covered foreground work; closing here kills that work.
+  it.each(['retain-route', { model: 'new-model', providerId: 'openai', effort: null, fastMode: false }] as const)(
+    'does not close background work during native recovery (%j)', async target => {
+      const deps = makeDeps([msg('user', 'keep the build running', 'u1')]);
+      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{}] });
+      await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, vi.fn()))
+        .rejects.toThrow('running');
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
+  it('does not commit an account handoff after the user stops recovery', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    const recovery = createContextOverflowRollover(deps);
+    deps.closeSession.mockImplementationOnce(async () => { recovery.cancelRecovery('s1'); });
+    await expect(recovery.prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('keeps the original native binding when the recorded conversation cannot be loaded', async () => {
@@ -638,7 +759,15 @@ describe('createContextOverflowRollover', () => {
   it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
+      // #9973, unit: exercise the real smaller-window entry with an early long
+      // request; the former two short rows never exercised lossy early history.
+      const initial = `${'background '.repeat(25)}Keep the production database read-only.${'context '.repeat(25)}`;
       const deps = makeDeps([
+        msg('user', initial, 'initial', 0),
+        ...Array.from({ length: 3 }, (_, i) => [
+          msg('user', `Progress ${i}`, `early-u${i}`, i + 1),
+          msg('assistant', 'Checking', `early-a${i}`, i + 1),
+        ]).flat(),
         msg('user', '先做 A', 'u1', 1),
         msg('assistant', '做完 A', 'a1', 2),
       ]);
@@ -676,6 +805,7 @@ describe('createContextOverflowRollover', () => {
       );
       const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
       const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain(initial);
       expect(handoff).toContain('switching to a model with a smaller context window');
       expect(handoff).not.toContain("exceeded the model's context window");
       expect(deps.setPendingHandoff).toHaveBeenCalled();

@@ -1104,6 +1104,43 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  // Unit regression: observe the actual SSH factory payload after next-turn rebuild.
+  // Legacy controller paths were deliberately omitted; validated project paths were omitted too.
+  // Missing coverage: a brand-new SSH task has no SDK id before its first send.
+  // Minimal input: setters before send, without resumeSessionId; unit, in-memory remote Query.
+  it.each([undefined, 'ssh-sdk-existing'])('sends matching-host SSH grants before first input and revokes them (resume %s)', async (resumeSessionId) => {
+    process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+    const deps = createDeps();
+    const starts: Record<string, unknown>[] = [];
+    deps.remoteCcQueryFactory = async ({ startParams }) => {
+      starts.push(startParams as unknown as Record<string, unknown>);
+      return createFakeQuery() as never;
+    };
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'ssh-project-directories', model: 'claude-opus-4-6', resumeSessionId,
+      workingDir: '/srv/project', remoteHostId: 'ssh-1', permissionMode: 'ask',
+      extraDirs: ['/controller/legacy'], writableDirs: ['/controller/output'],
+    });
+    try {
+      expect(starts.at(-1)?.additionalDirectories).toBeUndefined();
+      await handle.setExtraDirs?.(['/controller/legacy', '/srv/reference'], null,
+        { hostId: 'ssh-1', directories: ['/srv/reference'] });
+      await handle.setWritableDirs?.(['/controller/output', '/srv/output'],
+        { hostId: 'ssh-1', directories: ['/srv/output'] });
+      await handle.send({ type: 'user', content: 'Read the project.' });
+      expect(starts).toHaveLength(2);
+      expect(starts.at(-1)?.additionalDirectories).toEqual(['/srv/reference', '/srv/output']);
+      expect(starts.at(-1)?.resumeSdkSessionId).toBe(resumeSessionId);
+      expect(starts.at(-1)).not.toHaveProperty('forkSession');
+      await handle.setExtraDirs?.(['/srv/reference'], null,
+        { hostId: 'wrong-host', directories: ['/srv/reference'] });
+      await handle.setWritableDirs?.([],{ hostId: 'ssh-1', directories: [] });
+      await handle.send({ type: 'user', content: 'Continue.' });
+      expect(starts).toHaveLength(3);
+      expect(starts.at(-1)?.additionalDirectories).toBeUndefined();
+    } finally { await handle.close(); }
+  });
+
   it('passes the runtime session instance id into Claude MCP provider context', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -1820,6 +1857,18 @@ describe('remote sessions share the same permission semantics', () => {
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
       {
+        toolNamePrefix: 'mcp__cindy_helper__manage_user_questions',
+        sourceServerId: 'cindy_helper', invocation: 'root-only',
+        denialMessage: 'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
+        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        sourceServerId: 'cindy_helper',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
         toolNamePrefix: 'AskUserQuestion',
         sourceServerId: 'claude-code',
         invocation: 'root-only',
@@ -1827,7 +1876,7 @@ describe('remote sessions share the same permission semantics', () => {
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
       },
       {
-        toolNamePrefix: 'mcp__cindy_helper__ask_owner',
+        toolNamePrefix: 'mcp__cindy_helper__request_input_handoff',
         sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
@@ -1942,9 +1991,9 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(5);
     expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__request_input_handoff', invocation: 'root-only',
     }));
     await expect(
       remote.onApprovalRequest({
@@ -2027,9 +2076,9 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(5);
     expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__request_input_handoff', invocation: 'root-only',
     }));
     await expect(
       failed.onApprovalRequest({

@@ -20,7 +20,13 @@ import {
   dingtalkManagedWorkingDirName,
   dingtalkSessionIdFor,
 } from '../adapter';
+import { receivedHistoryScope, recordReceivedImageMessage } from '../../shared/receivedImageHistory';
 import { DINGTALK_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 const CONFIG = {
   agentKind: 'claude-code' as const,
@@ -91,6 +97,15 @@ describe('dingtalk turn permission boundary', () => {
 
   it('主人私聊遵循 session permissionMode，不叠加与完全访问互斥的逐轮策略', () => {
     expect(adapter.turnPermissionPolicyFor?.(baseEvent)).toBeUndefined();
+  });
+
+  it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
+    const copy = adapter.ui.error!.permissionModeUnsupported;
+    const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;
+    expect(message).toContain('尚未执行');
+    expect(message).toContain('Cindy');
+    expect(message).toContain('自动审批');
+    expect(message).not.toContain('/permission');
   });
 
   it('群聊保留逐轮危险操作强确认', () => {
@@ -173,6 +188,21 @@ describe('dingtalk group window', () => {
     speaker: { id: `${name}-id`, name, isOwner },
     attachments: [],
     unsupported: [],
+  });
+
+  it('makes a previously received managed image addressable in the next group turn', async () => {
+    const adapter = buildDingTalkAdapter({ getStatus: () => ({ kind: 'connected', appId: 'ding-app' }) } as unknown as DingTalkIM, CONFIG);
+    const turn = groupEvent('ask', '看看图', '张三', true);
+    await recordReceivedImageMessage({
+      scope: receivedHistoryScope('dingtalk', turn.contextId, turn.chatId),
+      messageId: 'photo-id', text: '', attachments: [{
+        kind: 'image', originalName: 'photo.jpg', mimeType: 'image/jpeg', absPath: '/photo.jpg',
+        url: `cindy-media://blobs/${'a'.repeat(64)}.jpg`,
+      }],
+    });
+    const next = await adapter.prepareAgentTurnText?.(turn);
+    expect(next?.agentText).toContain('[图片消息 #photo-id]');
+    expect(next?.agentText).toContain('get_images');
   });
 
   it('records member mentions and the bot reply, and the owner turn sees them as the group prefix', async () => {

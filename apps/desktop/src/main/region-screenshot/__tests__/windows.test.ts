@@ -87,7 +87,7 @@ vi.mock('../translationPreferences', () => ({
 vi.mock('../save', () => ({ saveScreenshotImage: vi.fn(), saveRegionRecording: mocks.saveRecording }));
 vi.mock('../recordingClipboard', () => ({ copyRegionRecording: mocks.copyRecording }));
 vi.mock('../liveCapture', () => ({ captureLiveRegion: mocks.liveCapture, RegionVideoCapture: class { frame = mocks.liveCapture; stop() {} } }));
-vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => mocks.locale, t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ getResolvedMainLocale: () => mocks.locale, t: (key: string) => key }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
 import { OverlayPool, hideScreenshotOverlay, showScreenshotOverlay } from '../overlays';
 import { RegionScreenshotSession } from '../session';
@@ -121,6 +121,7 @@ function fakeWindow() {
     getMediaSourceId: () => 'window:999:0',
     setVisibleOnAllWorkspaces: vi.fn(),
     setAlwaysOnTop: vi.fn(),
+    setHiddenInMissionControl: vi.fn(),
     setBounds: vi.fn(),
     setOpacity: vi.fn(),
     setIgnoreMouseEvents: vi.fn(),
@@ -736,7 +737,11 @@ describe('screenshot window lifecycle', () => {
     } finally { editor.dispose(); }
   });
 
-  it('creates only on demand without showing or transforming the macOS Dock identity, and reuses the shell', () => {
+  // 系统窗口契约 (实机复现, 单测无法模拟空间归属): macOS 少了临时窗口标记, 任一应用退出过
+  // 系统全屏后, 复用的浮层只属于桌面 1, 在全屏空间里截图会被切回桌面 1。Windows 上该方法
+  // 不存在, 调用会让浮层创建失败、快捷键没反应。
+  it.each(['darwin', 'win32'] as const)('creates only on demand without showing or transforming the Dock identity, reuses the shell, and marks only the macOS panel transient so it rejoins every Space (%s)', (platform) => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));
     expect(windows).toHaveLength(0);
     pool.ensure(display);
     pool.ensure(display);
@@ -746,6 +751,8 @@ describe('screenshot window lifecycle', () => {
       true,
       expect.objectContaining({ skipTransformProcessType: true }),
     );
+    if (platform === 'darwin') expect(windows[0].setHiddenInMissionControl).toHaveBeenCalledWith(true);
+    else expect(windows[0].setHiddenInMissionControl).not.toHaveBeenCalled();
   });
 
   it('closes an unresponsive overlay and bounds repeated failures', () => {

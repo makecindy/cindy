@@ -1,5 +1,9 @@
 # Cindy Mobile Remote Control Plan
 
+## 反馈卡片当前范围
+
+反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案已被替代。同账号手机在宿主声明 `remoteConfirmSupported: true` 时，以消息流内反馈卡片预览、按需编辑并明确确认公开提交或取消，正常聊天输入框保留；旧宿主继续显示回电脑处理的提示，共享访客不可处理。当前协议见[反馈确认](../../../docs/dev-rules/protocol-compatibility/mobile-feedback-confirmation.md)，实现见 [`IssueConfirmCard`](../src/session/IssueConfirmCard.tsx)，行为回归见 [`InteractionPanelReceipt.test.tsx`](../src/__tests__/InteractionPanelReceipt.test.tsx)。`mobile-scope-guard` 不再排除反馈 UI／E2E／截图；下文相关旧范围仅作历史记录。真实跨设备与自建 relay 尚未验收。
+
 > 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
 
 > 版本: 2026-06-16
@@ -180,7 +184,7 @@
 
 本轮补充 16:`ControlActionButton` 现在会把缺少 handler 的入口当作 disabled,避免 controls sheet 动作出现“可点但无动作”的状态。该改动不改变 rename/pin/archive/delete/model/effort/permission/fast/extraDirs/context 的远程协议、capability projection 或锚点。
 
-本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定输入、语音入口和附件调整,附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
+本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定语音入口和附件调整；输入框在 2026-11-07 修正为保持可编辑与键盘焦点，完成态仅清除匹配的发送快照，见 `docs/dev-rules/mobile-development.md`「Android 组字与发送快照」。附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
 
 本轮补充 18:`ScreenHeader` 左侧返回按钮已从裸 `Pressable` 收敛成内部 `ScreenBackButton`,主窗口 header 的返回入口现在也具备统一 pressed / disabled / accessibility state。该改动不改变返回箭头视觉、`deviceDetail.backButton` / `session.backButton` / `files.backButton` 等锚点,也不改变 `router.back()` 行为。
 
@@ -279,7 +283,7 @@
 | Ask User | `AskUserQuestionPrompt` 多步 wizard;single-click advance;multi-select JSON array string;skip 空字符串;draft 跨 session 保留。 | 底部全屏 wizard;单选、多选、自定义、跳过、返回、提交;草稿按 `sessionId + requestId` 保存。 | ask serialization 和 draft 单测;多问题 E2E。 |
 | Plan Review | `PlanViewerCard` expanded/half/minimized/edit;outline 从 Markdown heading 提取;批准或反馈通过 `PlanActionCard`;编辑会写回 plan file。 | V1 plan review:半屏/全屏高度切换、全文预览、Markdown h1-h3 目录跳转、编辑、approve、feedback,批准回传 `editedPlan`。 | plan decision / outline 单测;编辑后 approve E2E。 |
 | Issue Confirm | `IssueConfirmCard` 属于桌面端 `/issue` 反馈提交确认。 | 手机版 V1 不提供 Issue 编辑/提交表单;遇到 `issue_confirm` 只显示“请回到桌面端处理”的 unsupported card。 | shared 协议兼容单测;不纳入 mobile 主流程 E2E。 |
-| 会话控制 | `ChatInput` model/effort/permission/fast/extraDirs 是 server-first;远程会话 await 隧道 setX,被控端 patch 回流为真相;跨厂商切换有历史兼容确认。 | 手机 `SessionControlsPanel` 不做乐观最终态;调用 setX 后等待 sessions patch;已通过被控端 `maker:get-capabilities` 渲染模型、effort、permission 和 fast 支持状态;已有历史消息且模型类别不兼容时会先显示跨厂商确认卡;Claude 项目会话支持 extraDirs 文本编辑,提交后以被控端校验结果为准;触控布局由 `sessionControlsTouchLayout.ts` 根据屏宽和控件密度输出,controls sheet 动作由局部 `ControlActionButton` 统一 tone/active/disabled/pressed,inline 入口、section tabs 和远程目录进入行分别由局部 primitive 承载 pressed / expanded / selected / disabled state,Android 后续复用同一模型。 | set model/effort/permission/fast/extraDirs 回流 smoke;能力列表 mock;`sessionControlsTouchLayout.test` 覆盖 320/393/未就绪宽度和 dense controls。 |
+| 会话控制 | `ChatInput` model/effort/permission/fast/extraDirs 是 server-first;远程会话 await 隧道 setX,被控端 patch 回流为真相;跨厂商切换有历史兼容确认。 | 手机 `SessionControlsPanel` 不做乐观最终态;调用 setX 后等待 sessions patch;已通过被控端 `maker:get-capabilities` 渲染模型、effort、permission 和 fast 支持状态;换 Harness 或电脑按 2026-11-18 裁决点选即登记，下次发送时生效;Claude 项目会话支持 extraDirs 文本编辑,提交后以被控端校验结果为准;触控布局由 `sessionControlsTouchLayout.ts` 根据屏宽和控件密度输出,controls sheet 动作由局部 `ControlActionButton` 统一 tone/active/disabled/pressed,inline 入口、section tabs 和远程目录进入行分别由局部 primitive 承载 pressed / expanded / selected / disabled state,Android 后续复用同一模型。 | set model/effort/permission/fast/extraDirs 回流 smoke;能力列表 mock;`sessionControlsTouchLayout.test` 覆盖 320/393/未就绪宽度和 dense controls。 |
 | Fork / Rewind | `MessageActionBar` + `useForkAtMessage` + `RewindPreviewDialog`;首条 user 不显示 rewind;commit 后用被控端快照替换。 | 消息动作行;fork 成功 upsert 并跳转;rewind preview 显示风险,commit 后替换消息并回填 composer draft。`rewindPreviewLayout.ts` 按屏宽控制 preview 面板 padding、可见文件行数和 40px action 触控高度,`RewindActionButton` 统一取消/确认/关闭反馈。 | fork/rewind 单测和 smoke;`rewindPreviewLayout.test` 覆盖 320/393/未就绪宽度。 |
 | 自动化 | `SchedulerPage` 是 master-detail;`TaskListPane` 按 workingDir/dialogue 分组;active 包含 expired;`RunHistoryPane` 折叠同 session runs;`ScheduleFormDialog` 包含模板、fresh/persistent/bound、project automation。 | 手机不再提供自动化管理；PC 功能及已有运行历史保留。 | 不再要求手机管理页或对应 Maestro 流程。 |
 | 远程设置 | `ControlThisMacPanel` / `ControllableDevicesPanel` / `RemoteControlSection` 管本机允许被控、可控设备、撤销/重命名。 | 手机 Settings 显示登录、当前手机设备名、relay 状态、调试和退出;被控端允许开关仍在电脑端。 | `settings.yaml` + settings model 单测。 |
@@ -1251,7 +1255,10 @@ apps/mobile/src/
   - context usage 刷新、摘要和桌面同形字段扁平详情展示。
   - session spend 摘要,读取被控端 session row 的 `totalCostUsd` / `totalTokenUsage` / `contextTokens` / `contextWindow`,只展示当前远程会话自身用量。
 - 已给会话控制面板补关键 source anchors,并把删除从单击改为二次确认:第一次进入“确认删除”状态,第二次才向被控端提交 `status: deleted`。
-- 已按桌面 `ChatInput` 的 `ModelSelector` 分类规则补跨厂商模型切换确认:已有历史消息且从 Anthropic / GPT / Google / China 等不兼容类别切换时,手机端先显示确认卡;GPT 与 `codex/` 低价版 GPT 互切沿用桌面兼容豁免。
+- **2026-11-18 用户裁决**：手机端选择其他 Harness 或运行电脑直接登记意图，下一条消息发送时才执行。
+  另一台电脑上的可用副本单独列出，行内说明任务所在电脑的供应商当前不可用，由用户点选。
+  `agent_switch` 分隔条与上下文重建标记按主机提供的覆盖情况说明是完整接续还是较早内容已压缩。
+  缩小窗口且需要被控端重建时仍按已有远程拒绝规则处理。配额均衡换到共享来源时沿用两层询问。
 - 已按桌面 `SessionContentHeader` / sidebar menu 语义补复制入口:深度链接 `xdt-maker://session/<id>`、XDT session id、底层 SDK session id;SDK id 缺失时按钮禁用。
 - 已新增 `sessionControls` helper,统一构造 `maker:get-context-usage` 的 createOpts,并把常见 usage shape、桌面结构化 context usage 和 session spend shape 压成手机可读摘要 / 详情 rows。
 - 已新增 `agentCapabilities` helper,按桌面 `AgentCapabilities` / `ModelDescriptor` 结构归一远程 `maker:get-capabilities`,让已有会话和新建会话的 model / effort / permission / fast mode 选项由被控端能力声明驱动。新建会话如果当前模型声明 `efforts: []`,创建参数会省略 `effort`,避免把旧 effort 发给不支持 reasoning 强度的模型。
@@ -1598,8 +1605,8 @@ V2 完成标准:
   临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
 - 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
   不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
-- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
-  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；冷更说明见
+  `docs/dev-rules/mobile-development.md` 的冷更边界。服务端不需要新增接口。
 
 定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
 测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift

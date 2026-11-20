@@ -40,6 +40,7 @@ describe('desktop input permission detection', () => {
     vi.clearAllMocks();
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     mocks.app.isPackaged = false;
+    vi.spyOn(fs, 'readFile').mockResolvedValue('fixture source');
     mocks.access.mockResolvedValue(undefined);
     mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
   });
@@ -102,6 +103,35 @@ describe('desktop input permission detection', () => {
     mocks.exec.mockRejectedValue(new Error('compiler unavailable'));
     expect(await readDesktopInputPermission()).toBe('unknown');
   });
+
+  // Regression: a signed personal shell was probing an ad-hoc helper outside
+  // its app, so the visible app grant did not describe the input executable.
+  // Unit: actual resolver/probe, in-memory receipt/files; no existing case covered
+  // source-mode runtimes with shipped helpers. Missing promised helpers must fail.
+  it.each([true, false])(
+    'uses only the sealed personal input helper (present=%s)',
+    async (present) => {
+      const resources = path.resolve('/fixture/Cindy.app/Contents/Resources');
+      const previous = process.resourcesPath;
+      Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true });
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({ capabilities: { desktopInput: true } }),
+      );
+      if (!present) mocks.access.mockRejectedValue(new Error('ENOENT'));
+      try {
+        expect(await readDesktopInputPermission()).toBe(present ? 'granted' : 'unknown');
+        if (present)
+          expect(mocks.exec).toHaveBeenCalledExactlyOnceWith(
+            path.join(resources, 'tools', 'remote-desktop', 'cindy-macos-desktop-input'),
+            ['--check'],
+            { timeout: 5000, maxBuffer: 1024 },
+          );
+        else expect(mocks.exec).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, 'resourcesPath', { value: previous, configurable: true });
+      }
+    },
+  );
 
   it('does not probe Accessibility on Windows', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');

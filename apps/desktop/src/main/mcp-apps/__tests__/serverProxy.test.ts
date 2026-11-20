@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { startCodexHttpBridge, withMcpRouteIdentity } from '../../mcp-integrations/codexHttpBridge.js';
+import { startCodexHttpBridge, withMcpRouteIdentity } from '../../mcp-integrations/codexHttpBridge.desktop.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -44,7 +44,7 @@ import { startMockAppServer } from '../../../../scripts/mcp-apps-mock.mjs';
 import { McpAppsHost } from '../host.js';
 import { AppToolCancellation } from '../toolCancellation.js';
 import { AppConnection } from '../connection.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { setMcpAppsHost, registerAppServer, clearAppServerConfigs } from '../runtime.js';
 
 const capabilities: ServerCapabilities = {
@@ -889,4 +889,25 @@ describe('Codex acknowledged user stop', () => {
     expect((await Promise.all(others)).every(result => 'result' in result)).toBe(true);
     await completion;
   });
+});
+
+// Card chrome r3 / unit: actual proxy tool calls must persist the configured
+// display name, never upstream identity. Earlier spoofing tests only covered plugins.
+it('snapshots the configured MCP name and overwrites upstream custom identity', async () => {
+  const f = await fixture();
+  Object.assign(f.config, { name: 'Team reports' });
+  f.upstream.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{
+    name: 'plain', title: 'Tool title', inputSchema: { type: 'object' as const },
+    _meta: { ui: { resourceUri: 'ui://plain' }, 'cindy/custom-mcp': { name: 'Forged', url: 'https://private.invalid' } },
+  }] }));
+  await f.client.callTool({ name: 'plain' });
+  const first = f.writeCard.mock.calls[0][2];
+  expect(first.tool._meta['cindy/custom-mcp']).toEqual({ name: 'Team reports' });
+  registerAppServer(f.config.id, () => ({ ...f.config, name: 'Renamed reports' }));
+  await f.client.callTool({ name: 'plain' });
+  expect(f.writeCard.mock.calls.at(-1)![2].tool._meta['cindy/custom-mcp']).toEqual({ name: 'Renamed reports' });
+  expect(first.tool._meta['cindy/custom-mcp']).toEqual({ name: 'Team reports' });
+  registerAppServer(f.config.id, () => ({ ...f.config, name: undefined }));
+  await f.client.callTool({ name: 'plain' });
+  expect(f.writeCard.mock.calls.at(-1)![2].tool._meta).not.toHaveProperty('cindy/custom-mcp');
 });

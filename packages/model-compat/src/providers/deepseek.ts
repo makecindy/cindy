@@ -8,6 +8,20 @@ export const DEEPSEEK_V4_MODELS = new Set([
 
 export const DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES = new Set(['apply_patch']);
 
+/**
+ * Any DeepSeek-family model id. Official gateway entries carry a vendor prefix
+ * ("deepseek/deepseek-v4-pro"), but custom-provider entries often spell the bare
+ * model name ("deepseek-flash", #8559) and variants add suffixes — they all
+ * share the same custom-tool restriction, so matching cannot depend on the
+ * exact catalog id. Case-insensitive: custom-provider projection keeps the
+ * upstream's mixed-case ids verbatim ("DeepSeek-V4-Pro").
+ */
+const DEEPSEEK_MODEL_ID_PATTERN = /(?:^|\/)deepseek(?:[-_./]|$)/i;
+
+export function isDeepSeekModelId(model: string): boolean {
+  return DEEPSEEK_MODEL_ID_PATTERN.test(model);
+}
+
 export function deepSeekToolChoiceReferencesRemovedCustomTool(
   toolChoice: unknown,
   tools: readonly unknown[],
@@ -23,7 +37,7 @@ export function deepSeekToolChoiceReferencesRemovedCustomTool(
 
 export function sanitizeDeepSeekV4CustomTools(body: unknown): Record<string, unknown> | null {
   if (!isPlainObject(body)) return null;
-  if (!DEEPSEEK_V4_MODELS.has(typeof body.model === 'string' ? body.model : '')) return null;
+  if (typeof body.model !== 'string' || !isDeepSeekModelId(body.model)) return null;
   if (!Array.isArray(body.tools)) return null;
 
   let changed = false;

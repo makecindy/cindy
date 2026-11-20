@@ -17,12 +17,16 @@
  * 启发式),settle 后由 tool_result 的 xdt_card_id 接管配对。
  */
 
-import { GHOST_CARD_SPAWN_SEP } from '../../shared/ghost';
+import { parseRemoteResourceChangedPayload, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { GHOST_CARD_SPAWN_SEP, ghostCardRootCallId } from '../../shared/ghost';
 
 export type GhostCardEntry =
   | {
       status: 'ready';
       ghostId: string;
+      sessionId?: string | null;
       /** 静态版(settle 后 / 历史回放)。 */
       html: string;
       /** 动画版(仅推送携带;DB 取件无此字段——历史卡永远静止)。 */
@@ -32,9 +36,21 @@ export type GhostCardEntry =
        *  'working' = 过程态卡(衍生卡据此挂运行扫光);DB 取件无此字段——
        *  历史卡永远静止。 */
       state?: 'working' | 'done' | null;
+      /** A card of a task on another computer: actions go to that computer, never to this one. */
+      remote?: GhostRemoteCardSource;
     }
   | { status: 'loading' }
   | { status: 'missing' };
+
+export interface GhostRemoteCardSource {
+  deviceId: string;
+  sessionId: string;
+  /** The host's version of this card; an action made on an older one is refused there. */
+  revision: string;
+  externalLinks: boolean;
+  /** A mail card whose computer accepts attachments uploaded from this one. */
+  mailUpload?: boolean;
+}
 
 export interface GhostLiveCard {
   callId: string;
@@ -96,9 +112,11 @@ export function ingestCardPush(payload: {
 }): void {
   const now = Date.now();
   sweepLive(now);
+  const previous = byCallId.get(payload.callId);
   byCallId.set(payload.callId, {
     status: 'ready',
     ghostId: payload.ghostId,
+    sessionId: payload.sessionId ?? (previous?.status === 'ready' ? previous.sessionId : undefined),
     html: payload.html,
     ...(payload.animatedHtml ? { animatedHtml: payload.animatedHtml } : {}),
     height: payload.height,
@@ -163,8 +181,11 @@ export function ensureSessionCards(sessionId: string): void {
       let changed = false;
       for (const c of cards) {
         const cur = byCallId.get(c.callId);
-        if (cur?.status === 'ready') continue; // 推送先到,以更新者为准
-        byCallId.set(c.callId, { status: 'ready', ghostId: c.ghostId, html: c.html, height: c.height });
+        if (cur?.status === 'ready') {
+          if (!cur.sessionId) { byCallId.set(c.callId, { ...cur, sessionId }); changed = true; }
+          continue; // 推送先到,以更新者为准
+        }
+        byCallId.set(c.callId, { status: 'ready', sessionId, ghostId: c.ghostId, html: c.html, height: c.height });
         changed = true;
       }
       if (changed) bump();
@@ -277,6 +298,159 @@ export function noteCardMeasuredHeight(callId: string, measured: number): void {
   bump();
 }
 
+// ── Cards of tasks on another computer ─────────────────────────────────────────
+// The card stays on the task's computer. Its markup is read through device-link (and sanitized
+// again by this computer's main process); updates arrive as the host's existing
+// `plugin-results` change notices, which the always-on sessions subscription already carries.
+
+/** Hosts that ignored `plugin-card-html` (older versions): their tasks keep plain tool rows. */
+const unsupportedRemoteHosts = new Set<string>();
+/** A failed read may be retried later (link offline, card not yet persisted). */
+const remoteRetryAt = new Map<string, number>();
+const remoteAttempted = new Set<string>();
+/** Cards whose read failed: a later change notice from their computer reads them again. */
+const remoteUnread = new Map<string, { deviceId: string; sessionId: string }>();
+const REMOTE_RETRY_MS = 30_000;
+const remoteReads = new Map<string, Promise<void>>();
+let remoteSubscribed = false;
+const remoteViews = new Map<string, number>();
+const remoteDirty = new Set<string>();
+const remoteSessionKey = (deviceId: string, sessionId: string) => JSON.stringify([deviceId, sessionId]);
+
+/** Task stream and title-bar previews retain only the sessions currently displayed. */
+export function retainRemoteCardSession(deviceId: string, sessionId: string): () => void {
+  const key = remoteSessionKey(deviceId, sessionId);
+  const count = remoteViews.get(key) ?? 0;
+  remoteViews.set(key, count + 1);
+  ensureRemoteSubscribed();
+  if (!count) {
+    // Notices received while hidden did no IO; opening the task reads the latest versions.
+    for (const [callId, entry] of byCallId) {
+      if (entry.status === 'ready' && entry.remote?.deviceId === deviceId && entry.remote.sessionId === sessionId)
+        void readRemoteCard(deviceId, sessionId, callId);
+    }
+    for (const [callId, source] of remoteUnread) {
+      if (source.deviceId === deviceId && source.sessionId === sessionId)
+        void readRemoteCard(deviceId, sessionId, callId);
+    }
+  }
+  return () => {
+    const remaining = (remoteViews.get(key) ?? 1) - 1;
+    if (remaining) remoteViews.set(key, remaining);
+    else remoteViews.delete(key);
+  };
+}
+
+function readRemoteCard(deviceId: string, sessionId: string, callId: string): Promise<void> {
+  const key = `${deviceId}\n${callId}`;
+  const running = remoteReads.get(key);
+  if (running) { remoteDirty.add(key); return running; }
+  const owner = getDataOwnerGeneration();
+  const read = (async () => {
+    let result: Awaited<ReturnType<typeof window.electronAPI.ghosts.getRemoteCard>> | null = null;
+    try {
+      result = await window.electronAPI.ghosts.getRemoteCard(deviceId, sessionId, callId);
+    } catch {
+      result = null;
+    }
+    if (!isDataOwnerGenerationCurrent(owner)) return;
+    const current = byCallId.get(callId);
+    const card = result?.card;
+    if (card) {
+      remoteRetryAt.delete(callId);
+      remoteUnread.delete(callId);
+      byCallId.set(callId, {
+        status: 'ready',
+        ghostId: card.ghostId,
+        sessionId,
+        html: card.html,
+        height: current?.status === 'ready' && current.html === card.html ? current.height : card.height,
+        remote: { deviceId, sessionId, revision: card.revision, externalLinks: card.externalLinks, ...(card.mailUpload ? { mailUpload: true } : {}) },
+      });
+      bump();
+      return;
+    }
+    if (result?.unsupported) unsupportedRemoteHosts.add(deviceId);
+    else if (!result || result.failed) {
+      remoteRetryAt.set(callId, Date.now() + REMOTE_RETRY_MS);
+      remoteUnread.set(callId, { deviceId, sessionId });
+    }
+    // A card already shown keeps its last version when a refresh fails.
+    if (current?.status === 'ready' && (!result || result.failed)) return;
+    if (current?.status !== 'missing') {
+      byCallId.set(callId, { status: 'missing' });
+      bump();
+    }
+  })().finally(() => {
+    remoteReads.delete(key);
+    const changed = remoteDirty.delete(key);
+    if (changed && isDataOwnerGenerationCurrent(owner) && remoteViews.has(remoteSessionKey(deviceId, sessionId)))
+      void readRemoteCard(deviceId, sessionId, callId);
+  });
+  remoteReads.set(key, read);
+  return read;
+}
+
+function ensureRemoteSubscribed(): void {
+  if (remoteSubscribed) return;
+  const api = window.electronAPI?.deviceLink;
+  if (!api?.onRemotePush) return;
+  remoteSubscribed = true;
+  api.onRemotePush((push, stamp) => {
+    if (push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
+    const changed = parseRemoteResourceChangedPayload(push.payload);
+    if (changed?.collectionId !== 'plugin-results') return;
+    for (const ref of changed.resourceRefs ?? []) {
+      if (ref.kind !== 'card') continue;
+      let ids: unknown;
+      try { ids = JSON.parse(ref.id); } catch { continue; }
+      if (!Array.isArray(ids) || ids.length !== 2 || typeof ids[0] !== 'string' || typeof ids[1] !== 'string') continue;
+      const [sessionId, callId] = ids as [string, string];
+      if (!remoteViews.has(remoteSessionKey(push.deviceId, sessionId))) continue;
+      const entry = byCallId.get(callId);
+      const reading = remoteReads.has(`${push.deviceId}\n${callId}`);
+      const known = entry?.status === 'ready' && entry.remote?.deviceId === push.deviceId && entry.remote.sessionId === sessionId;
+      // A click's result appears beside its card (`<root>::sp…`): read it when its root is shown here.
+      const root = callId.includes(GHOST_CARD_SPAWN_SEP) ? byCallId.get(ghostCardRootCallId(callId)) : undefined;
+      const spawned = !entry && root?.status === 'ready' && root.remote?.deviceId === push.deviceId && root.remote.sessionId === sessionId;
+      const unread = remoteUnread.get(callId);
+      const retried = unread?.deviceId === push.deviceId && unread.sessionId === sessionId;
+      if (known || spawned || retried || reading) void readRemoteCard(push.deviceId, sessionId, callId);
+    }
+  });
+}
+
+/**
+ * Card of a task on another computer (idempotent, like ensureCard). Until it is read the tool row
+ * stays hidden, as for a local card; a host that cannot provide it leaves the row as before.
+ */
+export function ensureRemoteCard(deviceId: string, sessionId: string, callId: string, options: { force?: boolean } = {}): void {
+  if (!callId || !deviceId || !sessionId) return;
+  const entry = byCallId.get(callId);
+  if (remoteReads.has(`${deviceId}\n${callId}`) || entry?.status === 'ready') return;
+  // A lookup made on this computer before the task's location was known does not count.
+  if (!options.force && entry?.status === 'missing' && remoteAttempted.has(callId) && (remoteRetryAt.get(callId) ?? Infinity) > Date.now()) return;
+  ensureSubscribed();
+  ensureRemoteSubscribed();
+  if (unsupportedRemoteHosts.has(deviceId)) {
+    if (entry?.status !== 'missing') {
+      byCallId.set(callId, { status: 'missing' });
+      bump();
+    }
+    return;
+  }
+  remoteRetryAt.delete(callId);
+  remoteAttempted.add(callId);
+  if (!entry) byCallId.set(callId, { status: 'loading' });
+  void readRemoteCard(deviceId, sessionId, callId);
+}
+
+/** Read a shown remote card again (after an action, or when its version was refused). */
+export function refreshRemoteCard(callId: string): void {
+  const entry = byCallId.get(callId);
+  if (entry?.status === 'ready' && entry.remote) void readRemoteCard(entry.remote.deviceId, entry.remote.sessionId, callId);
+}
+
 /** 测试专用:清空全部状态(模块级单例,跨用例隔离)。 */
 export function __resetGhostCardStoreForTest(): void {
   byCallId.clear();
@@ -286,4 +460,12 @@ export function __resetGhostCardStoreForTest(): void {
   listeners.clear();
   subscribed = false;
   loadedSessions.clear();
+  unsupportedRemoteHosts.clear();
+  remoteRetryAt.clear();
+  remoteAttempted.clear();
+  remoteUnread.clear();
+  remoteReads.clear();
+  remoteSubscribed = false;
+  remoteViews.clear();
+  remoteDirty.clear();
 }

@@ -14,6 +14,7 @@ const runtime = vi.hoisted(() => ({
   deferAnimations: false,
   animationHeight: undefined as number | undefined,
   reactions: new Set<() => void>(),
+  textFrame: null as null | { pageX: number; pageY: number; width: number; height: number },
 }));
 vi.mock('react-native', () => ({ PanResponder: { create: vi.fn(() => ({ panHandlers: {} })) } }));
 vi.mock('expo-constants', () => ({
@@ -38,7 +39,16 @@ vi.mock('@/platform/gestureHandler', () => {
       onFinalize(fn: Callback) { callbacks.finalize = fn; return this; },
     });
   };
-  return { Gesture: { Pan: make, Native: make } };
+  // Manual: touches drive the gesture; the manager records who ends up owning it.
+  const manual = () => {
+    const callbacks = {} as Record<string, (...args: unknown[]) => void>;
+    const on = (name: string) => function (this: unknown, fn: (...args: unknown[]) => void) { callbacks[name] = fn; return this; };
+    return Object.assign(callbacks, {
+      onTouchesDown: on('down'), onTouchesMove: on('move'), onTouchesUp: on('up'),
+      onTouchesCancelled: on('cancelled'), onFinalize: on('finalizeManual'),
+    });
+  };
+  return { Gesture: { Pan: make, Native: make, Manual: manual } };
 });
 // Run real hooks/React and geometry models. Model UI worklets as synchronous
 // callbacks, but hold runOnJS deliveries to exercise a busy JS thread explicitly.
@@ -46,6 +56,8 @@ vi.mock('react-native-reanimated', async () => {
   const { useRef } = await import('react');
   return {
     useSharedValue: (initial: unknown) => useRef({ value: initial }).current,
+    useAnimatedRef: () => useRef({}).current,
+    measure: () => runtime.textFrame,
     useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
     useAnimatedStyle: (calculate: () => unknown) => ({ get current() { return calculate(); } }),
     // UI-thread reactions run when the test flushes a frame, after shared values change.
@@ -117,6 +129,7 @@ beforeEach(() => {
   runtime.deferAnimations = false;
   runtime.animationHeight = undefined;
   runtime.reactions.clear();
+  runtime.textFrame = null;
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
@@ -417,6 +430,231 @@ describe('composer resize interaction boundary', () => {
     for (const job of runtime.ui.splice(0)) job();
     expect(harness.result.active.value).toBe(true);
     expect(harness.result.contentHeight.value).toBe(210);
+  });
+});
+
+// Text area spans y 400–460 on screen; the toolbar sits below it.
+const TEXT_FRAME = { pageX: 0, pageY: 400, width: 390, height: 60 };
+type BodyGesture = Record<'down' | 'move' | 'up' | 'cancelled' | 'finalizeManual', (...args: unknown[]) => void>;
+function bodyDrag(gesture: unknown, x = 100) {
+  const body = gesture as BodyGesture;
+  const manager = { activate: vi.fn(), fail: vi.fn(), end: vi.fn() };
+  const touches = (y: number, dx = 0) => ({ numberOfTouches: 1, allTouches: [{ absoluteX: x + dx, absoluteY: y }], changedTouches: [{ absoluteX: x + dx, absoluteY: y }] });
+  return {
+    manager,
+    down: (y: number) => body.down(touches(y), manager),
+    move: (y: number, dx = 0) => body.move(touches(y, dx), manager),
+    up: (y: number) => body.up(touches(y), manager),
+  };
+}
+
+describe('composer body drag (press anywhere on the card)', () => {
+  beforeEach(() => { runtime.textFrame = TEXT_FRAME; vi.spyOn(Date, 'now').mockReturnValue(1_000); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('resizes from anywhere on a draft that fits, measured from where the drag was recognised', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(436);
+    // Still inside the tap slop: the editor keeps the touch for caret placement.
+    expect(drag.manager.activate).not.toHaveBeenCalled();
+    drag.move(430);
+    expect(drag.manager.activate).toHaveBeenCalledOnce();
+    expect(harness.result.contentHeight.value).toBe(60);
+    drag.move(390);
+    expect(harness.result.contentHeight.value).toBe(100);
+    drag.up(390);
+    flushJS();
+    expect(drag.manager.end).toHaveBeenCalledOnce();
+    expect(harness.result.mode).toBe('manual');
+    expect(harness.result.visibleContentHeight).toBe(100);
+  });
+
+  it.each([
+    // Long draft (500 > auto cap 120) with no edge report: text drags keep scrolling.
+    { name: 'unknown edge, drag up on text', edge: null, startY: 440, endY: 400, claims: false },
+    { name: 'scrolled mid-way, drag down on text', edge: { atTop: false, atBottom: false }, startY: 420, endY: 460, claims: false },
+    { name: 'at bottom, drag down on text scrolls back', edge: { atTop: false, atBottom: true }, startY: 420, endY: 460, claims: false },
+    { name: 'at bottom, drag up on text grows', edge: { atTop: false, atBottom: true }, startY: 440, endY: 400, claims: true },
+    { name: 'at top, drag down on text shrinks', edge: { atTop: true, atBottom: false }, startY: 420, endY: 460, claims: true },
+    { name: 'toolbar drag ignores the text scroll', edge: { atTop: false, atBottom: false }, startY: 500, endY: 540, claims: true },
+  ])('long draft: $name', ({ edge, startY, endY, claims }) => {
+    const harness = mountComposer({ ...composerInput(), contentHeight: 500, bodyDragEnabled: true });
+    act(() => harness.result.setTextScrollEdge(edge));
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(startY);
+    drag.move(startY + Math.sign(endY - startY) * 10);
+    drag.move(endY);
+    expect(drag.manager.activate).toHaveBeenCalledTimes(claims ? 1 : 0);
+    expect(drag.manager.fail).toHaveBeenCalledTimes(claims ? 0 : 1);
+    expect(harness.result.contentHeight.value === 120).toBe(!claims);
+  });
+
+  it('stays out of a grabber drag so the frame keeps following the finger', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const grabber = gestureOf(harness.result.gesture);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    // The grabber sits above the text frame; both gestures see this touch.
+    drag.down(390);
+    grabber.begin({ translationY: 0 });
+    drag.move(380);
+    expect(drag.manager.activate).not.toHaveBeenCalled();
+    expect(drag.manager.fail).toHaveBeenCalledOnce();
+    body.cancelled({}, drag.manager);
+    body.finalizeManual();
+    grabber.update({ translationY: -50 });
+    expect(harness.result.active.value).toBe(true);
+    expect(harness.result.contentHeight.value).toBe(110);
+    grabber.finalize({ translationY: -50 }, true);
+    flushJS();
+    expect(harness.result.visibleContentHeight).toBe(110);
+  });
+
+  // #9452: Android ReactEditText takes the native touch lock on DOWN. RNGH
+  // emits onTouchesCancelled from inside cancel(), before its CANCELLED state
+  // is committed. Re-entering the manager there can fail/reset the handler,
+  // leaving the outer cancellation without an orchestrator (native fatal).
+  // Existing gesture mocks never invalidated this native registration. Exercise
+  // the real hook's pending/active callbacks with that synchronous boundary;
+  // unit tier, smallest input is DOWN -> native cancel (or a drag -> cancel).
+  it.each([false, true])('lets native cancellation finish without resetting its handler (dragging=%s)', (dragging) => {
+    const input = { ...composerInput(), bodyDragEnabled: true };
+    const harness = mountComposer(input);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    if (dragging) {
+      drag.move(430);
+      drag.move(400);
+      expect(harness.result.contentHeight.value).toBe(90);
+    }
+    let registered = true;
+    // A synchronous fail inside native cancellation cleans up its registration
+    // before the outer cancel() has committed CANCELLED.
+    drag.manager.fail.mockImplementation(() => { registered = false; });
+    const nativeCancel = () => {
+      body.cancelled({}, drag.manager);
+      if (!registered) throw new Error('Manually handled gesture had not been assigned to any detector');
+      registered = false;
+      body.finalizeManual();
+    };
+    expect(nativeCancel).not.toThrow();
+    flushJS();
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(60);
+    expect(harness.result.mode).toBe('auto');
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    if (dragging) expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('drags the collapsed pill open with the finger: toolbar first, then height; short pulls fall back', () => {
+    const input = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const harness = mountComposer(input);
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(800);
+    drag.move(810);
+    // Downward drags on the pill are not ours.
+    expect(drag.manager.fail).toHaveBeenCalledOnce();
+    const open = bodyDrag(harness.result.bodyGesture);
+    open.down(800);
+    open.move(790);
+    expect(open.manager.activate).toHaveBeenCalledOnce();
+    flushJS();
+    expect(input.onDragOpenChange).toHaveBeenLastCalledWith(true);
+    open.move(778);
+    // 12pt up: half of the toolbar unfold, height still one line.
+    expect(harness.result.collapseProgress.value).toBeCloseTo(0.5);
+    expect(harness.result.contentHeight.value).toBe(20);
+    open.move(706);
+    expect(harness.result.collapseProgress.value).toBe(0);
+    expect(harness.result.contentHeight.value).toBe(80);
+    open.up(706);
+    flushJS();
+    expect(input.onDragOpenCommit).toHaveBeenCalledOnce();
+    input.collapsed = false;
+    harness.rerender();
+    expect(harness.result.mode).toBe('manual');
+    expect(harness.result.visibleContentHeight).toBe(80);
+
+    // Pulling only a little past the unfolded toolbar keeps that height even for a long draft.
+    const longInput = { ...composerInput(), contentHeight: 500, collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const long = mountComposer(longInput);
+    const lp = bodyDrag(long.result.bodyGesture);
+    lp.down(800);
+    lp.move(790);
+    lp.move(770);
+    lp.up(760);
+    flushJS();
+    expect(longInput.onDragOpenCommit).toHaveBeenCalledOnce();
+    longInput.collapsed = false;
+    long.rerender();
+    expect(long.result.mode).toBe('manual');
+    expect(long.result.visibleContentHeight).toBeGreaterThan(20 + 3);
+
+    const shortInput = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const short = mountComposer(shortInput);
+    const pull = bodyDrag(short.result.bodyGesture);
+    pull.down(800);
+    pull.move(790);
+    pull.up(780);
+    flushJS();
+    expect(shortInput.onDragOpenCommit).not.toHaveBeenCalled();
+    expect(shortInput.onDragOpenChange).toHaveBeenLastCalledWith(false);
+    expect(short.result.mode).toBe('auto');
+  });
+
+  it('a grabber drag that ended without a release no longer blocks body drags', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const grabber = gestureOf(harness.result.gesture);
+    // The grabber unmounts with the card when it collapses: no finalize arrives.
+    grabber.begin({ translationY: 0 });
+    harness.result.active.value = false;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(430);
+    expect(drag.manager.activate).toHaveBeenCalledOnce();
+  });
+
+  it('a second finger during a body drag still settles it', () => {
+    const input = { ...composerInput(), bodyDragEnabled: true };
+    const harness = mountComposer(input);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(430);
+    drag.move(400);
+    expect(harness.result.active.value).toBe(true);
+    const manager = { activate: vi.fn(), fail: vi.fn(), end: vi.fn() };
+    const two = { numberOfTouches: 2, allTouches: [{ absoluteX: 100, absoluteY: 400 }, { absoluteX: 200, absoluteY: 440 }], changedTouches: [{ absoluteX: 200, absoluteY: 440 }] };
+    body.down(two, manager);
+    body.finalizeManual();
+    flushJS();
+    expect(manager.fail).toHaveBeenCalled();
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(60);
+    expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('leaves long-press selection, horizontal swipes and the collapsed pill to the editor', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const longPress = bodyDrag(harness.result.bodyGesture);
+    longPress.down(440);
+    vi.spyOn(Date, 'now').mockReturnValue(1_400);
+    longPress.move(410);
+    expect(longPress.manager.fail).toHaveBeenCalledOnce();
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const swipe = bodyDrag(harness.result.bodyGesture);
+    swipe.down(440);
+    swipe.move(436, 30);
+    expect(swipe.manager.fail).toHaveBeenCalledOnce();
+    const collapsed = mountComposer({ ...composerInput(), bodyDragEnabled: false });
+    const pill = bodyDrag(collapsed.result.bodyGesture);
+    pill.down(440);
+    expect(pill.manager.fail).toHaveBeenCalledOnce();
+    for (const drag of [longPress, swipe, pill]) expect(drag.manager.activate).not.toHaveBeenCalled();
+    expect(harness.result.contentHeight.value).toBe(60);
   });
 });
 

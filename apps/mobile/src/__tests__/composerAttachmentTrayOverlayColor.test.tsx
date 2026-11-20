@@ -33,12 +33,14 @@ vi.mock("react-native", async () => {
       testID,
       onPress,
       disabled,
+      accessibilityLabel,
     }: {
       children?: ReactNode;
       style?: unknown;
       testID?: string;
       onPress?: () => void;
       disabled?: boolean;
+      accessibilityLabel?: string;
     }) =>
       createElement(
         tag,
@@ -46,6 +48,10 @@ vi.mock("react-native", async () => {
           "data-testid": testID,
           onClick: onPress,
           disabled,
+          "aria-label": accessibilityLabel,
+          "data-layout": JSON.stringify(flatten(
+            typeof style === "function" ? style({ pressed: false }) : style,
+          )),
           "data-color": flatten(
             typeof style === "function" ? style({ pressed: false }) : style,
           ).color,
@@ -58,6 +64,7 @@ vi.mock("react-native", async () => {
     Text: view("span"),
     ActivityIndicator: ({ color }: { color: string }) =>
       createElement("i", { "data-testid": "spinner", "data-color": color }),
+    PixelRatio: { roundToNearestPixel: (value: number) => value },
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   };
 });
@@ -147,6 +154,68 @@ const colorOf = (selector: string) =>
   host.querySelector(selector)?.getAttribute("data-color");
 
 describe("composer attachment tray overlay foreground", () => {
+  it.each(["light", "dark"])(
+    "preserves named file chips through upload completion in %s mode",
+    (mode) => {
+      theme.mode = mode;
+      const preview = vi.fn();
+      const remove = vi.fn();
+      const files: RemoteSerializedAttachment[] = [
+        ["movie.mp4", "file"], ["audio.m4a", "file"],
+        ["report.pdf", "pdf"], ["slides.pptx", "office"],
+        ["notes.txt", "text"], ["archive.zip", "file"],
+        ["missing-preview.jpg", "image"],
+        [`${"很长的附件名称".repeat(20)}.mp4`, "file"],
+      ].map(([name, category], index) => ({
+        ...attachment(String(index)), name,
+        category: category as RemoteSerializedAttachment["category"],
+      }));
+      const render = (uploaded: boolean) => act(() => root.render(
+        <ComposerAttachmentTray
+          attachments={uploaded ? files : []} previews={{}}
+          pendingUploads={uploaded ? [] : files.map((file) => ({
+            localId: file.id, kind: "file", name: file.name,
+            previewUri: `file:///${file.name}`, size: file.size,
+          }))}
+          onPreview={preview} onRemove={remove} onPreviewPending={() => {}}
+          testIDPrefix="t"
+        />,
+      ));
+      render(false);
+      const pendingChips = host.querySelectorAll('[data-testid="t.attachmentPendingChip"]');
+      expect(pendingChips).toHaveLength(files.length);
+      const pendingLayouts = Array.from(pendingChips, chip => JSON.parse(chip.getAttribute("data-layout")!));
+      for (const layout of pendingLayouts) {
+        expect(layout.minHeight).toBe(44);
+        expect(layout.paddingVertical ?? 0).toBe(0);
+      }
+      render(true);
+      expect(host.querySelector('[data-testid="t.attachmentPendingChip"]')).toBeNull();
+      const chips = host.querySelectorAll('[data-testid="t.attachmentChip"]');
+      expect(chips).toHaveLength(files.length);
+      chips.forEach((chip, index) => {
+        const button = chip.querySelector<HTMLButtonElement>("button")!;
+        expect(button.textContent).toContain(files[index].name);
+        expect(button.getAttribute("aria-label")).toContain(files[index].name);
+        const layout = JSON.parse(button.getAttribute("data-layout")!);
+        // flex: 1 gives Yoga a zero basis inside the intrinsic-width chip.
+        expect(layout.flex).toBeUndefined();
+        expect(layout.flexShrink).toBe(1);
+        expect(layout.minHeight).toBeUndefined();
+        expect(layout.alignSelf).toBe("stretch");
+        // The shared outer chip owns the touch height in both upload states.
+        expect(JSON.parse(chip.getAttribute("data-layout")!)).toEqual(pendingLayouts[index]);
+        expect(JSON.parse(chip.getAttribute("data-layout")!).maxWidth).toBe("100%");
+        act(() => button.click());
+        const removeButton = chip.querySelector<HTMLButtonElement>('[data-testid="t.attachmentRemoveButton"]')!;
+        expect(JSON.parse(removeButton.getAttribute("data-layout")!).flexShrink).toBe(0);
+        act(() => removeButton.click());
+      });
+      expect(preview.mock.calls).toEqual(files.map((file) => [file.id]));
+      expect(remove.mock.calls).toEqual(files.map((file) => [file.id]));
+    },
+  );
+
   // PR #6291: production expansion hook, with a button representing the card's
   // collapse gesture. Existing tray tests do not exercise new-task expansion.
   it("opens for new images but respects collapse through paste and upload completion", () => {

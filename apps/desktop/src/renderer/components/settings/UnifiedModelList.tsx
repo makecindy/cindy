@@ -8,7 +8,7 @@ import { modelManagementState } from './modelManagementState';
  *   - 列表 = 该供应商**所有 agent 的模型并集**(按 model id 合并),不再按 CLI 分 Tab。
  *   - 三个概念钉死到三种互不借用的表达上(用户裁决):
  *       · **开关 = 显示轴**:是否出现在对应模型选择面板 —— 纯陈列,全页
- *         唯一一种开关语义。隐藏的模型被显式点名 / 自动兜底时仍可用。存储 =
+ *         唯一一种开关语义。隐藏的对话模型被显式点名 / 自动兜底时仍可用。存储 =
  *         renderer modelVisibilityPrefs(不变)。
  *       · **高级设置 = 停用动作**(所有行):停用 = 准入关,不可被任何
  *         新路由选中。存储 = main 侧 model-disable-store,经 PROVIDER_LIST 的
@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
@@ -43,8 +44,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
@@ -122,6 +121,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'realtime',
   'embedding',
   'decision',
+  'rerank',
   'compression',
   'other',
 ]);
@@ -231,7 +231,7 @@ export function buildUnionRows(provider: ProviderView,
     name: string;
     disabled?: boolean;
     availability?: CatalogModel['availability'];
-    group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
+    group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime' | 'decision' | 'rerank';
     displayPricing?: CatalogModel['displayPricing'];
     currency?: CatalogModel['currency'];
     costDiscount?: number;
@@ -239,6 +239,7 @@ export function buildUnionRows(provider: ProviderView,
     modalities?: CatalogModel['modalities'];
     defaultEnabled?: boolean;
   }> = [
+    ...(provider.evaluationModels ?? []).map(m => ({ ...m, group: m.mode === 'rerank' ? 'rerank' as const : 'decision' as const })),
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
     ...(provider.videoModels ?? []).map((m) => ({ ...m, group: 'video' as const })),
     ...(provider.audioModels ?? []).map((m) => ({
@@ -305,7 +306,7 @@ export function buildUnionRows(provider: ProviderView,
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
   if (!isCapabilityRow(row, userProvider)) return true;
   return managementKindsOfRow(row, userProvider).some(
-    (kind) => kind === 'image' || kind === 'video' || kind === 'tts',
+    (kind) => kind === 'image' || kind === 'video' || kind === 'tts' || kind === 'decision' || kind === 'rerank',
   );
 }
 
@@ -1084,7 +1085,7 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频复用显示轴。 */}
+        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频、决策/重排复用显示轴。 */}
         {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
           <span className="w-9 shrink-0" />
         )}
@@ -1149,6 +1150,22 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
+            {/* Arrangement is a view field, not a menu action (DESIGN.md §4). */}
+            {unionRows.length > 0 && (
+              <Select data-settings-search-action="Choose how the provider model list is arranged"
+                label={t('settings.providers.models.manage.arrange')}
+                size="compact"
+                className="shrink-0"
+                value={managementView}
+                onValueChange={(value) => {
+                  if (value === 'brand' || value === 'model') setManagementView(value);
+                }}
+                options={[
+                  { value: 'brand', label: t('settings.providers.models.manage.byBrand') },
+                  { value: 'model', label: t('settings.providers.models.manage.byName') },
+                ]}
+              />
+            )}
             {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1166,23 +1183,6 @@ export function UnifiedModelList({
                   {unionRows.length > 0 && (
                     <>
                       {onAddSpeechModels && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel>
-                        {t('settings.providers.models.manage.arrange')}
-                      </DropdownMenuLabel>
-                      <DropdownMenuRadioGroup
-                        value={managementView}
-                        onValueChange={(value) => {
-                          if (value === 'brand' || value === 'model') setManagementView(value);
-                        }}
-                      >
-                        <DropdownMenuRadioItem value="brand">
-                          {t('settings.providers.models.manage.byBrand')}
-                        </DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="model">
-                          {t('settings.providers.models.manage.byName')}
-                        </DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                      <DropdownMenuSeparator />
                       <DropdownMenuLabel>
                         {t('settings.providers.models.manage.selection')}
                       </DropdownMenuLabel>

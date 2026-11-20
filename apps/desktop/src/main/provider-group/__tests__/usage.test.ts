@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
+import { pickProviderGroupMember } from '../scheduler';
 import {
   createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupUsageState,
   providerGroupCodexUsageSnapshot, providerGroupMemberUsageState,
   providerGroupCodexUsageFromReads, providerGroupRebalanceTarget,
   PROVIDER_GROUP_USAGE_MAX_AGE_MS, PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS,
+  providerGroupShareQuotaFromInsights, providerGroupShareQuotaSnapshot,
 } from '../usage';
 
 const NOW = 1_000_000;
@@ -83,6 +85,38 @@ describe('OpenAI group quota snapshots', () => {
     expect(state(fresh)).toMatchObject({ limited: false, urgency: expect.closeTo(6.75) });
     expect(state(fresh, 'gpt-5.3-codex', 'pi')).toMatchObject({ limited: false, urgency: null });
     expect(state(providerGroupCodexUsageFromReads(bucket(40), null, NOW)).urgency).toEqual(urgencyOneDayLeft(20));
+  });
+
+  // Unit regression: native account/rateLimits/read uses windowDurationMins,
+  // while running-task events already normalize it. Previous fixtures only used
+  // windowMinutes, masking an idle account's exclusion from quota-first selection.
+  it('selects the unused native account over a busy account with normalized weekly usage', () => {
+    const weekly = (usedPercent: number, duration: object) => ({
+      limitId: 'codex', primary: { usedPercent, resetsAt: (NOW + 6 * DAY) / 1000, ...duration },
+    });
+    const busy = providerGroupCodexUsageSnapshot({
+      ...weekly(29, { windowMinutes: 10_080 }), updatedAt: NOW,
+    });
+    const idle = providerGroupCodexUsageFromReads(null, {
+      rateLimits: weekly(0, { windowDurationMins: 10_080 }),
+      rateLimitsByLimitId: { codex: weekly(0, { windowDurationMins: 10_080 }) },
+    }, NOW);
+    const members = [busy, idle].map((usage, index) => ({
+      key: String(index), usable: true, paused: false, running: index === 0 ? 13 : 0,
+      limit: 16, weight: 1, ...state(usage),
+    }));
+    expect(pickProviderGroupMember(members, 'least')).toBe('1');
+    expect(idle?.appServerBuckets?.codex.primary?.windowMinutes).toBe(10_080);
+  });
+
+  it('recognizes native five-hour pressure and preserves explicit normalized durations', () => {
+    const usage = providerGroupCodexUsageFromReads(null, {
+      rateLimits: {
+        primary: { usedPercent: 90, windowDurationMins: 300, resetsAt: (NOW + 3 * 3_600_000) / 1000 },
+        secondary: { usedPercent: 20, windowMinutes: 10_080, windowDurationMins: 60, resetsAt: (NOW + DAY) / 1000 },
+      },
+    }, NOW);
+    expect(state(usage)).toMatchObject({ fiveHourTight: true, urgency: urgencyOneDayLeft(20) });
   });
 });
 const member = (kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId = 'anthropic'): ProviderGroupMember => ({
@@ -182,6 +216,44 @@ describe('provider group quota eligibility', () => {
   });
 });
 
+// Unit, provider-groups.md §5「分享边界」(2026-11-19)：分享者开放的额度按额度总览同一取法换成排序窗口。
+// 入口 providerGroupShareQuotaFromInsights → providerGroupMemberUsageState。未开放、余额账号、过期快照都不能被当成有额度；
+// 组账号不相加、不混用窗口；用完也不判冷却(只代表分享者的一个账号)。
+describe('received share quota for group ranking', () => {
+  const account = (week: number, patch: Record<string, unknown> = {}) => ({ state: 'ready', updatedAt: NOW, balance: null, windows: [
+    { kind: 'session', label: null, remainingPercent: 50, resetsAt: NOW + 3_600_000, windowMinutes: 300 },
+    { kind: 'week', label: null, remainingPercent: week, resetsAt: NOW + DAY, windowMinutes: null },
+    { kind: 'scoped', label: 'Opus', remainingPercent: 0, resetsAt: NOW + DAY, windowMinutes: 10_080 },
+  ], ...patch });
+  const insights = (accounts: unknown[], patch: Record<string, unknown> = {}) => ({ version: 1,
+    capabilities: { quota: true, usage: false }, status: { quota: 'ready', usage: 'disabled' },
+    quota: { group: accounts.length > 1, partial: false, accounts }, usage: null, ...patch });
+
+  it.each([
+    ['quota not opened', insights([account(60)], { capabilities: { quota: false, usage: false }, status: { quota: 'disabled', usage: 'disabled' }, quota: null })],
+    ['only a balance account', insights([account(60, { balance: { remaining: 1, total: 2, currency: 'USD', resetsAt: null, pools: [] } })])],
+    ['a stale snapshot', insights([account(60, { updatedAt: NOW - PROVIDER_GROUP_USAGE_MAX_AGE_MS - 1 })])],
+    ['malformed data', { version: 1 }],
+  ])('treats %s as unknown', (_name, raw) => {
+    expect(providerGroupShareQuotaFromInsights(raw, NOW)).toBeNull();
+  });
+
+  it('ranks by the account with the most weekly quota left, ignores per-model windows and never reports exhaustion', () => {
+    const shareQuota = providerGroupShareQuotaFromInsights(insights([account(10), account(60), { ...account(90), state: 'offline' }]), NOW);
+    expect(shareQuota?.windows).toEqual([
+      { usedPercent: 50, resetAtMs: NOW + 3_600_000, windowMs: 300 * 60_000 },
+      { usedPercent: 40, resetAtMs: NOW + DAY, windowMs: 7 * DAY },
+    ]);
+    expect(providerGroupMemberUsageState({ shareQuota }, 'claude-opus-5-5', NOW)).toMatchObject({
+      limited: false, urgency: urgencyOneDayLeft(40), fiveHourTight: false,
+    });
+    const used = providerGroupShareQuotaFromInsights(insights([account(0)]), NOW);
+    expect(providerGroupMemberUsageState({ shareQuota: used }, null, NOW)).toMatchObject({ limited: false, resetAtMs: null, urgency: 0 });
+    // A cached reading expires on its own clock rather than staying ranked.
+    expect(providerGroupMemberUsageState({ shareQuota }, null, NOW + PROVIDER_GROUP_USAGE_MAX_AGE_MS + 1).urgency).toBeNull();
+  });
+});
+
 describe('provider group usage reads', () => {
   function harness() {
     let now = NOW;
@@ -211,12 +283,39 @@ describe('provider group usage reads', () => {
     expect(h.readRemote).toHaveBeenCalledTimes(4);
   });
 
-  it('never requests another person’s subscription quota', async () => {
+  // Unit: an account pause invalidates quota while a read may still be in
+  // flight. Existing coverage only cleared completed reads, allowing old quota back.
+  it('discards a late quota reply after account settings invalidate it', async () => {
+    const h = harness();
+    let finish!: (value: ReturnType<typeof snapshot>) => void;
+    h.readRemote.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = h.reader.read(REMOTE);
+    await Promise.resolve();
+    h.reader.invalidate();
+    finish(snapshot());
+    expect(await pending).toBeNull();
+    expect(h.reader.peek(REMOTE)).toBeNull();
+    await h.reader.read(REMOTE);
+    expect(h.readRemote).toHaveBeenCalledTimes(2);
+  });
+
+  // Permission boundary (provider-groups.md §5「分享边界」): subscription channels never reach a sharer's computer;
+  // only the share-quota reader, which goes through the share's own authorization, reads share members, and nothing else.
+  it('never requests another person’s subscription quota, and the share-quota reader reads only share members', async () => {
     const h = harness();
     expect(await h.reader.read(member('share', 'share:s1'))).toBeNull();
     expect(await h.reader.read(member('device', 'share:s1'))).toBeNull();
     expect(h.readLocal).not.toHaveBeenCalled();
     expect(h.readRemote).not.toHaveBeenCalled();
+    const readRemote = vi.fn(async () => ({ updatedAt: NOW, windows: [{ usedPercent: 30, resetAtMs: NOW + DAY, windowMs: 7 * DAY }] }));
+    const shares = createProviderGroupUsageReader({ readShares: true, readLocal: vi.fn(), readRemote,
+      parseSnapshot: providerGroupShareQuotaSnapshot, now: () => NOW, isCurrent: () => true });
+    expect(await shares.read(member('local', null))).toBeNull();
+    expect(await shares.read(REMOTE)).toBeNull();
+    expect(await shares.read(member('device', 'share:s1'))).toBeNull();
+    expect(readRemote).not.toHaveBeenCalled();
+    expect(await shares.read(member('share', 'share:s1'))).toMatchObject({ windows: [{ usedPercent: 30 }] });
+    expect(readRemote).toHaveBeenCalledExactlyOnceWith('share:s1', 'anthropic');
   });
 
   it('falls back on unsupported peers or failed reads without caching an invented zero', async () => {

@@ -111,8 +111,16 @@ const readUpdateChannelSettings = vi.fn(() => ({
   orgDefaultEnableBeta: false,
 }));
 
+const nativeArmManifests = new WeakSet<object>();
+const runningTranslated = vi.fn(() => false);
+vi.mock('../arm64Translation', () => ({ isRunningUnderArm64Translation: runningTranslated }));
+
 vi.mock('../manifestService', () => ({
   fetchManifest,
+  // 生产实现先读本进程架构清单再按需读 arm64 清单；测试直接用 fetchManifest 的结果，
+  // 用 nativeArmManifests 标记「来自 arm64 清单」。
+  fetchAppUpdateManifest: (...args: unknown[]) => fetchManifest(...args),
+  getAppUpdateTargetArch: (manifest: object) => (nativeArmManifests.has(manifest) ? 'arm64' : undefined),
   getBaseUrl,
   isDev,
   clearCachedManifest: vi.fn(),
@@ -255,6 +263,8 @@ beforeEach(() => {
     return TEST_ROOT;
   });
   fetchManifest.mockReset();
+  runningTranslated.mockReset();
+  runningTranslated.mockReturnValue(false);
   getBaseUrl.mockReset();
   getBaseUrl.mockReturnValue(CDN_EXTERNAL_BASE_URL);
   isDev.mockReset();
@@ -1347,6 +1357,119 @@ describe('personal version app update policy', () => {
   });
 });
 
+
+// NZWG-9FC9：Apple 芯片上经 Rosetta 运行的 darwin-x64 包只能靠同版本的 arm64 包换装原生架构。
+describe('native architecture switch for Rosetta-translated macOS builds', () => {
+  function armManifest(version = '0.0.64') {
+    const manifest = updateManifest(version, `app/darwin-arm64/xdt-maker-${version}-arm64.zip`);
+    nativeArmManifests.add(manifest);
+    return manifest;
+  }
+
+  function stagePatch(patch: Record<string, unknown>) {
+    const updatesDir = path.join(TEST_USER_DATA, 'updates');
+    const patchPath = path.join(updatesDir, 'staged.zip');
+    fs.mkdirSync(updatesDir, { recursive: true });
+    fs.writeFileSync(patchPath, 'update');
+    fs.writeFileSync(path.join(updatesDir, 'patch-info.json'), JSON.stringify({
+      version: '0.0.64', fileName: 'staged.zip', sha256: 'abc', enableBeta: false, ...patch,
+    }));
+    return patchPath;
+  }
+
+  beforeEach(() => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+  });
+
+  it('stages and applies the same-version arm64 package when translated', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(armManifest())).resolves.toBe('ready');
+      expect(download).toHaveBeenCalledOnce();
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info).toMatchObject({ version: '0.0.64', targetArch: 'arm64' });
+
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  // 重新授权标记按版本生效：同版本换装若写入，会在冷启动清掉已完成迁移用户的账号登录。
+  it('does not write a relogin flag for a same-version switch', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    Object.assign(manifest.app, { requireRelogin: true });
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(fs.existsSync(path.join(TEST_USER_DATA, 'relogin-required.flag'))).toBe(false);
+    const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+    expect(info.requireRelogin).toBe(false);
+  });
+
+  // Agent 按「重启后版本前进」判定成功；同版本换装交给它会在换装成功后报失败。
+  it('does not offer a staged same-version switch to the Agent update flow', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    fetchManifest.mockResolvedValue(manifest);
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({
+      status: 'no_installable_update', currentVersion: '0.0.64',
+    });
+  });
+
+  it.each([
+    ['a native Intel Mac', false, true],
+    ['an x64 manifest under translation', true, false],
+  ])('keeps rejecting same-version packages on %s', async (_label, translated, fromArmManifest) => {
+    runningTranslated.mockReturnValue(translated);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = fromArmManifest ? armManifest() : updateManifest('0.0.64');
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('idle');
+
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('keeps a staged arm64 switch across an offline restart and clears it once native', async () => {
+    fetchManifest.mockResolvedValue(null);
+    runningTranslated.mockReturnValue(true);
+    const patchPath = stagePatch({ targetArch: 'arm64' });
+    let service = await freshUpdateService('darwin', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({
+        hasUpdate: true, action: 'relaunch', version: '0.0.64',
+      });
+    } finally {
+      service.stopUpdateService();
+    }
+
+    runningTranslated.mockReturnValue(false);
+    service = await freshUpdateService('darwin', 'arm64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({ hasUpdate: false });
+      expect(fs.existsSync(patchPath)).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+});
 
 describe('app update forward-only policy', () => {
   it('does not download a manifest version lower than the running app', async () => {
@@ -2723,6 +2846,43 @@ describe('splash 启动下载 0% 显式广播', () => {
     const payloads = progressSends().map((s) => s.payload);
     expect(payloads[0]).toMatchObject({ progress: 0, received: 0, total: 123 });
     expect(payloads[payloads.length - 1]).toMatchObject({ progress: 100 });
+  });
+
+  // Regression (2026-11-17): retries were only logged, so the splash bar sat still with no
+  // reason. They now reach the splash channel at once as standard `download` progress.
+  it('announces a retry and verification on the splash channel before the next byte', async () => {
+    const { progressSends } = makeProgressCollector();
+    download.mockImplementation(
+      async (opts: {
+        targetPath: string;
+        onProgress: (e: object) => void;
+        onRetry: (e: object) => void;
+        onVerifying: () => void;
+      }) => {
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onRetry({ attempt: 2, delayMs: 1000, cause: new Error('connection reset') });
+        // Bytes flow again without the bar rising a whole percent: "Retrying…" must clear now.
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onVerifying();
+        fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+        fs.writeFileSync(opts.targetPath, 'update');
+        return { path: opts.targetPath, size: 123 };
+      },
+    );
+
+    const { checkForUpdate } = await freshUpdateService('darwin');
+    expect(await checkForUpdate(updateManifest())).toBe('ready');
+
+    const phases = progressSends().map(
+      (s) => (s.payload as { download?: { phase: string } }).download?.phase,
+    );
+    expect(progressSends().map((s) => s.payload)).toContainEqual(
+      expect.objectContaining({
+        download: expect.objectContaining({ phase: 'retrying', attempt: 2, retryReason: 'network' }),
+      }),
+    );
+    const announced = phases.filter((phase, i) => phase && phase !== phases[i - 1]);
+    expect(announced).toEqual(['downloading', 'retrying', 'downloading', 'verifying', 'completed']);
   });
 
   it('superseding(wasReady)路径:下载前不向 splash 通道广播 0%', async () => {

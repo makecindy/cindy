@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, TextInputInstance, ViewInstance } from 'react-native';
 import {
   useEffect,
   useLayoutEffect,
@@ -7,13 +8,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react';
-import {
-  Pressable,
-  useWindowDimensions,
-  ScrollView,
-  View,
-  type TextInput as NativeTextInput,
-} from 'react-native';
+import { Pressable, useWindowDimensions, ScrollView, View } from 'react-native';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import Animated, {
   runOnJS,
@@ -392,9 +387,9 @@ export function TaskTagsPanel({
     528,
     Math.max(132, windowHeight - insets.top - insets.bottom - 240),
   );
-  const listRef = useRef<ScrollView>(null);
-  const nameInput = useRef<NativeTextInput>(null);
-  const viewportRef = useRef<View>(null);
+  const listRef = useRef<ScrollViewInstance>(null);
+  const nameInput = useRef<TextInputInstance>(null);
+  const viewportRef = useRef<ViewInstance>(null);
   const scrollOffset = useRef(0);
   const drag = useRef<{
     id: string;

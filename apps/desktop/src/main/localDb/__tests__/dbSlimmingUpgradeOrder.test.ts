@@ -7,8 +7,8 @@ describe('database cleanup and upgrade startup order', () => {
   it('derives both the cleanup database path and request owner from the same user id', () => {
     const source = readFileSync(path.resolve(__dirname, '..', 'index.ts'), 'utf8');
     const pathBinding = source.indexOf('const filePath = dbPath(userId)');
-    const cleanup = source.indexOf('maintenance = await runPendingDbSlimmingAtStartup', pathBinding);
-    const cleanupBlock = source.slice(cleanup, source.indexOf('});', cleanup) + 3);
+    const cleanup = source.indexOf('? await runSlimming({', pathBinding);
+    const cleanupBlock = source.slice(cleanup, source.indexOf('})', cleanup) + 2);
 
     expect(pathBinding).toBeGreaterThanOrEqual(0);
     expect(cleanup).toBeGreaterThan(pathBinding);
@@ -18,7 +18,7 @@ describe('database cleanup and upgrade startup order', () => {
 
   it('finishes cleanup recovery before opening the database for migration', () => {
     const source = readFileSync(path.resolve(__dirname, '..', 'index.ts'), 'utf8');
-    const cleanup = source.indexOf('maintenance = await runPendingDbSlimmingAtStartup');
+    const cleanup = source.indexOf('maintenance = runSlimming');
     const recoveryGuard = source.indexOf('if (!maintenance.originalDatabaseReady)', cleanup);
     const open = source.indexOf('_db = openWithPragmas(filePath)', recoveryGuard);
     const schemaStartup = source.indexOf(
@@ -26,7 +26,7 @@ describe('database cleanup and upgrade startup order', () => {
       open,
     );
     const migration = source.indexOf(
-      'runMigrations: () => runMigrations(db, filePath)',
+      'runMigrations: () => whileAvailable(() => runMigrations(db, filePath,',
       schemaStartup,
     );
 

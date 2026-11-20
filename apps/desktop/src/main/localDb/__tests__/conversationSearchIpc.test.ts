@@ -21,7 +21,7 @@ vi.mock('../conversationSearch.js', () => ({
   searchConversations: h.searchConversations,
 }));
 
-import { registerSearchIpc } from '../ipc/search.js';
+import { registerSearchIpc } from '../ipc/search.desktop.js';
 
 type Handler = (event: unknown, payload: unknown) => Promise<unknown>;
 

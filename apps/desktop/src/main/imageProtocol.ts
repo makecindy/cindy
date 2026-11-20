@@ -14,7 +14,7 @@
  */
 
 import { protocol, type CustomScheme } from 'electron';
-import * as imageCacheStore from './imageCacheStore';
+import * as imageCacheStore from './imageCacheStore.desktop';
 
 import { createLogger } from './logger';
 

@@ -9,6 +9,8 @@ import { MessageBodyText } from '@/session/ShareMessageCheckbox';
 import { buildQueueRowPresentation, EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
 import type { MobilePendingSendItem } from '@/session/pendingSendItems';
 import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
+import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
+import type { DeviceView } from '@cindy/device-link';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
@@ -25,6 +27,10 @@ const { handlers, frames, durableThumbs } = vi.hoisted(() => ({
   frames: new Map<number, FrameRequestCallback>(),
   durableThumbs: new Map<string, string>(),
 }));
+vi.mock('expo-router', async () => {
+  const { useEffect } = await import('react');
+  return { useFocusEffect: (work: () => void | (() => void)) => useEffect(work, [work]) };
+});
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
   const view = (tag: string) => (props: Record<string, unknown> & { children?: ReactNode }) => {
@@ -32,7 +38,7 @@ vi.mock('react-native', async () => {
     return createElement(tag, { 'data-testid': props.testID, onClick: props.disabled ? undefined : props.onPress }, props.children);
   };
   class AnimatedValue { setValue() {} interpolate() { return 0; } }
-  return { View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
+  return { AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
     Platform: { OS: 'ios' }, NativeModules: {}, UIManager: { getViewManagerConfig: () => ({}) },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     Animated: { View: view('div'), Value: AnimatedValue, timing: () => ({ start() {}, stop() {} }) },
@@ -112,7 +118,7 @@ function show(
 }
 function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = type === 'End' ? 0 : 1) {
   const handler = handlers.get('pendingSend.body.a')?.[`onTouch${type}`] as ((e: GestureResponderEvent) => void) | undefined;
-  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as GestureResponderEvent));
+  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as unknown as GestureResponderEvent));
 }
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
@@ -137,6 +143,36 @@ it.each(['move', 'end', 'cancel', 'long', 'multi', 'disabled', 'unmount', 'recyc
     flush(); expect(select).not.toHaveBeenCalled();
   },
 );
+// Foreground regression: a missed presence edge used to leave a pending send inert.
+// The real recovery hook and bubble must share one roster read for taps during retry.
+it('rechecks the waiting computer once, backs off, and never resubmits the message', async () => {
+  let finish!: (value: { devices: DeviceView[] }) => void;
+  const read = vi.fn(() => new Promise<{ devices: DeviceView[] }>(resolve => { finish = resolve; }));
+  const recover = vi.fn(async () => true);
+  const actions = { selectedClientId: null, onSelect: select, onRemove: remove, onBeginEdit: edit,
+    onSteer: steer, onMove: move, onRetryOutbox: retryOutbox, onRemoveOutbox: removeOutbox };
+  function Screen() {
+    const reconnect = useWaitingComputerRecovery('pc', 'message-a', read, recover);
+    return <PendingSendBubble item={{ ...item, phase: 'waiting', waitingFor: 'computer', actions: null }}
+      actions={{ ...actions, onReconnectComputer: reconnect, waitingComputerName: 'Mac' }}
+      renderImage={() => null} renderText={() => null} renderFile={() => null} />;
+  }
+  await act(async () => root.render(<Screen />));
+  const button = host.querySelector<HTMLElement>('[data-testid="pendingSend.reconnect.a"]')!;
+  act(() => button.click());
+  expect(read).toHaveBeenCalledTimes(1);
+  await act(async () => finish({ devices: [] }));
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(recover).not.toHaveBeenCalled();
+  await act(async () => finish({ devices: [{ deviceId: 'pc', online: true, remoteControlEnabled: true } as DeviceView] }));
+  expect(recover.mock.calls).toEqual([['pc']]);
+  expect(retryOutbox).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();

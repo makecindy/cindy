@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 interface SemverApi {
   valid(version: string): string | null;
@@ -53,32 +56,53 @@ export function parseBinaryVersionOutput(stdout: string, stderr: string): string
  * Probe a managed executable without letting a broken/local self-update fail the
  * surrounding CDN prepare. Invalid output, timeout, or spawn errors all return null.
  */
-export function probeBinaryVersion(
+export async function probeBinaryVersion(
   binaryPath: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
+  try {
+    return parseBinaryVersionOutput(await readBinaryVersionOutput(binaryPath, signal), '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Even `codex --version` creates PATH helpers in CODEX_HOME. A version read must
+ * neither initialize ~/.codex nor touch an inherited task/account runtime home.
+ * Share this boundary between startup arbitration and the About-page probe.
+ */
+export async function readBinaryVersionOutput(
+  binaryPath: string,
+  signal?: AbortSignal,
+  timeoutMs = VERSION_PROBE_TIMEOUT_MS,
+): Promise<string> {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'cindy-version-probe-'));
+  try {
+    return await new Promise<string>((resolve, reject) => {
       execFile(
         binaryPath,
         ['--version'],
         {
           encoding: 'utf8',
           maxBuffer: VERSION_PROBE_MAX_BUFFER,
-          timeout: VERSION_PROBE_TIMEOUT_MS,
+          timeout: timeoutMs,
           windowsHide: true,
           signal,
+          env: { ...process.env, CODEX_HOME: home },
         },
         (error, stdout, stderr) => {
           if (error) {
-            resolve(null);
+            reject(error);
             return;
           }
-          resolve(parseBinaryVersionOutput(stdout, stderr));
+          const firstLine = (stdout || stderr).trim().split(/\r?\n/, 1)[0]?.trim();
+          if (!firstLine) reject(new Error('empty --version output'));
+          else resolve(firstLine);
         },
       );
-    } catch {
-      resolve(null);
-    }
-  });
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true }).catch(() => undefined);
+  }
 }

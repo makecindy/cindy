@@ -7,6 +7,7 @@ import type {
   InteractiveCardSpec,
 } from '../types.js';
 import { decodeCustomId, encodeCustomId, encodeMessageId } from './codec.js';
+import { discordLaneOfChannel, encodeDiscordLaneUserId } from './lane.js';
 import { markdownToDiscord } from './markdown.js';
 
 const BUTTONS_PER_ROW = 5;
@@ -40,6 +41,9 @@ export interface ButtonInteractionLike {
   user: { id: string };
   channelId: string;
   message: { id: string };
+  /** 服务器内的点击才有；私聊为空。 */
+  guildId?: string | null;
+  channel?: { type?: number; parentId?: string | null } | null;
 }
 
 export interface BuildCardMessageOptions {
@@ -77,9 +81,18 @@ export function parseInteraction(i: ButtonInteractionLike): IMCardActionEvent | 
   const decoded = decodeCustomId(i.customId);
   if (!decoded) return null;
 
+  // 服务器频道里的卡片：senderId 折成该频道的 lane（与入站消息同一路由键），点击人的身份
+  // 由 handleButtonInteraction 单独核验；认不出 lane（thread 缺父频道）就当作无效交互。
+  let senderId = i.user.id;
+  if (i.guildId) {
+    const lane = discordLaneOfChannel(i.guildId, i.channelId, i.channel);
+    if (!lane) return null;
+    senderId = encodeDiscordLaneUserId(lane);
+  }
+
   return {
     channelName: 'discord',
-    senderId: i.user.id,
+    senderId,
     chatId: i.channelId,
     messageId: encodeMessageId(i.channelId, i.message.id),
     buttonId: decoded.buttonId,

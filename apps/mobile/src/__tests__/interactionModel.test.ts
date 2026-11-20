@@ -303,10 +303,14 @@ describe('interactionModel', () => {
     }
     visit(tree);
     if (!initializer) throw new Error('Missing production pending composer gate');
-    const blocks = new Function('pendingInteractionsBlockRemoteComposer', 'pending', 'return (' + initializer.getText(tree) + ')');
+    const blocks = new Function('pendingInteractionsBlockRemoteComposer', 'pending', 'collapsedPendingRequestIds = []', 'return (' + initializer.getText(tree) + ')');
     const pending = [{ request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } }, { request: { kind: 'permission', requestId: 'perm-1' } }];
     expect(blocks(pendingInteractionsBlockRemoteComposer, pending)).toBe(true);
     expect(blocks(pendingInteractionsBlockRemoteComposer, pending.slice(0, 1))).toBe(false);
+    const ask = { request: { kind: 'ask_user_question', requestId: 'ask-1' } };
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [ask])).toBe(true);
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [ask], ['ask-1'])).toBe(false);
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [...pending, ask], ['ask-1'])).toBe(true);
     expect(pendingInteractionsBlockRemoteComposer([
       { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
       { request: { kind: 'permission', requestId: 'perm-1' } },
@@ -388,7 +392,8 @@ describe('interactionModel', () => {
       { persistId: 'ask', request: { kind: 'ask_user_question', requestId: 'ask-1' } },
     ];
 
-    const selectedAsk = selectPendingInteractionByRequestId(interactions, 'ask-1');
+    expect(selectPendingInteractionByRequestId(interactions, 'ask-1')).toBe(interactions[0]);
+    const selectedAsk = selectPendingInteractionByRequestId(interactions.slice(1), 'ask-1');
     const selectedPlan = selectPendingInteractionByRequestId(interactions, 'plan-1');
 
     expect(selectedAsk?.request.requestId).toBe('ask-1');
@@ -409,6 +414,14 @@ describe('interactionModel', () => {
       activeKind: selectedPlan ? interactionKind(selectedPlan) : null,
       collapsed: true,
       planViewerState: 'expanded',
+    })).toBe(false);
+    // The feedback footer must stay outside the scrolling body, but collapsing
+    // must still release the fixed-height surface (unit; simulator regression).
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half',
+    })).toBe(true);
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half', collapsed: true,
     })).toBe(false);
   });
 

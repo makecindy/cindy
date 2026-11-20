@@ -9,6 +9,7 @@
 export { RemoteHost, isAuthFailure, authFailureHint, DEFAULT_REMOTE_FORWARD_PORT_BASE } from './RemoteHost.js';
 export type {
   RemoteHostDeps,
+  HostKeyErrorDetails,
   StatusListener,
   ExecOpts,
   ExecResult,
@@ -145,6 +146,7 @@ export {
   resolveIdentityFingerprints,
   SSH_AGENT_UNAVAILABLE_CODE,
 } from './sshAuthentication.js';
+export type { AgentUnavailableReason } from './sshAuthentication.js';
 
 export type {
   AddHostInput,

@@ -273,6 +273,42 @@ describe('resolveWorkspacePath', () => {
     });
   });
 
+  // #8726: `/D:/x` 是盘符路径的 URI pathname 写法;剥离前在 Windows 上会拿
+  // `/D:/x` 直接 stat(被解析成当前盘下的非法 `\D:\x`)而静默返回 none,点击
+  // 链接弹「文件不可用」。盘符写法只对 Windows 工作区做归一(与 renderer
+  // normalizeWindowsDriveHref 同门控)——POSIX 工作区里 `/D:` 是合法路径名。
+  it('resolves a URI-pathname Windows drive href (/D:/x)', async () => {
+    const target = write('docs/app.tsx');
+    if (process.platform === 'win32') {
+      // 真实盘符路径:`/` + `C:/.../docs/app.tsx` → 剥离后就是 absolute fast path。
+      const driveHref = `/${target.replace(/\\/g, '/')}`;
+      await expect(resolveWorkspacePath(driveHref, workspace)).resolves.toEqual({
+        status: 'unique',
+        candidates: [target.replace(/\\/g, '/')],
+        kind: 'file',
+      });
+      // 裸盘符 `/C:` 归一为盘根 `C:/`(目录链接尾斜杠剥落后的形态),stat 盘根命中目录。
+      await expect(resolveWorkspacePath('/C:', workspace)).resolves.toEqual({
+        status: 'unique',
+        candidates: ['C:/'],
+        kind: 'directory',
+      });
+    } else {
+      // POSIX 工作区门控关闭:`/D:*` 按 POSIX 绝对路径直接 stat,落空 none。
+      // 刻意写入 ws/D:/app.tsx:若剥离误开,`D:/app.tsx` 会经 direct-join
+      // 命中该文件返回 unique,none 断言因此能区分门控是否生效。
+      write('D:/app.tsx');
+      await expect(resolveWorkspacePath('/D:/app.tsx', workspace)).resolves.toEqual({
+        status: 'none',
+        candidates: [],
+      });
+      await expect(resolveWorkspacePath('/D:', workspace)).resolves.toEqual({
+        status: 'none',
+        candidates: [],
+      });
+    }
+  });
+
   it('returns none for href with newline', async () => {
     write('apps/desktop/src/App.tsx');
 
@@ -507,6 +543,26 @@ describe('resolveWorkspacePathBatch', () => {
       status: 'none',
       candidates: [],
     });
+  });
+
+  // #8726: 与单发用例同形的 URI pathname 盘符路径,验证批量入口共享同一归一化与门控。
+  it('resolves a URI-pathname Windows drive href (/D:/x)', async () => {
+    const target = write('docs/app.tsx');
+    if (process.platform === 'win32') {
+      const driveHref = `/${target.replace(/\\/g, '/')}`;
+      const out = await resolveWorkspacePathBatch([driveHref], workspace);
+      expect(out[driveHref]).toEqual({
+        status: 'unique',
+        candidates: [target.replace(/\\/g, '/')],
+        kind: 'file',
+      });
+    } else {
+      // POSIX 工作区门控关闭:`/D:/app.tsx` 按 POSIX 绝对路径直接 stat 落空
+      // none;ws/D:/app.tsx 刻意存在,剥离误开时 direct-join 会命中返回 unique。
+      write('D:/app.tsx');
+      const out = await resolveWorkspacePathBatch(['/D:/app.tsx'], workspace);
+      expect(out['/D:/app.tsx']).toEqual({ status: 'none', candidates: [] });
+    }
   });
 
   it('collapses duplicate hrefs into a single resolution', async () => {

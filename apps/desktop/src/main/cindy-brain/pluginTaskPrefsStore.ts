@@ -12,6 +12,10 @@
  * answers (cindy.text.oneshot) use them too; empty = the system auxiliary model.
  * Legacy per-ability oneshot catalog pins (ghost-cindy-prefs.json `overrides`)
  * are migrated here once on first read; see migrateLegacyOneshotPins.
+ * `agentDeviceId` saves where the Agent runs (another computer or share:<id>), like
+ * an explicit plugin route: tasks stay on this computer and the Agent runs there.
+ * Quick answers are local one-shot requests, so a remote model leaves them on the
+ * declared/auxiliary chain instead of borrowing a local namesake.
  */
 
 import {
@@ -22,6 +26,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { decodeCatalogModelPin } from '../../shared/catalogModelPin.js';
+import { isPluginTaskAgentDeviceId } from '../../shared/pluginTasks.js';
 import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 import {
   GHOST_CINDY_PREFS_FILE,
@@ -58,6 +63,11 @@ export interface PluginTaskConfig {
   effort?: PluginTaskEffort;
   fastMode?: boolean | 'ultrafast';
   providerId?: string;
+  /**
+   * Agent 运行位置:同账号另一台电脑或 share:<id>;null = 明确选本机。缺省保留历史
+   * 默认/errand 复用语义。只随完整模型组合保存,单独出现视为脏数据丢弃。
+   */
+  agentDeviceId?: string | null;
   permissionMode?: GhostErrandPermissionMode;
   /** 绝对路径(用户亲选的项目目录);缺省 = 专属对话目录。 */
   workingDir?: string;
@@ -105,6 +115,9 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')) cfg.fastMode = r.fastMode;
   if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128) {
     cfg.providerId = r.providerId;
+  }
+  if ((r.agentDeviceId === null || isPluginTaskAgentDeviceId(r.agentDeviceId)) && cfg.agentKind && cfg.model && cfg.providerId) {
+    cfg.agentDeviceId = r.agentDeviceId;
   }
   if (
     typeof r.permissionMode === 'string' &&
@@ -159,7 +172,7 @@ export function setPluginTaskConfigValidator(validator: (config: PluginTaskConfi
 export async function validatePluginTaskConfig(raw: unknown): Promise<void> {
   const config = normalizeConfig(raw);
   if (raw && typeof raw === 'object') {
-    for (const key of ['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
+    for (const key of ['agentKind', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
       if ((raw as Record<string, unknown>)[key] !== undefined && config[key] === undefined) {
         throw new Error(`任务配置 ${key} 无效，请重新选择`);
       }
@@ -203,7 +216,7 @@ function migrateLegacyOneshotPins(): void {
       for (const [ghostId, pin] of Object.entries(legacy)) {
         if (pin === null) continue;
         const route = decodeCatalogModelPin(pin);
-        if (!route) {
+        if (!route || route.agentDeviceId) {
           dropped.push(ghostId);
           continue;
         }
@@ -215,6 +228,8 @@ function migrateLegacyOneshotPins(): void {
         const rest: PluginTaskConfig = { ...current };
         delete rest.effort;
         delete rest.fastMode;
+        // 旧钉档是本机目录项,不继承任何运行位置。
+        delete rest.agentDeviceId;
         const next = normalizeConfig({
           ...rest,
           agentKind: route.agentKind === 'claude-code' ? 'cc' : 'codex',

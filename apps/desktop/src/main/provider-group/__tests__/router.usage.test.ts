@@ -1,11 +1,12 @@
 /** Real directory → quota eligibility → scheduler → status projection, using only in-memory accounts. */
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import { normalizeProviderGroupConfig, PROVIDER_GROUP_STRATEGIES, type ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupDirectory } from '../directory';
-import { createProviderGroupRouter } from '../router';
-import { providerGroupCodexUsageSnapshot } from '../usage';
+import { createProviderGroupRouter, type ProviderGroupRouterDeps } from '../router';
+import { providerGroupCodexUsageSnapshot, providerGroupShareQuotaFromInsights } from '../usage';
 
 const NOW = 1_000_000;
 const OPUS = 'claude-opus-5-5';
@@ -61,7 +62,9 @@ describe('OpenAI subscription group routing', () => {
     for (const [short, week] of [[100, 10], [10, 100]]) {
       h.usage.set('local', quota(short, week));
       expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
-      expect((await h.router.view('openai')).members[0].state).toBe('cooling');
+      expect((await h.router.view('openai')).members[0]).toMatchObject({
+        state: 'cooling', usageLimit: { resetAtMs: short === 100 ? NOW + 2 * 3_600_000 : NOW + 3 * 86_400_000 },
+      });
     }
     h.usage.set('local', quota(10, 20));
     h.usage.set(h.remote, quota(40, 70, NOW + 3 * 3_600_000));
@@ -81,6 +84,7 @@ describe('OpenAI subscription group routing', () => {
     expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
     expect(await h.pick(SPARK)).toMatchObject({ member: { key: h.remote } });
     expect(await h.pick(GPT, 'pi')).toMatchObject({ member: { key: h.remote } });
+    expect((await h.router.view('openai')).members[0]).not.toHaveProperty('usageLimit');
     expect((await h.router.view('openai')).members[0].state).toBe('available');
     expect((await h.router.view('openai', SPARK)).members[0].state).toBe('cooling');
     expect((await h.router.view('openai', { model: GPT, agentKind: 'pi' })).members[0].state).toBe('cooling');
@@ -96,9 +100,23 @@ describe('OpenAI subscription group routing', () => {
     h.usage.set('local', { ...quota(100, 20), primary: { usedPercent: 100, resetsAt: NOW / 1000 } });
     expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
   });
+
+  // Unit regression (2026-11-13): full plan windows still allow native-pool credit requests.
+  // Earlier routing cases had no native pool and only covered quota-based exclusion.
+  it('routes full-window native pools to upstream but retains real model cooldowns', async () => {
+    const h = openaiHarness();
+    const pooled = { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } };
+    h.usage.set('local', pooled);
+    h.usage.set(h.remote, pooled);
+    expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
+    expect((await h.router.view('openai')).members[0].state).toBe('available');
+    h.router.markCooling('openai', 'local', NOW + 100_000, GPT);
+    expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
+    expect(h.router.coolingUntil('openai', 'local', GPT)).toBe(NOW + 100_000);
+  });
 });
 
-function harness() {
+function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
   let now = NOW;
   const config = normalizeProviderGroupConfig({
     strategy: 'usage', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
@@ -115,6 +133,7 @@ function harness() {
   const writeCooling = vi.fn();
   const router = createProviderGroupRouter({
     directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
+    readPoolModelAvailability,
     coolingStore: { read: () => ({}), write: writeCooling }, now: () => now, random: () => 0,
   });
   const pick = (model = OPUS, reserveFor?: string) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model, reserveFor });
@@ -122,6 +141,91 @@ function harness() {
 }
 
 describe('provider-group quota routing', () => {
+  // PR #9837 review / unit: healthy local-only grants must not recover remote
+  // routes. Existing pool reads ignored the route's execution context.
+  it.each([
+    [0, true, 'member'], [0, undefined, 'unavailable'], [1, true, 'unavailable'],
+  ] as const)('uses the execution context for member %s with localTask=%s', async (index, localTask, kind) => {
+    const h = harness(async (_member, _model, options) => options?.remote !== true);
+    const member = h.config.members[index];
+    const exclude = new Set([h.config.members[1 - index].key]);
+    h.router.markCooling('anthropic', member.key, NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, localTask, exclude }))
+      .toMatchObject({ kind });
+    expect(h.router.coolingUntil('anthropic', member.key, OPUS))
+      .toBe(kind === 'member' ? null : NOW + 100_000);
+  });
+
+  // PR #10150 review, unit: a same-account pick launches with the own-computer grant, so its cooling probe of the
+  // local pool must use the same grant; picks for guests keep the strict one.
+  it('probes the local pool with the own-computer grant only for same-account picks', async () => {
+    const h = harness(async (_member, _model, options) => options?.ownComputer === true);
+    const exclude = new Set([h.config.members[1].key]);
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude }))
+      .toMatchObject({ kind: 'unavailable' });
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, ownComputer: true, exclude }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+
+  // #9833, unit: recovery must not erase newer failures or unrelated scopes.
+  // Previous cooldown tests had no asynchronous pool confirmation in pick().
+  it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {
+    let finish!: (available: boolean) => void;
+    const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const h = harness(read);
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    h.router.markCooling('anthropic', 'local', NOW + 200_000, SONNET);
+    const first = h.pick(OPUS);
+    const second = h.pick(OPUS);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+    h.router.markCooling('anthropic', 'local', NOW + 300_000, OPUS);
+    // A later waiter must not associate the old flight with the new cooldown.
+    const afterFailure = h.pick(OPUS);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+    finish(true);
+    expect((await first).kind).toBe('unavailable');
+    expect((await second).kind).toBe('unavailable');
+    expect((await afterFailure).kind).toBe('unavailable');
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 300_000);
+    expect(h.writeCooling).toHaveBeenLastCalledWith({ anthropic: { local: {
+      'claude:opus': NOW + 300_000, 'claude:sonnet': NOW + 200_000,
+    } } });
+    read.mockImplementation(async () => true);
+    h.router.markCooling('anthropic', 'local', NOW + 120_000); // auth/overload scope
+    expect((await h.pick(OPUS)).kind).toBe('unavailable');
+    expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
+    h.advance(120_001);
+    expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
+  });
+
+  // Unit regression: repeated 1.5s waits discarded healthy late evidence. The returned
+  // pick stays unchanged, but the next one must use it without a new probe.
+  it('bounds a pool read and applies a late healthy result to subsequent picks', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (available: boolean) => void;
+      const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const h = harness(read);
+      h.config.members[1].paused = true;
+      h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+      const pick = h.pick(OPUS);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect((await pick).kind).toBe('unavailable');
+      finish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+      expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit regression: an exhausted model plus a paused backup used to lose the quota reason
   // at pick(), preventing the task from showing/waiting for the actual reset.
   it('reports model quota exhaustion and the earliest usable reset without counting paused members', async () => {
@@ -154,6 +258,9 @@ describe('provider-group quota routing', () => {
     h.usage.set('local', { ...snapshot(100, 20), fiveHour: { utilization: 100, resetsAt: (NOW + 300_000) / 1000 } });
     h.usage.set(remote, { ...snapshot(100, 20), fiveHour: { utilization: 100, resetsAt: (NOW + 600_000) / 1000 } });
     h.router.markCooling('anthropic', 'local', NOW + 1_800_000, scope);
+    // The row describes the quota reset, even when a separate cooldown lasts longer.
+    expect((await h.router.view('anthropic', OPUS)).members[0])
+      .toMatchObject({ coolingUntil: NOW + 1_800_000, usageLimit: { resetAtMs: NOW + 300_000 } });
     expect(await h.pick()).toMatchObject({ kind: 'unavailable', usageLimit: { resetAtMs: NOW + 600_000 } });
     h.config.members[1].paused = true;
     expect(await h.pick()).toMatchObject({ kind: 'unavailable', usageLimit: { resetAtMs: NOW + 1_800_000 } });
@@ -170,6 +277,7 @@ describe('provider-group quota routing', () => {
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: 'local' } });
     expect((await h.router.view('anthropic')).members[0].state).toBe('available');
     expect((await h.router.view('anthropic', OPUS)).members[0].state).toBe('cooling');
+    expect((await h.router.view('anthropic', OPUS)).members[0]).not.toHaveProperty('usageLimit');
     h.usage.set('local', snapshot(0, 100));
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: remote } });
     expect((await h.router.view('anthropic')).members[0].state).toBe('cooling');
@@ -298,7 +406,9 @@ describe('provider-group quota routing', () => {
     h.usage.set('local', snapshot(100, 5));
     h.usage.set(remote, snapshot(40, 60));
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: remote } });
-    expect((await h.router.view('anthropic')).members[0]).toMatchObject({ state: 'cooling', coolingUntil: 3_000_000 });
+    expect((await h.router.view('anthropic')).members[0]).toMatchObject({
+      state: 'cooling', coolingUntil: 3_000_000, usageLimit: { resetAtMs: 3_000_000 },
+    });
     // Quota snapshots never overwrite error-derived cooldowns or turn a scoped limit into a persistent global one.
     expect(h.writeCooling).not.toHaveBeenCalled();
     h.usage.set('local', snapshot(5, 100));
@@ -339,6 +449,7 @@ describe('provider-group quota routing', () => {
     const status = (await h.router.view('anthropic')).members[0];
     expect(status.state).toBe('cooling');
     expect(status.coolingUntil).toBeUndefined();
+    expect(status.usageLimit).toEqual({ resetAtMs: null });
   });
 
   it('falls back for missing/failed data and releases old quota blocks after reset', async () => {
@@ -350,5 +461,80 @@ describe('provider-group quota routing', () => {
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: 'local' } });
     h.readUsage.mockRejectedValue(new Error('unreachable'));
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+});
+
+// Unit, provider-groups.md §5「分享边界」(2026-11-19 用户裁决)。生产入口：真实 directory → router.pick/view/rebalanceCandidates，
+// 额度经 providerGroupShareQuotaFromInsights 换算。回归：组里自己的两台读得到额度时，空闲的分享电脑(额度未知)从来分不到；
+// 分享者开放额度后也一直按未知处理。此前的用例没有分享成员，也没有覆盖「读得到 + 读不到」混合的组。
+describe('received share computers in a provider group', () => {
+  const HOUR = 3_600_000;
+  const WEEK = 7 * 24 * HOUR;
+  const insights = (weekRemaining: number, weekResetAt: number) => ({
+    version: 1,
+    capabilities: { quota: true, usage: false },
+    status: { quota: 'ready', usage: 'disabled' },
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: NOW, balance: null, windows: [
+      { kind: 'session', label: null, remainingPercent: 90, resetsAt: NOW + 2 * HOUR, windowMinutes: 300 },
+      { kind: 'week', label: null, remainingPercent: weekRemaining, resetsAt: weekResetAt, windowMinutes: 10_080 },
+    ] }] },
+    usage: null,
+  });
+  function shareHarness(strategy: 'least' | 'order') {
+    const config = normalizeProviderGroupConfig({ strategy, members: [
+      { kind: 'local' },
+      { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
+      { kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    const [local, mini, shared] = config.members.map((member) => member.key);
+    const usage = new Map<string, ClaudeSubscriptionUsageSnapshot>([[local, snapshot(10, 50)], [mini, snapshot(10, 50)]]);
+    let shareInsights: unknown = null;
+    const readShareQuota = vi.fn(async () => providerGroupShareQuotaFromInsights(shareInsights, NOW));
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [view('anthropic')], localDeviceName: () => 'local',
+      listDevices: async () => [{ deviceId: 'mini', name: 'mini', online: true, remoteControlEnabled: true, controlEnabled: true,
+        isSelf: false, platform: 'darwin', appVersion: null, lastSeenAt: null, busy: false }],
+      readDeviceProviders: async () => [view('anthropic')],
+      listReceivedShares: () => [{ shareId: 's1', memberId: 'm-s1', providerId: 'anthropic', providerLabel: 'Anthropic',
+        hostDeviceId: 'host-s1', deviceName: 'David PC', owner: { displayName: 'David', avatarUrl: null, region: 'cn' },
+        status: 'active', hostOnline: true, hostCapable: true } as ProviderShareReceived],
+      isMobilePlatform: () => false, now: () => NOW,
+      readClaudeUsage: async (member) => usage.get(member.key) ?? null,
+      readShareQuota,
+    });
+    // DP 3 个、DHL 2 个正在运行，分享来的 David 空闲。
+    const bindings = Object.fromEntries([...Array(3)].map((_, i) => [`dp${i}`, { providerId: 'anthropic', memberKey: local }])
+      .concat([...Array(2)].map((_, i) => [`dhl${i}`, { providerId: 'anthropic', memberKey: mini }])));
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => bindings as unknown as ReturnType<ProviderGroupRouterDeps['listBindings']>,
+      isTurnRunning: () => true, now: () => NOW, random: () => 0,
+      coolingStore: { read: () => ({}), write: vi.fn() } });
+    const pick = () => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS });
+    return { router, pick, local, shared, readShareQuota, setShare: (raw: unknown) => { shareInsights = raw; } };
+  }
+
+  it('assigns an idle share computer whose quota is not shared even when the group’s own computers report quota', async () => {
+    const h = shareHarness('least');
+    expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: h.shared } });
+    expect(h.readShareQuota).toHaveBeenCalled();
+  });
+
+  it('ranks a share computer by the quota its sharer opened, without exhausting it or exposing it', async () => {
+    const h = shareHarness('order');
+    // 快重置还剩一半：比组所在电脑更急，按顺序也先分给它。
+    h.setShare(insights(50, NOW + HOUR));
+    expect(await h.pick()).toMatchObject({ member: { key: h.shared } });
+    // 刚重置、几乎用完：明显不急，回到组里读得到额度的电脑。
+    h.setShare(insights(5, NOW + WEEK - HOUR));
+    expect(await h.pick()).toMatchObject({ member: { key: h.local } });
+    // 周额度显示用完也不据此判冷却(只代表分享者的一个账号)；额度不随组状态外传，也不作为任务进行中换号的目标。
+    h.setShare(insights(0, NOW + 2 * HOUR));
+    const shareRow = (await h.router.view('anthropic', OPUS)).members.find((member) => member.key === h.shared);
+    expect(shareRow).toMatchObject({ state: 'available' });
+    expect(shareRow).not.toHaveProperty('quota');
+    h.setShare(insights(50, NOW + HOUR));
+    const resolved = (await h.pick() as { resolved: Parameters<typeof h.router.rebalanceCandidates>[1] }).resolved;
+    expect(h.router.rebalanceCandidates({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude: new Set() }, resolved)
+      .map((candidate) => candidate.key)).not.toContain(h.shared);
   });
 });

@@ -6,6 +6,17 @@
 > [`DESIGN.md`](./DESIGN.md) 为准；两者冲突时，视觉判断以 `DESIGN.md` 为准，流程判断以本文为准。
 > 方法论先例：同套治理已在 `xindong/mivo-canvas-plugin` 仓完整试点并被 review 流程接受
 > （治理合同 #191、单一台账 #233/#237、Token 单一权威 #332/#341、最小试点 #343）。
+>
+> **读取时机**：新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁
+> 脚本，或参与设计系统迁移 PR 之前；做 UI 圆角分类或点击目标尺寸审查时，同时读
+> `DESIGN.md` §5 与本文 §13（普通 UI 改动同样适用，不限于设计系统迁移 PR）。
+> **适用路径**：`packages/design-tokens/**`、`apps/desktop/src/renderer/themes/**`、
+> `apps/desktop/src/renderer/components/ui/**`、`apps/mobile/src/theme/**`、
+> `scripts/design-inventory.mjs`、`scripts/hardcoded-color-audit.mjs`、
+> `scripts/hardcoded-color-exemptions.json`、`scripts/shared/design-*.mjs`、
+> `scripts/shared/hardcoded-color-match.mjs`、`scripts/check-pr-design-basis.mjs`、
+> `docs/design-rules/design-inventory.md`、
+> `apps/desktop/src/renderer/__tests__/{designEffectsDiscipline,motionDiscipline}.test.ts`
 
 ## 1. 目的与范围
 
@@ -32,10 +43,10 @@ Cindy 的新界面大量由非设计师贡献。本合同要达成的状态：
 这些**保护值**不适用上表的通用改值路径，按各自条款执行：
 
 - CINDY 皮肤族（`DESIGN.md §15`）：值经用户 2026-07-18 终签，**实现期零裁量**——
-  仓内以主题文件、`cindyDecisionData.ts` 与冻结测试为权威编码，改值须回到用户裁决；
-- U2 二级信息色（`DESIGN.md §15.5`）：明示「never darken unilaterally」，改值须
-  **新的用户裁决**（2026-08 亮色调整即循此路径）。2026-10-22 用户裁决以 CINDY 文字墨水阶梯
-  取代 U2（`DESIGN.md §2` / `§15.16`），保护随之延续到整条阶梯：任一档透明度改值须新的
+  仓内数值编辑源为 `packages/design-tokens`（DTCG，主题文件是生成产物），`cindyDecisionData.ts`
+  与冻结测试锁定预期，改值须回到用户裁决；
+- CINDY 文字墨水阶梯（`DESIGN.md §15.16`；2026-10-22 用户裁决以它取代已退役的 U2 二级信息色
+  例外 §15.5，原「never darken unilaterally」保护随之延续到整条阶梯）：任一档透明度改值须新的
   用户裁决，冻结测试 `cindyThemes.test.ts` 组⑦ 会在缺裁决或退回实色灰时拦下基线变更；
 - `annotation-accent`（`DESIGN.md §15.4`）：图片标注烧录墨色，exempt, do not change
   ——与烧进位图的笔迹恒一致，改它就是改已发布图片的外观合同。
@@ -43,7 +54,7 @@ Cindy 的新界面大量由非设计师贡献。本合同要达成的状态：
 **守卫红灯不是禁令，是提醒走合法路径**：改数值真相源 → 同一 PR 更新对应守卫快照 /
 台账 / 文档 → 按 §6 交证据 → 设计师批准（保护值另按上文门槛）。这是必要步骤，不是
 绕守卫。唯一禁止的事：为了让红灯变绿而**未经裁决**加豁免、绕加载路径、在别处重声明
-——那是砸管道，不是改设计。真实例外（资产固有色、平台语义色等，`DESIGN.md §10`
+——那是砸管道，不是改设计。真实例外（资产固有色、平台语义色等，`DESIGN.md §15.13`
 Process gates 要求）仍走 §11 登记的 `hardcoded-color-exemptions.json` 豁免表，附
 理由与 owner 登记——经裁决登记的正式例外是合法路径，与为消红灯私自加条目是两回事。
 系统对「混乱」的全部定义：消灭**没人决定过的变化**；一切拍板过的值都可以再拍板。
@@ -57,10 +68,8 @@ Process gates 要求）仍走 §11 登记的 `hardcoded-color-exemptions.json` �
 | 台账真相 | `docs/design-rules/design-inventory.md`（DS-2a 已建立，schema 见 §2.1；Mobile 入口已由 DS-7 纳入） | 生产可达 UI 范围、每个 surface 的迁移状态与保护标签 | 不保存截图与历史日志（证据外置，见 §6） |
 | 视觉真相 | 真实运行的 Desktop / Mobile 截图 | 视觉验收的唯一依据 | SSR / 静态渲染样张（含 UI 设计哨兵产物）不得充当 |
 
-在 `packages/design-tokens` 建立并完成生产生成切换（路线图 DS-8）**之前**，`colors.ts`
-仍是 Desktop **颜色**数值权威——这与 `DESIGN.md §10`「`colors.ts` itself is the only
-authoritative inventory」的现行表述一致（该句本身也限定在颜色 Token 登记范围内），本合同
-不提前改变它；Desktop 非颜色数值的现行来源见上表。已合并的 DS-8 已建立 DTCG→Terrazzo→Desktop 生产链；fixture 仅作独立预期。实际范围、保留项与验证状态见 Token README 和唯一主计划。接管按族登记：DS-8 交付 Desktop 的颜色与非颜色生成消费链，Mobile 独立阶段再接管；未切换族继续沿用原权威，不可提前宣称已统一。完整转换与双端样本合同见 [Token README](../../packages/design-tokens/README.md)。
+Desktop 颜色的数值编辑源是 `packages/design-tokens`（DTCG）；`colors.ts` 是注册 API 与
+生成默认值的消费入口，不再手改数值。已合并的 DS-8 已建立 DTCG→Terrazzo→Desktop 生产链；fixture 仅作独立预期。实际范围、保留项与验证状态见 Token README 和唯一主计划。接管按族登记：DS-8 交付 Desktop 的颜色与非颜色生成消费链，Mobile 独立阶段再接管；未切换族继续沿用原权威，不可提前宣称已统一。完整转换与双端样本合同见 [Token README](../../packages/design-tokens/README.md)。
 
 ### 2.1 台账 schema（现行生成与人工维护合同）
 
@@ -237,7 +246,13 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 | Mobile 五档字色与占位字 | `textColorDiscipline.test.ts`（登记在 mobile guard 层）两条全仓扫描：文字色只能是五档中性色或已登记语义色；`placeholderTextColor` 只能是 `textPlaceholder`（登录画布除外） | 存量名单按次数登记、只许减少（共 17 次，逐条清单见证据文档第 3 节）：光标蓝与 `cta` 文字、额度 / 未读计数 / 错误状态色 / 警告 / 就绪 / 录制状态色被当作文字色、共享任务危险文字借用确认钮红、ContextSheet 占位字三级色，待设计裁决或有意可见 PR |
 | PR 设计依据检查 | `apps/mobile/src/**/*.tsx` 计入 UI 路径；设计依据按现行规范确切文件名（含 `mobile-design-guide`）且区分大小写，任意 `*-design.md` 不再误过；补 workflow ↔ 检查名 ↔ 脚本一致性测试 | 无存量 |
 
+2026-11-11 维护者裁决（A-15、A-07）：Toast 四色改走状态色 token，撤销上表续期的 Toast 豁免；composer 兜底色已从代码删除；两条记录移入 `scripts/hardcoded-color-exemptions.archive.json`。
+
 UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
+
+### 阴影、渐变与失效写法门禁（2026-11-07）
+
+`designEffectsDiscipline.test.ts`（登记在 Desktop guard 层）扫描 renderer 源码：无类型 `shadow-[var(--x)]`、HSL 三元组直接当颜色、优先级低于 Button 变体的 `enabled:hover:` 零容忍；阴影和渐变只留逐文件计数的登记例外，与 DESIGN.md §2、§6、§7 对应。失败信息带文件、行号和改法。未覆盖 CSS 与行内 style，也未覆盖 `sidebar-item-active-*` 这类跨主题混合格式的 token。存量已在同一 PR 清零。
 
 ### DS-10 报告准确性与维护（提交候选已验证）
 
@@ -301,7 +316,7 @@ git grep -c "registerColor(" -- apps/desktop/src/renderer/themes/colors.ts | awk
 ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 ```
 
-这与 `DESIGN.md §10` 的既有立场一致（counts drift constantly，`colors.ts` 为唯一权威清单）。
+数量随时漂移，以注册 API（`colors.ts`）的实时清单为准；数值编辑源是 `packages/design-tokens`。
 
 ## 10. 待裁决登记
 
@@ -315,7 +330,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 | 快捷键键帽外框 | 2026-09-06 用户裁决 [#4001](https://github.com/makecindy/cindy/pull/4001)：所有可见快捷键外框（含承载快捷键的交互按钮）4px；边框/填充/内边距/颜色按所在表面 | 已回写 `DESIGN.md §5` / decision-log；Desktop Permission 本样本键帽已 4px，不重开该决定，不把键帽按普通按钮胶囊改掉 |
 | DS-4 基础控件 | `DESIGN.md §4` 与 decision-log 2026-09-04：按钮/输入尺寸、按钮字号字重、hover/pressed、通用 secondary Tier-1、ivory 暂留 | DS-4 已落地；DS-4b 设置封装恢复局部覆盖。ivory 的长期用途已由下列 DS-6 裁决明确；完整表单/证据与第二消费者在 DS-6 |
 
-**DS-6 已批准、验收另记（2026-09-08）**：D1 soft/50% 输入焦点环，亮暗/错误/旧主题可辨识是验收前提；不通过须提供实际对照再讨论该项。D2 elevated 默认＋用途明确的 ivory，保留局部覆盖。D3 普通确认保留反相中性主按钮、轮廓次/第三按钮、主→第三→取消排列、默认 Cancel / 显式主按钮 / typed 输入优先分支及 default/destructive；仅指定两处删除入口 opt-in，授权不迁。D4 原必填/格式规则转字段错误并定位首错，服务失败保留 Toast。D5 仅实际保存禁止重复提交及 Cancel/Esc/遮罩关闭，成功关闭/失败恢复，不锁独立测试连接/获取模型，不改业务语义。实现与实际证据见 [DS-6 索引](../design-evidence/2026-09-08/ds6-forms.md)，未验证不记通过。
+**DS-6 已批准、验收另记（2026-09-08）**：D1 soft/50% 输入焦点环，亮暗/错误/旧主题可辨识是验收前提；不通过须提供实际对照再讨论该项。D2 elevated 默认＋用途明确的 ivory，保留局部覆盖。D3 普通确认保留反相中性主按钮、轮廓次/第三按钮、主→第三→取消排列、默认 Cancel / 显式主按钮 / typed 输入优先分支及 default/destructive；仅指定两处删除入口 opt-in，授权不迁。D4 原必填/格式规则转字段错误并定位首错，服务失败保留 Toast。D5 仅实际保存禁止重复提交及 Cancel/Esc/遮罩关闭，成功关闭/失败恢复，不锁独立测试连接/获取模型，不改业务语义。实现与实际证据见 [DS-6 索引](../design-evidence/2026-09-08/ds6-forms.md)，未验证不记通过。D3 的按钮排列与「仅两处 opt-in」已被 2026-11-11 维护者裁决 C-01 / C-02 取代（取消在左、主操作在右，标准按钮为唯一呈现），现行规则见 `DESIGN.md §4`。
 
 **DS-9 Desktop Permission 已裁决（2026-09-11）**：真实组件对照后用户选择允许一次突出、保持中性、沿用当前密度；适用边界见 DESIGN §4「Desktop chat and operation authorization」及 decision-log 同日条目。下表 Permission 行保留来源比较：Desktop 已关闭，Mobile 保持后续待决。工程实现、用户最终视觉验收分别登记。
 
@@ -323,7 +338,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 
 | 问题 / 行为依据（Permission 含决定前对照） | 候选与推荐依据（是否已批准见该行结论） | 影响、未决定时的保持方式 / 最晚阻塞 |
 | --- | --- | --- |
-| **用户 `colors.radius` 效果**：[theme-service.ts](../../apps/desktop/src/renderer/themes/theme-service.ts):11 优先主题显式值；[Tailwind](../../apps/desktop/tailwind.config.ts):85—87 用 `--radius` 派生 rounded-lg/md/sm；实际 computed 可偏离默认档 | A：保留用户覆盖，并区分默认基线与合法自定义；B：以后让标准控件固定几何，仅在明确兼容方案与用户裁决下讨论。**建议 A**，保留现有用户能力。B 不能通过删字段/白名单绕过旧主题红线，当前未授权 | 自定义圆角主题。pending 保留字段与实际效果；DS-7 棘轮不能把合法覆盖报违规，可按类名与默认主题建基线；DS-8 必须等值保留，不能保留就先关闭该部分决定，不得先切换 |
+| **用户 `colors.radius` 效果**：[theme-service.ts](../../apps/desktop/src/renderer/themes/theme-service.ts):11 优先主题显式值；[Tailwind](../../apps/desktop/tailwind.config.ts) 的 `TAILWIND_RADIUS` 生成块（源在 `packages/design-tokens`）用 `--radius` 与偏移变量派生 rounded-lg/md/sm；实际 computed 可偏离默认档 | A：保留用户覆盖，并区分默认基线与合法自定义；B：以后让标准控件固定几何，仅在明确兼容方案与用户裁决下讨论。**建议 A**，保留现有用户能力。B 不能通过删字段/白名单绕过旧主题红线，当前未授权 | 自定义圆角主题。pending 保留字段与实际效果；DS-7 棘轮不能把合法覆盖报违规，可按类名与默认主题建基线；DS-8 必须等值保留，不能保留就先关闭该部分决定，不得先切换 |
 | **跨 surface 旧 alias**：DS-4b 仅设置输入；`msg-user-text/msg-assistant-text` 默认同指 `text-primary` 仍允许独立用户覆盖，设置同理。来源：`colors.ts`、theme-service 与 Token README 真实消费者 | A：以语义源供默认值，保留旧局部 ID 及覆盖优先级；B：强制局部跟随全局会改旧用户主题效果，不能在现兼容合同下执行。**建议 A**，按族核对，不能靠默认同值猜意图 | 设置、消息、确认/授权及其它主题用户。pending 原 ID、作用域、加载幂等和磁盘不变；DS-6/8/9 分别在相关消费者切换前核对，历史“49 文件”不当实时清单 |
 | **Permission 允许/拒绝主次（Desktop 已裁决，Mobile 后续）**：[PermissionPrompt](../../apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx):209/241 为拒绝/整任务允许轮廓，:267 允许一次实底，CINDY 内置覆盖为反相中性；Mobile [InteractionPanel](../../apps/mobile/src/session/InteractionPanel.tsx):635—672 拒绝/始终允许 secondary、允许一次 primary（cta） | A：保留允许一次为视觉主动作、其它次级；B：降低允许强调或突出拒绝以增强审慎感。先比较真实普通请求、长规则与主题；Desktop 无高风险字段，不虚造样本；不以 Desktop 默认白底推断所有主题。选项仅指视觉，不改含义/顺序/默认/审批生命周期 | 所有授权用户，两端与主题。pending 原样保留；**Desktop 已按上述 09-11 决定关闭；Mobile 后续单独裁决**，责任为用户/设计师决定，DS-9 执行者准备/落实 |
 | **Permission 危险样式**：09-11 main 的 Desktop PendingPermission 无风险等级字段，PermissionPrompt 没有危险视觉 variant；autoReviewUnavailable 仅表示审查不可用；Mobile [interactionModel](../../apps/mobile/src/session/interactionModel.ts):64—82 判高风险，[InteractionPanel](../../apps/mobile/src/session/InteractionPanel.tsx):611—620 高风险允许要二次点击且不提供始终允许；风险提示为中性色，无 destructive 红 | A：保留中性风险信息与已有确认行为；B：危险授权加清晰的危险色/层级，普通授权保持中性。建议比较风险提示的辨识度再决定 B 的范围，不能因普通 ConfirmDialog 已有 destructive 就认为授权已裁决 | 高风险授权及信息色；pending 保留现有行为与配色，尤其不移除 Mobile 二次点击、不恢复高风险始终允许。**Desktop 已按上述 09-11 决定关闭；Mobile 后续单独裁决**；若要求权限业务变化则退出设计迁移范围另议 |

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { useDeviceLinkReconnectEpoch } from '../features/device-link/useDeviceLinkReconnectEpoch';
 import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claudeQuotaState';
@@ -14,7 +15,7 @@ import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claude
  *     payload(顶层 app-server 兼容位 + appServerBuckets 桶表 + webSnapshot WHAM 槽),
  *     push 'usage:codex-account-changed' 同形;槽 / 桶选择复用 useAccountUsage 导出的
  *     纯函数,在消费点按会话形态与模型执行(与本机同口径,绝不显示别的桶)。
- *   - Claude 网关配额(LiteLLM daily/monthly):invoke 同 channel(agentKind=
+ *   - Cindy AI 企业账号配额（Model Access 周期/日额度）:invoke 同 channel(agentKind=
  *     'claude-code'),push 'usage:claude-account-changed'。
  *   - xAI 订阅周用量:invoke 'maker:usage:xai-subscription'(被控端 dispatch 拦截
  *     执行),push 'usage:xai-subscription-changed'。
@@ -32,38 +33,121 @@ import {
 import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
 
 import { createRemoteDeviceUsageMirror } from './remoteDeviceUsageMirror';
+import { DEFAULT_ACCOUNT_USAGE_SCOPE } from '../../shared/subscriptionAccounts';
 
 import type { XaiRateLimitSnapshot } from '../../shared/xaiRateLimit';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage';
 
 /** 被控端 readCodexAccountUsageSnapshot 的组合 payload(与本机 push 同形)。 */
 export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
+  /** Renderer-only: a native read failed and this is the host's retained snapshot. */
+  refreshFailed?: boolean;
   webSnapshot?: RateLimitSnapshot | null;
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 };
 
+// The native group card and the task quota projection need different result
+// shapes, but read exactly the same account. Share only the running RPC, not a
+// cached result or a retry: each mirror keeps its own observation/cancel fences.
+const nativeQuotaReads = new Map<string, { promise: Promise<unknown>; stop: () => void }>();
+function readRemoteCodexNativeQuota(deviceId: string, providerId = 'openai', scheduling?: { background?: boolean }): Promise<unknown> {
+  const owner = getDataOwnerGeneration();
+  const key = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, providerId, scheduling?.background === true]);
+  const pending = nativeQuotaReads.get(key);
+  if (pending) return pending.promise;
+  const api = window.electronAPI.deviceLink;
+  let resolve!: (value: unknown) => void;
+  let reject!: (error: unknown) => void;
+  const response = new Promise<unknown>((done, fail) => { resolve = done; reject = fail; });
+  const entry = { promise: response.finally(() => {
+    entry.stop();
+    if (nativeQuotaReads.get(key) === entry) nativeQuotaReads.delete(key);
+  }), stop: () => {} };
+  nativeQuotaReads.set(key, entry);
+  entry.stop = api.onRemotePush((push, ownerStamp) => {
+    if (push.deviceId !== deviceId || !isDataOwnerGenerationCurrent(owner)
+      || !isDeviceLinkRemotePushCurrent(push, ownerStamp)) return;
+    const cleared = providerId === 'openai' && push.channel === 'usage:codex-account-changed' && push.payload === null
+      || push.channel === 'usage:codex-provider-account-changed' && push.payload !== null
+        && typeof push.payload === 'object' && 'providerId' in push.payload && push.payload.providerId === providerId
+        && 'snapshot' in push.payload && push.payload.snapshot === null;
+    // A new account observation must not join a pre-clear read. Its existing
+    // callers still settle normally and their mirror revisions discard it.
+    if (cleared && nativeQuotaReads.get(key) === entry) nativeQuotaReads.delete(key);
+  });
+  try {
+    void api.invoke(deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : [])).then(resolve, reject);
+  } catch (error) { reject(error); }
+  return entry.promise;
+}
+
 const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:account',
-  invokeArgs: ['codex'],
+  read: (deviceId, providerId = 'openai', scheduling) => {
+    const args = providerId === 'openai'
+      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId];
+    return scheduling
+      ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args, scheduling)
+      : window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args);
+  },
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
 });
+const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRateLimitsResult>({
+  refreshOnReconnect: true,
+  invokeChannel: 'maker:usage:codex-rate-limits',
+  // Group cards use this richer native result for the default account. An
+  // unscoped read returns usable pool quota and can borrow another account.
+  read: readRemoteCodexNativeQuota,
+  pushChannel: 'usage:codex-account-changed',
+  defaultProviderId: 'openai',
+  providerPushChannel: 'usage:codex-provider-account-changed',
+  // A missed identity clear while collapsed/disconnected must not let an old
+  // native account override a fresh mirror indefinitely after a failed reread.
+  clearOnReadFailure: true,
+  decodeRead: (value) => {
+    if (value === null) return null;
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !('account' in value) ||
+      !('rateLimits' in value) ||
+      !value.account ||
+      typeof value.account !== 'object' ||
+      !value.rateLimits ||
+      typeof value.rateLimits !== 'object'
+    )
+      return undefined;
+    return value as MobileCodexRateLimitsResult;
+  },
+  // Native reads also emit usage pushes. Only identity clears apply to this richer
+  // RPC result; refetching on its own non-null push would create a request loop.
+  decodePush: (value) => (value === null ? null : undefined),
+});
 
-/** Account cards and model lists read app-server directly, just like Mobile. */
+/** Task chips, account cards and model lists share visible native reads. */
 const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:codex-rate-limits',
-  pushChannel: null,
+  pushChannel: 'usage:codex-account-changed',
+  providerPushChannel: 'usage:codex-provider-account-changed',
   defaultProviderId: 'openai',
   refreshIntervalMs: 60_000,
-  async read(deviceId, providerId = 'openai') {
+  refreshOnReconnect: true,
+  minimumRequestIntervalMs: 5_000,
+  failureBackoffMs: 60_000,
+  isStale: snapshot => snapshot.refreshFailed === true,
+  // The native read itself emits the generic account push before returning its
+  // complete bucket table. Do not let that partial projection cancel the read.
+  decodePush: value => value === null ? null : undefined,
+  async read(deviceId, providerId = 'openai', scheduling) {
     const owner = getDataOwnerGeneration();
     const matchesProvider = (value: { providerId?: string }) =>
       value.providerId === providerId || (value.providerId === undefined && providerId === 'openai');
     try {
-      const result = await window.electronAPI.deviceLink.invoke(
-        deviceId, 'maker:usage:codex-rate-limits', [providerId],
-      ) as MobileCodexRateLimitsResult | null;
+      const result = await readRemoteCodexNativeQuota(deviceId, providerId, scheduling) as MobileCodexRateLimitsResult | null;
       if (result && matchesProvider(result) && result.rateLimits && result.account) {
         const updatedAt = Date.now();
         const buckets = result.rateLimitsByLimitId ?? {
@@ -86,12 +170,14 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
     }
     if (!isDataOwnerGenerationCurrent(owner)) return undefined;
     const fallback = await window.electronAPI.deviceLink.invoke(
-      deviceId, 'maker:usage:account', providerId === 'openai' ? ['codex'] : ['codex', providerId],
+      deviceId, 'maker:usage:account', providerId === 'openai'
+        ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
+      ...(scheduling ? [scheduling] as const : []),
     ) as (RemoteCodexAccountUsagePayload & { providerId?: string }) | null;
     // A successful empty account read is authoritative (for example after logout).
     if (fallback === null) return null;
-    if (!fallback || !matchesProvider(fallback)) return undefined;
-    return fallback;
+    if (!fallback || !matchesProvider(fallback)) throw new Error('Remote Codex quota unavailable');
+    return { ...fallback, refreshFailed: true };
   },
 });
 
@@ -122,13 +208,13 @@ const xaiRateLimitMirror = createRemoteDeviceUsageMirror<XaiRateLimitSnapshot>({
 export function useRemoteCodexAccountUsage(
   deviceId: string | null,
   providerId?: string,
-  { live = false, web = false }: { live?: boolean; web?: boolean } = {},
+  { live = false, web = false, groupLive = false, refreshEpoch, poll }: { live?: boolean; web?: boolean; groupLive?: boolean; refreshEpoch?: number; poll?: boolean } = {},
 ): RemoteCodexAccountUsagePayload | null {
   // The WHAM slot still comes from the existing account reader. Sharing uses a
   // separate permissioned quota reader; session chips retain their push mirror.
   const target = live && isProviderShareAgentDeviceId(deviceId) ? null : deviceId;
-  const snapshot = codexAccountMirror.useMirror(live && !web ? null : target, providerId);
-  const realtime = codexRateLimitsMirror.useMirror(live ? target : null, providerId);
+  const snapshot = codexAccountMirror.useMirror(live && !web ? null : target, providerId, { live: groupLive, refreshEpoch });
+  const realtime = codexRateLimitsMirror.useMirror(live ? target : null, providerId, { poll });
   return useMemo(() => {
     if (!live) return snapshot;
     if (!web) return realtime;
@@ -137,11 +223,39 @@ export function useRemoteCodexAccountUsage(
   }, [live, web, realtime, snapshot]);
 }
 
-export function requestRemoteCodexAccountRefresh(deviceId: string, providerId?: string): void {
-  codexAccountMirror.request(deviceId, providerId);
+export function requestRemoteCodexAccountRefresh(
+  deviceId: string,
+  providerId?: string,
+  queueIfPending = false,
+  scheduling?: { background?: boolean },
+): void {
+  codexAccountMirror.request(deviceId, providerId, queueIfPending, scheduling);
 }
 
-/** 被控端 Claude 网关配额(LiteLLM daily/monthly)镜像(远程网关形态会话 chip 用)。 */
+/** Same native quota entry as Settings; never query the sharing permission boundary here. */
+export function useRemoteCodexRefreshState(deviceId: string | null, providerId?: string) {
+  return codexRateLimitsMirror.useReadState(isProviderShareAgentDeviceId(deviceId) ? null : deviceId, providerId);
+}
+
+export function requestRemoteCodexLiveRefresh(deviceId: string, providerId?: string): void {
+  if (!isProviderShareAgentDeviceId(deviceId)) codexRateLimitsMirror.request(deviceId, providerId, false, undefined, true);
+}
+
+/** Query the execution computer's native account RPC even when another card has a cached result. */
+export function useRemoteCodexRateLimits(
+  deviceId: string | null,
+  providerId?: string,
+): MobileCodexRateLimitsResult | null {
+  const snapshot = codexNativeRateLimitsMirror.useMirror(deviceId, providerId);
+  useEffect(() => {
+    if (deviceId) codexNativeRateLimitsMirror.request(deviceId, providerId);
+  }, [deviceId, providerId]);
+  return snapshot;
+}
+
+export const requestRemoteCodexRateLimitsRefresh = codexNativeRateLimitsMirror.request;
+
+/** 被控端 Cindy AI 企业账号配额（Model Access 周期/日额度）镜像(远程网关形态会话 chip 用)。 */
 export function useRemoteClaudeAccountUsage(
   deviceId: string | null,
 ): ClaudeAccountUsageSnapshot | null {
@@ -157,12 +271,18 @@ export function useRemoteClaudeAccountUsage(
 export function useRemoteXaiSubscriptionUsage(
   deviceId: string | null,
   providerId?: string,
+  options: { live?: boolean; refreshEpoch?: number } = {},
 ): XaiSubscriptionUsageSnapshot | null {
-  return xaiSubscriptionMirror.useMirror(deviceId, providerId);
+  return xaiSubscriptionMirror.useMirror(deviceId, providerId, options);
 }
 
-export function requestRemoteXaiSubscriptionRefresh(deviceId: string, providerId?: string): void {
-  xaiSubscriptionMirror.request(deviceId, providerId);
+export function requestRemoteXaiSubscriptionRefresh(
+  deviceId: string,
+  providerId?: string,
+  queueIfPending = false,
+  scheduling?: { background?: boolean },
+): void {
+  xaiSubscriptionMirror.request(deviceId, providerId, queueIfPending, scheduling);
 }
 
 /** 被控端 xAI 限流头镜像(push-only,tooltip 尽力显示;独立账号订阅各自的 provider 镜像)。 */
@@ -197,8 +317,11 @@ export function selectRemoteCodexAccountUsage(
 
 /** 供单测重置全部镜像缓存。 */
 export function resetRemoteDeviceUsageMirrorsForTest(): void {
+  for (const entry of nativeQuotaReads.values()) entry.stop();
+  nativeQuotaReads.clear();
   codexAccountMirror.resetForTest();
   codexRateLimitsMirror.resetForTest();
+  codexNativeRateLimitsMirror.resetForTest();
   claudeAccountMirror.resetForTest();
   xaiSubscriptionMirror.resetForTest();
   xaiRateLimitMirror.resetForTest();

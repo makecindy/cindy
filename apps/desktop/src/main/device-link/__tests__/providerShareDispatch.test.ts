@@ -18,8 +18,8 @@ const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
-vi.mock('../settings-store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../settings-store')>()),
+vi.mock('../settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../settings-store.desktop')>()),
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, keepAwake: false, revokedControllers: [], disabledControlDeviceIds: [] }),
 }));
 
@@ -31,7 +31,11 @@ import {
   setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
-} from '../dispatch';
+  setRemoteSubscriptionPoolQuotaReader,
+  setRemoteClaudeSubscriptionUsageReader,
+} from '../dispatch.desktop';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
+import { canRetrySharedTaskRecovery, sharedTaskFailureReason } from '../../../shared/sharedTaskRecovery';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');
 const ACCESS = { shareId: 'share-1', memberId: 'member-1', providerId: 'anthropic' };
@@ -52,8 +56,47 @@ beforeEach(() => {
   setProviderShareAccess({ guestAccess: () => state.access, ensureKnown: async () => undefined, hasShares: () => false });
 });
 afterEach(() => {
+  setRemoteSubscriptionPoolQuotaReader(null);
+  setRemoteClaudeSubscriptionUsageReader(null);
   __testing.reset();
   setProviderShareAccess(null);
+});
+
+// Unit regression: old consumers cannot query maker:subscription-pool:quota.
+// Exercise real authorized dispatch with only legacy arguments; a full default
+// account must not hide a second usable account, or expose pool data to guests.
+describe('legacy controller quota compatibility', () => {
+  it.each([
+    ['maker:usage:claude-subscription', []],
+    ['maker:usage:account', ['codex']],
+    ['maker:usage:codex-rate-limits', []],
+  ])('answers %s using the available pooled account', async (channel, args) => {
+    const { __testing: registry } = await import('../invoke-registry');
+    const now = Date.now();
+    const window = { usedPercent: 12, windowMinutes: 300, resetsAt: now / 1000 + 3600 };
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now, primary: window, secondary: null };
+    const read = vi.fn(async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: window.resetsAt }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    }));
+    registry.register(channel, async () => ({ primary: { usedPercent: 100 } }));
+    setRemoteClaudeSubscriptionUsageReader(async () => ({ fiveHour: { utilization: 100 } }));
+    setRemoteSubscriptionPoolQuotaReader((name, values) => readLegacySubscriptionQuota(read, name, values));
+    try {
+      const reply = await runInvoke('same-account-controller', { channel, args });
+      expect(reply).toMatchObject({ ok: true, result: channel.includes('claude-subscription')
+        ? { fiveHour: { utilization: 12 } }
+        : channel.includes('codex-rate-limits')
+          ? { rateLimits: { primary: { usedPercent: 12 } }, resetOffer: null }
+          : { primary: { usedPercent: 12 } } });
+      state.access = ACCESS;
+      read.mockClear();
+      await expect(runInvoke(GUEST, { channel, args })).resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      registry.reset();
+    }
+  });
 });
 
 describe('provider share link admission', () => {
@@ -92,6 +135,55 @@ describe('provider share link admission', () => {
 });
 
 describe('provider share invoke', () => {
+  // #10848 unit: real dispatch admission, post-handler and send/outbox gates
+  // must retain bounded pending diagnostics without admitting or leaking data.
+  it.each(['snapshot-not-loaded', 'member-cleanup-pending'])('keeps %s pending at admission and after the handler', async (denial) => {
+    setProviderShareAccess({ guestAccess: () => state.access, denial: () => denial,
+      ensureKnown: async () => undefined, hasShares: () => true });
+    const handle = vi.fn(async () => {
+      state.access = null;
+      return { secret: 'owner-private-result' };
+    });
+    setRemoteAgentHandler({ handle, abortAll: vi.fn() });
+    const client = fakeClient(); __testing.setActiveClient(client);
+    const payload = { channel: 'maker:remote-agent:v1', args: [{ op: 'direct-locate', sessionId: 'task' }] };
+    await __testing.handleInvoke(client, GUEST, 'pending-admission', payload);
+    expect(handle).not.toHaveBeenCalled();
+    const admission = vi.mocked(client.sendInvokeResult).mock.calls.at(-1)?.[2];
+    state.access = ACCESS;
+    const late = await runInvoke(GUEST, { ...payload, args: [{ op: 'allocate', sessionId: 'task' }] });
+    expect(handle).toHaveBeenCalledTimes(1);
+    for (const result of [admission, late]) {
+      expect(result).toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[SHARED_TASK_RECOVERY_authorization]') } });
+      if (!result || result.ok) throw new Error('expected a failed dispatch response');
+      const error = Object.assign(new Error(result.error.message), { code: result.error.code });
+      expect(sharedTaskFailureReason(error)).toBe('authorization');
+      expect(canRetrySharedTaskRecovery(error)).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(denial);
+      expect(JSON.stringify(result)).not.toContain('owner-private-result');
+    }
+  });
+
+  it('revalidates pending outbox results and replaces them with definitive revocation', async () => {
+    let denial = 'member-cleanup-pending';
+    setProviderShareAccess({ guestAccess: () => state.access, denial: () => denial,
+      ensureKnown: async () => undefined, hasShares: () => true });
+    const client = fakeClient(); __testing.setActiveClient(client);
+    vi.mocked(client.sendInvokeResult).mockImplementationOnce(() => { throw new Error('temporary backpressure'); });
+    __testing.sendInvokeResultSafe(client, GUEST, 'pending-outbox', { ok: true, result: { secret: true } },
+      'maker:remote-agent:v1', [{ op: 'direct-locate', sessionId: 'task' }]);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    expect(vi.mocked(client.sendInvokeResult).mock.calls[0][2]).toMatchObject({
+      ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[SHARED_TASK_RECOVERY_authorization]') },
+    });
+    denial = 'member-not-active';
+    __testing.flushRemoteInvokeResultOutbox(GUEST);
+    expect(vi.mocked(client.sendInvokeResult).mock.calls.at(-1)?.[2]).toEqual({
+      ok: false, error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
+    });
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
   it('allows only the remote agent and the filtered provider list', async () => {
     state.access = ACCESS;
     // #8010: a shared provider must not expose its owner's other model sources.
@@ -208,11 +300,12 @@ describe('provider share invoke', () => {
     registry.register('maker:provider:list', async () => ({ providers: [{
       id: 'anthropic', remoteInvocationEnabled: true,
       models: { 'claude-code': [{ id: 'small' }, { id: 'large' }] },
+      evaluationModels: [{ id: 'small', mode: 'evaluation' }, { id: 'large', mode: 'rerank' }],
     }] }));
     try {
       for (const [src, model] of [[GUEST, 'small'], [second, 'large']]) {
         await expect(runInvoke(src, { channel: 'maker:provider:list', args: [] })).resolves.toMatchObject({
-          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] } }] },
+          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] }, evaluationModels: [{ id: model }] }] },
         });
       }
     } finally { registry.reset(); }
@@ -379,6 +472,17 @@ describe('provider group channel', () => {
 });
 
 describe('provider share revoke', () => {
+  it('requires the host cleanup acknowledgement for standby revocation', async () => {
+    setRemoteAgentHandler(null);
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup is unavailable');
+    const purgeControllers = vi.fn(async (_match: (peer: string) => boolean, _strict?: boolean) => { throw new Error('cleanup busy'); });
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), purgeControllers });
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup busy');
+    expect(purgeControllers).toHaveBeenCalledWith(expect.any(Function), true);
+    expect(purgeControllers.mock.calls[0][0](GUEST)).toBe(true);
+    expect(purgeControllers.mock.calls[0][0]('same-account-mac')).toBe(false);
+  });
+
   it('only touches provider-share guests and routes purge to the remote agent host', async () => {
     const abortControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);
     const purgeControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);

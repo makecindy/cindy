@@ -39,6 +39,7 @@ import {
 } from './policy.js';
 import {
   RELAY_PROGRESS_STAGES,
+  RELAY_PROGRESS_TEXT_MAX_CHARS,
   RELAY_TIMING,
   relayRequestTimeout,
   validateRelayRequest,
@@ -111,6 +112,8 @@ export interface BrowserExtensionBridgeStatus {
   protocol: number;
   port: number;
   extension_connected: boolean;
+  /** Host-only history survives live-client expiry; never grants access. */
+  hadConnectedClient?: boolean;
   extension_ids: string[];
   policy: BrowserExtensionPolicy;
   pending: number;
@@ -138,6 +141,11 @@ export interface BrowserExtensionBridgeOptions {
   pollTimeout?: number;
   connectWait?: number;
   jobTimeout?: number;
+  /**
+   * 作业到期的调度器:到点调用 `expire`,返回取消函数。缺省是真实定时器;
+   * 测试注入手动调度器,把「作业何时过期」从墙钟里拿出来。
+   */
+  scheduleJobDeadline?: (expire: () => void, delayMs: number) => () => void;
   now?: () => number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -171,8 +179,13 @@ interface Job {
   state: JobState;
   resolve: (result: BrowserExtensionJobResult) => void;
   created: number;
-  timer?: ReturnType<typeof setTimeout>;
+  cancelDeadline?: () => void;
 }
+
+const realJobDeadline = (expire: () => void, delayMs: number): (() => void) => {
+  const timer = setTimeout(expire, delayMs);
+  return () => clearTimeout(timer);
+};
 
 interface RelayItem {
   id: string;
@@ -186,6 +199,8 @@ interface RelayItem {
     stage: string;
     attempt: number;
     receivedChars?: number;
+    /** Partial answer so far (side panel streaming); replaced on every progress report. */
+    text?: string;
     startedAt: number;
     updatedAt: number;
   };
@@ -222,6 +237,8 @@ export class BrowserExtensionBridge {
   private port = 0;
   private readonly jobs = new Map<string, Job>();
   private readonly clients = new Map<string, Client>();
+  private readonly connectionStates = new Map<string, string>();
+  private hadConnectedClient = false;
   private readonly waiting = new Map<string, () => void>();
   private readonly relays = new Map<string, RelayItem>();
   private readonly relayChallenges = new Map<string, { clientId: string; expiresAt: number }>();
@@ -255,6 +272,22 @@ export class BrowserExtensionBridge {
 
   private live(c: Client): boolean {
     return this.now() - c.seen < 35000;
+  }
+
+  /** Observe transitions on requests/status reads; no heartbeat logging or extra timer. */
+  private observeConnection(c: Client): void {
+    const state = !this.live(c) ? 'heartbeat-expired'
+      : !this.compatible(c.version) ? 'protocol-incompatible'
+      : !this.sessionReady(c) ? 'authentication-pending' : 'connected';
+    if (state === 'connected') this.hadConnectedClient = true;
+    if (this.connectionStates.get(c.id) === state) return;
+    const previous = this.connectionStates.get(c.id) ?? 'unseen';
+    this.connectionStates.set(c.id, state);
+    this.options.log?.info('browser extension connection changed', {
+      clientId: c.id.slice(0, 8), browser: c.browser, version: c.installedVersion,
+      previous, state, lastSeenAt: new Date(c.seen).toISOString(),
+      lastSeenAgeMs: Math.max(0, this.now() - c.seen), port: this.port,
+    });
   }
 
   private sameIdentity(p: BrowserExtensionTrustedClient | undefined, c: Client): boolean {
@@ -440,7 +473,7 @@ export class BrowserExtensionBridge {
 
   private finish(job: Job, result: Record<string, unknown>): void {
     if (!this.jobs.has(job.id)) return;
-    clearTimeout(job.timer);
+    job.cancelDeadline?.();
     this.jobs.delete(job.id);
     const safe = this.boundResult(result, job.payload.maxChars || 6000);
     const timing = (safe.timing && typeof safe.timing === 'object' ? safe.timing : {}) as Record<
@@ -605,7 +638,9 @@ export class BrowserExtensionBridge {
           this.now() - c.seen > 180000 &&
           ![...this.jobs.values()].some((j) => j.clientId === key)
         ) {
+          this.observeConnection(c);
           this.clients.delete(key);
+          this.connectionStates.delete(key);
           this.nativeBindings.delete(key);
         }
       }
@@ -641,6 +676,7 @@ export class BrowserExtensionBridge {
           trusted: false,
         };
       }
+      if (this.clients.has(clientId)) this.observeConnection(client);
       client.browser = family ?? client.browser;
       client.version = String(this.header(req, 'x-my-browser-version') || '').slice(0, 30);
       const boot = this.header(req, 'x-my-browser-boot');
@@ -680,6 +716,7 @@ export class BrowserExtensionBridge {
       const sessionAllowed = this.sessionReady(client);
       const nativeRequired = this.official(client) && authRequired && !this.boundCredential(client);
       if (sessionAllowed && !client.session) client.session = crypto.randomUUID();
+      this.observeConnection(client);
       return this.send(res, {
         ok: true,
         plugin: this.options.ghostId,
@@ -696,6 +733,7 @@ export class BrowserExtensionBridge {
         ...(sessionAllowed ? { session: client.session } : {}),
       });
     }
+    if (client) this.observeConnection(client);
     if (
       !client ||
       !this.sessionReady(client) ||
@@ -711,6 +749,7 @@ export class BrowserExtensionBridge {
       );
     }
     client.seen = this.now();
+    this.observeConnection(client);
     if (req.url === '/learning/challenge' && req.method === 'GET') {
       if (!this.authenticatedCredential(client))
         return this.send(
@@ -1098,6 +1137,7 @@ export class BrowserExtensionBridge {
       stage?: unknown;
       attempt?: unknown;
       receivedChars?: unknown;
+      text?: unknown;
     };
     if (!item.result && (RELAY_PROGRESS_STAGES as readonly unknown[]).includes(p.stage)) {
       const previous = item.progress;
@@ -1110,6 +1150,10 @@ export class BrowserExtensionBridge {
         attempt,
         ...(Number.isSafeInteger(p.receivedChars) && (p.receivedChars as number) >= 0
           ? { receivedChars: p.receivedChars as number }
+          : {}),
+        // Old extensions ignore the extra field; oversized text is dropped and the stage still lands.
+        ...(typeof p.text === 'string' && p.text.length <= RELAY_PROGRESS_TEXT_MAX_CHARS
+          ? { text: p.text }
           : {}),
         startedAt: previous.startedAt || item.created,
         updatedAt:
@@ -1151,8 +1195,10 @@ export class BrowserExtensionBridge {
     } catch (e) {
       return this.startFailure(e);
     }
+    for (const client of this.clients.values()) this.observeConnection(client);
     return {
       ok: true,
+      hadConnectedClient: this.hadConnectedClient,
       version: this.options.installedVersion,
       protocol: BROWSER_EXTENSION_PROTOCOL_NUMBER,
       port: this.port,
@@ -1171,8 +1217,31 @@ export class BrowserExtensionBridge {
     return this.connected().map((c) => this.publicClient(c));
   }
 
+  private updatePaused = false;
+  private readonly activeActions = new Set<Promise<BrowserExtensionJobResult>>();
+
+  /** Drain accepted operations using their existing timeout/result, never resend them. */
+  pauseForUpdate(): { settled: Promise<unknown>; release: () => void } {
+    this.updatePaused = true;
+    return {
+      settled: Promise.allSettled([...this.activeActions]),
+      release: () => { this.updatePaused = false; },
+    };
+  }
+
   /** 向扩展投递一个页面作业;按策略守门、绑定连接、一次送达、超时即 unknown。 */
   async act(action: unknown, payloadInput: unknown = {}): Promise<BrowserExtensionJobResult> {
+    if (this.updatePaused) return {
+      ...failure('BRIDGE_UPDATING', 'The browser connection is updating. This operation was not sent.'),
+      execution: 'not_executed',
+    };
+    const pending = this.actAccepted(action, payloadInput);
+    this.activeActions.add(pending);
+    try { return await pending; }
+    finally { this.activeActions.delete(pending); }
+  }
+
+  private async actAccepted(action: unknown, payloadInput: unknown): Promise<BrowserExtensionJobResult> {
     try {
       await this.start();
     } catch (e) {
@@ -1218,7 +1287,7 @@ export class BrowserExtensionBridge {
         resolve,
         created: this.now(),
       };
-      job.timer = setTimeout(
+      job.cancelDeadline = (this.options.scheduleJobDeadline ?? realJobDeadline)(
         () =>
           this.finish(
             job,
@@ -1242,6 +1311,9 @@ export class BrowserExtensionBridge {
   }
 
   async close(): Promise<void> {
+    if (!this.closed) this.options.log?.info('browser extension bridge closing', {
+      port: this.port, clients: this.clients.size,
+    });
     this.closed = true;
     this.relays.clear();
     for (const job of [...this.jobs.values()])

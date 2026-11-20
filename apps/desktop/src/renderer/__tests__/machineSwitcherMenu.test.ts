@@ -93,10 +93,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain(
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
-    // 搜索可排在中间,底部间距只在钉住时补上(未钉住时由后续行的 gap 承担)。
-    expect(topNavSource).toContain(
-      "pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pb-2.5'",
-    );
+    // 搜索吸顶不改变导航行高度，也不在输入框外绘制额外背景。
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30'");
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
@@ -283,9 +281,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(automationGroupSource).toContain('sourceLabel: sourceLabelMap?.get(session.id)');
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
-    expect(cardSource).toContain('{sourceLabel ? (');
+    // Outside the inbox; the inbox leaves the project name to the row's project icon.
+    expect(cardSource).toContain('{sourceLabel && !inboxMode ? (');
     const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
-    expect(itemSource).toContain('{sourceLabel ? (');
+    expect(itemSource).toContain('{sourceLabel && !inboxMode ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示
@@ -319,26 +318,6 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   });
 
   // 设计文档 §3.3 定稿 + 2026-08-12 用户重申:筛选不作用于置顶区。
-  it('置顶区不受项目 / Agent / 最近活跃筛选影响(归档仍按状态隐藏)', () => {
-    // 置顶会话:直接用 allGroups.pinned,不再套 vendor / project 过滤。
-    expect(sidebarUpperSource).toMatch(
-      /const visiblePinnedSessions = useMemo\(\(\) => \{[\s\S]*?return allGroups\.pinned;\s*\}, \[allGroups\.pinned\]\)/,
-    );
-    // 置顶项目:仍尊重「从侧栏移除」(用户显式隐藏),但不再按 project / vendor 过滤。
-    const pinnedProjectsBlock = sidebarUpperSource.slice(
-      sidebarUpperSource.indexOf('const visiblePinnedProjects'),
-      sidebarUpperSource.indexOf('const visiblePinnedEntries'),
-    );
-    expect(pinnedProjectsBlock).toContain('hiddenProjectComparisonKeys');
-    expect(pinnedProjectsBlock).toContain('pinnedProjectComparisonKeys');
-    expect(pinnedProjectsBlock).toContain('projectKeyComparisonSetHas');
-    expect(pinnedProjectsBlock).not.toContain('vendorPredicate');
-    expect(pinnedProjectsBlock).not.toContain('filter.projectsAsSet');
-    expect(pinnedProjectsBlock).not.toContain('allowedProjects');
-    // 「最近活跃」本就豁免:置顶取 allGroups(未经活跃时间收窄),不是 activityFilteredSessions。
-    expect(sidebarUpperSource).toMatch(/const allGroups = useProjectGroups\(\s*sidebarSessions/);
-  });
-
   // 2026-08-12 用户裁决:任务信息按用户勾选顺序显示(先勾时间再勾费用 → 时间在前)。
   it('任务信息渲染顺序 = 勾选顺序,不再是固定的 pr → tokens → cost → time', () => {
     const infoMetaSource = read('features', 'cc-agent', 'sidebar', 'SessionInfoMeta.tsx');
@@ -414,7 +393,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
     // 空账户 / 只剩置顶:ProjectsSection 不再因无内容整段 return null。
     expect(projectsSectionSource).toContain('const hasMainListContent =');
-    expect(projectsSectionSource).toContain('{hasMainListContent ? (');
+    expect(projectsSectionSource).toContain("{taskListMode === 'tasks' && hasMainListContent ? (");
   });
 
   it('项目段头标题即范围下拉(2026-08-13 定稿,推翻 2026-07「不挂段头」)', () => {

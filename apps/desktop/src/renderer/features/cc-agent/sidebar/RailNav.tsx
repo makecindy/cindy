@@ -39,6 +39,8 @@ import { formatSidebarTime } from '../lib/formatSidebarTime';
 import { railPanelStore, type RailLampSession, type RailPanelSection } from './railPanelStore';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { aggregateRailActivity, dotToneOf, remoteLampOf } from './railActivity';
+import { sortPinnedSidebarEntries } from '../lib/pinnedSidebarOrder';
+import type { PinnedSortBy } from '../hooks/helpers/sidebarFilterCore';
 export { remoteLampOf } from './railActivity';
 
 /** 预览卡宽度(px)——旧 RailFlyout 同宽。 */
@@ -51,6 +53,7 @@ export interface RailNavProps {
   activeSessionId: string | undefined;
   /** 与展开态共用的置顶顺序(平铺瓷砖同序)。 */
   manualPinnedOrder: readonly string[];
+  pinnedSortBy: PinnedSortBy;
   /** 运行中集合(含后台意识活动)。 */
   runningSessionIds: ReadonlySet<string>;
   /** 未读集 = attention 快照 ∪ 定时任务未读运行。 */
@@ -158,6 +161,7 @@ export function RailNav({
   sessions,
   activeSessionId,
   manualPinnedOrder,
+  pinnedSortBy,
   runningSessionIds,
   notifications,
   attentionKinds,
@@ -174,16 +178,19 @@ export function RailNav({
     const base = sessions.filter(
       (s) => s.pinnedAt != null && s.status !== 'archived' && !isOrcaWorkerSession(s),
     );
-    if (manualPinnedOrder.length === 0) return base;
     const rank = new Map<string, number>();
     manualPinnedOrder.forEach((id, idx) => rank.set(id, idx));
-    return base
+    const manual = base
       .slice()
       .sort(
         (a, b) =>
           (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
       );
-  }, [sessions, manualPinnedOrder]);
+    return sortPinnedSidebarEntries(
+      manual.map((session) => ({ kind: 'session', id: session.id, session })),
+      pinnedSortBy,
+    ).flatMap((entry) => entry.kind === 'session' ? [entry.session] : []);
+  }, [sessions, manualPinnedOrder, pinnedSortBy]);
 
   // 对话灯取样不截断(面板展示上限只是渲染折叠,未读/运行的事实不该被截掉,
   // review P2);排序只服务 fallback 一致性,聚合本身与序无关。
@@ -277,6 +284,8 @@ export function RailNav({
           白名单,click 与拖拽由 fallbackTolerance(4px)区分。 */}
       <SortableList
         items={pinnedSessions}
+        sortScope="pinned"
+        disabled={pinnedSortBy !== 'manual'}
         getId={(s) => s.id}
         onReorder={onReorderPinned}
         reducedMotion={reducedMotion}

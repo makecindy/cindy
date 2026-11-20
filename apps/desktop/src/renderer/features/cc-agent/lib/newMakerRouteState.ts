@@ -15,18 +15,47 @@ export interface NewMakerFolderPickerRequest {
 export interface NewMakerRouteState {
   workspacePrompt: 'generic' | 'dialogue';
   dialogueTargetRequest?: NewMakerDialogueTargetRequest;
+  restoreLastCreatedWorkspace?: true;
   folderPickerRequest?: NewMakerFolderPickerRequest;
+}
+
+/** A saved local default only fills a generic draft with no explicit target. */
+export function shouldPrefillDefaultNewTaskWorkingDir(
+  state: unknown,
+  draft: {
+    workingDir: string | null;
+    explicitNoProject?: boolean;
+    remoteHostId?: string | null;
+    deviceLinkDeviceId?: string | null;
+  },
+): boolean {
+  if (
+    !state ||
+    typeof state !== 'object' ||
+    (state as NewMakerRouteState).workspacePrompt !== 'generic'
+  ) {
+    return false;
+  }
+  const request = readNewMakerDialogueTargetRequest(state);
+  return (
+    (!request || request.deviceId === null) &&
+    !draft.workingDir &&
+    !draft.explicitNoProject &&
+    !draft.remoteHostId &&
+    !draft.deviceLinkDeviceId
+  );
 }
 
 let dialogueTargetRequestSequence = 0;
 let folderPickerRequestSequence = 0;
 
-/** These requests select local/device-link execution, never an SSH workspace. */
+/** Compare both transport identities: equal paths may belong to different hosts. */
 export function isSameNewMakerDevice(
   deviceId: string | null,
   draft: { deviceLinkDeviceId?: string | null; remoteHostId?: string | null },
+  remoteHostId: string | null = null,
 ): boolean {
-  return !draft.remoteHostId && deviceId === (draft.deviceLinkDeviceId ?? null);
+  return (draft.remoteHostId ?? null) === remoteHostId && deviceId === (draft.deviceLinkDeviceId ?? null);
 }
 
 /**
@@ -71,7 +100,8 @@ export function readNewMakerFolderPickerRequest(
 export function consumeNewMakerFolderPickerRequest(state: unknown): unknown {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
   if (!Object.prototype.hasOwnProperty.call(state, 'folderPickerRequest')) return state;
-  const { folderPickerRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.folderPickerRequest;
   return remainingState;
 }
 
@@ -105,6 +135,7 @@ export function readNewMakerDialogueTargetRequest(
 export function consumeNewMakerDialogueTargetRequest(state: unknown): unknown {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
   if (!Object.prototype.hasOwnProperty.call(state, 'dialogueTargetRequest')) return state;
-  const { dialogueTargetRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.dialogueTargetRequest;
   return remainingState;
 }

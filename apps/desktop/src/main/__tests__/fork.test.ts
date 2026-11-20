@@ -26,6 +26,7 @@ import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/control
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
+import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -105,6 +106,8 @@ vi.mock('../maker-host/index.js', () => ({
 }));
 
 const inferProviderIdForModelMock = vi.fn();
+// Fork route/history tests use isolated storage and no live provider directory.
+vi.mock('../maker-host/model-context-settings.js', () => ({ resolveDesktopHandoffWindow: async () => null }));
 vi.mock('../maker-host/provider-route.js', () => ({
   inferProviderIdForModel: inferProviderIdForModelMock,
 }));
@@ -159,15 +162,18 @@ vi.mock('../localDb/client/current', () => ({
   }),
 }));
 
-let forkSessionAtMessage: typeof import('../maker-orchestration/fork').forkSessionAtMessage;
-let createSideChat: typeof import('../maker-orchestration/fork').createSideChat;
-let listSideChats: typeof import('../maker-orchestration/fork').listSideChats;
-let forkSessionStripEncrypted: typeof import('../maker-orchestration/fork').forkSessionStripEncrypted;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalXdtUserDataDir = process.env.XDT_USER_DATA_DIR;
 const tempDirs: string[] = [];
 /** electron mock 的 app.getPath('userData') 指向的临时目录；beforeEach 里建、afterEach 随 tempDirs 清。 */
 const userDataDirRef: { current: string } = { current: '' };
+
+// Load the production module once during collection, after the mock state exists.
+// Loading it in the first beforeEach charged Vite's cold dependency graph to that
+// case's 10s setup budget (PR #9386, client-ci 42468165931 attempts 1–3).
+// Keep per-case filesystem isolation and the existing hook timeout unchanged.
+const { forkSessionAtMessage, createSideChat, listSideChats, forkSessionStripEncrypted } =
+  await import('../maker-orchestration/fork');
 
 beforeEach(async () => {
   readBoundClaudeConfigDirMock.mockReset();
@@ -199,13 +205,6 @@ beforeEach(async () => {
     newSdkSessionId: 'sdk-new-session-uuid',
     uuidMap: new Map<string, string>(),
   });
-  if (!forkSessionAtMessage) {
-    const mod = await import('../maker-orchestration/fork');
-    forkSessionAtMessage = mod.forkSessionAtMessage;
-    createSideChat = mod.createSideChat;
-    listSideChats = mod.listSideChats;
-    forkSessionStripEncrypted = mod.forkSessionStripEncrypted;
-  }
 });
 
 afterEach(async () => {
@@ -334,6 +333,20 @@ describe('disabled Cindy Make fork boundaries', () => {
 });
 
 describe('forkSessionAtMessage', () => {
+  // Unit, Host tool lifecycle: an install/owner revoked while native fork awaits must not
+  // create a database task. Existing UI tests have no asynchronous authorization scope.
+  it('rejects an expired caller after native fork and before creating the task', async () => {
+    selectQueue.push([makeSourceRow({})], [makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 })],
+      [makeMessageRow({ id: 'assistant', role: 'assistant', createdAt: 2500, agentMeta: JSON.stringify({ uuid: 'prior' }) })]);
+    let current = true;
+    const decision = await admitTaskAction({ server: 'cindy_helper', tool: 'fork_session', sessionId: 'caller', args: {} },
+      { key: 'approved', ownerInput: true, delegated: false, assertCurrent: async () => { if (!current) throw new Error('PERMISSION_DENIED'); } });
+    if (!decision.ok || !decision.run) throw new Error('expected admission');
+    forkSdkSessionMock.mockImplementationOnce(async () => { current = false; return { newSdkSessionId: 'native-fork', uuidMap: new Map() }; });
+    await expect(decision.run(() => forkSessionAtMessage('src-session', 'target-user'))).rejects.toThrow('PERMISSION_DENIED');
+    expect(txCalls).toEqual([]);
+  });
+
   it('inherits the task context-window budget (preference entry, not a session column)', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorAssistant = makeMessageRow({

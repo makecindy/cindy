@@ -69,10 +69,7 @@
   background-color: hsl(var(--sidebar-item-hover));
   border-radius: 8px;
   cursor: grabbing;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-}
-.dark .xdt-sortable-drag {
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-menu);
 }
 
 /* PendingQueuePanel 复用 SortableList 的 fallback 拖拽机制，但它不在 sidebar

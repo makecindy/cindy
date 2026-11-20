@@ -204,7 +204,7 @@ function matchingBracket(source, open) {
   return -1;
 }
 
-const ROUTE_KEY_RE = /(path|index|element|children)\s*:/y;
+const ROUTE_KEY_RE = /(path|index|element|lazy|children)\s*:/y;
 
 /** 抽出对象字面量体里 depth-0 的路由键，忽略嵌套对象与 JSX 属性里的同名键。 */
 function topLevelRouteKeys(body) {
@@ -255,6 +255,12 @@ function parseRouteObject(body) {
     const element = body.slice(elementAt);
     route.component = /^\s*<([A-Za-z][\w.]*)/.exec(element)?.[1];
     if (route.component === 'Navigate') route.to = /\bto="([^"]*)"/.exec(element)?.[1] ?? '';
+  }
+
+  // route lazy（按需加载的页面）：组件名取 lazy 函数返回的 `Component: X`。
+  const lazyAt = keys.get('lazy');
+  if (route.component === undefined && lazyAt !== undefined) {
+    route.component = /\bComponent:\s*([A-Z]\w*)/.exec(body.slice(lazyAt))?.[1];
   }
 
   const childrenAt = keys.get('children');
@@ -868,6 +874,25 @@ export function catalogSurfaces() {
       ],
       routerPaths: [],
       rendererEntryModules: { regionScreenshotPin: './region-screenshot-pin-entry' },
+    },
+    {
+      id: 'desktop.window.quota-tray',
+      platform: 'desktop',
+      title: 'Windows 托盘额度卡片',
+      productionEntry: '`?quotaTray=1` → renderer/quota-tray-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['QuotaTray'],
+      // 卡片与 macOS 菜单栏面板共用 quotaPanelDesign 的尺寸和颜色，不加载 globals.css。
+      styleRoots: [
+        'apps/desktop/src/renderer/quota-tray-entry.tsx',
+        'apps/desktop/src/renderer/quota-tray-panel.tsx',
+        'apps/desktop/src/renderer/quota-tray-pages.tsx',
+        'apps/desktop/src/renderer/quota-tray-tube.tsx',
+        'apps/desktop/src/renderer/styles/quota-tray.css',
+        'apps/desktop/src/shared/quotaPanelDesign.ts',
+        'apps/desktop/src/main/quota-overview/windowsPanel.ts',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { quotaTray: './quota-tray-entry' },
     },
     {
       id: 'desktop.window.remote-desktop',
@@ -1505,7 +1530,7 @@ export function compareGenerated(existingMarkdown, nextGeneratedBlock) {
  * files are not surfaces. New route files require an explicit family assignment. */
 export function mobileCatalogSurfaces() {
   const rows = [
-    ['home', '主机与资源首页', ['index.tsx', 'devices/index.tsx']],
+    ['home', '主机与资源首页；用量概览', ['index.tsx', 'devices/index.tsx', 'usage.tsx']],
     ['devices', '主机详情', ['devices/[deviceId].tsx']],
     ['device-management', '设备管理', ['devices/manage.tsx', 'devices/manage/[deviceId].tsx']],
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],
@@ -1548,7 +1573,9 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['+native-intent.ts', 'native intent routing; no screen'],
     ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
+    ['group-execution-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI'],
     ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
+    ['plugin-preview-regression.tsx', 'MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1558,7 +1585,8 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     const source = stripJsComments(fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8'));
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
-      if (route === 'splash-preview.tsx' && !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
+      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx' || route === 'plugin-preview-regression.tsx') &&
+        !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
       if (route === 'plugin-management-preview.tsx' &&
         (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||
           !source.includes('__DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"'))) missing.push(file);

@@ -47,6 +47,7 @@ import {
   loadDeviceLinkExistingProjects,
   type ExistingRemoteProject,
 } from './remoteExistingProjects';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 /** 用户最终确认添加的远程项目,带来源 kind —— 调用方据此决定立即建会话(SSH)还是进草稿(device-link)。 */
 export type RemoteProjectTarget =
@@ -68,6 +69,7 @@ interface Props {
    */
   initialDeviceId?: string | null;
   fixedDeviceId?: string;
+  existingOnly?: boolean;
   title?: string;
   confirmText?: string;
   errorText?: string;
@@ -86,6 +88,7 @@ export function AddRemoteProjectDialog({
   onOpenChange,
   initialDeviceId,
   fixedDeviceId,
+  existingOnly = false,
   title,
   confirmText,
   errorText,
@@ -160,8 +163,8 @@ export function AddRemoteProjectDialog({
     if (!selectedTarget) return null;
     return selectedTarget.kind === 'ssh'
       ? sshBrowseAdapter(selectedTarget.hostId)
-      : deviceLinkBrowseAdapter(selectedTarget.deviceId);
-  }, [selectedTarget?.key]);
+      : deviceLinkBrowseAdapter(selectedTarget.deviceId, existingOnly);
+  }, [selectedTarget?.key, existingOnly]);
   const currentBrowseRef = useRef({ open, adapter });
   currentBrowseRef.current = { open, adapter };
   useEffect(() => {
@@ -179,7 +182,11 @@ export function AddRemoteProjectDialog({
     if (!selectedTarget || selectedTarget.kind !== 'ssh') return null;
     return sshExistingProjects(sessions, selectedTarget.hostId);
   }, [selectedTarget, sessions]);
-  const existingProjects = sshExisting ?? deviceExisting;
+  // A teammate's project on that computer is reached from the teammate, not added as a project.
+  const existingProjects = useMemo(
+    () => (sshExisting ?? deviceExisting).filter((project) => !isTeammateProjectPath(project.path)),
+    [sshExisting, deviceExisting],
+  );
 
   // 打开时拉 SSH ready hosts;重置选中(配置可能在设置里改过,不保留上次状态)。
   useEffect(() => {
@@ -343,6 +350,10 @@ export function AddRemoteProjectDialog({
         return;
       }
       if (stat.kind === 'missing') {
+        if (existingOnly) {
+          toast.error(t('newChat.addRemoteProject.toast.addFailed'));
+          return;
+        }
         const ok = await confirm({
           title: t('newChat.addRemoteProject.confirmCreate.title'),
           description: t('newChat.addRemoteProject.confirmCreate.description', {
@@ -378,7 +389,7 @@ export function AddRemoteProjectDialog({
     } finally {
       setBusy(false);
     }
-  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText]);
+  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText, existingOnly]);
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。

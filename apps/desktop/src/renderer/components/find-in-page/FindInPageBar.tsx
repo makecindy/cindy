@@ -728,7 +728,7 @@ export function FindInPageBar() {
         'flex items-center gap-1',
         'rounded-lg border border-border',
         'bg-popover text-popover-foreground',
-        'shadow-lg',
+        'shadow-[shadow:var(--shadow-menu)]',
         'px-2 py-1.5',
         previewHost ? 'w-80 max-w-[calc(100%-24px)]' : 'min-w-[280px]',
         // mount-only 入场:Cmd+F 呼出时从右上角(标题栏方向)轻长出;

@@ -771,7 +771,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') setPageInput(null);
                 }}
-                className="h-8 w-12 rounded-full border border-[var(--border-default)] bg-transparent text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--text-primary)]"
+                className="h-8 w-12 rounded-full border border-[var(--border-default)] bg-transparent text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               />
               <span>/ {pageCount}</span>
             </form>

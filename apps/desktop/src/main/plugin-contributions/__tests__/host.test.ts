@@ -48,7 +48,7 @@ vi.mock('../../authManager', () => ({
   onAuthStateChange: vi.fn(),
   isPassiveSharedUserDataInstance: () => harness.passive,
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   ServerApiError: class extends Error {
     statusCode = 500;
     code = 'INTERNAL';

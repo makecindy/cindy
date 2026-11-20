@@ -43,7 +43,7 @@ vi.mock('../windowsTaskbarBadge', () => ({
     description: string,
   ) => win.setOverlayIcon(createWindowsBadgeIcon(count), description),
 }));
-vi.mock('../i18n', () => ({ t: () => badgeDescription }));
+vi.mock('../i18n.desktop', () => ({ t: () => badgeDescription }));
 
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent }));
 

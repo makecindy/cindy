@@ -18,6 +18,28 @@ const audio = `cindy-media://blobs/${'c'.repeat(64)}.mp3`;
 const request = { ref: { collectionId: 'plugin-results', kind: 'card', id: JSON.stringify(['s', 'c']) }, client: { protocolVersion: 1, primitives: [] } };
 const context = { controllerDeviceId: 'phone' };
 
+// Unit: the same card viewed by old and new phones must expose exactly one usable
+// entry. Host version alone cannot establish the viewing phone's navigation support.
+it('negotiates native task navigation per reader and retains the fallback action for old phones', async () => {
+  const html = '<button data-ghost-action="open" data-ghost-session-link="cindy://session/target">Open task</button>';
+  let permitted = true;
+  const provider = createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'example', html, v: 2, height: 80 }),
+    authorize: async () => {}, captureScope: () => () => true,
+    interactions: { externalLinks: () => permitted, dispatch: async () => true },
+  });
+  const read = async (native: boolean) => {
+    const result = await provider.get!(context, { ...request, client: { protocolVersion: 1,
+      primitives: ['plugin-card-actions', ...(native ? ['plugin-card-session-links'] : [])] } });
+    return result.blocks?.find(block => block.id === 'actions')?.data;
+  };
+  expect(await read(false)).toMatchObject({ items: [{ id: 'open', label: 'Open task' }] });
+  expect((await read(false) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+  expect(await read(true)).toMatchObject({ items: [{ id: 'link:0', label: 'Open task', url: 'cindy://session/target' }] });
+  permitted = false;
+  expect((await read(true) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+});
+
 it('mail imports reuse task attachment cleanup and verify downloaded bytes before provider delivery', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mail-upload-test-'));
   try {
@@ -138,6 +160,46 @@ describe('native mobile card actions', () => {
     expect(moved.blocks?.[0].fallbackMarkdown).toContain('Latest status is below');
     expect(moved.blocks?.find(b => b.primitive === 'plugin-card-actions')?.data).toMatchObject({ supersededBy: 'new', items: [] });
     await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: moved.revision } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Unit: a desktop controlling this computer shows the stored card itself and may answer its
+// model menu. Only that reader gets the markup; mail cards keep their projection; a model choice
+// is accepted only in its declared shape and never with an autosave.
+describe('desktop controller card markup', () => {
+  const desktop = { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-html'] };
+  it('returns the stored card only to readers that ask for it, never for mail cards', async () => {
+    let html = '<div style="color:red"><button data-ghost-action="pick" data-ghost-model-select="">Model</button></div>';
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 240 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => true, dispatch: async () => true },
+    });
+    const card = async (client: typeof desktop) =>
+      (((await provider.get!(context, { ...request, client })).blocks?.find(b => b.id === 'actions')?.data) as { card?: unknown } | undefined)?.card;
+    expect(await card(desktop)).toEqual({ html, height: 240, externalLinks: true });
+    expect(await card({ protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'] })).toBeUndefined();
+    html = renderMailCard({ accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'self@example.test',
+      state: 'draft', status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [],
+      fields: ['to', 'subject', 'body'].map(name => ({ name, label: name, value: name })) });
+    expect(await card(desktop)).toBeUndefined();
+  });
+  it('forwards a valid model choice and rejects malformed or autosave choices', async () => {
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="">Model</button><button data-ghost-action="change">x</button>';
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 80 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => false, dispatch },
+    });
+    const { revision } = await provider.get!(context, { ...request, client: desktop });
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false, agentDeviceId: 'controller' };
+    const base = { client: desktop, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'pick', input: { revision, pageId: 'page', modelSelection: route } };
+    await provider.invoke!({ controllerDeviceId: 'controller' }, base);
+    expect(dispatch).toHaveBeenCalledWith('c', 'pick', undefined, 'page', 'cindy-github', 'controller', undefined, undefined, undefined, route);
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, modelSelection: { ...route, agentDeviceId: 'local' } } })).rejects.toThrow();
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, formChange: true } })).rejects.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });
@@ -340,6 +402,29 @@ describe('plugin-card-rich projection', () => {
     expect(await projected('open', rich)).toMatchObject({ text: '开放中\n\ntail', live: '跟进中', items: [{ id: 'pr:stop' }] });
     expect(await projected('merged', rich)).toMatchObject({ text: 'tail', live: undefined, items: [], lookups: 1 });
     expect(await projected('merged', ['plugin-card-actions'])).toMatchObject({ text: 'tail', items: [] });
+  });
+
+  // Bug (2026-11-08): the phone card never offered the archive button or the auto-archive notice, because
+  // the button has no action and no text. Minimal input: one merged card, varying the task-wide facts.
+  it('tells newer phones when to offer the archive button, using the desktop task page rule', async () => {
+    const card = '<div><p>#9 Fix login</p><button data-ghost-task-archive="O/R#9" data-ghost-task-archive-auto="" aria-label="归档任务"></button></div>';
+    const projected = async (state: 'open' | 'merged', facts: { allMerged: boolean; attached: boolean }, primitives = ['plugin-card-actions', 'plugin-card-rich']) => {
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true,
+        prStatus: async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never,
+        taskArchive: async () => facts,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      return (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).taskArchive;
+    };
+    expect(await projected('merged', { allMerged: true, attached: false })).toEqual({ auto: true });
+    // An IM channel took the task over: the button stays, the silent archive does not.
+    expect(await projected('merged', { allMerged: true, attached: true })).toEqual({ auto: false });
+    // Another PR of the task is still open, or this card's PR is not merged: no button at all.
+    expect(await projected('merged', { allMerged: false, attached: false })).toBeUndefined();
+    expect(await projected('open', { allMerged: true, attached: false })).toBeUndefined();
+    expect(await projected('merged', { allMerged: true, attached: false }, ['plugin-card-actions'])).toBeUndefined();
   });
 
   // Review (Greptile P2 on #9022): markedElements returns only outermost matches, so a mark for an

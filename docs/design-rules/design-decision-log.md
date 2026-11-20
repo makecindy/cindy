@@ -1,5 +1,10 @@
 # Cindy 设计决策史(design-decision-log)
 
+- **2026-11-16 项目图片图标裁剪白角**——用户报告项目选择器中自动获取的网站图标露出不透明白角，并要求修复。图片缩略图沿用项目字母图标边长 25% 的圆角裁剪，Desktop 与 Mobile 同步，覆盖自动图片、上传图片和预览；不改源图颜色或持久化图片，不扩展到 emoji、线性符号及外围操作框。现行落点：DESIGN.md §2 Project icon identity colors、两端 ProjectIcon。
+
+- **2026-11-15 新建任务分支切换的局部打磨**——用户认可 HTML 方向稿中的分组三选一（带过去／保存／worktree）与中性运行状态卡。分组外框 12px、内层图标与文件预览 8px，原生 radio 配 16px 视觉圆点；操作仍经原有确认按钮。空闲任务提示降为一行，运行中其它分支仍禁用；不增加查看任务跳转或点分支直接创建 worktree。范围仅限新建任务的 CheckoutDialog 与分支菜单，不推广为其它页面的新样式。
+
+
 > `DESIGN.md` 只保留「现行有效」的规范;历史决策、被推翻的方案、勘误过程按日期
 > 归档在本文件(中文)。每条记录:日期 / 决策 / 背景与被取代方案 / 现行落点
 > (DESIGN.md 章节 + token / 冻结测试)。
@@ -11,6 +16,86 @@
 > 定稿等)已随 §15 保号重构迁入本文件,`DESIGN.md §15` 只保留现行规范。
 
 ## 2026-11
+
+- **11-19 速度图加上每次模型请求的推理量**——用户看到外部工具把每次响应的推理 token 数显示出来、用来判断模型「想没想」，要求 Cindy 也能看到，并指定位置：运行中画在状态栏速度浮窗的速度图里，结束后画在消息用量明细浮窗的顶部，不新增面板、不在消息末尾另起一行。现行：速度曲线的基线下方，每次模型请求结束的时刻挂一笔，笔长表示这次请求的推理 token（开方缩放，避免一次长思考把其余压平；上报为 0 的请求保留一段短笔，连续「没推理就回答」读成一排贴地的短笔）。无论一轮有多少次请求，时间轴都等分成 28 段、同段内的请求合成一笔，宽度不随请求数增长。文字里以「推理占输出」的比例为主、token 数为辅：用户看过本机约 6 万次请求的统计后认为比例比绝对数直观（单次请求多为调用工具，中位数只有几十个 token；同一档位不同模型的比例差一倍以上）。比例只按上报了推理拆分的请求计算，且只给整轮的：用户明确不需要逐次请求的占比，图上的笔画不逐次展开；图上两半不加文字标签，靠指针说明：指针移到图上（触屏按住）选中 28 段里的一段，图的上方显示那一刻的速度和它在本轮里的时间位置；那一段有推理量时再加一行推理 token，没有请求结束、没有上报或为 0 时不显示这一行。选中的时刻用曲线上的空心圆点和一小段竖线标出，竖线只从圆点画到那一段笔画的末端（没有笔画时到基线），不贯穿整张图；选中的一笔变实、其余变淡。用户在 HTML 体验稿上逐轮确认了这套交互，此前「固定一句说明」的悬停提示被否决。两个浮窗一致。提示复用 Floating UI 的视口避让，空间不足时翻到下方；滚动、缩放、失焦或触屏取消时清除选中。运行中的浮窗把本轮到目前为止的比例放在底下那排统计的同一行，作为第四项，中文名「推理占比」（用户在体验稿里对比「单独一行」后选定，并要求浮窗宽度尽量不增加）；浮窗保持 320 宽，四项按各自文字所需分配宽度，图表大小不变；结束后的图下方一行只写两件事：整轮的比例与请求次数。引擎没有上报推理拆分时不画下半部分、不显示比例，运行中的浮窗与此前一致，结束后的明细顶部只留速度曲线和请求次数；一轮太短、画不出速度曲线时只留笔画，不留上方的空白；两者都没有时明细顶部不出现图。旧消息没有保存图，同样不出现。没有金额的回复（免费模型、价表缺失、估值未命中）这一格只显示 token 数：有图时它与金额一样悬停预览、点击固定，打开同一张图加 token 明细，不带费用明细一节（评审提出、用户 11-20 确认）；没有图时仍是原来的文字提示。笔画与速度曲线同为图表线条（`currentColor` 描边、直角端点），不是 §5 的数据色块成员。落点：`GenerationTraceChart`、`RunningTokenRatePopover`、`TurnGenerationTrace`；回归场景 `pnpm ui:check --page running-speed-trace` 与 `--page usage-cost-details`。
+
+- **11-19 运行中发送：常驻提示条改为发送键上的提示**——#10998 在任务运行中、输入框有草稿时于输入框上方常驻一条提示（「任务运行中发送的消息默认排队。默认改为插话 ×」）。用户认为它在想发这一条的时候打断人去决定以后每一条怎么发，要求从发送键的悬停提示出发、平时不占界面，并在 HTML 原型上逐轮确认。现行：提示条及其「已关闭」本机状态删除；发送键提示在可插话的运行中任务里变成两行（下面一行是默认方式、紧挨发送键，上面一行是另一种方式），点哪行这一条就按哪种方式发；Enter 为发送键时按住 ⌘ / Ctrl 高亮滑到另一行、发送键图标随之变化，修饰键+Enter 与修饰键+点击按另一种方式发（收回 #10998「不提供临时反选快捷键」的范围排除）；左侧对调图标原地改默认、不发送。被否决的方案：发送键旁常驻「排队⌄」选择器（占界面）、横排带小尾巴的双按钮提示、提示顶部的「默认：排队　改为插话」文字行。落点：`DESIGN.md §14.6`（Send button delivery tip）、`SendDeliveryTip.tsx`、`resolveComposerEnterIntent` 的 `alternateOnModifier`。
+
+- **11-16 交互回答输入框默认单行，文字换行后再展开为全宽**——用户指出提问卡回答框空白时也有约 108px 高（两行高的文字区加单独一行按钮），默认一行就够了，且多张交互卡片都有此问题。现行：普通回答、自定义回答、多选补充、撤回补充与计划反馈的输入框空白或单行时，文字与语音、发送按钮同处一行（约 48px）；文字换行或含回车后展开为全宽文字区、按钮移到下方，清空前不收回，避免输入中两种布局来回切换。修订 11-10「操作位于框内下方」的说法，全宽长文本体验保留。落点：`DESIGN.md §4 Inputs & Forms`（Interaction answer composers）；`useAnswerComposerExpanded.ts`；单页验证 `ask-user-question` 的单行断言。
+
+- **11-12 #10019 旧阴影 ID 兼容修复**——生产注册与本地主题导出回归证实，删除 `shadow-chip-raised` 会使旧主题的 `shadow-menu: var(--shadow-chip-raised)` 引用失效。按治理合同 §4 保留旧 ID 及原 Light/Dark 默认值，仅作兼容项，不恢复生产 UI 的直接消费；这是对 11-11 A-14 实施范围的兼容修正，历史记录保留。现行落点：`DESIGN.md` §10、DTCG reference/semantic 与 desktop bindings、`colors.ts` 注册项及 ThemeService 回归测试。
+
+- **11-12 内联字号加守卫，选中态外框登记例外（维护者追加裁决，随规范整理一组落地）**——B-06 只登记了内联字号不随「外观 → UI 字号」缩放的缺口；维护者追加：现在就加守卫，只拦新增，存量登记基线只减不增，登录 / Splash 品牌画布按已登记例外豁免。现行：`typographyDiscipline.test.ts` 新增 `inline-literal-size` 规则，`apps/desktop/src/renderer` 里白名单内的静态内联字号也判红；基线 `INLINE_SIZE_DEBT` 登记真实界面 11 处（技能市场 6、`MakerExperimentalView` 4、`ModelLightbox` 1）与核对时新发现的 CodeMirror 编辑器主题 6 处 px 字面量；登录画布家族 10 处（`LoginControls` 2、`LegacyMigrationDialog` 3、`LoginCaptchaOverlay` 5）与分享图片生成按次数登记为豁免，§3 豁免表「登录 / Splash 品牌画布」行补上 `LoginCaptchaOverlay` 与 `LegacyMigrationDialog` 的设计 px 字号。已验证新增一处、删掉一条基线或修掉一处未下调基线都会失败。选中态外框：`TemplateCard` 1.5px、外观页主题预览与壁纸预览 2px 不改，在 §7 登记「选中态指示」例外，允许 1.5–2px，普通容器仍为 1px。落点：`DESIGN.md` §3「内联字号守卫」条与豁免表、§7 Don't 边框条。
+
+- **11-11 规范文档整理：合并重复、删除失效说法（维护者裁决：E-01 方案 B、E-19 方案 B，E-04 / E-06 / E-07 / E-08 / E-09 / E-10 / E-11 / E-14 / E-15 / E-17 / E-18 / A-08 / A-12 / A-13 / C-09 / C-10 / C-11 / C-14 / B-09 / D-02 / D-03 / D-08 / D-09 / D-12 / D-14 / D-15 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现同一参数多处重复、部分说法已与代码不符，Agent 读到的颜色也不是大多数用户看到的。维护者要求给规范瘦身、去矛盾，只合并与删除，不重写其他章节。现行：称呼——原 Default 主题统一称 Classic，新用户默认是 CINDY，§9 速查表改列 CINDY Light / Dark（墨水写成「黑 88%」），Classic 降为附注，§15 标题去掉「可选」（E-01）。单一出处——按钮尺寸只在 §4 按钮结构块写一次（C-09）；用量图表几何、淡化与选中只留在 `usage-history-charts.md`，§4 两节合成一段指针，§5 只留圆角与点击区登记，§14.4 只留动效 token 与一次性超调例外，放大效果的适用范围写成「用量历史 + 供应商『远程与分享』页用量块」（C-10、D-08）；运行橙以 §15.14 为唯一正文，Desktop 中性按钮色值以 §15.10 为准（E-09）；品牌红用途只看 §15.10 白名单（E-08）；§7 圆角与 700 字重改为引用 §5 / §3（B-09）；CINDY 墨水透明度只在 §15.16，决策表 §9 只留裁决经过与对比度（A-13）；Android 更新弹层搬到手机设计指南 §9（C-14）。纠错——数值编辑源统一写成 `packages/design-tokens`（DTCG），`colors.ts` 是注册 API 与生成产物（E-04、A-08）；§9 示例拆分 Select 与 DropdownMenu，设置卡与输入框改为复用 `SettingsSection` / `ComposerCard`（E-06、E-07）；`status-badge-fg` 无界面使用，与 `shadow-chip-raised` 一样作兼容保留（E-10）；聊天代码块底为 `surface-elevated`，`perm-code-bg` 只给权限卡（E-11）；创建页登记可用宽度 < 560px 时的窄档位置（E-14）；外观页不再写「只保留三项」（E-15）；颜色门禁同时阻断规范外圆角（E-17）；治理、索引与入口的失效引用改到现行出处（E-18）；中性按钮的 8% / 10% 规则限定中性变体，并改正 `colors.ts` 旧注释（C-11）；`outline` 只对被聚焦元素本身失效（D-02）；展开收起参考实现改为 `components/ui/collapse.tsx`，`SectionCollapse` 改用 `--motion-base` / `--motion-ease-move`，默认值不变（D-03）；用量历史页面标题沿用设置页标题（D-09）；壁纸文档后半段的三张场景图规则只作退役兼容，见下条（D-12）；可点性文档旧接口名标为已被不变量 C 取代，「只多一条下划线」并入文件类型图标例外（D-14、D-15）；决策表「跳过登录」文字色标注 Desktop 已改为墨水次要档（A-12）；台账人工区去掉「尚未合并」、过期复查日期与临时负责人安排，未排期的下一动作写「待定」，`owner` 列按台账 schema 保留（E-19）。在最新 main 上核对时已失效、不再处理：E-18 中豁免表 Toast 一处（A-15 已把 Toast 改为 token，条目已删）、A-08 中权限高亮 token 的出处（§2 已无该句）、D-02 中输入框 `outline: revert` 的误述（已更正）。被取代：§9「Default-theme values」速查与三条示例、§15.13 品牌红 only-for 清单、§15.8 失效消费者行号、§7 圆角与豁免域列举、决策表 §9 的透明度列。落点：`DESIGN.md` §2、§3、§4、§5、§7、§9、§10、§14.2、§14.4、§15；`design-governance.md`、`cindy-design-system.md`、`token-decision-table.md`、`design-inventory.md`、`usage-history-charts.md`、`message-link-clickability.md`、`wallpaper.md`、手机设计指南 §9；`motionDiscipline.test.ts` 基线删去 `SectionCollapse`。
+
+- **11-11 壁纸文档退役场景归档（D-12）**——Window Companion、Future Atelier、Dream Wander 已于 2026-10-17 退出选择器，`wallpaper.md` 后半段仍按「三张场景图」写现行规则。现行：通用的动态壁纸规则（固定机位、按需下载与校验、每窗一个解码器、静态 / 动态切换淡入淡出、消息层淡出）改写为适用于所有内置视频；三张退役场景只保留兼容已保存选择所需的说明（构图、遮罩、素材规格与「不得重做动效」）。以下为原文中只属于这三张场景的美术与动效验收要求，原样归档：
+
+  > The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
+  > character and black cat in three distinct illustrated environments: a sunny
+  > window, a futuristic atelier and a floating garden above clouds. Preserve each
+  > landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
+  > tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
+  > or reposition/scale it when sidebars open: that splits the app into disconnected
+  > pieces (user correction, 2026-10-01). Only window resizing changes the crop.
+  > These curated scenes use a lighter theme-derived
+  > veil than arbitrary photos, with a stronger Dark veil to preserve reading
+  > contrast. Validate real long messages, not only empty chat views.
+  >
+  > The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
+  > Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
+  > camera, preserving the same composition and full-window crop. Camera position,
+  > viewing angle and field of view must stay constant throughout the entire loop,
+  > including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
+  > tilts, dolly movement, zooms or perspective drift; matching first and last frames
+  > alone is insufficient. Built-in static artwork
+  > uses 3584×2240 WebP. The three official scenes use bundled 640×400 previews and
+  > download the full WebP or 2304×1440 MP4 on demand (2026-10-15 decision), with no
+  > resolution switching on window resize. Only the previews enter the Renderer bundle.
+  > The motion approved on 2026-10-02 is preserved frame for frame at its original
+  > 24fps. The 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
+  > of the approved 1214×758 sources, not native 2K generation; do not regenerate,
+  >
+  > Environment motion must be clearly perceptible rather than concentrated on the
+  > character (user correction, 2026-10-01). Animate existing foliage, curtains and
+  > leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
+  > clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
+  > and the camera stationary. Prefer several slow, independent environmental rhythms
+  > with restrained character movement; verify foliage crops and loop transitions,
+  > including after the Light/Dark readability veil is applied.
+  > For the floating garden, keep the environmental amplitude restrained: tiny leaf
+  > and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
+  > large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
+  > the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
+  > chat interface with messages, composer and pane chrome, not only isolated artwork.
+  > In the sunny window scene, keep the curtain close to its resting drape: small,
+  > slow folds rather than large billows across the window. Nearby leaves and light
+  > shadows should move gently without competing with messages (user correction,
+  > 2026-10-01).
+  > The window scene needs infrequent, natural blinking and coherent whole-scene
+  > motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
+  > foliage together at normal playback speed. Do not retime an isolated eye patch
+  > against a differently moving face or reverse hair motion to manufacture a loop.
+  > Keep the blink gentle and the environment moving at a steady pace: never speed
+  > up the entire frame to shorten a blink, which also accelerates curtains, hair and
+  > shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
+  > holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
+  > motion; inspect the complete action and loop boundary before accepting an asset.
+
+- **11-11 颜色与主题一组落地（维护者裁决：A-03 A、A-04 A（含 E-16）、A-05 B、A-06 A、A-07 A、A-09 A、A-14 A、A-15 A、A-16 A、E-02 B、E-03 A、E-05 A、E-12 A）**——设计规范矛盾审核（基准 `6b8468f37c`）颜色组。改界面：Classic 的 `text-primary-hsl` / `surface-hover-hsl` / `text-tertiary-hsl` 改为与 hex 同色（Light `0 0% 9%`→`0 0% 15%`，Dark `60 2% 17%`→`60 2% 23%`、`0 0% 45%`→`0 0% 64%`；`text-tertiary-hsl` 跟随次要档，与 CINDY 一致；取代 DS-8「历史 HSL 不按名称纠正」），Classic 浅色 shadcn 正文/主按钮略浅、深色侧栏与标题栏悬停更明显、深色侧栏灰字提亮一档；聊天输入框占位字注册默认改为占位档本身（不再叠 40%），删除 CINDY 的同值覆盖，未使用的 `chat-placeholder-text` 改指占位档（ID 保留）；图片预览底、文件预览「未保存」浮签与旧副本横幅、worktree 失败提示、计划保存失败、搜索错误、转换对话框对勾、语音权限对勾、终端错误改走现有 token，删除 composer-pill 兜底色；`.diff` / `.patch` 文件在文件预览与文档预览里按 `--diff-*` 整行上色，patch 代码块与 diff 代码块同款渲染，深色 hljs 增删行改走 token；Toast 四色改走 `--focus-ring` / `--card-status-done` / `--warning-fg` / `--card-status-error`，撤销 10-30 续期的 Toast 豁免（与已过期的 composer 兜底豁免一起移入归档）；CINDY Dark `sidebar-item-hover` 由白 9% 并入墨水阶梯白 6%（取代 07-21 玻璃面白 9%；核对 #9828 只改侧栏底色、薄黑与系统磨砂，未改此值）；计划编辑框去掉自设光标、CodeMirror 主题删除被全局规则覆盖的 `caretColor`。只改规范：§2 补登在用的功能彩色（推理强度、价格档、Fast 蓝、收藏金、引擎徽标、SSH 状态点、Skill Hub 审核徽标、info 蓝），完整清单改为 §2 + §10 + §15.4 合读；§2 渐变清单补登模型名预算彩虹（7 段、深浅两套、只用于折扣路由模型名文字）、GhostTool 中性扫光与 Computer Use 光晕，改正 §7 / §15.4「中性色条」说法；§10 登记 `--shadow-soft-panel` 为命令面板 / 确认框阴影基值并删除未使用的 `--shadow-chip-raised`，§7 只引用 §6 清单；§10 豁免表补 `--warning-accent` 根 token，四个跟随者写成 `= var(--warning-accent)`；§15.11 登记截图标注光标跟随画笔色为例外；§15.4 改正 `destructive` / `search-match-bg` 与 `HSL_FORMAT_IDS` 的关系，`cindyThemes.test.ts` ③ 补「名单外不得写成 HSL」断言；CINDY 主题与冻结数据文件头改为数值看 `packages/design-tokens`、规则看 §15。现行落点：`DESIGN.md` §2、§7、§10、§15.4、§15.6、§15.11、§15.16；`packages/design-tokens` 源与生成物，`cindyDecisionData.ts` 与两份冻结快照。
+- **11-11 动效一组：面板宽度回到 base 档，循环指示器逐个登记或移除（2026-11-11 维护者裁决：D-04 方案 A、D-05 方案 C、D-06 方案 C、D-07 方案 A、D-11 方案 B、D-16 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现动效规范、开发规范与代码三方不一致。D-04：左右侧栏、标题栏红绿灯让位与浮动按钮簇、文件浏览聊天栏的宽度动画写死 250ms，比面板开合的 base 档（200ms）慢；Toast 列表重排写死 300ms + 浏览器默认 ease-out。现行：全部改用 `--motion-base` / `--motion-ease-move`（侧栏开合快 50ms），开发规范不再写死数值；新增守卫禁止 renderer 的 `.ts` / `.tsx` 写死时长与 `cubic-bezier`，存量 67 个文件 117 处登记为只减不增的基线。D-05：语音「整理中」转圈与麦克风波形在 SVG 内部做循环动画，违反「SVG 上不做动画」红线，但改到 HTML 层会让多行文字每帧重绘抖动；登记为 SVG 例外，转圈从 0.9s 改为共用的 `--motion-spinner-cycle`（1 秒）。D-06：Thinking 三点与 GhostTool 运行扫光登记为循环例外；插件页唯一一处呼吸脉冲未读点改为与其他未读点一致的静态点（`AttentionDot` 去掉 `breathing`）；已无人使用的 `session-card-prog`、`session-running-dot-wave` 残留样式删除。D-07：Agent Island 设置页吉祥物预览登记为品牌例外，代码与参数保持现状。D-11：壁纸视频 Static / Dynamic 淡入淡出从 base（200ms）改为与预览图相同的 fast / ease-move（150ms），下载进度条的 base + linear 登记为窄例外（以 #9828 后的现状为准，只改时长）。D-16：菜单栏面板任务列表的运行中图标扩散环（2.2s）与呼吸点（0.8s）补登记，代码不动。被取代：§14.4 菜单栏「持续动效只有液面涟漪与份额条高光两种」的说法、`wallpaper.md`「视频淡入淡出 base/ease-move (200ms)」、`desktop-development.md`「250ms 宽度动画」。落点：`DESIGN.md` §14.4（Panel width and list reorder、Registered looping indicators、红线、菜单栏段落、Application wallpaper）、§15.7（Agent Island mascot preview）；`wallpaper.md`、`macos-menu-bar-quota.md`、`desktop-development.md`；守卫 `motionDiscipline.test.ts`。
+
+- **11-11 固定行高的定义扩展到 rem 与 Tailwind 数字档（维护者裁决：方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`，B-01）发现：§3 只把 `text-<n>` + `leading-[Mpx]` 算作固定行高缺陷，§4 DS-11 却要求行框随字号设置增长；而 Tailwind 自带的 `leading-3…10` 是 rem 长度，字号设置只改写 `--text-*`、不改根字号，UI 字号 24 时 `text-13` 变成 22px 而 `leading-5` 仍是 20px，多行文字几乎贴住。守卫只匹配 `leading-[数字px]`，renderer 中同类组合约 370 处，包括共享的 ErrorNotice 与 DownloadToast。维护者在三个方案中选 A：补规范和守卫，先改共享组件，存量分批。现行：固定行高 = `leading-[Mpx]` / `leading-[Nrem]` / `leading-3…10`，一律改无单位比例（原 px ÷ 默认字号）；守卫只拦新增，存量 119 个文件 375 处登记为只减不增的基线，按区域分五批迁移。被取代：#1553「只有 px 行高算缺陷」的口径。落点：`DESIGN.md §3` 排版 non-goals 行高例外条款；`typographyDiscipline.test.ts` 的 `fixed-leading` 规则与 `FIXED_LEADING_DEBT`；`components/ui/error-notice.tsx`、`components/ui/toast/DownloadToast.tsx`。
+
+- **11-11 确认弹窗按钮顺序改为「取消在左、主操作在右」，标准按钮成为唯一呈现（维护者裁决：C-01 方案 B、C-02 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现：§4 规定确认弹窗按「主操作 → 可选第三按钮 → 取消」排列（DS-6），但 `ConfirmDialog` 另有未登记的 `cancelFirst` 开关，9 处调用把取消挪到左边，同一 App 出现两种顺序；同时 §4 仍写 `presentation="standard"` 只在两处删除入口试点，实际已有三十余处显式使用，其余调用仍是旧呈现，长按钮文案会冲出弹窗。维护者选 C-01 B：所有确认弹窗统一为取消在最左、主操作在最右，三个按钮时为取消 → 第三按钮 → 主操作，移除 `cancelFirst`；选 C-02 A：标准按钮设为唯一呈现，移除 `presentation` 参数，Full Access 与插件授权确认一并统一（对话内权限卡不是 ConfirmDialog，不受影响）。默认焦点仍落在取消（Radix 按 Cancel 定位，与 DOM 位置无关），`autoFocusConfirm` 与逐字输入分支、Enter / Esc 行为不变。手写弹窗中按钮顺序相反的一并对调：「删除定时任务」「任务运行时插件」，以及供应商分享 / 中转 / 供应商组共用底栏的申请、粘贴链接、成员备注、分享审批、中转审批、加入供应商组，和账单结账失败态的「关闭 / 重试」。被取代：DS-6 D3 的「主 → 第三 → 取消」排列与「仅两处 opt-in」范围。落点：`DESIGN.md §4` Inputs & Forms、Dialog & Modal（Button order / Focus on open）；`components/ui/confirm-dialog.tsx`。
+
+- **11-11 对话框其余：删除伙伴改用共享确认弹窗、「下次不再提示」用共享复选框、弹窗一律带浮层阴影（维护者裁决：C-05 A、C-13 A、C-04 A、C-06 A、A-01 A、C-03 A）**——设计规范矛盾审核（基准 `6b8468f37c`）对话框组的其余条目。改界面：删除伙伴的确认弹窗原是手写的一套（右上角 × 与「取消」并存、取消是无边框小字、标题红色、正文 12px），改用共享 `ConfirmDialog` 的破坏性样式，去掉 ×、取消变描边胶囊、标题常规色、正文 16px，取消在左；删除失败提示保留在弹窗内（C-05）。共享确认弹窗里的「下次不再提示」从手写 14px 原生复选框改为共享 `Checkbox`（16px、`--text-primary` 强调色、统一焦点环与禁用态）（C-13）。实验页「关闭会话」不是确认步骤，从红底实心改为 `tone="danger"` 红字透明底；数据库清理与图像生成中断两处手写确认的红底按钮写法统一为与 ConfirmDialog 相同的 `variant="primary" tone="danger-solid"`，外观不变（C-06）。只改文档：`danger-solid` 的使用范围从「只给 ConfirmDialog 的确认按钮」放宽为「确认弹窗的最终确认按钮」，含同结构的手写确认，手写确认优先迁到 ConfirmDialog（C-06）；确认弹窗正文以代码为准写成 regular 400，标题仍为 500（C-04）；所有弹窗（确认与其他）统一保留现有浮层阴影 `--shadow-menu`，§6 层级表新增「Floating」一行，Lifted 行与 §2 居中卡片不再列模态，§1 的阴影例外改为指向 §6 登记（A-01，维护者备注；并入 B-17）；按钮迁移说明去掉已过时的「legacy ConfirmDialog」（C-03）。被取代：§2「Centered-card layouts（含 modal）无需阴影」、§6 Lifted 行的「modals」、§1「窄例外由 §10 的 Token 约束」、§4「Title / description … medium weight」与「danger-solid reserved for the ConfirmDialog confirm button」。落点：`DESIGN.md` §1、§2（Layer rule、ConfirmDialog Danger）、§4 Buttons / Desktop settings controls / Dialog & Modal、§6；`BotDeleteDialog.tsx`、`confirm-dialog.tsx`。
+
+- **11-11 字体一组：标题字重统一为 500，§3 / §5 对齐生成源与实际用法（2026-11-11 维护者裁决：B-03 方案 B，B-02 / B-04 / B-05 / B-06 / B-07 / B-08 / B-11 / B-12 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现标题字重四处说法不一：字重阶梯写 500，Hierarchy 表 Card Title 写 400，§7 写 400/500，§4 DS-11 又规定表单弹窗标题 18/600、紧凑提示标题 15/600，相邻弹窗看起来轻重不一。维护者选 B：标题全部回到 500。现行：桌面端页面、弹窗、分区、卡片与提示卡标题一律 500，600 只做局部强调、不用于标题；登录 / Splash 品牌画布的标题按 §16 / `login-flow.md` 的明确规定取字重（§3 豁免表的 700 只限该行所列文件，注销状态气泡标题 Regular 400），登录规范没有规定的界面同样用 500；手机端角色表不变。代码：原先 600 的 16 处弹窗标题（服务商、MCP、语音、代输入、技能扫描、Cindy Make、中转服务、任务标签等）、9 处提示卡标题（权限、插件授权、重命名、计划审阅、插件配置、收起的提示卡外壳、远程桌面确认）与 12 处页面 / 卡片 / 面板标题改为 500，自动化表单弹窗标题由 400、人机验证弹窗、文本附件读取失败提示与 Review 授权确认窗（main 进程生成的独立窗口）标题由 600 改为 500；分组小标签、表头与名称不是标题，仍可用 600。同批纯文档纠错：§3 Hierarchy 桌面行按实际角色重写（13px 按钮与可阅读说明、15px 聊天正文与卡片标题、20px 页面标题；去掉「按钮 18px」）；代码行改为跟随 `--app-code-font-size`（默认 14，可设 10–24）与系统等宽栈；UI 与代码回退字体栈改为引用生成值并说明中文字体排在 Segoe UI 之前的原因；§5 间距改为引用生成的 DTCG `space-*`（4px 基准，含 2px 半档），删除手写的 8px 基准与 12 档；豁免表改正桌面守卫扫描范围（整个 `apps/desktop/src`）与 xterm 字号来源（`terminalSize`，默认 13，可设 10–24），补登 Windows 任务栏角标 8–12px / bold；§3 登记内联字号不随 UI 字号缩放的缺口与分批迁移计划，存量本轮不改。被取代：DS-11「provider/MCP form title 18/600；compact prompt title 15/600」、§7「display headings 400 / 500」、§5「Base unit: 8px」及 12 档列表。落点：`DESIGN.md` §2 Windows 角标条、§3、§4 DS-11、§5 Spacing System、§7；`typographyDiscipline.test.ts` 盲区注释。
+
+- **11-11 英文文案一组：统一 sentence case，写作规则只拦新增（维护者裁决：B-13 A、B-14 A、B-15 A、B-16 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现：§11.2 要求英文按钮、标题用 Title Case，而 en 词库约 455 : 129 以 sentence case 为主（B-13）；§11.1 的写作规则在 en 词库里大量违反，含 Please 237 条、直引号 120 条、successfully 5 条、无宾的 Confirm / OK / Submit 15 条，且没有存量登记（B-14）；§11 仍写「5 种语言」，实际 12 种，es / fr / de / pt 与文言版没有大小写与标点规则（B-15）；§11.1 与 §2 的示例 `Spelunking…` 已不存在（B-16）。维护者裁决：英文统一 sentence case，专有名词、产品名、保留英文的术语、缩写与系统界面名称例外，存量 Title Case 随页面改动迁移；保留写作规则，先修高频文案，新增由 `check:i18n-glossary` 的英文写法规则拦截，存量 350 条登记进 `i18n/glossary-baseline.json`，只减不增；语言数改为引用 `SUPPORTED_LOCALES`，按词库现状补各语言标点（fr 冒号等前空格与 « »、de „ “、es ¿ ¡、pt-BR “ ”）；示例改为 `Thinking…`。被取代：§11.2「英文 labels / buttons / titles / tabs 用 Title Case」。落点：`DESIGN.md` §2 Thinking Orange 条、§11 导语、§11.1、§11.2；`scripts/shared/glossary-rules.mjs` 的 `findEnglishCopyIssues`；`docs/dev-rules/engineering-conventions.md` §5.1。
+
+- **11-10 交互回答输入框统一全宽、操作放框内**——用户指出撤回补充卡中语音和长文字发送按钮挤占输入宽度，要求所有交互输入一起优化。普通回答、自定义回答、多选补充、撤回补充与计划反馈改用全宽输入区，已有语音及发送操作位于框内下方；发送复用主消息输入框的纸飞机图标，动作名通过提示和无障碍标签保留。多选自定义输入只保留一个发送入口。落点：`DESIGN.md §4 Inputs & Forms`、桌面 `AskUserQuestionPrompt` / `PlanActionCard`、手机 `InteractionPanel`；证据：`ask-user-question` 的 withdrawn / input-free / input-custom / input-multi / input-plan 窄屏深浅色场景。
 
 - **11-06 桌面伙伴展开行与任务列表模式的任务行统一**——用户发现展开后的伙伴行比列表模式的一条任务高（头像外层是行内盒，落在文字基线上把行撑到 66px），要求「和任务一样高」，看过选中对比图后要求选中样式也统一。现行：伙伴、远程伙伴、多电脑 Cindy 与群行共用任务行的高度（`SIDEBAR_LIST_ROW_HEIGHT_CLASS`，默认约 59px，随界面字号缩放，头像仍为 44px）与选中样式（`SIDEBAR_LIST_ROW_ACTIVE_CLASS`：实色底 + 文字色 + 1px 内描边），行间距由 4px 改为与任务一致的 2px，行圆角由 12px 改为任务行的 8px（悬停与选中底色同形）。被取代：10-29「伙伴选中用淡色表面、不用任务侧栏选中底色」。收起头像行的圆形描边选中不变，手机端不变。落点：`cc-agent/sidebar/listRowStyle.ts`、`desktop-bot-list-status.md`；守护：`teammatesSectionSpacing.test.ts`、`teammates-section` 单页验证。
 - **11-05 填充按钮的悬停与按下改由基础色算出，借鉴苹果「基础色 + 系统效果」**——用户看 `cta` 按下色时发现白字按钮按下反而变亮（公式朝按钮文字色混 10%），11 个内置主题中 4 个反向；发送按钮在非 Cindy 主题没有悬停和按下反馈；授权按钮按下明显变亮；确认框按下与悬停同色。用户要求统一成一条规则，便于以后做更自由的主题自定义，看过对比图后确认。规则：OKLCH 亮度悬停 -0.045、按下 -0.085，亮度不高于 0.25 的底色改抬到 0.27 / 0.355。步长由 Cindy 定稿值反推（浅色 -0.051 / -0.091，深色 -0.036 / -0.079），Cindy 不留例外：`#2E3237` / `#25282C` → `#303337` / `#27292D`，`#E2E2E2` / `#D4D4D4` → `#DFDFDF` / `#D2D2D2`。唯一例外是深色 `danger-solid` 继续朝文字色走，否则对比度低于 4.5。列表与菜单悬停、登录页、设置页自有按钮、中性按钮不在范围内。落点：DESIGN §4 Filled button states、§15.10；`themes/filledButtonStates.ts`；`buttonStateContrast.test.ts`。
@@ -974,6 +1059,10 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 
 用户选择并验收「A · 轻量缩进」：手动添加模型对齐高级连接设置，采用左侧箭头的无边框标题，两节纵向排列；手动表单展开后缩进。替代手动添加模型原有的整行描边按钮。仅登记这两个折叠入口的静止、悬停、按下与独立键盘焦点表现，不扩展为其他按钮的豁免；业务逻辑不变。现行规范见 `DESIGN.md §4` 的 Provider dialog disclosures，已验收的真实组件深浅截图见 [PR #8599](https://github.com/makecindy/cindy/pull/8599)。
 
+## 2026-11-06 · 远程连接 V2 拓扑（克制模式）
+
+用户在设计稿上多轮调整后确定远程连接 V2 页面的拓扑形态：这台电脑在中间，其它设备按「怎么连」分到左右两列，线全部用曲线（先拐到那一行再直走），经中转的设备中途经过中转站图块，直走段中间贴往返延迟。状态用线框图块的颜色表达（在线绿、要处理金、离线红、中转站蓝、未建链灰），描边与图标带透明度、悬停实色；用户要求去掉顶部的「XX 连得最好」标题句和下方的设计说明，顶部只留一行数字。多台设备时一组超过六台对半分、离线折成一行、九台起进入紧凑模式并显示组名。试过又撤回：同心圆距离图（用户认为看不出谁连谁、直连还是中转）、单侧从左到右的树（用户要求两侧都用起来）、直角折线、实心状态点（像提示）。不做立体盘面、自转与粒子拖尾，`docs/agent-net-plan.md` §9 的「酷炫」效果按「克制」模式落地，不需要动效例外。开关「新版连接」按设备保存、默认关，关闭时页面与原来完全一致。现行规范见 `DESIGN.md §2`「Remote connection V2 topology status colors」与 `§4`「Remote connection V2 topology」。本条记录方案裁决与 `pnpm ui:check` 场景截图，不代表实机已验收。
+
 ## 2026-11-03：设备卡权限改为「我可以 / 它可以」胶囊
 
 用户评价「远程连接 → 我的设备」每台设备叠四个开关「越来越差」，在 A 列表+详情、B 胶囊、C 矩阵中选 B；随后指出第一版 B 仍留一个蓝色开关、且「我控制它、它控制我」应是两行。定稿：按方向分两行，四项全用同一种胶囊，本 PR 先落现有的两项（控制它 / 控制本机），模型 key 同步与模型共享随各自功能加入「它可以」行。本机总开关仍是 Switch。当前规范见 DESIGN.md「Device access pills」。
@@ -981,3 +1070,142 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 ## 2026-11-04 · 手机群聊点名与 PC 对齐
 
 用户明确要求点名身份信息和 `@` 样式对齐 PC。移动端身份卡第一行复用成员显示名规则：他人的伙伴带主人后缀，自有伙伴和人类成员不新增后缀。已发送正文点名采用对应 CINDY 主题 `msg-link` 的专用 `groupMentionText`，仅着色，不添加下划线、底色或额外字重；作者的 Markdown 强调保留。广播及歧义点名保留高亮但不猜个人身份。已选定的原生锚定 Popover 与原生局部选字继续保留；不扩展为普通消息链接改色。
+
+## 2026-11-06 · 远程连接 V2 拓扑去色、系统图标与消息流动
+
+用户看过当天的「克制模式」后提出三处调整：系统类型改用图标；按延迟排序会让界面跟着延迟刷新一直变，不需要；图标颜色太花，换成没有颜色的设计；并要求在操作某台机器工作时，线上能看到消息在流动。落地：图块改为 `--surface-chip` 方块里的单色系统标志（Apple / Windows / Linux / Android，按光学大小对齐），全图只有灰阶，唯一的颜色是「要处理」原因那行字；组内只按名字排，往返刷新不挪位置；device-link 记录每条链路最近一次业务收发的时刻，页面每 2 秒读一次，最近几秒真有消息时线上跑小胶囊（发出往外、收到往回），闲着的线静止，减弱动效时只加深线并写「收发中」。同时把中转站挪近中间、扇出按距离加宽拐弯，延迟标签改为贴着图块对齐成一列，中转站的名字和往返挪到小圆点旁边；悬停或打开一台设备时只描出它的整条路径。被取代：同日登记的绿 / 金 / 红 / 蓝状态色与绿 / 金延迟色、按延迟排序、行副标题里的「系统 · 路径」、「不画流量」的克制口径。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: grayscale with one warning line」、`§4`「Remote connection V2 topology」与 `§14.4`「Remote connection message packets」。本条记录 `pnpm ui:check` 场景截图（流量为场景值），不代表实机已验收。
+
+## 2026-11-06 · 远程连接 V2 拓扑：区分手机与电脑、消息流动加颜色和节奏
+
+用户看过灰阶版后提出两点：只看系统标志分不出手机和电脑（尤其 iPhone 和 Mac 都是 Apple 标志）；消息流动太素，要有颜色，要有「duang duang duang」的感觉。落地：手机改成带「灵动岛」短条的竖窄条图块，电脑仍是方块；在用的线、消息包、撞上时的涟漪和「收发中」统一用一种「在用」色 `--status-info`，静止时仍是灰阶。消息包改成带拖尾的彗星，所有线共用 1 秒一拍并对齐同一时钟：本机发出的消息越飞越快撞上对端，对端图块鼓起回弹并扩散涟漪；对端发来的消息由对端图块先缩一下弹出，落到这台电脑时圆盘外扩散涟漪。图块拆成「外层管定位、里层管弹跳」，弹跳不会带着图块移位。被取代：同日灰阶版里白色小胶囊匀速流动与「在用的线只加深不上色」。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: grayscale at rest, one live hue in motion」、`§4`「Remote connection V2 topology」与 `§14.4`「Remote connection message packets」。截图来自 `pnpm ui:check` 场景（流量为场景值），不代表实机已验收。
+
+## 2026-11-06 · 远程连接 V2 拓扑：只用绿、蓝、红，不用黄
+
+用户确定拓扑页的颜色只用三种：绿色表示连接正常，蓝色表示正在收发消息，红色表示出错或需要处理；不用黄色（用户认为黄色不好看）。落地：已建好的连接线（直连、经中转、中间到中转站那一段）静止时是绿色细线；正在收发时整条线连同彗星、涟漪和「收发中」换成蓝色；「要处理」的原因文字和它的点线由金色改为红色；卡片上方与中转的连接状态在线为绿、出问题为红。图块、文字、未建链与离线仍是灰阶。被取代：同日「静止时全灰、只有要处理用金色」的配色。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: green, blue and red only — no yellow」。同时给 `ui:preview` 加了 `--motion`，人工预览时可以看到真实动效；检查与截图仍按减弱动效渲染。
+
+同日追加：用户反馈颜色「太灰」——彩色线叠了透明度、又只有 1.25px。改为彩色线一律不透明并加粗（绿 1.5px、蓝与红 2px），这台电脑外的细环在线时为绿、中转站小圆点为绿，正在收发的设备图块描边与图标为蓝、要处理的为红；普通设备图块仍保持中性。
+
+## 2026-11-06 · 远程连接 V2 拓扑：消息流动改成水管里的圆点
+
+用户看过彗星版后认为「有点丑」，要求改成圆点像水管里的水那样流动。落地：去掉彗星、图块鼓起回弹和涟漪；正在收发的线画成一根半透明的蓝色管子，一排等距的小圆点在管子里匀速流动，从线头冒出、在线尾没入，所有线一样快。发出的往设备流、收到的往这台电脑流；两个方向都有时两列圆点各靠自己前进方向的右侧，管子相应加宽。减弱动效或超过八条在用的线时，不画圆点，线仍是实心蓝线。被取代：同日的 1 秒一拍、越飞越快的彗星、鼓起 / 缩一下的弹跳和涟漪，以及彗星拖尾的渐变例外。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: green, blue and red only — no yellow」与 `§14.4`「Remote connection message packets」。截图来自 `pnpm ui:check` 场景（流量为场景值），不代表实机已验收。
+
+## 2026-11-07 · 远程连接 V2 拓扑：照 hhh 蓝图做消息流动和状态切换
+
+用户看过「水管里的圆点」后仍认为不好看，指定参考 hhh 项目会话流程图（「蓝图」，`hhh-friend` 的 flow-board）的状态转换动效。参考其做法落地：平时克制、有事才亮。在用的线回到 2px 实心蓝线，线上一排卡片底色的小点每秒 16px 慢慢流；每来一条新消息（两次快照之间最近一次收发的时刻往后挪了），一颗带光晕和光尾的光点沿线走一趟，先加速后减速，到站时那一点散开一圈细涟漪，收到的图块或这台电脑亮一下；一来一回都有时先走发出的、到站后再走回来的；经中转的设备，光点从这台电脑穿过中转站一路走到设备。状态切换不再跳变：线的颜色、粗细、透明度，图块的描边、图标和光晕，以及中间的细环都淡过去；设备名下面那行字换了时淡入并上浮。正在收发的图块外面加一圈同色柔光。被取代：同日的半透明蓝色管子、管子里的匀速圆点和一来一回分两道；以及「SVG 线悬停不做过渡」。hhh 蓝图里的四种状态色、卡片形变与镜头弹簧没有搬过来，本页仍只用绿、蓝、红。同日追加：用户反馈光点走得太快，一趟由按路长每 px 1.2ms（0.3–0.9 秒）放慢到每 px 3ms，同一条线上的光点没走完时不叠着再发；随后要求匀速移动，光点改为全程同一速度（不再先加速后减速），所有线一样快，不再按 0.9–1.8 秒的上下限卡时长；线上小点的速度不变。用户在真机上看过后又要求再慢一倍（每 px 6ms，约每秒 167px），并指出打开页面时中间那台电脑会滑一下：打开时先按默认宽度排、量到宽度和数据回来后重排，位置过渡已经开着。改为打开时直接落到最终位置，设备目录和第一份链路快照到齐后再等 0.6 秒（最多 2 秒）才打开位置过渡和消息动效。现行规范见 `DESIGN.md §2`、`§4`「Remote connection V2 topology」与 `§14.4`「Remote connection message packets」。截图来自 `pnpm ui:check` 场景（流量为场景值），不代表实机已验收。
+
+## 2026-11-07 · 远程连接 V2：去掉设备列表，管理搬进拓扑卡片
+
+用户问拓扑上线后下面的设备列表是否冗余。对照后结论是：状态信息重复，但改名、删除和两个方向的控制开关只在列表里。用户拍板去掉列表，把改名、删除和开关都搬进拓扑卡片。落地：设备卡加上就地改名、「我可以控制它」「它可以控制这台电脑」两个开关和「从账号移除」（确认后删除），开关规则沿用旧版列表；中间这台电脑的卡加上改名、连接问题与待机说明，原本本机卡上的「允许远程桌面」设置也搬进来（总开关打开时显示）；刷新挪到统计数字那一行；离线设备多、旧开发版重复时可用「移除全部离线设备…」一次清掉，只汇总提示一次。消息上的设备标签、侧栏入口和设置搜索等原来跳到列表的深链，改为直接打开那台设备的卡片（离线折叠时先展开）。旧版页面（关掉「新版连接」）的「我的设备」列表不变。被取代：同日 `DESIGN.md §4` 里卡片上的「管理设备…」与拓扑下方可折叠的「设备列表」。现行规范见 `DESIGN.md §4`「Remote connection V2 topology」。截图来自 `pnpm ui:check` 场景，写操作在场景里被拦截，不代表实机已验收。
+
+## 2026-11-07 · 远程连接 V2 拓扑：只用绿和红，有消息时绿线变成流动虚线
+
+用户在真机上看过光点版后认为不需要圆形的移动动画，也不需要用蓝色表示第二种状态：连着就是绿色实线，有消息时同一条绿线变成朝消息方向流动的绿色虚线。落地：去掉光点、光晕、光尾、到站涟漪和图块亮一下；在用的线是 2px 绿线，上面一排卡片底色的空隙以每秒 16px 朝消息方向匀速走（发出 / 收发中往设备，接收中往这台电脑），中转站那一段一起流；正在收发的图块描边、图标、柔光和「收发中」都改为绿色。顺手修了一个偏差：空隙绕自身中心旋转，竖直和弯曲的线段上会偏到线旁边（看着像实线），改为绕左上角旋转。被取代：同日的蓝色「在用」色 `--rcv2-live`、按新消息走一趟的光点。同日追加：用户反馈设备名下面那行状态字换的时候会闪一下（新字先完整画出一帧，动画才把它设成透明再淡入）。改为在同一格里交叉淡入淡出：旧字往上淡出、新字晚 60ms 从下方淡入，动画在画出前就开始；整行出现或消失时设备名平滑挪到新位置，不再跳半行。随后用户觉得这个切换又快又晃眼：改为只做透明度、不上下移动，旧字 0.22 秒淡出、新字在它快淡完时再用 0.32 秒淡入，设备名挪位放慢到 0.32 秒；同时行字的方向放宽到 15 秒（另一个方向 15 秒内有过就写「收发中」），一问一答时不再在「发送中 / 收发中」之间来回跳，线上虚线的方向仍按 4 秒。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: green and red only — no blue, no yellow」与 `§14.4`「Remote connection message packets」。截图来自 `pnpm ui:check` 场景（流量为场景值）。
+
+## 2026-11-07 · 远程连接 V2 拓扑：状态只用颜色，忙碌用心动橙
+
+用户看到设备名下面灰色的「忙碌中」后指出：忙碌应该是应用里的心动橙，灰色看着像不能用；随后决定先不要状态文字，只用颜色表达。落地：设备名下面不再写状态字，名字对着图块居中（折叠的离线行仍保留「显示离线设备」这句操作提示）；忙碌的设备在图块右上角显示一个 8px 心动橙 `--warning-accent` 小圆点，带全局的 `session-status-breathing` 呼吸，与侧栏「运行中」同一套，用圆点是为了能和绿色的「在收发」描边同时出现；设备卡片里状态一行的「忙碌中」也用心动橙。绿色（连着 / 在收发）、红色（要处理）不变，灰色只留给离线和未建链。文字状态仍在设备卡片、图块的悬停提示与读屏标签、「需要处理」列表和顶部统计里。被取代：同日设备名下面的状态行及其淡入淡出切换（`SubtitleSwap`）。心动橙的新用法已在 `DESIGN.md §2`「Thinking / Warning Orange」登记，现行规范见同节「Remote connection V2 topology: state by color only」与 `§4`。截图来自 `pnpm ui:check` 场景。
+
+## 2026-11-07 · 远程连接：开关改名 Agent-Net (Beta)，拓扑图只管拓扑，「我的设备」保留
+
+用户看过「去掉设备列表、管理搬进拓扑卡片」后改主意：「我的设备」的配置还是留着，拓扑图管拓扑图；打开开关后才显示拓扑图；开关「新版连接」改名为「Agent-Net (Beta)」，说明写成新版本的 device-link、逐渐迭代中、当前实现了什么。落地：开关打开时在「我的设备」上方多一块拓扑图和「需要处理 / 最近」，关掉就没有这一块；「我的设备」（改名、两个方向的开关、删除、本机总开关与远程桌面设置）、连接线路和 SSH 开不开都一样。拓扑卡片回到只读：设备卡展示连接信息，带「管理设备…」（展开「我的设备」并定位那一行）和「远程桌面」；这台电脑的卡展示与中转的连接、连接问题与待机说明和「管理设备…」，不再放总开关。撤掉：同日搬进卡片的改名、开关、从账号移除，「移除全部离线设备…」，统计行旁的刷新，以及深链直接打开卡片。说明文案在 12 种语言里同步。同日追加：用户进一步明确只要「我的设备」的本机卡片放在最上面、下面就是拓扑，其它设备不需要。开关打开时「我的设备」只留本机卡片（改名、允许控制本机、远程桌面、锁屏控制），不再列出其它设备；设备卡片因此去掉「管理设备…」，这台电脑的卡片上的「管理设备…」定位到本机卡片；设备深链指向其它设备时改为在拓扑里打开它的卡片。开关关闭时页面不变。现行规范见 `DESIGN.md §4`「Remote connection V2 topology」。截图来自 `pnpm ui:check` 场景。
+
+## 2026-11-07 · 远程连接 Agent-Net：去掉「需要处理 / 最近」卡片
+
+用户认为拓扑下面的「需要处理 / 最近」卡片多余：设备有问题已经在拓扑里显示为红色，点开设备就该看到问题；最近活动可以在拓扑右上角放一个图标，点开再看。落地：去掉这张卡片；要处理的设备，卡片里「状态」一行直接用红字写原因（如「对方未允许远程控制」），「路径」只写怎么连；本机总开关没开、连接出问题这两类原先列在里面的事项，分别由上方本机卡片和拓扑右上角的连接状态表达；最近上下线收进统计行右端「已连接」旁的时钟图标，点开是「最近活动」弹出层。Agent-Net 的说明同步改为「……以及最近活动」，不再使用的文案在 12 种语言里一并删除。现行规范见 `DESIGN.md §2`「Remote connection V2 topology: state by color only」与 `§4`「Remote connection V2 topology」。截图来自 `pnpm ui:check` 场景。
+
+## 2026-11-07 · 远程连接 Agent-Net 拓扑：连着是绿、有消息是蓝
+
+用户看过「只用绿和红」版后改为：有消息时是蓝色的流动线、电脑图块也是蓝色；没有消息但能连上时是绿色实线、图块也是绿色。落地：恢复蓝色「在用」色 `--rcv2-live` = `--status-info`，只用于有消息在走的线（2px 蓝色流动虚线）和那台设备的图块（描边、图标、柔光）；直连和经中转的设备平时图块描边与图标为绿，与绿色实线一致；忙碌心动橙圆点、要处理红色、离线与未建链灰色不变。被取代：同日「有消息时仍是绿色虚线、没有第二种颜色」和「普通设备图块保持中性」。现行规范见 `DESIGN.md §2`「Remote connection V2 topology」与 `§14.4`「Remote connection message packets」。截图来自 `pnpm ui:check` 场景。
+
+## 2026-11-07 · 插件标记只表达用户选择
+
+用户反馈调用过飞书后，后续普通消息也出现「XD Feishu 调用中」，像是一直由插件接管。用户同意修复，并明确不要增加上下文控制。
+
+- 普通用户消息不因 AI 后续调用插件而追加标记；历史提及不再升级为调用卡。
+- 显式插件指令保留名称、静态标记与展开详情，仅显示已选择。
+- 调用进度沿用工作过程中的真实工具步骤，结果返回即结束，不跟随整轮 AI 状态。
+- 移除旧的按轮次反向关联和召唤结束动画，不改提示词、上下文、调用路由或设置。
+
+实现：桌面 `GhostSummonCard.tsx`、`UserMessage.tsx`、`MessageStream.tsx` 与手机 `MessageRenderer.tsx`；现行规则见 `DESIGN.md` §14.4。
+
+## 2026-11-07 · 阴影、渐变与失效写法收口
+
+用户裁决：跳转胶囊、Tooltip、查找栏等浮层统一走 `--shadow-menu`；边缘渐隐登记为功能性例外；模型和权限面板跟随 §4 带阴影；Cindy 的分段控件与侧栏选中态登记为实色例外，`create-agent` 按下加深到 8%。看过对比图后，用户决定音频封面保留渐变并登记为例外，伙伴消息保留「已发消息给 X／消息来自 X」，规范改为与界面一致。
+
+全量扫描后同类处理：无类型 `shadow-[var(--x)]` 从不产生阴影，浮层改为有类型写法，页内元素删掉；HSL 三元组直接当颜色的写法修正；本地悬停低于 Button 变体优先级的写法修正。PDF 页面、WorkLouder 摇杆帽和 `ThemeBrandLockup` 图标保留阴影并登记为例外。`designEffectsDiscipline.test.ts` 防止这些问题复发。
+
+## 2026-11-07 · 设置分区和行进入组件库
+
+此前有三套写法：群设置抽屉的 `ChatGroupSettingsRows`、手柄页各自复制的局部组件、设置页的 `settingsRowClasses` 类名。提升为 `components/ui/settings-rows.tsx`，行名称按用户裁决统一 13px/500（群设置原为 14px）。局部副本已删除；其余设置页仍用类名，按页面分批迁移。
+
+用户确认 13px 符合 §4 后，同时把窄抽屉登记为例外：群设置抽屉保留 13px 次要色组名和 48px 行高，不套用设置页的 16px 组名与 `py-4`，行名称仍是 13px/500。
+
+## 2026-11-08 · 设置页全部迁到设置行组件
+
+剩下 17 个直接用 `settingsRowClasses` 类名的设置页迁到 `SettingsSection`、`SettingsCard`、`SettingsRow`，`settingsRowClasses.ts` 删除。迁移时补了几处组件此前没覆盖的约定：设置页分区标题是 `h2`、标题到卡片 14px（与其余设置页一致，抽屉仍是 8px），组名下一行说明用 `description`；滑块、字体选择这类不是「名称 + 控件」的内容用 `SettingsBlock`；原来同一卡片里靠「不画分割线」表示一组的行（应用连接和它的开关），改为一组一张卡片。组件原本沿用群设置抽屉的行距（名称行高 1.38、与说明间隔 2px），迁过来的设置行会矮约 3px；§4 此前没写行高。用户裁决设置页沿用原来的节奏：名称行高 1.5、说明 1.4、间隔 4px，分割线和手写卡片里一样占 1px 高度，与没用组件的手写设置行一致，迁移前后行高不变；抽屉维持紧凑行距。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 手写设置区块迁到组件，设置页面标题统一 20px
+
+一直手写的设置区块（语音输入、存储、关于、帮助、自动操作、记忆、小技巧、辅助模型、视觉桥、上下文压缩、供应商共享等）迁到 `SettingsSection` / `SettingsCard` / `SettingsRow` / `SettingsBlock`。只迁「组名 + 卡片 + 设置行」结构；对话框、模型和供应商列表、图表、键位图、连接向导这类不是设置行的内容保持原样。手写卡片的 20px 内边距、14px 标题、全宽分割线等走样统一到 §4 的数值。
+
+迁移后有自己页面标题的设置页里，分组标题变成 16px，和 16px 的页面标题一样大，同一页还混着 13px 的手写小标题。用户裁决：设置页的页面标题统一 20px（沿用外观页先例），页内分组一律 16px 组名，不再用更小的页内小标题。组件新增 `variant="page"` 和 `SETTINGS_PAGE_TITLE_CLASS`。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 页面标题区与「名称在上、控件在下」的间距统一
+
+用户检查开发版时指出模型供应商、IM 机器人、工具、自动操作的标题仍偏小，并要求统一卡片里小标题和下面内容的间距。核查后：页面标题到第一块内容的间距有 14、16、18、24、32px 五种，说明文字有 12px 和 13px 两种；卡片里名称与下方宽控件的间距有 6、8、12、14、16px，有的中间还画了分割线。
+
+统一为：所有设置标签页和子页面（含配件、手柄页）用 `SettingsPageHeader` / `SettingsSection variant="page"`，标题 20px、说明 13px、到第一块内容 24px，子页面返回按钮放在标题前；通用页没有页面标题，插件页保留自己的插件管理头部。名称在上、宽控件在下的一项设置用 `SettingsField`，名称到控件 12px，中间不画分割线。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 设置页内的分区间距
+
+页面标题统一后，页内相邻分区的距离出现三种：通用、外观 36px，用 `variant="page"` 的页面 24px，个性化、工具页叠加外层 18px 下边距后 42px；没有组名、连着放的卡片之间也被拉到 24px。用户裁决：页面标题到第一块 24px，分区之间 36px，同一分区内的卡片和说明 14px，与通用、外观已定稿的节奏一致；连着的无标题卡片算一个分区。`SettingsSection variant="page"` 内置这套间距，自己排版的页面用 `SettingsPageHeader` 加 `SettingsPageScope`（让里面的分区成为 `h3`）。§4 同时列出尚未迁移的已知例外，不再写成「一律」。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 设置页控件用法统一
+
+检查设置页时发现同一类操作用的控件不一致：要点保存才生效的表单里用了开关，用户会以为已经生效；单选字段有原生下拉、菜单单选组、自绘弹层和共用 `Select` 四种做法，触发器高度有 32/36/40/44px，宽度各页不同；「恢复默认」有图标按钮、文字按钮、方形按钮几种形态，位置时左时右；不可撤销的清除、删除和可撤销的操作用同样的次要按钮。
+
+用户裁决四条：立即生效用开关、点保存才生效用复选框，并新增共用复选框；下拉默认 36px、紧凑 32px，宽度 220 / 320 两档加撑满；单项重置用「已修改」标记加 28px 圆形图标按钮，放在控件左边，整页重置用带图标和文字的小号按钮；不可撤销的操作用危险色，可撤销的保持次要按钮，菜单里的删除项一律危险样式。
+
+看过对比图后，用户决定两处暂不改：模型详情的推理强度保留分段按钮（不换成下拉）；群管理的接话方式和发言方式保留原样（本地群分段切换、服务端群下拉），作为「同一设置同一控件」的已知例外。
+
+实现：`components/ui/checkbox.tsx`、`components/ui/select.tsx` 的 `size` / `width`、`DefaultOverrideControls` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings controls。
+
+## 2026-11-08 · 伙伴 V2：退役 V1 伙伴专属界面
+
+伙伴升级为「项目 + 任务 + 身份」后（PR #9314），只服务 V1 伙伴机制的界面一并移除，不改其余视觉规则：
+
+- 近况（桌面浮层、手机 sheet）去掉待办块、到期红点（`TodoDueDot`，原 `DESIGN.md` §3 例外色登记改为退役说明）、「帮我查查／每天帮我查一次」；现在只显示电脑、近期任务与输出内容。
+- 自动跟进的对话内邀请（桌面 `BotFollowUpInvitation`、手机 `CompanionFollowUpInvitation`）与伙伴设置的「跟进我的任务」「例行任务」「夜间学习」页移除；右侧栏 `routines` 页签移除。
+- 伙伴能力页去掉「系统技能」分组；模型页去掉「任务模型」分组（见 `DESIGN.md`「Teammate model settings」）。
+- 伙伴聊天里的 V1 后台任务卡只读：不再有停止与补一句，未落终态的旧卡按子任务实际状态或「状态未知」显示（`desktop-bot-delegation-status.md`）。伙伴间私信不再产生新的单行入口，历史入口照常打开只读往来页。
+
+现行落点：`DESIGN.md` §3 例外色、「Teammate capability page」、「Desktop and Mobile task creator filters」、「伙伴内部通讯入口」；产品规则 `cindy-bots-runtime.md`。
+
+## 2026-11-11 · 组件与控件：输入框默认高度、选框、图标按钮、窄下拉（维护者裁决 C-08、B-10、C-07、C-12）
+
+设计规范审核发现四处规范与组件不一致，维护者裁决：
+
+- **C-08（A）**：共享 `Input` 默认尺寸从 40px（lg）改为 36px（md），与同一行默认 `Select`、`Button lg` 等高；40px 只给需要宽松的字段显式传 `size="lg"`。
+- **B-10（B）**：「边框不超过 1px」只管容器与分隔线，不管控件描边；手绘的复选框改用共享 `Checkbox`（系统原生样式，外观会变）；思考强度滑块 2.5px 描边登记为例外。没有共享组件的单选圆点、编辑框焦点框、头像/状态点镂空环和加载圈不在迁移范围。
+- **C-07（A）**：共享 `Button` 的正方形用法（28 / 32 / 36px，无框 quiet 或带边框 secondary）就是通用图标按钮；原有 28×24 的扁图标按钮改成 28px 正方形。
+- **C-12（A）**：设置页里与其他控件同行的短选项下拉（并发上限、权重、文言文字体）新增 120px 窄档 `width="xs"`；高度用 `size`、宽度用 `width`，不再用 className 自定。
+
+现行规则见 `DESIGN.md` §4 Buttons、Desktop settings controls、Inputs & Forms、§7、§14.6、§15.18。
+
+## 2026-11-13 · 远程连接拓扑：Agent-Net 与 Device Link 用图标和紫色区分
+
+用户反馈拓扑图设备名下面的「Agent-Net」「Device Link」字号、颜色完全一样，只能逐字读，希望更好看、区分更明显。这一页的绿、蓝、红、橙都已表示状态（连着、有消息、要处理、忙碌），黄色此前已否决，协议不能再借这几种颜色。先在真实页面（`pnpm ui:check` 的 fleet 形状，一半 Agent-Net、一半 Device Link）对比了三种做法：A 只加图标（全灰）、B 图标 + 紫色、C 图块右下角紫色盾牌角标。用户选 B。
+
+落地：新增 `--remote-agent-net-accent`（浅色 `#7C5CFF`、深色 `#A993FF`），只用于协议标识。Agent-Net 是 lucide `Waypoints` 图标 + 名称，紫色、500 字重；Device Link 是 lucide `Link2` 图标 + 名称，保持原来的灰色。设备名下面那行与设备卡片的「路径」行共用 `ProtocolMark`。紫色不进连线、图块、光晕和圆点，不表示连接状态。被取代：设备名下面的协议只写文字、两种协议同色。现行规范见 `DESIGN.md §2`「Remote connection V2 topology」与 §10 Semantic Exemption Colors。
+
+## 2026-11-16 · 恢复插件调用辨识，状态按真实调用结算
+
+普通插件调用恢复用户气泡顶部的单行摘要，包含头像法阵、多个插件名字合排及完成编舞；正文保留普通气泡形态。该摘要记录所属消息的真实工具使用：调用结果全部返回即结束，不等待助手整轮回答；后续没有新调用的消息不继承旧标记，合成触发与已封口轮次隔离归属，中断不加完成勾。显式选择未执行只显示“已选择”。这是对 #9235 静态选择方案的局部调整，执行进度仍以真实调用和结果为准；调用路由、上下文、权限、Mobile、工作日志折叠和插件自绘结果卡保持原状。

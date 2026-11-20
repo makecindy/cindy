@@ -17,7 +17,11 @@ import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
-import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  reconcileScheduledModelRouteBeforeBaseline,
+  type ScheduledModelSelection,
+} from '../scheduledModelSelection';
 import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
@@ -42,7 +46,6 @@ function makeDeps(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}): 
 } {
   const calls: string[] = [];
   const deps: MakerSessionAgentSwitchHandlerDeps = {
-    confirmNativeHistoryFallback: vi.fn(async () => true),
     getSessionRow: vi.fn(async () => makeRow()),
     getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
     closeSession: vi.fn(async () => {
@@ -85,33 +88,132 @@ const validParams = {
   providerId: null,
 };
 
+// #10893, unit: same-device group members are distinct provider connections.
+// The old same-engine no-op retained the old provider/native session. Exercise
+// the real transaction with an observable persisted route and bootstrap input.
+it.each([
+  { agentDeviceId: null, resolved: false },
+  { agentDeviceId: 'mini', resolved: false },
+  { agentDeviceId: 'mini', resolved: true },
+])('rebuilds a same-device group route for the selected subscription ($agentDeviceId, resolved=$resolved)', async ({ agentDeviceId, resolved }) => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId, providerId: 'openai-sub-aaaaaaaa' });
+  const bootstrapRoutes: AgentSwitchSessionRow[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'wrong-account', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    relocateNativeHistory: vi.fn(async () => 'wrong-account'),
+    assertAgentDeviceRouteUsable: vi.fn(async () => undefined),
+    ...(resolved ? { resolveProviderGroupTarget: vi.fn(async () => ({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb' })) } : {}),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { bootstrapRoutes.push({ ...row }); }),
+  });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: resolved ? null : agentDeviceId,
+    providerId: resolved ? 'openai' : 'openai-sub-bbbbbbbb', applyNow: true,
+    ...(!resolved ? { providerGroupRelocation: true } : {}),
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(bootstrapRoutes).toEqual([expect.objectContaining({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb', sdkSessionId: null })]);
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(deps.relocateNativeHistory).not.toHaveBeenCalled();
+  if (agentDeviceId) {
+    expect(deps.assertAgentDeviceRouteUsable).toHaveBeenCalledWith(agentDeviceId, 'codex', 'gpt-5.5', 'openai-sub-bbbbbbbb');
+    // The DB port uses this to avoid resolving the remote account's window
+    // against the task computer's catalog, even though the device did not move.
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId }));
+  }
+  const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+  expect(boundary).toMatchObject({ fromProviderId: 'openai-sub-aaaaaaaa', toProviderId: 'openai-sub-bbbbbbbb', resumed: false });
+  expect(boundary).not.toHaveProperty('toAgentDeviceId');
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
+it('rejects an unavailable same-device connection before closing or changing the source', async () => {
+  const { deps } = makeDeps({
+    getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),
+    assertAgentDeviceRouteUsable: vi.fn(async () => { throw new Error('ACCESS_REVOKED'); }),
+  });
+  await expect(performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true, providerGroupRelocation: true,
+  })).rejects.toThrow('ACCESS_REVOKED');
+  expect(deps.closeSession).not.toHaveBeenCalled();
+  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+});
+
+it('automatically replays history when same-device quota balancing changes connections', async () => {
+  const row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' });
+  const { deps } = makeDeps({ getSessionRow: vi.fn(async () => row) });
+  await performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true,
+    providerGroupRelocation: true, providerGroupSwitchReason: 'quota-rebalance',
+  });
+  expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+    handoffCoverage: 'complete',
+    toProviderId: 'openai-sub-bbbbbbbb',
+  }));
+});
+
+
 describe('same-harness native relocation', () => {
-  // Quota balancing is now automatic only while native context survives. Exercise the
-  // real switch entry: refusal after a failed resume must restore the original route.
-  it.each(['missing', 'rejected', 'silent'] as const)('asks before summary fallback after %s native history and preserves the source on refusal', async failure => {
+  // Unit: native failure must restore the source before committing a fresh
+  // target and publish the same replay to DB and the next send.
+  it.each(['missing', 'rejected', 'silent'] as const)('automatically replays after %s native history', async failure => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
       relocateNativeHistory: vi.fn(async () => failure === 'missing' ? null : 'transferred'),
       closeSession: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('DEVICE_LINK_NOT_CONNECTED')),
-      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        if (patch.agentDeviceId === 'mini' && patch.sdkSessionId === null) {
+          expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId });
+        }
+        row = { ...row, ...patch, providerId: patch.providerId ?? null };
+      }),
       getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: failure === 'silent' ? 'fresh' : row.sdkSessionId ?? undefined }),
       bootstrapSwitchedSession: vi.fn(async () => { if (failure === 'rejected') throw new Error('cannot resume'); }),
-      confirmNativeHistoryFallback: vi.fn(async () => {
-        expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId, providerId: original.providerId });
-        return false;
-      }),
     });
-    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
-      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledOnce();
-    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
-    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(row.sdkSessionId).toBe('source-native');
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+      nativeHistory: 'fallback', handoffCoverage: 'complete', handoff: expect.stringContaining('你好'),
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+    expect(row).toMatchObject({ sdkSessionId: null, agentDeviceId: 'mini' });
   });
 
-  it.each([false, true])('publishes an automatic native switch without asking, or a confirmed summary (%s)', async resumeFails => {
+  // A target that cannot take the task (full, unreachable, model not offered) is not a
+  // history problem: a summary would fail the same way and discard the native context,
+  // so the task stays put and nobody is asked (provider-groups.md §6.2).
+  it.each([
+    '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] remote task limit for this device reached',
+    '[REMOTE_AGENT_DEVICE_UNREACHABLE] the other computer is offline',
+    '[REMOTE_AGENT_MODEL_UNAVAILABLE] model is not offered',
+    // #10833, unit: presentation prefixes must not turn a transport failure into
+    // a native-history failure and offer a lossy summary after rollback.
+    ...['INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'ACCESS_REVOKED']
+      .map(code => remoteAgentLinkError(Object.assign(new Error('transport failed'), { code })).message),
+  ])('stays on the source without asking when the target cannot take the task: %s', async message => {
+    let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
+    const original = { ...row };
+    const { deps } = makeDeps({
+      getSessionRow: vi.fn(async () => ({ ...row })),
+      relocateNativeHistory: vi.fn(async () => 'transferred'),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: row.sdkSessionId ?? undefined }),
+      bootstrapSwitchedSession: vi.fn(async () => { throw new Error(message); }),
+    });
+    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow(message);
+    expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
+    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(row).toEqual(original);
+  });
+
+  it.each([false, true])('publishes an automatic native switch or replay fallback (%s)', async resumeFails => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
@@ -122,7 +224,6 @@ describe('same-harness native relocation', () => {
     });
     await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
       applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledTimes(resumeFails ? 1 : 0);
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
     expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ nativeHistory: resumeFails ? 'fallback' : 'restored' }));
     expect(row.agentDeviceId).toBe('mini');
@@ -142,7 +243,6 @@ describe('same-harness native relocation', () => {
       applyNow: true, providerGroupSwitchReason: 'quota-rebalance', signal: controller.signal })).rejects.toThrow();
     expect(row.sdkSessionId).toBe('source-native');
     expect(row.agentDeviceId).toBeNull();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
   });
 
   it.each(['closed', 'close-rejected', 'account-changed', 'history-cleared'] as const)('rolls back a successful quota probe when the final route write fails (%s)', async state => {
@@ -176,7 +276,6 @@ describe('same-harness native relocation', () => {
     expect(live).toBe(false);
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
     if (state === 'account-changed' || state === 'history-cleared') {
       expect(deps.applyAgentSwitchToDb).toHaveBeenCalledTimes(2);
       expect(deps.setSessionProvider).toHaveBeenCalledTimes(1);
@@ -306,12 +405,27 @@ describe('same-harness native relocation', () => {
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
   });
 
-  it('keeps cross-harness switching on the existing handoff path', async () => {
+  // #9973, unit: ordinary and Orca Lead switches must deliver early constraints
+  // through the real switch transaction; the previous short fixture could not lose its middle.
+  it.each([null, 'lead'] as const)('keeps early constraints in the cross-harness handoff (role=%s)', async (orcaRole) => {
     const relocateNativeHistory = vi.fn();
-    const { deps } = makeDeps({ relocateNativeHistory, getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })) });
+    const initial = `${'background '.repeat(25)}Review only; do not modify files.${'context '.repeat(25)}`;
+    const history = [
+      { role: 'user', content: initial, createdAt: 1 },
+      ...Array.from({ length: 4 }, (_, i) => [
+        { role: 'user', content: `Progress ${i}`, createdAt: 2 + i * 2 },
+        { role: 'assistant', content: 'Checking', createdAt: 3 + i * 2 },
+      ]).flat(),
+    ];
+    const { deps } = makeDeps({ relocateNativeHistory,
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project', orcaRole })),
+      listMessagesForHandoff: vi.fn(async () => history),
+    });
     await performSessionAgentSwitch(deps, { ...validParams, agentDeviceId: 'mini', applyNow: true });
     expect(relocateNativeHistory).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: null }));
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ handoff: expect.stringContaining(initial) }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining(initial), undefined);
   });
 
   it('restores the source before opening a native copy whose fallback boundary could not be saved', async () => {
@@ -1085,6 +1199,21 @@ describe('performSessionAgentSwitch', () => {
 });
 
 describe('deferred switch (turn running)', () => {
+  // Unit: two successful switch receipts for one task must not grant the first
+  // controller permission to apply the second controller's selection at send.
+  it('refuses to apply a newer intent using an older switch receipt', async () => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({ pendingSwitches });
+    const first = await performSessionAgentSwitch(deps, validParams);
+    const second = await performSessionAgentSwitch(deps, { ...validParams, effort: 'high' });
+    expect(first.pendingSwitchRevision).toBe(1);
+    expect(second.pendingSwitchRevision).toBe(2);
+    expect(() => applyPendingAgentSwitchIfIdle(deps, 's1', { expectedRevision: first.pendingSwitchRevision }))
+      .toThrow('HARNESS_SWITCH_NOT_READY');
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')?.effort).toBe('high');
+  });
+
   function makeDepsWithPending(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}) {
     const base = makeDeps(overrides);
     const store = new Map<string, PendingAgentSwitchIntent>();
@@ -1608,6 +1737,37 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
 describe('settleSystemRouteSwitchIntent', () => {
   const intent = { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' };
 
+  // #9642 / PR #11375 P1, unit: exercise the real pending apply's fail-continue
+  // branch. A throwing apply stub misses a model disabled after registration.
+  it('reports a swallowed cross-engine apply failure during scheduled baseline preparation', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const assertModelRouteUsable = vi.fn(async () => undefined);
+    const { deps } = makeDeps({ pendingSwitches: pending, assertModelRouteUsable });
+    await performSessionAgentSwitch(deps, validParams);
+    const staged = pending.get('s1');
+    expect(staged).toBeDefined();
+    assertModelRouteUsable.mockRejectedValueOnce(new Error('target model disabled'));
+    await expect(reconcileScheduledModelRouteBeforeBaseline({
+      reconcile: async () => {},
+      hasPendingRoute: () => !!pending.get('s1'),
+      hasPendingSwitch: () => !!pending.get('s1'),
+      isIdle: () => true,
+      applyPendingSwitch: async () => {
+        const stagedIntent = pending.get('s1');
+        await applyPendingAgentSwitchIfIdle(deps, 's1', { bootstrapAfterSwitch: true });
+        return settleSystemRouteSwitchIntent({
+          stagedIntent, remainingIntent: pending.get('s1'), sessionIdle: true,
+        });
+      },
+    })).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
+    expect(pending.get('s1')).toBe(staged);
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'agent-switch: pending apply failed; intent retained for next send',
+      expect.objectContaining({ err: 'target model disabled' }),
+    );
+  });
+
   it('reports applied once the intent is gone', () => {
     expect(
       settleSystemRouteSwitchIntent({ stagedIntent: intent, remainingIntent: undefined, sessionIdle: true }),
@@ -1741,6 +1901,56 @@ describe('landed user route selection', () => {
 });
 
 describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
+  // Unit, #9854: an old runtime snapshot is not mutation admission. Exercise the
+  // real handoff path: expiry leaves route/history untouched, while our own
+  // successful close must not invalidate an admitted relocation.
+  it.each(['handoff-expired', 'drained-expired', 'no-live-expired', 'closing-expired',
+    'runtime-replaced', 'own-close', 'user-takeover'] as const)(
+    'admits forced shared relocation at its first actual mutation: %s', async mode => {
+      let clock = 0, grantActive = true, inputCurrent = true, admitted = false;
+      let historyRead = false, checksAfterHistory = 0;
+      const source = { isTurnRunning: () => false, hasStartedClosing: () => mode === 'closing-expired' };
+      let live: typeof source | null = mode === 'no-live-expired' ? null : source;
+      const mutations: string[] = [];
+      const assertCurrent = () => {
+        if (!inputCurrent || (!admitted && (!grantActive || clock >= 10))) throw new Error('recovery is not current');
+      };
+      const { deps } = makeDeps({
+        getSessionRow: vi.fn(async () => makeRow({ source: 'bot', agentDeviceId: 'share:owner' })),
+        getLiveSession: () => live,
+        listMessagesForHandoff: vi.fn(async () => {
+          historyRead = true;
+          if (mode === 'handoff-expired') clock = 11;
+          if (mode === 'drained-expired') live = null;
+          if (mode === 'runtime-replaced') live = { ...source };
+          return [{ role: 'user', content: 'continue', createdAt: 1 }];
+        }),
+        closeSession: vi.fn(async () => {
+          if (!live || live.hasStartedClosing()) return;
+          mutations.push('close'); live = null; grantActive = false;
+          if (mode === 'user-takeover') inputCurrent = false;
+        }),
+        applyAgentSwitchToDb: vi.fn(async () => { mutations.push('db'); }),
+      });
+      const result = performSessionAgentSwitch(deps, {
+        sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5',
+        providerId: 'xd', agentDeviceId: 'share:owner', applyNow: true,
+        providerGroupRelocation: true, forceRelocation: true, assertSelectionCurrent: assertCurrent,
+        beforeMutation: async () => {
+          if (historyRead && ++checksAfterHistory === 2
+            && ['drained-expired', 'no-live-expired', 'closing-expired'].includes(mode)) clock = 11;
+        },
+        onRelocationMutationStart: () => { assertCurrent(); admitted = true; },
+      });
+      if (mode === 'own-close') await expect(result).resolves.toMatchObject({ switched: true, engineReady: true });
+      else await expect(result).rejects.toThrow(mode === 'runtime-replaced' ? 'runtime changed' : 'not current');
+      expect(mutations).toEqual(mode === 'own-close' ? ['close', 'db'] : mode === 'user-takeover' ? ['close'] : []);
+      expect(deps.insertBoundaryMessage).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(deps.setPendingHandoff).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(deps.bootstrapSwitchedSession).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+    },
+  );
+
   // Unit regression for provider-groups §6.1: companion eligibility can change
   // while history or the target is read. Earlier cancellation tests only changed
   // the synchronous lease, not the host's asynchronous companion-state guard.
@@ -2001,18 +2211,24 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
   it.each([
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }) },
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker', releasedAt: 1 }) },
-  ])('execution-device Worker rejects user relocation while preserving harness/model selection: %j', async (identity) => {
+  ])('execution-device Worker moves its Agent like a normal task (2026-11-12): %j', async (identity) => {
     const row = { ...identity, model: 'anthropic/claude-opus-5-5[1m]' };
     const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    // The user's choice is only staged; it lands at the next send with a full handoff.
     const userMove = relocationHarness(row);
-    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'office-pc' }))
-      .rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-    const staged = relocationHarness(row);
-    await expect(performSessionAgentSwitch(staged.deps, {
-      ...backToTaskComputer,
-      agentDeviceId: 'office-pc',
-      providerGroupRelocation: true,
-    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'share:s-1' }))
+      .resolves.toMatchObject({ deferred: true, switched: false });
+    expect(userMove.assertAgentDeviceRouteUsable).toHaveBeenCalled();
+    expect(userMove.pending.get('s1')).toMatchObject({ targetAgentDeviceId: 'share:s-1' });
+    expect(userMove.calls).toEqual([]);
+    await applyPendingAgentSwitchIfIdle(userMove.deps, 's1');
+    expect(userMove.findParkedEngineSession).not.toHaveBeenCalled();
+    expect(userMove.calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
+    expect(userMove.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'share:s-1',
+      sdkSessionId: null,
+    }));
+    expect(userMove.pending.get('s1')).toBeUndefined();
     const otherModel = relocationHarness(row);
     await expect(performSessionAgentSwitch(otherModel.deps, {
       ...withoutLocation,
@@ -2025,15 +2241,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       targetAgentKind: 'codex',
       applyNow: true,
       })).resolves.toMatchObject({ switched: true });
-    expect(userMove.calls).toEqual([]);
-    expect(staged.calls).toEqual([]);
   });
 
   // PR #6830 merge regression, unit: the scheduled entry materialized inherited
-  // null and turned a same-computer Harness switch into a forbidden Worker move.
-  // Earlier tests entered the handoff directly. Exercise both production entries;
-  // an actual location change must still fail before runtime or database mutation.
-  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker keeps its location boundary: %j', async (agentDeviceId) => {
+  // null and turned a same-computer Harness switch into a Worker move. Exercise
+  // both production entries; since 2026-11-12 an explicit location change on an
+  // execution-device Worker is applied like any other task.
+  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker applies the saved location: %j', async (agentDeviceId) => {
     const h = relocationHarness({ agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }),
     });
@@ -2051,15 +2265,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       }),
       applyModel,
     });
-    if (agentDeviceId) {
-      await expect(result).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-      expect(h.calls).toEqual([]);
-      expect(applyModel).not.toHaveBeenCalled();
-    } else {
-      await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: null });
-      expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'codex' }));
-      expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: null }));
-    }
+    const expected = agentDeviceId ?? null;
+    await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: expected });
+    // The DB write only carries agentDeviceId when the location actually changes.
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', ...(agentDeviceId ? { agentDeviceId } : {}),
+    }));
+    expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: expected }));
   });
 
   it('协同 Lead 离开远程电脑:关闭旧远程会话遇链路错误仍提交新位置', async () => {
@@ -2394,9 +2606,15 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
     expect(pending.get('s1')).toBeUndefined();
   });
 
-  it.each(['lead', 'worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (orcaRole) => {
+  it.each(['lead', 'worker', 'remote-worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (role) => {
+    // PR #10230 unit: a remote Worker with null orcaRole must rebuild when
+    // its selected group returns to the current provider, clearing the intent.
+    const orcaRole = role === 'remote-worker' ? null : role;
+    const orcaRemoteLead = role === 'remote-worker'
+      ? JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' })
+      : null;
     const pending = createPendingAgentSwitchRegistry();
-    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole });
+    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole, orcaRemoteLead });
     const selectSameAgentModel = vi.fn(async () => ({ deferred: false }));
     const commitBinding = vi.fn(async () => undefined);
     const { deps } = makeDeps({

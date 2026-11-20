@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, Maker } from '@cindy/maker-core';
+import { buildUserProvider } from '@cindy/model-providers';
+import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
+import type { readOpenCodeGoAccountUsage } from '../../maker-host/provider-account-usage';
 import type { CodexAccountUsagePayload } from '../../usageBroadcaster';
 import type { GoalState, SessionLike } from '../types';
 import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
@@ -8,6 +11,7 @@ const host = vi.hoisted(() => ({
   goals: new Map<string, GoalState>(),
   row: { providerId: 'openai', model: 'gpt-6-astra', agentDeviceId: null as string | null },
   codex: vi.fn<() => Promise<CodexAccountUsagePayload | null>>(),
+  go: vi.fn<typeof readOpenCodeGoAccountUsage>(),
 }));
 
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }) }));
@@ -36,6 +40,7 @@ vi.mock('../../usageBroadcaster.js', () => ({
   readXaiSubscriptionUsageSnapshot: async () => null,
 }));
 vi.mock('../../usage/subscriptionAccountUsage.js', () => ({ readSubscriptionAccountUsage: async () => null }));
+vi.mock('../../maker-host/provider-account-usage.js', () => ({ readOpenCodeGoAccountUsage: host.go }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({ readClaudeAccountUsageSnapshot: () => null }));
 vi.mock('../../maker-ipc/usage.js', () => ({ onCodexAutoResetRestored: () => () => {} }));
 vi.mock('../sessionRestore.js', () => ({
@@ -58,7 +63,7 @@ vi.mock('../storage', () => ({
   },
 }));
 
-import { resetGoalController, startGoalController } from '../index';
+import { resetGoalController, startGoalController, waitForGoalController } from '../index';
 
 const NOW = Date.parse('2026-10-29T10:00:00Z');
 const RESET = NOW + 7 * 24 * 60 * 60 * 1000;
@@ -169,5 +174,126 @@ describe('ChatGPT goal admission', () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: RESET });
     expect(h.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Unit regression: Go quota cards had a deadline, but the real Goal host never
+// scheduled a continuation. Controller-only tests supply the deadline themselves.
+describe('OpenCode Go goal recovery', () => {
+  const fiveHours = 5 * 60 * 60 * 1000;
+  const month = 30 * 24 * 60 * 60 * 1000;
+  const rolling = { id: 'rolling', limited: true, usedPercent: 100, resetsAt: NOW + 43 * 60_000 } as const;
+  const goError = { message: 'Go usage limit exceeded', errorStatus: 429 };
+
+  beforeEach(() => {
+    const provider = buildUserProvider({ id: 'my-go', name: 'My Go', runtimes: { pi: {
+      baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'go-model', name: 'Go model' }],
+    } } });
+    setCustomProviders([provider]);
+    host.row.providerId = provider.id;
+    host.row.model = 'go-model';
+    host.go.mockReset();
+  });
+
+  function quota(windows: OpenCodeGoUsageSnapshot['windows'], stale = false) {
+    host.go.mockResolvedValue({
+      status: 'ready', stale, snapshot: { kind: 'opencode-go-quota', fetchedAt: NOW, windows },
+    });
+  }
+
+  it('waits for the rolling reset on the selected connection and sends the next goal turn once', async () => {
+    quota([rolling, { id: 'weekly', limited: false, usedPercent: 42, resetsAt: RESET }]);
+    const h = await start('pi');
+    h.finish();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.send).toHaveBeenCalledTimes(2);
+    expect(host.go).not.toHaveBeenCalled();
+    h.finish(goError);
+    await vi.advanceTimersByTimeAsync(rolling.resetsAt - Date.now() - 1);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: rolling.resetsAt });
+    expect(host.go).toHaveBeenCalledWith({ providerId: 'my-go', agent: 'pi' }, 'after-limit');
+    expect(h.send).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'active', usageResetAt: null });
+    expect(h.send).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits for all limited windows even when the monthly reset exceeds one native timer', async () => {
+    quota([rolling, { id: 'monthly', limited: true, usedPercent: 99.9, resetsAt: NOW + month }]);
+    const h = await start('pi');
+    h.finish(goError);
+    await vi.advanceTimersByTimeAsync(month - 1);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: NOW + month });
+    expect(h.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the rejecting engine’s Go connection when the goal was created on another engine', async () => {
+    quota([rolling]);
+    const h = await start('pi');
+    const saved = host.goals.get('s1')!;
+    host.goals.set('s1', { ...saved, agentKind: 'codex' });
+    h.finish(goError);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(host.go).toHaveBeenCalledWith({ providerId: 'my-go', agent: 'pi' }, 'after-limit');
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: rolling.resetsAt });
+  });
+
+  it.each([
+    { reason: 'missing reset', windows: [rolling, { ...rolling, id: 'weekly' as const, resetsAt: null }] },
+    { reason: 'expired reset', windows: [{ ...rolling, resetsAt: NOW }] },
+    { reason: 'stale snapshot', windows: [rolling], stale: true },
+    { reason: 'ordinary rate limit', windows: [{ ...rolling, limited: false }] },
+  ])('keeps manual recovery with a $reason despite a generic retry hint', async ({ windows, stale }) => {
+    quota(windows, stale);
+    const h = await start('pi');
+    h.finish({ message: 'Too many requests. Try again in 30s', errorStatus: 429 });
+    await vi.advanceTimersByTimeAsync(fiveHours);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: null });
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not schedule a remote goal against a local connection with the same id', async () => {
+    host.row.agentDeviceId = 'other-computer';
+    quota([rolling]);
+    const h = await start('pi');
+    h.finish(goError);
+    await vi.advanceTimersByTimeAsync(fiveHours);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: null });
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(host.go).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-10 startup regression, unit: real host readiness must release pending
+// reads only for its own controller lifetime. Prior tests always started first.
+describe('Goal startup readiness', () => {
+  it('releases a queued query when Goal starts, independently of Scheduler readiness', async () => {
+    let finished = false;
+    const pending = waitForGoalController().then(controller => { finished = true; return controller; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    const { controller } = await start();
+    expect(await pending).toBe(controller);
+  });
+
+  it('rejects an old owner waiter on reset and allows a new waiter to reach the next controller', async () => {
+    const rejected = expect(waitForGoalController()).rejects.toMatchObject({ name: 'GoalControllerDisposedError' });
+    await resetGoalController();
+    await rejected;
+    const pending = waitForGoalController();
+    const { controller } = await start();
+    expect(await pending).toBe(controller);
+  });
+
+  it('times out without dispatching late work when startup never completes', async () => {
+    const pending = waitForGoalController();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await pending).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    const { controller } = await start();
+    expect(await waitForGoalController()).toBe(controller);
   });
 });

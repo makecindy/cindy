@@ -33,7 +33,7 @@
   "none": "Sem cor",
   "editLabel": "Editar “{{name}}”",
   "reorderLabel": "Reordenar “{{name}}”",
-  "reorderHint": "Pressione a alça e arraste para reordenar",
+  "reorderHint": "Mantenha pressionada a alça e arraste para reordenar",
   "reorder": "Reordenar etiquetas",
   "reorderDone": "Concluir reordenação",
   "reorderFooter": "Toque em “Reordenar etiquetas” e arraste as alças para alterar a ordem.",

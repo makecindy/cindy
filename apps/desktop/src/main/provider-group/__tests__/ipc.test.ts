@@ -6,7 +6,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../fastPolicyRuntime.js', () => ({ groupFastPolicyPending: vi.fn(() => false), syncGroupFastPolicy: vi.fn(async () => {}) }));
-vi.mock('../../device-link/dispatch.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
 vi.mock('../runtime.js', () => ({
   getProviderGroupDirectory: vi.fn(),
   getProviderGroupRouter: vi.fn(),
@@ -14,9 +14,10 @@ vi.mock('../runtime.js', () => ({
   readProviderGroupOfSession: vi.fn(),
   readProviderGroupRebalanceSuggestion: vi.fn(),
   recordProviderGroupRebalanceDecision: vi.fn(),
+  setProviderGroupRebalancePreference: vi.fn(),
 }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn(), listProviderGroups: vi.fn() }));
-vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
+vi.mock('../bindings.desktop.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: vi.fn(() => 'owner-a'),
   isAppSessionBoundaryPending: vi.fn(() => false),
@@ -50,9 +51,11 @@ import { executeProviderShareManagementCommand, parseProviderShareCommand } from
 import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
 import { captureProviderShareGroupRecovery } from '../../device-link/providerShareGuest';
-import { pruneProviderGroupBindings } from '../bindings';
+import { pruneProviderGroupBindings } from '../bindings.desktop';
 import { readProviderGroup, writeProviderGroup } from '../store';
 import { broadcast } from '../../device-link/index';
+import { createProviderGroupDirectory } from '../directory';
+import type { ProviderView } from '@cindy/model-providers';
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
@@ -96,6 +99,18 @@ function deps(candidates: ProviderGroupCandidate[], existing: ProviderGroupConfi
 }
 
 describe('parseProviderGroupCommand', () => {
+  // Unit/protocol, §6.2：独立偏好动作不能走一次换号决定，坏布尔值不得触发写入。
+  it('validates and saves an explicit per-task balancing preference', async () => {
+    const d = deps([]);
+    d.rebalancePreference = vi.fn(async () => true);
+    const request = { action: 'rebalance-preference', sessionId: 's1', enabled: false };
+    const command = parseProviderGroupCommand(request);
+    if (command.action !== 'rebalance-preference') throw new Error('Expected the rebalance preference command');
+    expect(await executeProviderGroupCommand(d, command)).toEqual({ ok: true });
+    expect(d.rebalancePreference).toHaveBeenCalledWith('s1', false);
+    expect(() => parseProviderGroupCommand({ ...request, enabled: 'false' })).toThrow('enabled must be boolean');
+    expect(() => parseProviderGroupCommand({ ...request, sessionId: '../s1' })).toThrow();
+  });
   // Unit: the real command boundary must preserve the confirmed message ID instead of a session-wide decision.
   it('passes a confirmed message id through parsing and execution', async () => {
     const d = deps([]);
@@ -396,6 +411,35 @@ describe('provider group IPC remote management', () => {
 });
 
 describe('executeProviderGroupCommand save', () => {
+  // Unit regression (provider-groups.md §3): save rechecks the real candidate directory.
+  // Existing save tests supplied already-accepted candidates and missed the independent-ID filter.
+  it('accepts independently adding both subscription connections from the same computer', async () => {
+    const accounts = ['openai-sub-12345678', 'openai-sub-abcdef01'].map((id, index): ProviderView => ({
+      id, name: `Codex ${index}`, source: 'builtin', connected: true, subscriptionAccountPool: 'openai', auth: { method: 'oauth' },
+      agents: ['codex'], models: { codex: [] }, routing: {},
+    }));
+    const d = deps([]);
+    d.directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [{ ...accounts[0], id: 'openai' }],
+      localDeviceName: () => 'Group host', listDevices: async () => [{ deviceId: 'mini', name: 'Mini',
+        online: true, remoteControlEnabled: true, controlEnabled: true, platform: 'darwin', appVersion: '1.0.0',
+        isSelf: false, busy: false, lastSeenAt: null }],
+      readDeviceProviders: async () => accounts, listReceivedShares: () => [],
+      isMobilePlatform: () => false, now: () => 0,
+    });
+    const candidates = await executeProviderGroupCommand(d, { action: 'candidates', providerId: 'openai' });
+    expect(candidates).toHaveLength(2);
+    for (const count of [1, 2]) {
+      const expectedConfig = d.readGroup('openai');
+      const config: ProviderGroupConfig = { strategy: 'round', autoSwitch: true,
+        members: accounts.slice(0, count).map((account) => ({ key: `device:mini:${account.id}`, kind: 'device',
+          agentDeviceId: 'mini', providerId: account.id, limit: 4, weight: 1, paused: false })) };
+      await executeProviderGroupCommand(d, { action: 'save-if-current', providerId: 'openai', config, expectedConfig });
+      expect(d.readGroup('openai')?.members.map((m) => [m.key, m.providerId, m.providerName]))
+        .toEqual(accounts.slice(0, count).map((account) => [`device:mini:${account.id}`, account.id, account.name]));
+    }
+  });
+
   it.each(['save-if-current', 'delete-if-current'] as const)(
     'does not publish or prune %s under a new owner after Fast synchronization fails',
     async (action) => {

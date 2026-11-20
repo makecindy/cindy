@@ -15,6 +15,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
@@ -84,20 +85,11 @@ export function BetaChannelCell() {
   );
 
   return (
-    <div {...setting.anchorProps} className="flex flex-col gap-3 px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {setting.title}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {setting.description}
-          </p>
-        </div>
-
+    <SettingsRow
+      {...setting.anchorProps}
+      title={setting.title}
+      hint={setting.description}
+      trailing={
         <Switch
           {...setting.controlProps}
           checked={state.enableBeta}
@@ -105,7 +97,7 @@ export function BetaChannelCell() {
           onCheckedChange={(v) => void handleToggle(v)}
           aria-label={t('settings.betaChannel.toggleAria')}
         />
-      </div>
-    </div>
+      }
+    />
   );
 }

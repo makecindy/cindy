@@ -7,7 +7,7 @@ import {
   startCodexHttpBridge,
   selectRemoteInjectableServerNames,
   type CodexHttpBridge,
-} from '../../mcp-integrations/codexHttpBridge.js';
+} from '../../mcp-integrations/codexHttpBridge.desktop.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 let bridge: CodexHttpBridge | undefined;
 const receivedNotification = vi.fn();

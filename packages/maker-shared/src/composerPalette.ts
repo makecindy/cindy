@@ -12,6 +12,8 @@ export type ComposerSlashCommand =
       name: string;
       description?: string;
       source: 'user' | 'skill';
+      runtimeCommandName?: string;
+      runtimeStatus?: string;
       path?: string;
       scope?: string;
       enabled?: boolean;
@@ -57,6 +59,14 @@ export function mergeSlashCommands(
   return out;
 }
 
+/** Store the host-confirmed invocation in the draft so queue edits and retries keep it. */
+export function composerSlashInvocationName(command: ComposerSlashCommand): string {
+  if (command.kind !== 'agent-skill' || !command.runtimeCommandName) return command.name;
+  if (command.runtimeStatus === 'unknown' || command.runtimeStatus === 'failed'
+    || (command.scope === 'repo' && command.runtimeStatus === 'discovered')) return command.name;
+  return command.runtimeCommandName;
+}
+
 export function filterSlashCommands(
   commands: readonly ComposerSlashCommand[],
   query: string,
@@ -64,7 +74,8 @@ export function filterSlashCommands(
 ): ComposerSlashCommand[] {
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? commands.filter((command) => command.name.toLowerCase().startsWith(q))
+    ? commands.filter((command) => command.name.toLowerCase().startsWith(q)
+      || composerSlashInvocationName(command).toLowerCase().startsWith(q))
     : [...commands];
   return filtered.slice(0, Math.max(0, limit));
 }

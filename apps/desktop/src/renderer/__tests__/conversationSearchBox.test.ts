@@ -1,3 +1,4 @@
+import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs';
@@ -202,6 +203,7 @@ function allProjectsOption(): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  setSearchDraft('');
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'win32' },
@@ -513,12 +515,16 @@ describe('ConversationSearchBox live search', () => {
     await screen.findByTestId('conversation-search-popover');
     expect(allProjectsOption().disabled).toBe(true);
 
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), { target: { value: '保留 needle' } });
     fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
     await waitFor(() => expect(screen.queryByTestId('conversation-search-popover')).toBeNull());
 
     fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
     await screen.findByTestId('conversation-search-popover');
     expect(allProjectsOption().disabled).toBe(false);
+    expect((screen.getByLabelText('ccAgent.search.placeholder') as HTMLInputElement).value).toBe('保留 needle');
+    fireEvent.click(screen.getByLabelText('ccAgent.search.clear'));
+    expect((screen.getByLabelText('ccAgent.search.placeholder') as HTMLInputElement).value).toBe('');
 
     view.rerender(
       createElement(ConversationSearchBox, {

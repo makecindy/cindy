@@ -34,6 +34,7 @@ const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callb
     'readLocalGhostUpdateSource', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
     'assertGhostRelocationIdle', 'findGhostForInstanceId',
   ],
+  variables: ['updateLocalFile'],
   callbacks: Object.fromEntries(Object.entries(callbackChannels).map(([name, channel]) =>
     [name, ['ipcMain.handle', channel] as const],
   )),
@@ -218,6 +219,8 @@ function harness(
     captureGhostMutationOwner: () => ({ ...session }),
     beginGhostMutation: () => release,
     pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
+    getGhostBrowserExtensionSlot: () => ({ prepareUpdate: vi.fn(async () => () => undefined) }),
+    broadcastGhostsChanged: vi.fn(),
     getActiveAppSession: () => session,
     isAppSessionBoundaryPending: () => false,
     isSameAppSession: (left: typeof session, right: typeof session) =>
@@ -280,7 +283,7 @@ function harness(
     hasRunningGhostCindyWork: () => false,
     fsSlotSingleton: { hasInFlightRequests: () => options.fsBusy === true },
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
-    handoffStoreSingleton: null,
+    isGhostHandoffBusy: () => false,
     stopPluginAppInstance: vi.fn(async () => {}),
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),
@@ -340,7 +343,8 @@ describe('local file recovery and source gates through production IPC callbacks'
         '/local.cindy',
         expect.objectContaining({ sourceStateArchiveId: '_ns__cindy-archive-test__filo-local' }),
       );
-      expect(target.release).toHaveBeenCalledOnce();
+      // The operation lease, plus the short owner recheck taken after the browser bridge drains.
+      expect(target.release).toHaveBeenCalledTimes(2);
     },
   );
   it('treats missing approved receipt as source replacement, not inherited approval', async () => {

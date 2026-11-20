@@ -7,7 +7,7 @@ import type { AgentIslandCompanionSnapshot } from '../../shared/agentIsland.js';
 import { parseBotGroupIdFromRouteKey } from '../../shared/botGroupChat.js';
 import { botAvatarInitial, normalizeBotAvatarHue } from '../../shared/botAvatarHue.js';
 import { BOT_AVATAR_MAX_BYTES, isManagedBotAvatarUrl, isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
-import { resolveSafe } from '../cindy-media/blobStore.js';
+import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botGroups, botProfiles, botSessionLinks } from '../localDb/schema.js';
 import { encodeNotificationAvatar } from '../notificationAvatar.js';

@@ -3,6 +3,12 @@
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
 > 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
 > `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+> **读取时机**：首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
+> 或排查目录下发与显示错误之前
+> **适用路径**：`packages/model-providers/**`、`tools/model-catalog/**`、
+> `apps/desktop/src/main/maker-host/**/model-catalog-override-store*`、
+> `apps/desktop/src/main/maker-host/{active-catalog,subscriptionPoolCatalog,provider-model-auto-refresh}.ts`、
+> `apps/desktop/src/main/maker-host/model-discovery/**`
 
 ## 本地模型说明的客户端译文
 
@@ -224,13 +230,48 @@ bridge 共用这一顺序；OpenAI 订阅的 Pi 以公共 Pi 目录为基础，�
 清单补入新型号并排序，能力按 Pi 协议适配，沿用 Registry 条目的 `defaultEnabled: false`；
 用户本地 `sortOrder` patch 仍最高。
 
+订阅账号池按 owner、账号 ID 和官方 CLI 目录分别发现模型，再按供应商内部 ID 聚合；供应商名称
+仅用于显示，改名、同名或名字包含 Claude/OpenAI 都不改变发现、认证和路由。独立 Claude 供应商
+不再依赖内置 Anthropic 默认账号登录，Codex 的独立供应商手动刷新同样按实际 ID 处理。
+账号池的 Claude 发现结果保存在当前 owner 的内存中，重启后重新读取；旧版内置单账号磁盘缓存
+不记成其它账号的新发现结果。已登录账号尚无可用实报时，继续使用该供应商升级前的目录元数据，
+避免冷启动或 SDK 失败把远程恢复名单清空；这不跳过登录、模型停用或分享授权检查。
+暂停、移除、重新登录与 owner 切换使相应结果失效，失败只保留
+同一登录已成功返回的模型；SDK 空回复沿用旧捕获入口的失败语义，不清空成功清单。
+普通供应商视图与完整路由目录都保留原有 Claude 元数据，只按供应商 ID 合入该账号的新发现与能力更新。
+已有任务的本机发送、手机显示、供应商组续用和分享授权也会读取普通视图，不能把它裁成 SDK 当前返回的子集。
+目录元数据不代替账号准入；SDK 部分回复仍合入明确返回的 effort / Fast 能力，缺席字段保留原值。
+Claude 的模型发现不新增启动、续聊、换号或切模型的准入门槛，仍由原生 CLI 处理历史型号与别名；
+原有账号绑定、登录与权限校验保持生效。普通供应商列表读取在后台发现，不等待 Claude SDK，
+只有明确请求等待发现的读取与手动刷新才等待结果。
+实现与回归见 `subscription-accounts/runtime.ts`、`agent.ts`、`maker-host/subscriptionPoolCatalog.ts`
+及其现有测试。手动刷新使用供应商 ID，后台启动／前台恢复按已连接的同类供应商触发，不能只看内置来源。
+
+Codex 订阅池成功读取完整分页后，异步原子写入当前 Cindy 账号的模型发现目录，记录已确认的型号、展示资料和时间。
+发布前再次核对账号代次。快照里的未知推理档位保持缺省，可由公共目录补充；明确声明的空档位保留。
+重启后读取失败，仅在订阅账号槽位、邮箱与 ChatGPT 工作区的身份摘要一致时恢复；无身份证据时只显示任务保存的型号。
+原生磁盘目录没有账号标识，不能单独补入成员。非空实报突然缩短且与原生目录有冲突时，经现有退避再确认一次；
+没有已确认清单时，重试超时仍保留同一账号此前实报的型号，状态维持待确认。
+成功返回的空清单仍生效。选择器展示清单未更新状态、上次已知时间和重试入口。
+排查时用主进程日志的 `refreshId` 关联分页探针，再用探针 PID 对照 Codex 自身的目录日志。
+
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
-清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
+清单（不发消息、不产生模型调用）。SDK 提供 `resolvedModel` 时优先使用其中的真实 Claude ID；
+Claude Code 2.1.321 的说明已不含型号版本，不能只靠说明猜型号。旧 SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
 `default`）并把版本写在说明里（如 “Opus 5.5 · …”）；简称按说明拼出 `claude-<系列>-<主>-<次>`。
 Registry 尚未登记的新版本照样显示（资料用未知模型默认值，并记日志提示补登记），**绝不映射到
 相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
 型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
+排查新型号缺失时，先核对 Cindy 实际使用的内置 CLI 版本，而不是 PATH 上的 `claude`；
+例如 Fable 5.2 从 Claude Code 2.1.321 起进入清单。还要核对实际子进程环境：
+`DISABLE_TELEMETRY` 不只关闭遥测，也关闭上游 feature-flag 获取，可能令同一内核返回旧清单。
+原生订阅会话及发现探针不默认注入该变量，保留 Claude 官方默认行为；用户显式设置仍原样传递，
+网关及远端路径继续默认禁用。错误上报和 OTEL 导出仍独立默认禁用。
+参见 [Claude Code 环境变量说明](https://code.claude.com/docs/en/env-vars)。
+`configure_model_provider` 的
+`rediscover` 与设置页手动刷新共用 `refreshBuiltinModels`，等待真实发现完成后再返回目录，
+不能走已无发现实现的旧 hook 并报告成功。CLI 清单可见、选择器可见和真实推理成功须分别验证。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
 第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
@@ -239,7 +280,7 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
-未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
+未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.2 Sol（Codex）、
 Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi），最后保留 xAI 回退。
 订阅按认证身份识别独立账号，始终保留实际账号 ID。Cindy Auto 由服务端决定：在 Cindy AI 与
 企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型

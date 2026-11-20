@@ -12,7 +12,7 @@ const host = vi.hoisted(() => ({
 }));
 vi.mock('../../authManager', () => ({ getDeviceId: () => 'computer' }));
 vi.mock('../../localDb/client/current', () => ({ getCurrentDbClientSnapshot: () => host.account }));
-vi.mock('../../maker-host/outbound-fetch', () => ({ outboundFetch: host.fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: host.fetch }));
 vi.mock('../ghCliTokenSource', () => ({
   getSharedGhCliTokenSource: () => ({
     readTokenDetailed: async () => ({ ok: true, token: 'fake' }),

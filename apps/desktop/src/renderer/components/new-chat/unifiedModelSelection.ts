@@ -347,6 +347,13 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
+  /** 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。 */
+  | { kind: 'model-groups' }
+  /**
+   * 一个插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，与供应商格一样每个引擎一格、用插件
+   * 自己的图标。只在本机新任务草稿出现；列表内容由调用方提供，不按目录筛选。
+   */
+  | { kind: 'plugin-engine'; providerId: string }
   | { kind: 'provider'; providerId: string }
   /**
    * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后
@@ -356,6 +363,13 @@ export type UnifiedRailItem =
   | { kind: 'remote-provider'; deviceId: string; providerId: string };
 
 export type UnifiedRailFilter = UnifiedRailItem;
+
+/** 左侧栏一个插件引擎格的展示：引擎名与提供它的插件的图标(没有图标时画通用拼图)。 */
+export interface PluginEngineRailTab {
+  providerId: string;
+  name: string;
+  iconDataUrl?: string;
+}
 
 /**
  * 远程 Agent 只能用那台电脑开了「允许被远程调用」的供应商。没有该标记(旧数据)按未开放处理；
@@ -374,6 +388,7 @@ export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'provider') return `provider:${item.providerId}`;
   if (item.kind === 'remote-provider') return `remote:${item.deviceId}:${item.providerId}`;
   if (item.kind === 'engine') return `engine:${item.agent}`;
+  if (item.kind === 'plugin-engine') return `plugin-engine:${item.providerId}`;
   return item.kind;
 }
 
@@ -603,6 +618,11 @@ export function buildUnifiedListSections(args: {
    * 这些行只出现在 ★ / 全部视图,按本机供应商筛选的视图不列。
    */
   resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
+  /**
+   * 只从模型分组里收起的供应商(同一供应商「运行于」另一台电脑时只列那台的一项)。收藏与最近仍按完整目录解析，
+   * 不因收起而消失。
+   */
+  listHiddenProviderIds?: ReadonlySet<string>;
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -735,6 +755,7 @@ export function buildUnifiedListSections(args: {
   const visible = entries.filter(
     (entry) =>
       matches(entry, q) &&
+      !args.listHiddenProviderIds?.has(entry.providerId) &&
       (groupProviderId === null || entry.providerId === groupProviderId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );

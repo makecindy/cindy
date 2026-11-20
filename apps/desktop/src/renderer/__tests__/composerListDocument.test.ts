@@ -164,24 +164,21 @@ describe('composer list document normalization', () => {
     });
   });
 
-  it('keeps optional spaces after CJK ordered markers in item text', () => {
+  // CJK ordinals are not Markdown list syntax: they stay literal for pasted
+  // text, draft restore and detached voice text alike. Only the typed input
+  // rule (ComposerListNodes) turns them into a list.
+  it('keeps CJK ordinal rows literal instead of building a list', () => {
     expect(plainTextToComposerDocument('2、项目\n3、 项目')).toEqual({
       type: 'doc',
       content: [
-        {
-          type: 'orderedList',
-          attrs: { start: 2, marker: '、', separator: '' },
-          content: [
-            {
-              type: 'listItem',
-              content: [{ type: 'paragraph', content: [{ type: 'text', text: '项目' }] }],
-            },
-            {
-              type: 'listItem',
-              content: [{ type: 'paragraph', content: [{ type: 'text', text: ' 项目' }] }],
-            },
-          ],
-        },
+        { type: 'paragraph', content: [{ type: 'text', text: '2、项目' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: '3、 项目' }] },
+      ],
+    });
+    expect(plainTextToComposerDocument('324325、123423、235233')).toEqual({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '324325、123423、235233' }] },
       ],
     });
   });

@@ -21,10 +21,25 @@ const netFetchMock = vi.hoisted(() => vi.fn());
 /** globalThis.fetch(Node undici):OSS PUT 主路径。 */
 const undiciFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: netFetchMock } }));
+vi.mock('../agentNetDeviceDirectory.js', () => ({ readCurrentDeviceDirectory: vi.fn() }));
+// The API assembly imports these modules statically. Media requests never read
+// device-management secrets or enumerate devices; fail if that boundary changes.
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetClientForRelay: () => { throw new Error('unexpected device-management runtime'); },
+  // The API assembly registers the device-list reader at load; registering reads nothing.
+  useDeviceLinkDeviceList: () => {},
+}));
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => { throw new Error('unexpected device-management owner read'); },
+  isAppSessionBoundaryPending: () => { throw new Error('unexpected device-management boundary read'); },
+}));
+vi.mock('../selfHostedRelayConfig.js', () => ({
+  readRelaySecrets: () => { throw new Error('unexpected device-management secret read'); },
+}));
 vi.stubGlobal('fetch', undiciFetchMock);
 
 const apiFetch = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   serverApiFetch: apiFetch,
   ServerApiError: class extends Error {},
 }));
@@ -67,8 +82,9 @@ import {
   openMediaStream,
   removeRemote,
   __testing,
-} from '../mediaTransfer.js';
+} from '../mediaTransfer.desktop.js';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting.js';
+import { installAgentNetMediaBackend, type AgentNetMediaBackend } from '../agentNetMediaRouting.js';
 
 const PUT_PATH = '/api/device-link/media/presign-put';
 const GET_PATH = '/api/device-link/media/presign-get';
@@ -97,6 +113,30 @@ beforeEach(() => {
   renameMock.mockResolvedValue(undefined);
   rmMock.mockResolvedValue(undefined);
   createWriteStreamMock.mockImplementation(() => new PassThrough());
+});
+afterEach(() => installAgentNetMediaBackend(null));
+
+// Gap: the legacy orchestration tests did not run the installed V2 media port. Preserve the public
+// mediaTransfer entry and ensure neither encrypted traffic nor encrypted-only failures use a legacy presign.
+it('uploads through the encrypted backend and never requests a legacy object URL', async () => {
+  const backend: AgentNetMediaBackend = { guard: () => () => {}, available: () => true, cacheScope: () => 'test',
+    async upload(size, contentType, read) {
+      expect(Buffer.from(await read(0, size))).toEqual(Buffer.from('private-attachment'));
+      return { key: 'agent-net-v3/encrypted-reference', size, contentType, sha256: 'verified-hash' };
+    }, open: async () => new Response('private-attachment', { headers: { 'content-type': 'image/png' } }), remove: async () => {} };
+  installAgentNetMediaBackend(backend);
+  const uploaded = await uploadBuffer(Buffer.from('private-attachment'), { ext: 'png' });
+  expect(uploaded.key).toBe('agent-net-v3/encrypted-reference');
+  expect((await downloadToBuffer(uploaded.key)).bytes.toString()).toBe('private-attachment');
+  expect(apiFetch).not.toHaveBeenCalled(); expect(netFetchMock).not.toHaveBeenCalled(); expect(undiciFetchMock).not.toHaveBeenCalled();
+});
+it('rejects legacy media before fetching a presign when encrypted-only is required', async () => {
+  installAgentNetMediaBackend({ guard: () => () => {}, available: () => false, cacheScope: () => '',
+    assertLegacyAllowed() { throw new Error('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED'); },
+    upload: async () => null, open: async () => new Response(), remove: async () => {} });
+  await expect(uploadBuffer(Buffer.from('private-attachment'), { ext: 'png' })).rejects.toThrow('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED');
+  await expect(downloadToBuffer(KEY)).rejects.toThrow('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED');
+  expect(apiFetch).not.toHaveBeenCalled(); expect(netFetchMock).not.toHaveBeenCalled(); expect(undiciFetchMock).not.toHaveBeenCalled();
 });
 
 // docs/self-hosted-relay-plan.md §7:共享任务附件的成员授权在官方服务,走自建中转时不能向中转换地址。
@@ -658,6 +698,50 @@ describe('putBytesToOss — 传输栈回退', () => {
       DEL_PATH,
       expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),
     );
+  });
+
+  // 海外加速兜底:presign-put 可选返回 accelerateUrl(同一 bucket/key)。只有普通地址两栈都因
+  // 网络层失败才换加速线路;HTTP 拒绝不换(加速解决不了签名/权限,还要多付加速流量费),
+  // 没有或无效的 accelerateUrl 时调用序列与原来完全一致。
+  it.each([
+    { name: '普通地址网络失败 → 加速地址成功', accelerateUrl: 'https://bucket.oss-accelerate.example/obj.png?Signature=ACC', normal: 'network', outcome: 'ok',
+      calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put', 'undici https://bucket.oss-accelerate.example/obj.png?Signature=ACC'] },
+    { name: '普通地址被 HTTP 403 拒绝 → 不走加速', accelerateUrl: 'https://bucket.oss-accelerate.example/obj.png?Signature=ACC', normal: 'http-403', outcome: 'OSS PUT 失败 (403)',
+      calls: ['undici https://oss.example/put'] },
+    { name: '没有加速地址 → 两栈失败即结束', accelerateUrl: undefined, normal: 'network', outcome: 'OSS 上传失败',
+      calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
+    { name: '加速地址无效 → 视同没有', accelerateUrl: 'javascript:alert(1)', normal: 'network', outcome: 'OSS 上传失败',
+      calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
+    { name: 'HTTPS 地址解析失败 → 视同没有', accelerateUrl: 'https://[bad', normal: 'network', outcome: 'OSS 上传失败',
+      calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
+  ] as const)('$name', async ({ accelerateUrl, normal, outcome, calls }) => {
+    apiFetch.mockImplementation(async (path: string) => {
+      if (path === PUT_PATH) return { putUrl: 'https://oss.example/put', key: KEY, expiresAt: 'x', ...(accelerateUrl ? { accelerateUrl } : {}) };
+      if (path === DEL_PATH) return { deleted: true };
+      throw new Error(`unexpected path ${path}`);
+    });
+    const seen: string[] = [];
+    const route = (transport: string) => async (url: string, init: RequestInit) => {
+      seen.push(`${transport} ${url}`);
+      // 加速地址与普通地址是同一份签名契约:ACL 头照带,body 复用同一份字节。
+      expect((init.headers as Record<string, string>)['x-oss-object-acl']).toBe('private');
+      expect(init.body).toBeInstanceOf(ArrayBuffer);
+      if (url === accelerateUrl) return { ok: true, status: 200, text: async () => '' };
+      if (normal === 'http-403') return { ok: false, status: 403, text: async () => '' };
+      throw new TypeError('fetch failed');
+    };
+    undiciFetchMock.mockImplementation(route('undici'));
+    netFetchMock.mockImplementation(route('electron-net'));
+
+    const result = uploadLocalFile('/fixture/a.png');
+    if (outcome === 'ok') {
+      expect((await result).key).toBe(KEY);
+      expect(apiFetch).not.toHaveBeenCalledWith(DEL_PATH, expect.anything());
+    } else {
+      await expect(result).rejects.toThrow(outcome);
+      expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ body: { key: KEY } }));
+    }
+    expect(seen).toEqual(calls);
   });
 
   it('写入记忆时顺手清掉过期条目,长跑进程不会攒下一堆一次性 host', async () => {

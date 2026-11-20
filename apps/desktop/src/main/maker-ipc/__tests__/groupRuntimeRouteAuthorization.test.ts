@@ -2,24 +2,20 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge.js';
 import { createSessionControlService } from '../sessionControlService.js';
 import { GroupToolAuthorizationError, authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
-import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
-import { createPendingAgentSwitchRegistry, performSessionAgentSwitch } from '../sessionAgentSwitchHandler.js';
+import { createSessionControlRuntimeWriter } from '../sessionControlRuntimeWriter.js';
+import { createPendingAgentSwitchRegistry } from '../sessionAgentSwitchHandler.js';
 import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
-import { mergeSessionRuntimeProfilePatch } from '../sessionRuntimeControl.js';
+import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
 import { clearSessionProvider, getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 
-const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
-const start = source.indexOf('    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) =>');
-const end = source.indexOf('    assertExternalInputAllowed:', start);
-const mutationStart = source.indexOf('? await applyRuntimeSetModelChange({');
-const mutationEnd = source.indexOf('})', source.indexOf('              logger: log,', mutationStart)) + 2;
-const mutation = transpileModule(`return (async () => ${source.slice(mutationStart + 2, mutationEnd)})();`, {
-  compilerOptions: { target: ScriptTarget.ES2022 },
-}).outputText;
-const adapter = transpileModule(`return ({${source.slice(start, end)}}).setSessionRuntime;`, {
+// The complete writer is importable. Retain the separate assertion across the
+// native mutation inside the larger handleSetModel assembly.
+const applySource = readFileSync(resolve(__dirname, '../sessionRuntimeSelectionApply.ts'), 'utf8').replace(/\r\n?/g, '\n');
+const mutationStart = applySource.indexOf('? await applyRuntimeSetModelChange({');
+const mutationEnd = applySource.indexOf('})', applySource.indexOf('              logger: log,', mutationStart)) + 2;
+const mutation = transpileModule(`return (async () => ${applySource.slice(mutationStart + 2, mutationEnd)})();`, {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
@@ -37,8 +33,8 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
     const nativeSet = vi.fn(async () => {});
     const close = vi.fn();
     const supersede = vi.fn();
-    const profile = { control: { generation: 1, pending: null }, effective: current };
-    const runtime = { ok: true, runtime: { runtimeGeneration: 1, effectiveProfile: current } };
+    const controlSnapshot = getSessionRuntimeControlSnapshot('route-child');
+    const profile = { control: controlSnapshot, effective: current };
     const maker = {
       getSession: () => ({ agentKind: 'pi' as const, model: 'old', setModel: nativeSet,
         previewModelSwitch: async () => {
@@ -49,22 +45,17 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
     };
     setSessionProvider('route-child', 'provider');
     const deps = {
-      setSessionRuntimeHarness, performSessionAgentSwitch,
-      withSendToSessionLock: async (_id: string, fn: () => Promise<unknown>) => fn(),
-      captureSessionRuntimeControlOwnerEpoch: () => 'owner',
-      getSessionRuntimeControlSnapshot: () => ({ generation: 1, effectiveOverride: current, pending: null }),
       agentSwitchPending: pending,
       readSessionRuntimeProfiles: async () => profile,
       assertModelRouteUsable: async () => null,
-      getActiveCatalog: () => ({}),
       getDesktopProviderService: () => ({ listProviders: async () => {
         if (point === 'catalog') revoked = true;
-        return [{ id: 'provider', connected: true }];
+        return [{ id: 'provider', connected: true, models: { codex: [{ id: 'next', efforts: [] }] } }];
       } }),
-      findCatalogModel: () => ({}),
-      resolveSessionRuntimeAxes: () => ({ ok: true, effort: null, fastMode: false }),
-      mergeSessionRuntimeProfilePatch,
       runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      // A deliberate choice becomes the task's own; this boundary does not inspect that bookkeeping.
+      updateScheduledPreference: async () => true,
+      reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
       agentSwitchDeps: {
         getSessionRow: async () => {
           if (point === 'harness-read') revoked = true;
@@ -92,13 +83,13 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
         return { deferred: result.status === 'deferred', generation: 1 };
       },
     };
-    const host = new Function(...Object.keys(deps), adapter)(...Object.values(deps));
+    const host = createSessionControlRuntimeWriter(deps as unknown as Parameters<typeof createSessionControlRuntimeWriter>[0]);
     const control = createSessionControlService({ sessionExists: async () => true, getLiveSession: () => null, setSessionRuntime: host } as never);
-    const bridge = createBotSessionTaskRouteBridge({ getSessionRuntime: async () => runtime as never,
-      setSessionRuntime: params => control.setSessionRuntime(params), readConfiguredCandidate: vi.fn() });
     try {
       const authority = await authorizeGroupTool('route-group', 'bot-route', 'owner-action');
-      const action = bridge.advance('route-child', 1, next, authority.refresh);
+      const action = control.setSessionRuntime({ targetSessionId: 'route-child', expectedGeneration: controlSnapshot.generation,
+        beforeMutation: authority.refresh, patch: { ...(next.agentKind === current.agentKind ? {} : { harness: next.agentKind }),
+          model: next.model, providerId: next.providerId, effort: next.effort, fastMode: next.fastMode } });
       if (point.startsWith('valid')) {
         expect(await action).toMatchObject({ ok: true, status: point === 'valid-harness' ? 'deferred' : 'applied' });
         if (point === 'valid-harness') expect(pending.get('route-child')).toMatchObject({ model: 'next' });
@@ -117,9 +108,9 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
 
 it.each([true, false])('refreshes after the final deferred-route read (revoked=%s)', async revoked => {
   // Execute the production deferred commit closure, with its asynchronous metadata boundary.
-  const begin = source.indexOf('      const deferLockedSelection = async () => {');
-  const finish = source.indexOf('      // 远端回合中不能 live', begin);
-  const js = transpileModule(`${source.slice(begin, finish)}\nreturn deferLockedSelection;`, {
+  const begin = applySource.indexOf('      const deferLockedSelection = async () => {');
+  const finish = applySource.indexOf('      // 远端回合中不能 live', begin);
+  const js = transpileModule(`${applySource.slice(begin, finish)}\nreturn deferLockedSelection;`, {
     compilerOptions: { target: ScriptTarget.ES2022 },
   }).outputText;
   let prepared = false;

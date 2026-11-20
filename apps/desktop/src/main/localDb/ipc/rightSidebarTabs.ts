@@ -20,44 +20,13 @@
  *   - `ON DELETE CASCADE` 联动 sessions 表,删 session 自动清相关 tab,无孤立行。
  */
 
-import { ipcMain } from 'electron';
+/** Shared owner-database operations. Electron supplies sender checks; Host supplies owner admission. */
 import { createId } from '@paralleldrive/cuid2';
 import { and, asc, eq } from 'drizzle-orm';
-
-import { getDbClient } from '../client/current.js';
+import type { getDbClient } from '../client/current.js';
 import { rightSidebarTabs, sessions } from '../schema.js';
 import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState.js';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
-import { createLogger } from '../../logger.js';
-
-const log = createLogger('rightSidebarTabs');
-
-/**
- * 变更广播:同一会话的页签可能同时活在主窗侧边栏与弹出的单页签窗口里,两个
- * renderer 各有一份 store 缓存。任何写操作落库后通知**其它** renderer 按 DB 刷新
- * (renderer 只覆盖自己不承载的页签,见 store.refreshSessionFromDb)。由
- * bootstrap 注入实际的 BrowserWindow 广播实现;未注入(单测)时静默。
- */
-type RightSidebarTabsChangeBroadcaster = (sessionId: string, senderWebContentsId: number) => void;
-let changeBroadcaster: RightSidebarTabsChangeBroadcaster | null = null;
-
-export function setRightSidebarTabsChangeBroadcaster(
-  broadcaster: RightSidebarTabsChangeBroadcaster | null,
-): void {
-  changeBroadcaster = broadcaster;
-}
-
-function broadcastChange(sessionId: string, event: { sender?: { id?: number } }): void {
-  if (!changeBroadcaster) return;
-  try {
-    // 受信 sender 校验已在各 handler 入口完成;这里只取 id 用于排除发起方。
-    changeBroadcaster(sessionId, event.sender?.id ?? -1);
-  } catch (err) {
-    log.warn('right sidebar tabs change broadcast failed', { sessionId, err });
-  }
-}
-
 /** 单 session 最多 20 个 tab,超抛 RIGHT_SIDEBAR_TOO_MANY_TABS。 */
 const MAX_TABS_PER_SESSION = 20;
 const SINGLETON_TAB_KINDS = new Set(['subagents']);
@@ -95,19 +64,6 @@ function rowToTab(row: typeof rightSidebarTabs.$inferSelect): TabRow {
   };
 }
 
-/** Main-only check for the narrow permission action from a popped-out workbench tab. */
-export async function hasAssignedBotWorkbenchTab(sessionId: string, tabIds: readonly string[], botId: string): Promise<boolean> {
-  if (tabIds.length === 0) return false;
-  const ids = new Set(tabIds);
-  const rows = await getDbClient().drizzle.select({
-    id: rightSidebarTabs.id,
-    kind: rightSidebarTabs.kind,
-    state: rightSidebarTabs.state,
-  }).from(rightSidebarTabs).where(eq(rightSidebarTabs.sessionId, sessionId));
-  return rows.some((row) => ids.has(row.id) && row.kind === 'bot-workbench' &&
-    (parseState(row.state) as { botId?: unknown } | null)?.botId === botId);
-}
-
 function requireInt(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throwIpcError('INVALID_PARAMS', `${name} must be a non-negative integer`);
@@ -138,12 +94,15 @@ function serializeState(value: unknown): string {
   return json;
 }
 
-export function registerRightSidebarTabsIpc(): void {
-  ipcMain.handle('local-db:right-sidebar-tabs:list', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+export function createRightSidebarTabsService(deps: {
+  getDb: () => ReturnType<typeof getDbClient>['drizzle'];
+  changed: (sessionId: string) => void;
+}) {
+  return {
+  'list': async (payload: unknown) => {
     const obj = requireObject(payload, 'list payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     const sessionExists = await db
       .select({ id: sessions.id })
       .from(sessions)
@@ -167,14 +126,13 @@ export function registerRightSidebarTabsIpc(): void {
       activeTabId: activeRow?.id ?? null,
       persistable: true,
     };
-  });
+  },
 
   // Renderer caches are per window, so find-then-add there cannot enforce a
   // singleton while attached/detached hosts overlap. The partial unique index
   // is the authority; INSERT OR IGNORE + re-read returns one canonical row to
   // every caller without changing the user's active tab.
-  ipcMain.handle('local-db:right-sidebar-tabs:ensure-singleton', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  'ensure-singleton': async (payload: unknown) => {
     const obj = requireObject(payload, 'ensure singleton payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const kind = requireString(obj.kind, 'kind');
@@ -182,7 +140,7 @@ export function registerRightSidebarTabsIpc(): void {
       throwIpcError('INVALID_PARAMS', `${kind} is not a singleton tab kind`);
     }
     const stateJson = serializeState(obj.state);
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     const sessionExists = await db
       .select({ id: sessions.id })
       .from(sessions)
@@ -231,25 +189,24 @@ export function registerRightSidebarTabsIpc(): void {
       .limit(1);
     if (!canonical) throw new Error(`failed to ensure ${kind} tab for session ${sessionId}`);
     const created = canonical.id === id;
-    if (created) broadcastChange(sessionId, event);
+    if (created) deps.changed(sessionId);
     return {
       tab: rowToTab(canonical),
       created,
       persistable: true,
     };
-  });
+  },
 
   // upsert: 新增或更新 tab(state / position / kind)。kind 不变(新 tab 注册时定),
   // 但接口允许传以保持 IPC 形态对称(renderer 拿到 unknown kind 时可以 fallback)。
-  ipcMain.handle('local-db:right-sidebar-tabs:upsert', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  'upsert': async (payload: unknown) => {
     const obj = requireObject(payload, 'upsert payload');
     const id = requireString(obj.id, 'id');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const kind = requireString(obj.kind, 'kind');
     const position = requireInt(obj.position, 'position');
     const stateJson = serializeState(obj.state);
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     // tab count 上限:仅在"新增"路径上校验(更新已有 tab 不增加总数)
     const existing = await db
       .select({ id: rightSidebarTabs.id })
@@ -279,15 +236,14 @@ export function registerRightSidebarTabsIpc(): void {
         target: rightSidebarTabs.id,
         set: { kind, position, state: stateJson, updatedAt: now },
       });
-    broadcastChange(sessionId, event);
+    deps.changed(sessionId);
     return { ok: true };
-  });
+  },
 
-  ipcMain.handle('local-db:right-sidebar-tabs:close', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  'close': async (payload: unknown) => {
     const obj = requireObject(payload, 'close payload');
     const id = requireString(obj.id, 'id');
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     // SELECT 验证存在再 DELETE,不用 `.delete().returning()` —— 本仓 SQLite 上不使用
     // drizzle 的 update/delete `.returning()`(grep 验证全仓 0 处)。
     const exists = await db
@@ -299,19 +255,18 @@ export function registerRightSidebarTabsIpc(): void {
       throwIpcError('NOT_FOUND', `tab ${id} not found`);
     }
     await db.delete(rightSidebarTabs).where(eq(rightSidebarTabs.id, id));
-    broadcastChange(exists[0].sessionId, event);
+    deps.changed(exists[0].sessionId);
     return { ok: true };
-  });
+  },
 
   // setActive: 先把 session 内所有 tab 设 inactive,再设 target 为 active(targetId=null
   // 表示无激活态,close last tab 时使用)。两步操作不在事务里 —— 单 session 内 tab 数 ≤ 20,
   // 失败概率极低;真出现中间态 next list 时 UI 会展示"无激活 tab",用户重新点一下就好。
-  ipcMain.handle('local-db:right-sidebar-tabs:setActive', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  'setActive': async (payload: unknown) => {
     const obj = requireObject(payload, 'setActive payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const targetId = obj.id === null ? null : requireString(obj.id, 'id');
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     const now = Date.now();
     await db
       .update(rightSidebarTabs)
@@ -335,14 +290,13 @@ export function registerRightSidebarTabsIpc(): void {
         .set({ isActive: true, updatedAt: now })
         .where(and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)));
     }
-    broadcastChange(sessionId, event);
+    deps.changed(sessionId);
     return { ok: true };
-  });
+  },
 
   // reorder: 一次性重写 same session 内全部 tab 的 position;orderedIds 数组下标 = 新 position。
   // 数组里漏的 id 不会被改动 —— renderer 端调用时应该传完整 orderedIds(同 session 当前全部 tab id)。
-  ipcMain.handle('local-db:right-sidebar-tabs:reorder', async (event, payload: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  'reorder': async (payload: unknown) => {
     const obj = requireObject(payload, 'reorder payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     if (!Array.isArray(obj.orderedIds)) {
@@ -354,7 +308,7 @@ export function registerRightSidebarTabsIpc(): void {
       }
       return id;
     });
-    const db = getDbClient().drizzle;
+    const db = deps.getDb();
     const now = Date.now();
     for (let i = 0; i < orderedIds.length; i++) {
       await db
@@ -364,9 +318,9 @@ export function registerRightSidebarTabsIpc(): void {
           and(eq(rightSidebarTabs.id, orderedIds[i]), eq(rightSidebarTabs.sessionId, sessionId)),
         );
     }
-    broadcastChange(sessionId, event);
+    deps.changed(sessionId);
     return { ok: true };
-  });
+  },
 
-  log.info('rightSidebarTabs IPC handlers registered');
+  };
 }

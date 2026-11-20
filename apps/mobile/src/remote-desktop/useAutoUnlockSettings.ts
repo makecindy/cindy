@@ -241,6 +241,7 @@ export function useAutoUnlockSettings(
     busy,
     available,
     notice,
+    clearNotice: () => setNotice(null),
     onAutoUnlock: (enabled: boolean) => {
       void change(async () => {
         if (enabled) {

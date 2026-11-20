@@ -37,6 +37,15 @@ export const additionalSettings = defineSettings({
     sectionKey: 'settings.sections.compatMode',
     aliases: ['提问导航', '消息导航'],
   },
+  worktreeModelNaming: {
+    id: 'personalization.worktreeModelNaming',
+    tab: 'personalization',
+    targetId: 'settings-worktree-model-naming',
+    titleKey: 'settings.worktreeModelNaming.cell.label',
+    descriptionKey: 'settings.worktreeModelNaming.cell.description',
+    sectionKey: 'settings.sections.compatMode',
+    aliases: ['worktree 名字', 'worktree 命名', '分支名', 'branch name'],
+  },
   chatEmbedding: {
     id: 'personalization.chatEmbedding',
     tab: 'personalization',
@@ -99,15 +108,6 @@ export const additionalSettings = defineSettings({
     descriptionKey: 'settings.about.storage.dialogueDirectoryDescription',
     sectionKey: 'settings.tabs.storage',
     aliases: ['工作目录', 'working directory'],
-  },
-  botModel: {
-    id: 'general.botModel',
-    tab: 'general',
-    targetId: 'settings-bot-model',
-    titleKey: 'bots.globalSettings.defaultModel',
-    descriptionKey: 'bots.globalSettings.defaultModelHint',
-    sectionKey: 'settings.sections.bots',
-    aliases: ['伙伴默认模型', 'teammate default model'],
   },
   botReplyTarget: {
     id: 'general.botReplyTarget',

@@ -41,6 +41,37 @@ describe('permanent Bot model selection', () => {
       agentDeviceId: 'group-owner', providerId: 'xd',
     }), h.state.current);
   });
+  // 依据：Slack 反馈（2026-11-06）——例行任务里手动换的模型每跑一次就被改回伙伴的模型；
+  // 实测确认重开任务后内存记录丢失。最小失败输入：已套用配置后任务里换了模型，再发送 / 重启再发送。tier：unit。
+  it('keeps a model picked in the task across sends and restart until the configuration changes', async () => {
+    const h = harness();
+    const saved = new Map<string, string>();
+    const applied = { get: async (id: string) => saved.get(id), set: async (id: string, key: string) => { saved.set(id, key); } };
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply, applied };
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    h.apply.mockClear();
+    h.state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('lane');
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+    h.state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('lane', expect.objectContaining({ model: 'sol' }), h.state.current);
+  });
+  // 实测（2026-11-07）：例行任务跑过一次后留下自动化临时路由，之后在任务里换模型，下次运行仍被改回。tier：unit。
+  it('keeps a task choice made after an automation ran on the task', async () => {
+    const h = harness();
+    const state = { ...h.state, scheduledModelBaseline: JSON.stringify({ ...h.state.current, scopeId: 'automation' }) as string | null };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await reconcile('lane');
+    state.scheduledModelBaseline = null;
+    state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    await reconcile.acceptTaskChoice('lane');
+    await reconcile('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+  });
   it.each(['model', 'group', 'unbound'] as const)('applies a changed %s instead of preserving an unrelated group member', async change => {
     const h = harness();
     h.state.current = { agentKind: 'codex', model: change === 'model' ? 'old-model' : 'luna',
@@ -62,9 +93,14 @@ describe('permanent Bot model selection', () => {
     await reconcile('canonical');
     await createBotModelRouteReconciler(deps)('canonical');
     expect(h.apply).not.toHaveBeenCalled();
+    // The automation scope restores the task's own route itself; the unchanged
+    // configuration is not applied over it, but a changed one is.
     state.scheduledModelBaseline = null;
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+    expect(h.apply).not.toHaveBeenCalled();
+    state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'sol' }), state.current);
   });
   // Capability grants apply to the next ordinary turn, including after restart.
   // The temporary automation route must not choose a different Harness catalog.

@@ -3,7 +3,7 @@ import os from 'node:os';
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { isPluginMarketPassthroughErrorCode } from './api.js';
 import {
   isGhostInstallApprovalToken,
@@ -21,7 +21,7 @@ import {
   setGhostUninstallLedgerPreparer,
 } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { getActiveAppSession, getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { markGhostRecommendationInstalled } from '../cindy-brain/ghostRecommendationStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
@@ -39,6 +39,8 @@ const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
 const UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL = 'plugin-market:update-consent-holds-changed';
+/** Local display push for the window running an install; not on the device-link allowlist. */
+const INSTALL_PROGRESS_CHANNEL = 'plugin-market:install-progress';
 const localIconRequestGate = new LocalIconRequestGate();
 const localShareWindows = new Set<number>();
 
@@ -169,6 +171,20 @@ export function registerPluginMarketIpc(): void {
       }),
     );
   });
+  ipcMain.handle('plugin-market:query', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const query = requireObject(input, 'query');
+    return invokePluginMarket(() => service().query(query));
+  });
+  ipcMain.handle('plugin-market:recommendations', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().recommendations());
+  });
+  ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ghostIds)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin identities');
+    return invokePluginMarket(() => service().lookup(ghostIds));
+  });
   ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
@@ -269,6 +285,9 @@ export function registerPluginMarketIpc(): void {
         throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
       }
       const owner = getActiveAppSession();
+      // Every push carries the owner that started this install; after an account or mode switch
+      // the renderer drops it instead of drawing it on the new owner's plugin.
+      const ownerStamp = getActiveDataOwnerPushStamp();
       const previouslyInstalled = new Set(
         getGhostManager()
           .list()
@@ -288,6 +307,9 @@ export function registerPluginMarketIpc(): void {
             consent: {
               prompt: createWindowGhostInstallConsentPrompt(event.sender),
               initiator: 'user',
+            },
+            onProgress: (progress) => {
+              if (!event.sender.isDestroyed()) event.sender.send(INSTALL_PROGRESS_CHANNEL, progress, ownerStamp);
             },
           },
         );

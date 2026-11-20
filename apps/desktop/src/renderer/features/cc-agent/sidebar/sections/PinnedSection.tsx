@@ -12,7 +12,7 @@
  * 段头为纯文字标题，与伙伴、全部任务保持相同的文字起点与颜色。
  * 右侧 hover 浮现的显示样式钮打开 ViewStyleMenu（文字 / 卡片 / 列表），
  * 与 Settings → 外观 的开关同源。
- * 置顶**不做"最多显示 N 条"折叠**——置顶是用户主动钉住的内容,三种模式都全部显示。
+ * 展开时三种模式全部显示；收起后只显示未读和待反馈条目，不限制提醒数量。
  *
  * 拖拽：文字 / list 模式通过 SortableList 整行可拖；card 模式由 CardMasonry 在多列时
  *   切到 DraggableCardColumns。落定后都通过父层注入的 `onReorder(newOrderIds)`
@@ -29,6 +29,8 @@ import {
   LayoutGrid,
   LayoutList,
   Check,
+  Clock,
+  GripVertical,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -40,6 +42,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -65,7 +69,15 @@ import {
   subscribeRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
+import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
+import { remoteLampOf } from '../../lib/sessionLampAggregation';
+import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import type { PinnedSidebarEntry } from '../../lib/pinnedSidebarOrder';
+import type { PinnedSortBy } from '../../hooks/helpers/sidebarFilterCore';
+export type { PinnedSidebarEntry } from '../../lib/pinnedSidebarOrder';
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -99,17 +111,21 @@ function viewStyleIcon(mode: SidebarViewMode): LucideIcon {
 }
 
 /**
- * ViewStyleMenu — Pinned 段头的"显示样式"切换弹层(文字版 / 卡片版 / 列表)。
+ * ViewStyleMenu — Pinned 段头的显示菜单(排序 + 文字版 / 卡片版 / 列表)。
  * trigger 由调用方提供(段头右侧 hover 出现、图标随当前模式变化),菜单写回全局
  * sidebar 显示模式(useSidebarCardMode 的 mode),与 Settings → 外观 同源。
  */
 function ViewStyleMenu({
   mode,
   setMode,
+  sortBy,
+  setSortBy,
   children,
 }: {
   mode: SidebarViewMode;
   setMode: (next: SidebarViewMode) => void;
+  sortBy: PinnedSortBy;
+  setSortBy: (next: PinnedSortBy) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -118,6 +134,33 @@ function ViewStyleMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent side="bottom" align="end" sideOffset={4} className="min-w-[128px]">
+        <DropdownMenuLabel>{t('ccAgent.sidebar.filterSortByHeading')}</DropdownMenuLabel>
+        {(
+          [
+            {
+              value: 'manual',
+              labelKey: 'ccAgent.sidebar.filterSortBy.manual',
+              Icon: GripVertical,
+            },
+            { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.activity', Icon: Clock },
+          ] as const
+        ).map((opt) => (
+          <DropdownMenuItem
+            key={opt.value}
+            onSelect={() => setSortBy(opt.value)}
+            className={MENU_ITEM_CLASS}
+          >
+            <opt.Icon
+              size={15}
+              strokeWidth={1.75}
+              className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+            />
+            <span className="truncate">{t(opt.labelKey)}</span>
+            {sortBy === opt.value && <Check size={15} className="ml-auto shrink-0" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>{t('ccAgent.sidebar.displayHeading')}</DropdownMenuLabel>
         {OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}
@@ -138,16 +181,9 @@ function ViewStyleMenu({
   );
 }
 
-export type PinnedSidebarEntry =
-  | { kind: 'session'; id: string; session: Session }
-  | {
-      kind: 'project';
-      id: string;
-      project: ProjectNodeData;
-      displaySessions: ProjectNodeData['sessions'];
-    };
-
 export interface PinnedSectionProps {
+  sortBy: PinnedSortBy;
+  onSortByChange: (next: PinnedSortBy) => void;
   /** 已按筛选和持久化顺序排好的置顶对话与项目。 */
   entries: PinnedSidebarEntry[];
   /**
@@ -169,7 +205,7 @@ export interface PinnedSectionProps {
   notifications: ReadonlySet<string>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
@@ -179,6 +215,8 @@ export interface PinnedSectionProps {
 }
 
 export function PinnedSection({
+  sortBy,
+  onSortByChange,
   entries,
   allKnownProjects,
   renderProject,
@@ -207,13 +245,25 @@ export function PinnedSection({
     persistPinnedSectionCollapsed(next);
   }, [collapsed]);
 
-  const visibleEntries = entries;
+  const activities = useAgentIslandActivityMap();
+  const attentionKinds = useSessionAttentionKinds();
+  useRemoteSessionActivityRevision();
+  const needsAttention = (session: Session) => hasPendingSessionInterruption(session)
+    || notifications.has(session.id)
+    || attentionKinds.has(session.id)
+    || activities.get(session.id)?.phase === 'needs-interaction'
+    || remoteLampOf(session.id, session.deviceLinkDeviceId)?.tone != null;
+  const visibleEntries: PinnedSidebarEntry[] = collapsed ? entries.flatMap((entry): PinnedSidebarEntry[] => {
+    if (entry.kind === 'session') return needsAttention(entry.session) ? [entry] : [];
+    const displaySessions = entry.displaySessions.filter(needsAttention);
+    return displaySessions.map(session => ({ kind: 'session' as const, id: session.id, session }));
+  }) : entries;
   const pinnedSessions = useMemo(
     () =>
-      visibleEntries.flatMap((entry) =>
+      entries.flatMap((entry) =>
         entry.kind === 'session' ? [entry.session] : entry.displaySessions,
       ),
-    [visibleEntries],
+    [entries],
   );
   // Pinned rows are absent from ProjectsSection's starting settlement.
   // Settle only the activity being pushed, never an old waiting phase on rerender.
@@ -329,15 +379,36 @@ export function PinnedSection({
     ],
   );
 
+  const renderText = (entry: PinnedSidebarEntry) =>
+    entry.kind === 'project' ? (
+      renderProject(entry.project, entry.displaySessions, collapsed, 'text')
+    ) : (
+      <SessionItem
+        session={entry.session}
+        isActive={entry.session.id === activeSessionId}
+        isRunning={runningSessionIds.has(entry.session.id)}
+        isAttached={attachedSessionIds.has(entry.session.id)}
+        hasAttentionNotification={notifications.has(entry.session.id)}
+        isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
+        onClick={onSessionClick}
+        onAction={onAction}
+        onRename={onRename}
+        onTogglePin={onTogglePin}
+        onMoveSession={onMoveSession}
+        projectOptions={projectOptions}
+        sourceLabel={sourceLabelMap.get(entry.session.id)}
+      />
+    );
+
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const toggleLabel = collapsed
     ? t('ccAgent.sidebar.pinnedToggleExpand')
     : t('ccAgent.sidebar.pinnedToggleCollapse');
 
-  if (visibleEntries.length === 0) return null;
+  if (entries.length === 0) return null;
 
   return (
-    <div className="flex flex-col w-full">
+    <div data-sortable-scope="pinned" className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）
@@ -380,7 +451,7 @@ export function PinnedSection({
         {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。
             图标 = 当前选中的显示模式(2026-08-12 用户裁决),不再恒为网格。 */}
         <div className={cn(HEADER_HOVER_ACTION_CLASS, 'flex items-center gap-0.5')}>
-          <ViewStyleMenu mode={mode} setMode={setMode}>
+          <ViewStyleMenu mode={mode} setMode={setMode} sortBy={sortBy} setSortBy={onSortByChange}>
             <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
               <button
                 type="button"
@@ -404,7 +475,7 @@ export function PinnedSection({
           两侧视觉对称。卡片模式原先用 px-[11px],右侧在 gutter 之外又叠了 11px padding,
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
       {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
-      <SectionCollapse collapsed={collapsed}>
+      <SectionCollapse collapsed={collapsed && visibleEntries.length === 0}>
         {/* 留白放进折叠内容，收起后不残留；列表和卡片按自身内边距补偿。 */}
         <div
           className={cn(
@@ -416,9 +487,16 @@ export function PinnedSection({
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;
               - text:紧凑行 SessionItem。card/list 都整卡可拖,回写同一份 manualPinnedOrder。 */}
-          {mode === 'card' ? (
+          {collapsed ? (
+            <div className={mode === 'card' ? 'grid grid-cols-1 gap-2' : 'flex flex-col gap-0.5'}>
+              {slicedEntries.map((entry, index) => (
+                <div key={entry.id}>{mode === 'text' ? renderText(entry) : renderCard(entry, index)}</div>
+              ))}
+            </div>
+          ) : mode === 'card' ? (
             <CardMasonry
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -432,6 +510,7 @@ export function PinnedSection({
             // 一条顶线覆盖"列表顶";高亮(active/选中/hover)行及其相邻行的线隐藏。
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -442,32 +521,13 @@ export function PinnedSection({
           ) : (
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
               forceFallback={false}
               className="flex flex-col gap-0.5"
-              renderItem={(entry) =>
-                entry.kind === 'project' ? (
-                  renderProject(entry.project, entry.displaySessions, collapsed, 'text')
-                ) : (
-                  <SessionItem
-                    session={entry.session}
-                    isActive={entry.session.id === activeSessionId}
-                    isRunning={runningSessionIds.has(entry.session.id)}
-                    isAttached={attachedSessionIds.has(entry.session.id)}
-                    hasAttentionNotification={notifications.has(entry.session.id)}
-                    isSelected={selectedSessionIds?.has(entry.session.id) ?? false}
-                    onClick={onSessionClick}
-                    onAction={onAction}
-                    onRename={onRename}
-                    onTogglePin={onTogglePin}
-                    onMoveSession={onMoveSession}
-                    projectOptions={projectOptions}
-                    sourceLabel={sourceLabelMap.get(entry.session.id)}
-                  />
-                )
-              }
+              renderItem={renderText}
             />
           )}
         </div>

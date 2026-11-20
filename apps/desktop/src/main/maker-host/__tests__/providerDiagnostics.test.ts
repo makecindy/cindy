@@ -10,10 +10,47 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { channel } from 'node:diagnostics_channel';
+import * as googleAdapter from '@earendil-works/pi-ai/api/google-generative-ai';
+import * as vertexAdapter from '@earendil-works/pi-ai/api/google-vertex';
+import * as bedrockAdapter from '@earendil-works/pi-ai/api/bedrock-converse-stream';
+
+// Retain real adapters for existing native SDK regressions; expose configurable
+// wrappers only for the transport-conversion boundary fixtures below.
+vi.mock('@earendil-works/pi-ai/api/google-generative-ai', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-generative-ai')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/google-vertex', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-vertex')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/bedrock-converse-stream', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/bedrock-converse-stream')>(),
+}));
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const usageLog = vi.hoisted(() => ({
+  record: vi.fn(async (_tokens: unknown, _route: unknown) => {}),
+}));
+vi.mock('../../usage/auxiliaryUsage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../usage/auxiliaryUsage.js')>();
+  const create = (attribution: Record<string, unknown> = {}) =>
+    Object.assign(
+      async (tokens: unknown, route: Record<string, unknown> = {}) =>
+        usageLog.record(tokens, { ...attribution, ...route }),
+      { close: () => {} },
+    );
+  return {
+    ...actual,
+    createAuxiliaryUsageRecorder: create,
+    withAuxiliaryUsage: async (
+      attribution: Record<string, unknown>,
+      run: (record: ReturnType<typeof create>) => Promise<unknown>,
+    ) => run(create(attribution)),
+  };
+});
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
+  desktopMakerLogger: { ...probeLog, child: () => probeLog },
 }));
 
 import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
@@ -28,12 +65,21 @@ import {
   testProviderConnection,
 } from '../provider-diagnostics.js';
 import { probeProviderProtocols } from '../provider-protocol-probe.js';
+import { fetchProviderModels } from '../provider-model-fetch.js';
 import { setCustomProviders } from '../active-catalog.js';
+import {
+  __resetModelVisibilityMirrorForTest,
+  clearModelVisibilityMirror,
+  setModelVisibilityMirror,
+} from '../model-visibility-mirror.js';
 
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  usageLog.record.mockClear();
+  setDiagnosticsOAuthTokenReader(() => null);
 });
 
 describe('classifyProviderError', () => {
@@ -84,6 +130,66 @@ describe('classifyProviderError', () => {
       classifyProviderError({ status: 400, bodyText: 'Extra inputs are not permitted' }).code,
     ).toBe('WIRE_INCOMPATIBLE');
     expect(classifyProviderError({ status: 400, bodyText: 'something odd' }).code).toBe('UNKNOWN');
+  });
+
+  // Regression: Azure/LiteLLM's "exceeds ... context window" was UNKNOWN here
+  // although the Agent already recognized it. Unit: real classifier, no network.
+  it.each([400, 422])('%i recognizes context overflow without requiring a structured code', (status) => {
+    const message = 'Your input exceeds the context window of this model.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'CONTEXT_TOO_LONG', retryable: false,
+      });
+    }
+  });
+
+  // #9470: unit, real classifier. Existing field-pattern coverage missed Google's
+  // quoted Unknown name rejection; raw and JSON-escaped messages reach consumers.
+  it.each([400, 422])('%i recognizes explicit Unknown name payload rejections', (status) => {
+    const message = 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field. Unknown name "max_tokens": Cannot find field.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'WIRE_INCOMPATIBLE', retryable: false,
+      });
+    }
+  });
+
+  // #9470 P2: unit, real classifier; field order and JSON escaping must not
+  // turn a rejected request field into a missing model (no live gateway covered).
+  it.each([400, 422])('%i ignores rejected field names when matching model errors', (status) => {
+    for (const fields of [['model', 'messages'], ['anthropic_version', 'model', 'messages']]) {
+      const message = 'Invalid JSON payload received. '
+        + fields.map((field) => `Unknown name "${field}": Cannot find field.`).join(' ');
+      for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+        expect(classifyProviderError({ status, bodyText })).toMatchObject({
+          code: 'WIRE_INCOMPATIBLE', retryable: false,
+        });
+      }
+    }
+  });
+
+  it.each([
+    [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
+    [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
+    [400, 'Unknown name "customer"', 'UNKNOWN'],
+    [401, 'Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid API key. Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid model name. Invalid JSON payload received. Unknown name "messages"', 'MODEL_NOT_FOUND'],
+    [400, 'insufficient_quota. Invalid JSON payload received. Unknown name "messages"', 'QUOTA_EXCEEDED'],
+    [400, 'prompt is too long. Invalid JSON payload received. Unknown name "messages"', 'CONTEXT_TOO_LONG'],
+    [500, 'Invalid JSON payload received. Unknown name "messages"', 'UPSTREAM_ERROR'],
+  ] as const)('preserves classification for %i / %s', (status, bodyText, code) => {
+    expect(classifyProviderError({ status, bodyText }).code).toBe(code);
+  });
+
+  it.each([
+    'Invalid Responses API request: input - Invalid input',
+    'Rate limit exceeded: too many tokens per minute',
+    'Maximum output tokens reached: too many tokens',
+    'Tool argument validation failed: input length exceeds 1000 characters',
+  ])('does not classify unrelated input/token errors as context overflow: %s', (bodyText) => {
+    expect(classifyProviderError({ status: 400, bodyText }).code).not.toBe('CONTEXT_TOO_LONG');
   });
 
   it('403 命中鉴权措辞归 AUTH_INVALID（部分网关 key 无效报 403）', () => {
@@ -345,6 +451,20 @@ function fakeResponse(status: number, body = ''): Response {
 }
 
 describe('runProviderProbe（注入 fetch，不联网）', () => {
+  // #9470: production probe result and log must carry the classifier's code.
+  it('reports an Unknown name field rejection as wire incompatible', async () => {
+    const r = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(400, JSON.stringify({ error: {
+        message: 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field.',
+      } })),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 400 });
+    expect(probeLog.warn.mock.calls[0]?.[1]).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', model: 'm', status: 400,
+    });
+  });
+
   it('2xx → ok + latency', async () => {
     const r = await runProviderProbe(
       { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
@@ -423,6 +543,64 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
+  });
+
+  it('records trailing usage from a later network chunk and keeps the served model', async () => {
+    const frames = [
+      { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+      {
+        model: 'served-model',
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 40 },
+          completion_tokens: 2,
+        },
+      },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encode = new TextEncoder();
+        for (const frame of frames)
+          controller.enqueue(encode.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const result = await runProviderProbe(
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'requested-alias',
+        wireProtocol: 'openai-chat',
+        apiKey: 'fake',
+      },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
+
+  it('keeps observed usage when a probe stream disconnects after its first payload', async () => {
+    let step = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const frames = [
+          { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+          { model: 'served-model', usage: { prompt_tokens: 100, completion_tokens: 2 } },
+        ];
+        if (step === frames.length) { controller.error(new Error('socket disconnected')); return; }
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frames[step++])}\n\n`));
+      },
+    });
+    await expect(runProviderProbe({ agent: 'codex', baseUrl: 'https://x.example', modelId: 'alias', wireProtocol: 'openai-chat', apiKey: 'fake' },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))).rejects.toThrow('socket disconnected');
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 2 }), expect.objectContaining({ model: 'served-model' }));
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -524,12 +702,12 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     },
   };
 
-  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', () => {
+  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader((id, agent) =>
       id === 'my-relay' && agent === 'claude-code' ? 'sk-saved' : null,
     );
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec).toMatchObject({
       baseUrl: 'https://relay.example/anthropic',
       modelId: 'glm-5.2',
@@ -538,11 +716,11 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     });
   });
 
-  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', () => {
+  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader(() => null);
 
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({
       'x-tenant': 't1',
@@ -572,7 +750,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setCustomProviders([buildUserProvider(chatConfig)]);
     setDiagnosticsKeyReader(() => 'sk-ds');
     // resolveSavedProbeSpec 必须回带 wireProtocol，否则 buildProbeRequest 回落原生 /responses。
-    expect(resolveSavedProbeSpec('ds-chat', 'codex').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('ds-chat', 'codex')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'ds-chat', agent: 'codex' },
@@ -600,7 +778,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'pi-chat-key');
 
-    expect(resolveSavedProbeSpec('pi-chat', 'pi').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('pi-chat', 'pi')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'pi-chat', agent: 'pi' },
@@ -615,7 +793,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenUrl).toBe('https://pi-chat.example/v1/chat/completions');
   });
 
-  it('Pi saved 探测优先使用单模型协议覆盖', () => {
+  it('Pi saved 探测优先使用单模型协议覆盖', async () => {
     setCustomProviders([
       buildUserProvider({
         id: 'pi-model-override',
@@ -636,7 +814,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
 
-    expect(resolveSavedProbeSpec('pi-model-override', 'pi')).toMatchObject({
+    expect((await resolveSavedProbeSpec('pi-model-override', 'pi'))).toMatchObject({
       baseUrl: 'https://pi-override.example/v1',
       modelId: 'messages-model',
       wireProtocol: 'anthropic-messages',
@@ -669,7 +847,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-responses-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-responses-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/v1',
       modelId: 'glm-5.3',
       wireProtocol: 'openai-responses',
@@ -703,7 +881,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-chat-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-chat-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
       modelId: 'glm-5.2',
       wireProtocol: 'openai-chat',
@@ -735,17 +913,17 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
     setDiagnosticsKeyReader(() => 'sk-exact');
-    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath).toBe('/tenant/acme/infer');
+    expect((await resolveSavedProbeSpec('exact-path', 'codex')).requestPath).toBe('/tenant/acme/infer');
   });
 
-  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {
+  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', async () => {
     setCustomProviders([buildUserProvider(config)]);
-    expect(() => resolveSavedProbeSpec('nope', 'claude-code')).toThrow(/not found/);
-    expect(() => resolveSavedProbeSpec('xd', 'claude-code')).toThrow(/not a custom provider/);
-    expect(() => resolveSavedProbeSpec('my-relay', 'codex')).toThrow(/no runtime/);
+    await expect(resolveSavedProbeSpec('nope', 'claude-code')).rejects.toThrow(/not found/);
+    await expect(resolveSavedProbeSpec('xd', 'claude-code')).rejects.toThrow(/not a custom provider/);
+    await expect(resolveSavedProbeSpec('my-relay', 'codex')).rejects.toThrow(/no runtime/);
   });
 
-  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', () => {
+  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -773,10 +951,175 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
-  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', () => {
+  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-4.5': true });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
+  });
+
+  // 测试价值:生产入口 resolveSavedProbeSpec,可观察结果是探测请求用的 modelId。
+  // Bug #9470 / PR #9571 P1:镜像只存显式开关,关掉写 false、没拨过无条目。
+  // 原兜底只认 === true,会把显式隐藏的第一个坏模型当成探测目标。
+  // 最小失败输入:候选 [glm-5.2, glm-4.5],只把 glm-5.2 标成 false。tier: unit。
+  it('显式隐藏第一个聊天模型、第二个未拨过时,探测跳过隐藏项选第二个', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-5.2': false });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
+  });
+
+  // 全部显式隐藏时仍要能测连接:退回第一个可选模型,不要因为没有可见模型而抛空。
+  it('全部聊天模型都被显式隐藏时,探测仍退回第一个可选模型', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({
+      'claude-code:my-relay:glm-5.2': false,
+      'claude-code:my-relay:glm-4.5': false,
+    });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  // 镜像未就绪时 getModelVisibilityOverride 抛 MODEL_VISIBILITY_NOT_READY。
+  // 探测不能因此失败,必须走原来的第一个可选模型。
+  it('可见性镜像未就绪时走兜底且不抛错', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    clearModelVisibilityMirror();
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  it('没有显式可见偏好时,探测仍退回第一个聊天模型', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({});
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -797,7 +1140,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(() => resolveSavedProbeSpec('my-relay', 'claude-code')).toThrow(/no chat models/);
+    await expect(resolveSavedProbeSpec('my-relay', 'claude-code')).rejects.toThrow(/no chat models/);
   });
 
   it('testProviderConnection(saved) 端到端（注入 fetch 断言 URL 与 key）', async () => {
@@ -818,6 +1161,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenAuth).toBe('sk-saved');
   });
 
+  // #8679: saved providers probe the first chat model, which the user never picks in the test button's
+  // context. A bare "upstream 5xx" made a failure on that model read like the whole provider (or the model
+  // that just answered) was broken, so the result must say which model was tested.
+  it('testProviderConnection(saved) 失败时仍带回被测模型 ID', async () => {
+    setCustomProviders([buildUserProvider({
+      ...config,
+      runtimes: { 'claude-code': { ...config.runtimes['claude-code'],
+        models: [{ id: 'glm-5.2', name: 'GLM' }, { id: 'glm-5.2-air', name: 'GLM Air' }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    const r = await testProviderConnection(
+      { kind: 'saved', providerId: 'my-relay', agent: 'claude-code' },
+      async () => fakeResponse(500, '{}'),
+    );
+    expect(r).toMatchObject({ ok: false, modelId: 'glm-5.2' });
+  });
+
   it('oauth-token 供应商:探测 token 走 authorization 头,绝不发 x-api-key(与真实路由同口径)', async () => {
     const oauthConfig = {
       ...config,
@@ -836,7 +1196,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setDiagnosticsKeyReader(() => 'sk-should-not-be-used');
     setDiagnosticsOAuthTokenReader((id) => (id === 'my-sub' ? 'at-77' : null));
 
-    const spec = resolveSavedProbeSpec('my-sub', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-sub', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toMatchObject({ authorization: 'Bearer at-77', 'x-tenant': 't1' });
 
@@ -846,7 +1206,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(headers['x-api-key']).toBeUndefined();
   });
 
-  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', () => {
+  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', async () => {
     setCustomProviders([
       buildUserProvider({
         ...config,
@@ -867,7 +1227,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'stale-safe-storage-key');
 
-    const spec = resolveSavedProbeSpec('local-proxy', 'claude-code');
+    const spec = await resolveSavedProbeSpec('local-proxy', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({ 'x-tenant': 't1' });
   });
@@ -902,7 +1262,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
 });
 
 
-it('probes Google using generateContent instead of falling through to Responses', () => {
+it('probes Google using generateContent instead of falling through to Responses', async () => {
   const request = buildProbeRequest({ agent: 'codex', wireProtocol: 'google-generative-ai',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'new-gemini', apiKey: 'fixture-key' });
   expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/new-gemini:generateContent');
@@ -913,6 +1273,41 @@ it('probes Google using generateContent instead of falling through to Responses'
 
 
 describe('native SDK connection probes', () => {
+  // #11007 review regression: unlike the direct-fetch matrix, this unit test
+  // enters the real native SDK, which resolves transport failures as messages.
+  // Minimal failure is a fetch rejection with a certificate code in its cause.
+  it.each(['saved', 'adhoc'] as const)('preserves certificate diagnostics when the native SDK consumes a %s rejection', async kind => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    setCustomProviders([buildUserProvider({ id: 'native-certificate', name: 'Native certificate',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
+        models: [{ id: row.id, name: row.name, piApi: 'openai-responses' }] } },
+    })]);
+    setDiagnosticsOAuthTokenReader(() => 'fixture-token');
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('private endpoint'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }) });
+    });
+    const result = await testProviderConnection(kind === 'saved'
+      ? { kind, providerId: 'native-certificate', agent: 'pi' }
+      : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api: 'openai-responses',
+        catalogPresetId: 'github-copilot', apiKey: 'fixture-token' } }, fetcher);
+    expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain('private endpoint');
+  });
+
+  it.each([
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'],
+    ['ABORT_ERR', 'TIMEOUT'],
+  ])('keeps native transport failure %s distinct from certificate errors', async (networkCode, code) => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw Object.assign(new Error('transport failed'), { code: networkCode }); });
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      api: 'openai-responses', nativeModel: row, apiKey: 'fixture-token' }, fetcher)).toMatchObject({ ok: false, code });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each(['saved', 'adhoc', 'header-only'] as const)('uses the Vertex SDK for a %s connection, not the public Gemini path', async kind => {
     const row = PROVIDER_MODEL_CATALOG.providers['google-vertex'][0];
     const baseUrl = 'https://us-central1-aiplatform.googleapis.com';
@@ -954,7 +1349,7 @@ describe('native SDK connection probes', () => {
 });
 
 
-it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', () => {
+it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', async () => {
   const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
   setCustomProviders([buildUserProvider({ id: 'copilot-probe', name: 'Copilot',
     auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
@@ -963,7 +1358,7 @@ it('keeps the Copilot SDK identity but uses the assigned enterprise host for con
   })]);
   setDiagnosticsOAuthTokenReader(() => 'fixture;proxy-ep=proxy.enterprise.githubcopilot.com;');
   try {
-    expect(resolveSavedProbeSpec('copilot-probe', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('copilot-probe', 'codex'))).toMatchObject({
       baseUrl: 'https://api.enterprise.githubcopilot.com', api: 'openai-responses',
       nativeModel: { upstream: row.upstream, execution: { pi: { headers: expect.objectContaining({ 'Copilot-Integration-Id': 'vscode-chat' }) } } },
     });
@@ -1039,6 +1434,39 @@ describe('automatic Pi protocol connection test', () => {
     { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]);
   const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('does not overcount cumulative prompt/cache snapshots in native probing', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      sse([
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 20 },
+            completion_tokens: 1,
+          },
+        },
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 40 },
+            completion_tokens: 2,
+          },
+        },
+      ]),
+    );
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: true });
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
 
   it('uses native streaming and stops on the first successful generation', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => chat());
@@ -1250,4 +1678,278 @@ describe('automatic Pi protocol connection test', () => {
     expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
     expect(JSON.stringify(result)).not.toContain(secret);
   });
+});
+
+// #7942: 真实连接探测入口等待凭证，失败时不访问推理端点；假 reader/fetch，无外网。
+it.each(['claude-code', 'codex', 'pi'] as const)('awaits refreshed OAuth credentials for saved connection diagnostics on %s', async agent => {
+  setCustomProviders([buildUserProvider({ id: 'refresh-probe', name: 'Refresh probe',
+    auth: { method: 'oauth', oauth: providerPresetOAuth('moonshot-kimi-code')! },
+    runtimes: { [agent]: { baseUrl: 'https://api.kimi.com/coding', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'fake-model', name: 'Fake model' }] } },
+  })]);
+  let release!: (token: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    expect(init?.headers).toMatchObject({ authorization: 'Bearer fake-refreshed' });
+    return new Response('{}');
+  });
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock);
+  await Promise.resolve();
+  expect(fetchMock).not.toHaveBeenCalled();
+  release('fake-refreshed');
+  expect(await pending).toMatchObject({ ok: true });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockClear();
+  setDiagnosticsOAuthTokenReader(async () => { throw new Error('provider_oauth_refresh_failed'); });
+  expect(await testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock))
+    .toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+// #7942 / PR review: a catalog rebuild is not an OAuth identity change. The
+// production saved probe must still send after an unrelated connection edit,
+// while a changed destination must prevent dispatch. Unit tier, injected I/O.
+it.each([false, true])('checks connection values across catalog rebuilds (target changed=%s)', async targetChanged => {
+  const oauth = { authorizeUrl: 'https://auth.example/authorize', tokenUrl: 'https://auth.example/token', clientId: 'fixture', scopes: 'openid' };
+  const provider = (id: string, baseUrl: string) => buildUserProvider({ id, name: id,
+    auth: { method: 'oauth', oauth }, runtimes: { codex: { baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'fixture-model', name: 'Fixture' }] } },
+  });
+  setCustomProviders([provider('probe-rebuild', 'https://provider.example/v1'), provider('other', 'https://other.example/v1')]);
+  let release!: (value: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetcher = vi.fn<typeof fetch>(async () => new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'probe-rebuild', agent: 'codex' }, fetcher);
+  await Promise.resolve();
+  setCustomProviders([provider('probe-rebuild', targetChanged ? 'https://changed.example/v1' : 'https://provider.example/v1'), provider('other', 'https://other-updated.example/v1')]);
+  release('fake-refreshed');
+  expect(await pending).toMatchObject(targetChanged ? { ok: false, code: 'AUTH_INVALID' } : { ok: true });
+  expect(fetcher).toHaveBeenCalledTimes(targetChanged ? 0 : 1);
+});
+
+/** #11007 unit regression: existing tests only covered shallow connection failures.
+ * Exercise all three public settings operations with direct, nested and aggregate
+ * certificate failures; assert safe diagnostics and no automatic request replay.
+ * Real TLS handshake reproduction is a separate loopback experiment, not a mock claim.
+ */
+describe('provider certificate diagnostics (#11007)', () => {
+  const spec = { agent: 'codex' as const, baseUrl: 'https://provider.example',
+    modelId: 'synthetic-model', wireProtocol: 'openai-responses' as const, apiKey: 'synthetic-key' };
+  const certificate = () => Object.assign(new Error('private endpoint and credential must not escape'),
+    { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+  it.each([
+    ['direct', () => certificate()],
+    ['fetch cause', () => new TypeError('fetch failed', { cause: certificate() })],
+    ['nested aggregate', () => new TypeError('fetch failed', { cause: new AggregateError([
+      new Error('transport wrapper', { cause: certificate() }),
+    ]) })],
+  ])('%s errors reach all settings operations without replay or sensitive details', async (_shape, makeError) => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw makeError(); });
+    const expected = { ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject(expected);
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject(expected);
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ...expected, decision: 'blocked' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
+    'CERT_NOT_YET_VALID', 'CERT_REVOKED', 'CERT_UNTRUSTED', 'CERT_REJECTED',
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_PURPOSE', 'INVALID_CA', 'PATH_LENGTH_EXCEEDED', 'CERT_CHAIN_TOO_LONG',
+    'UNABLE_TO_GET_CRL', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+    'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY', 'CERT_SIGNATURE_FAILURE', 'CRL_SIGNATURE_FAILURE',
+    'CRL_NOT_YET_VALID', 'CRL_HAS_EXPIRED', 'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+    'ERROR_IN_CERT_NOT_AFTER_FIELD', 'ERROR_IN_CRL_LAST_UPDATE_FIELD', 'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+    'HOSTNAME_MISMATCH',
+  ])('%s is a non-retryable certificate failure', networkErrorCode => {
+    expect(classifyProviderError({ networkErrorCode })).toEqual({
+      code: 'CERT_ERROR', retryable: false, detail: networkErrorCode,
+    });
+  });
+
+  it.each([
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'], ['ERR_TLS_INVALID_PROTOCOL_VERSION', 'UNKNOWN'],
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'], ['ENOTFOUND', 'UPSTREAM_UNREACHABLE'],
+    ['ETIMEDOUT', 'TIMEOUT'], ['OUT_OF_MEM', 'UNKNOWN'],
+  ])('preserves non-certificate failure %s', async (networkErrorCode, code) => {
+    const error = new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('private message'), { code: networkErrorCode }),
+    ]) });
+    const fetcher = async () => { throw error; };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: false, code });
+  });
+
+  it('terminates cyclic causes and keeps explicit cancellation distinct from certificate errors', async () => {
+    const cycle = new Error('private cyclic message');
+    cycle.cause = cycle;
+    const cyclicFetch = async () => { throw cycle; };
+    expect(await fetchProviderModels(spec, cyclicFetch)).toMatchObject({ ok: false, code: 'UNKNOWN' });
+    const aborted = new Error('cancelled', { cause: certificate() });
+    aborted.name = 'AbortError';
+    expect(await runProviderProbe(spec, async () => { throw aborted; })).toMatchObject({ ok: false, code: 'TIMEOUT' });
+  });
+});
+
+// #11007 review / unit: these SDKs reject injected fetch. Model their actual
+// Node transport diagnostics before the SDK discards cause; no sockets or cloud
+// credentials. Existing Copilot tests only cover the injected-fetch adapter.
+describe.each([
+  ['google', 'google-generative-ai', googleAdapter, 'undici:request:create', 'undici:request:error'],
+  ['google-vertex', 'google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['amazon-bedrock', 'bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('SDK-owned transport certificate diagnostics: %s', (preset, api, adapter, startName, errorName) => {
+  it.each(['saved', 'adhoc'] as const)('preserves the %s probe code before SDK error conversion', async kind => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('SDK must own its transport'); });
+    const start = channel(startName), failed = channel(errorName);
+    const previous = [start.hasSubscribers, failed.hasSubscribers];
+    const observed = new Set<unknown>();
+    const listener = (message: unknown) => { observed.add(message); };
+    failed.subscribe(listener);
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation((_model, _context, options = undefined) => ({
+      result: async () => {
+        expect(options).not.toHaveProperty('fetch');
+        const request = startName.startsWith('undici:')
+          ? { origin: new URL(row.upstream.replace('{location}', 'us-central1')).origin }
+          : { protocol: new URL(row.upstream).protocol, getHeader: () => new URL(row.upstream).host };
+        start.publish({ request });
+        await Promise.resolve();
+        failed.publish({ request, error: Object.assign(new Error('private SDK endpoint'), { code: 'INVALID_PURPOSE' }) });
+        return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    setCustomProviders([buildUserProvider({ id: 'native-owned', name: 'Native', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: preset,
+        models: [{ id: row.id, name: row.name, piApi: api }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'fixture-key');
+    try {
+      const result = await testProviderConnection(kind === 'saved'
+        ? { kind, providerId: 'native-owned', agent: 'pi' }
+        : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api,
+          catalogPresetId: preset, apiKey: 'fixture-key' } }, fetcher);
+      expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+      expect(JSON.stringify(result)).not.toContain('private SDK endpoint');
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(sdk).toHaveBeenCalledOnce();
+      // Capture must leave pre-existing diagnostics subscribers operational.
+      const late = { request: {}, error: Object.assign(new Error('late'), { code: 'INVALID_CA' }) };
+      failed.publish(late);
+      expect(observed.has(late)).toBe(true);
+    } finally { sdk.mockRestore(); failed.unsubscribe(listener); }
+    expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+  });
+});
+
+// #11007: async request errors may arrive outside the creating async context.
+// Two simultaneous native probes must not borrow each other's safe error code.
+it('isolates concurrent SDK-owned requests and removes observers after settlement', async () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.google[0];
+  const start = channel('undici:request:create'), failed = channel('undici:request:error');
+  const previous = [start.hasSubscribers, failed.hasSubscribers];
+  const complete: Array<() => void> = [];
+  let index = 0;
+  const sdk = vi.spyOn(googleAdapter, 'streamSimple').mockImplementation(() => ({
+    result: () => {
+      const request = { origin: new URL(row.upstream).origin };
+      const code = index++ === 0 ? 'INVALID_PURPOSE' : 'ECONNREFUSED';
+      start.publish({ request });
+      return new Promise(resolve => complete.push(() => {
+        failed.publish({ request, error: Object.assign(new Error('private'), { code }) });
+        resolve({ stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+      }));
+    },
+  }) as never);
+  try {
+    const spec = { agent: 'pi' as const, baseUrl: row.upstream, modelId: row.id,
+      api: 'google-generative-ai' as const, apiKey: 'fixture' };
+    const first = runProviderProbe(spec), second = runProviderProbe(spec);
+    expect(complete).toHaveLength(2);
+    // An unrelated request must not enter either probe, even while both await.
+    const unrelated = {};
+    start.publish({ request: unrelated });
+    failed.publish({ request: unrelated, error: { code: 'CERT_HAS_EXPIRED' } });
+    complete[0](); complete[1]();
+    expect(await first).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+    expect(await second).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE', detail: 'ECONNREFUSED' });
+  } finally { sdk.mockRestore(); }
+  expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+});
+
+// #11007 review: ADC/IAM credential lookup errors belong to auth, not the
+// provider base URL. Simulate the actual SDK conversion after those events.
+describe.each([
+  ['google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('credential lookups during %s probes', (api, adapter, startName, errorName) => {
+  it.each(['INVALID_CA', 'ENOTFOUND', 'ETIMEDOUT'])('does not project credential %s onto the provider', async code => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const baseUrl = row.upstream.replace('{location}', 'us-central1');
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation(() => ({
+      result: async () => {
+        const request = api === 'google-vertex'
+          ? { origin: 'https://oauth2.googleapis.com' }
+          : { protocol: 'http:', getHeader: () => '169.254.169.254' };
+        channel(startName).publish({ request });
+        channel(errorName).publish({ request, error: { code } });
+        return { stopReason: 'error', errorMessage: '401 Unauthorized', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    try {
+      expect(await runProviderProbe({ agent: 'pi', baseUrl, modelId: row.id,
+        nativeModel: row, api })).toMatchObject({ ok: false, code: 'AUTH_INVALID', status: 401 });
+      expect(sdk).toHaveBeenCalledOnce();
+    } finally { sdk.mockRestore(); }
+  });
+});
+
+it.each([
+  'bedrock-runtime.eu-west-1.amazonaws.com',
+  'bedrock-runtime.us-east-1.api.aws',
+  'bedrock-runtime.cn-north-1.api.amazonwebservices.com.cn',
+])('retains diagnostics for a Bedrock runtime selected by the SDK: %s', async host => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const request = { protocol: 'https:', getHeader: () => host };
+      channel('http.client.request.start').publish({ request });
+      channel('http.client.request.error').publish({ request, error: { code: 'INVALID_CA' } });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
+});
+
+it('retains the cause of a default Bedrock HTTP/2 stream TLS failure', async () => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const created = channel('http2.client.stream.created'), failed = channel('http2.client.stream.error');
+  const previous = [created.hasSubscribers, failed.hasSubscribers];
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const stream = {};
+      created.publish({ stream,
+        headers: { ':scheme': 'https', ':authority': new URL(row.upstream).host } });
+      failed.publish({ stream,
+        error: Object.assign(new Error('stream cancelled', { cause: { code: 'INVALID_CA' } }), { code: 'ERR_HTTP2_STREAM_CANCEL' }) });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
+  expect([created.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
 });

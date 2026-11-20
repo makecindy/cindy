@@ -46,6 +46,7 @@ import {
   type BotGroupDetail,
   type BotGroupFailure,
   type BotGroupMessageView,
+  type BotGroupPlanView,
   type BotGroupRemoteActionId,
   type BotGroupRemoteChatData,
   type BotGroupSummary,
@@ -301,13 +302,19 @@ function shareWithoutPaths(share: BotGroupThreadShareView): BotGroupThreadShareV
   return share.attachments.length > 0 ? { ...share, attachments: withoutPaths(share.attachments) } : share;
 }
 
+function canSetAutoContinue(detail: BotGroupDetail, plan: BotGroupPlanView): boolean {
+  return detail.serverBacked === true && detail.singleSpeaker === true && !detail.archived && !detail.dissolvedAt
+    && detail.openPlan?.id === plan.id && plan.kind === 'work' && plan.canManage === true
+    && typeof plan.autoContinue === 'boolean' && ['proposed', 'running', 'waiting'].includes(plan.status);
+}
+
 /** Host paths stay on the computer; the phone gets the folder name and attachment names only. */
 export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteChatData {
   return {
     ...detail,
     projectDir: null,
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
-    plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
+    plans: detail.plans.map((plan) => ({ ...plan, workDir: null, canSetAutoContinue: canSetAutoContinue(detail, plan) })),
     // Older phones consume message views only; derive from this read's state here.
     messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => {
       const view = message.attachments.length > 0 ? { ...message, attachments: withoutPaths(message.attachments) } : message;
@@ -316,10 +323,13 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    canStopAll: false,
+    supportsScopedStop: detail.serverBacked === true && detail.singleSpeaker === true,
     supportsReadReceipts: detail.serverBacked === true,
     ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
+    supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
   };
 }
@@ -588,12 +598,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           result = await current.continueRound(groupId);
           break;
         case 'stop':
-          result = await current.stopRound(groupId);
+          if (input.scope !== undefined && input.scope !== 'all') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          if (input.scope === 'all')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          result = await current.stopRound(groupId, input.scope);
           break;
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberInvites'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;
@@ -650,6 +663,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'plan-retry':
           result = await current.retryPlan(planInput);
           break;
+        case 'plan-auto-continue': {
+          if (typeof input.autoContinue !== 'boolean') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const plan = visibleGroup.plans.find(plan => plan.id === input.planId);
+          if (!plan || !canSetAutoContinue(visibleGroup, plan)) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PERMISSION_DENIED');
+          if (input.expectedPlanRevision !== undefined && (!Number.isSafeInteger(input.expectedPlanRevision) || input.expectedPlanRevision !== plan.revision))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PRECONDITION_FAILED');
+          result = await current.updateGroup({ groupId, autoContinue: input.autoContinue });
+          break;
+        }
         case 'plan-edit':
           result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId,
             ...(input.action === 'skip' ? { executionId: input.executionId } : {}) });

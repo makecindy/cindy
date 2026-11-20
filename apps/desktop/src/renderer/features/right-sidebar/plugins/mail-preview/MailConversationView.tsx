@@ -78,7 +78,7 @@ function MessageRow({ summary, initial, selected, initiallyExpanded, accountId, 
   return <section className="my-3 overflow-hidden rounded-xl border border-border bg-[var(--mail-paper)] dark:bg-[var(--surface)]"
     style={{ '--mail-paper': MAIL_PAPER_COLOR } as CSSProperties} data-mail-message-id={summary.messageId}>
     <button type="button" aria-expanded={expanded} aria-label={t(expanded ? 'mailReader.collapseMessage' : 'mailReader.expandMessage', { from })}
-      onClick={() => { if (!expanded) setOpened(true); setExpanded(v => !v); }} className="flex min-h-11 w-full items-start gap-2 rounded-lg px-3 py-3 text-left hover:bg-muted/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+      onClick={() => { if (!expanded) setOpened(true); setExpanded(v => !v); }} className="flex min-h-11 w-full items-start gap-2 rounded-lg px-3 py-3 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]">
       {expanded ? <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">

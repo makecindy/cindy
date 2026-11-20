@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Plus, Sparkles, Store, Upload } from 'lucide-react';
+import { ChevronDown, Github, Plus, Sparkles, Store, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -13,12 +13,14 @@ import {
 /** Add-plugin menu shared by local and remote catalogs. */
 export function GhostPluginActions({
   onInstall,
+  onInstallGithubRelease,
   onCreateWithCindy,
   onAddMarketplace,
   disabled = false,
   installTarget,
 }: {
   onInstall: () => void;
+  onInstallGithubRelease?: () => void;
   onCreateWithCindy?: () => void;
   onAddMarketplace?: () => void;
   disabled?: boolean;
@@ -35,7 +37,7 @@ export function GhostPluginActions({
           type="button"
           disabled={disabled}
           aria-label={t('settings.ghosts.page.addPluginAria')}
-          className="plugin-management-action-trigger group shrink-0 shadow-[var(--plugin-card-shadow)] data-[state=open]:[--button-face-bg:var(--surface-chip)]"
+          className="plugin-management-action-trigger group shrink-0 data-[state=open]:[--button-face-bg:var(--surface-chip)]"
         >
           <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
           <span className="plugin-management-action-label">
@@ -82,6 +84,12 @@ export function GhostPluginActions({
           />
           {t('settings.ghosts.install')}
         </DropdownMenuItem>
+        {onInstallGithubRelease && (
+          <DropdownMenuItem onSelect={onInstallGithubRelease} className="gap-3 whitespace-nowrap">
+            <Github size={16} strokeWidth={1.7} className="text-[var(--text-secondary)]" aria-hidden="true" />
+            {t('settings.ghosts.page.githubInstall.label')}
+          </DropdownMenuItem>
+        )}
         {onAddMarketplace ? (
           <>
             <DropdownMenuSeparator />

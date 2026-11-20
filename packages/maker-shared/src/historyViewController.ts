@@ -43,13 +43,29 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
 }
 
 export interface HistoryViewDiagnostic {
-  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset';
+  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset' | 'failed';
   previousItemCount: number;
   itemCount: number;
   messageCount: number;
   detailMessageCount: number;
   ready: boolean;
   stale: boolean;
+  /**
+   * 只在 source='failed' 时出现:哪一种分页读取失败,以及错误码(`[CODE]` 前缀,缺省 UNKNOWN)。
+   * 只带枚举,不带错误正文 —— 正文可能含路径或对端返回内容。
+   */
+  failure?: { read: 'latest' | 'older'; code: string };
+}
+
+/**
+ * 诊断只取 `[CODE] …` 前缀里的错误码;其它形状一律记 UNKNOWN。
+ * Desktop 的读取经 `ipcRenderer.invoke`,失败消息带 Electron 包装:
+ * `Error invoking remote method '<channel>': Error: [CODE] …`,同样只取其中的错误码。
+ */
+export function historyViewErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /^(?:Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?)?\[([A-Z][A-Z0-9_]{0,63})\]/
+    .exec(message)?.[1] ?? 'UNKNOWN';
 }
 
 /** Display-only artifact paths and live tool inputs are not read-request inputs. */
@@ -63,6 +79,23 @@ function workReference(summary: HistoryWorkSummary): HistoryWorkReference {
     ...(summary.liveMessageIds === undefined ? {} : { liveMessageIds: [...summary.liveMessageIds] }),
     ...(summary.parentToolUseId === undefined ? {} : { parentToolUseId: summary.parentToolUseId }),
   };
+}
+
+// Keep small collapsed ranges warm, but never serialize large bodies just to
+// measure them. Count every string field (including tool input), with cycle safety.
+function detailCharacters(value: unknown): number {
+  const pending = [value];
+  const seen = new Set<object>();
+  let size = 0;
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item === 'string') size += item.length;
+    else if (item && typeof item === 'object' && !seen.has(item)) {
+      seen.add(item);
+      for (const child of Object.values(item)) pending.push(child);
+    }
+  }
+  return size;
 }
 
 /**
@@ -97,6 +130,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     private readonly intentQueue = { tail: Promise.resolve() as Promise<void> },
   ) {}
   isActive = (): boolean => this.active && this.networkAvailable;
+  /** Inactive views can reload on return; offline/fallback views cannot. */
+  canReloadDetails = (): boolean => this.networkAvailable && this.state.ready && !this.state.error;
   /** Offline reading retains the view, but never sends page/detail/interest requests. */
   setNetworkAvailable(available: boolean): void {
     if (this.networkAvailable === available) return;
@@ -131,7 +166,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  private publish(patch: Partial<HistoryViewSnapshot<T>>, source?: HistoryViewDiagnostic['source']): void {
+  private publish(
+    patch: Partial<HistoryViewSnapshot<T>>,
+    source?: HistoryViewDiagnostic['source'],
+    failure?: HistoryViewDiagnostic['failure'],
+  ): void {
     const previousItemCount = this.state.items.length;
     this.state = { ...this.state, ...patch };
     if (source && this.transport.diagnostic) {
@@ -140,7 +179,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           messageCount: historyViewLeaves(this.state.items).reduce((count, item) =>
             count + (item.type === 'messages' ? item.messages.length : 0), 0),
           detailMessageCount: [...this.state.details.values()].reduce((count, detail) => count + detail.messages.length, 0),
-          ready: this.state.ready, stale: this.state.stale === true });
+          ready: this.state.ready, stale: this.state.stale === true,
+          ...(failure ? { failure } : {}) });
       } catch { /* Diagnostics must not interrupt cache restoration or remote reads. */ }
     }
     for (const listener of this.listeners) listener();
@@ -242,7 +282,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       });
       const stableItems = items.length === this.state.items.length
         && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+      const presentKeys = new Set(historyWorkSummaries(stableItems).map(summary => summary.key));
+      // Evicting an obsolete range must also invalidate its pending read, or a
+      // late reply can resurrect an unreachable detail body.
+      for (const key of this.detailRuns.keys()) {
+        if (!presentKeys.has(key)) this.detailRuns.delete(key);
+      }
       this.publish({ items: stableItems, ready: true, loading: false,
+        details: this.trimCollapsedDetails(this.state.expanded, stableItems),
         ...(older ? {} : { stale: false, readReceipt }),
         hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
       if (!older) this.latestReadOkStartedAtMs = readStartedAt;
@@ -262,7 +309,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           this.refreshTimer = null;
           this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
             nextCursor: null, hasMore: false, loading: false, error }, 'fallback');
-        } else this.publish({ loading: false, error });
+        } else {
+          // 读取失败过去不留任何诊断:界面停在缓存上,事后无从判断是没发出去还是发出去失败了。
+          this.publish({ loading: false, error }, 'failed',
+            { read: older ? 'older' : 'latest', code: historyViewErrorCode(error) });
+        }
       }
     }
   }
@@ -271,11 +322,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     if (this.state.expanded.has(key) === expanded) return;
     const next = new Set(this.state.expanded);
     if (expanded) next.add(key); else next.delete(key);
-    if (!expanded) this.detailRuns.delete(key);
-    this.publish({ expanded: next });
+    let details = this.state.details;
+    if (!expanded) {
+      this.detailRuns.delete(key);
+      details = this.trimCollapsedDetails(next);
+      const detail = details.get(key);
+      // Cancellation invalidates late replies, so they cannot clear this flag.
+      // Stop the indicator now while retaining any warm body for reopening.
+      if (detail?.loading) details = new Map(details).set(key, { ...detail, loading: false });
+    }
+    this.publish({ expanded: next, details });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
     if (expanded && summary) void this.loadDetails(summary);
+  }
+
+  private trimCollapsedDetails(expanded: ReadonlySet<string>, items = this.state.items) {
+    // Offline readers cannot reload an evicted body. Running/expanded ranges and
+    // in-flight reads are owned by their visible surfaces, not this warm cache.
+    if (!this.networkAvailable) return this.state.details;
+    const details = new Map(this.state.details);
+    const summaries = historyWorkSummaries(items);
+    const present = new Set(summaries.map(row => row.key));
+    const running = new Set(summaries.filter(row => row.isStreaming).map(row => row.key));
+    let retained = 0;
+    for (const [key, detail] of [...details].reverse()) {
+      if (!present.has(key)) { details.delete(key); continue; }
+      if (expanded.has(key) || running.has(key) || (detail.loading && this.detailRuns.has(key))) continue;
+      const size = detailCharacters(detail.messages);
+      if (size >= 1024 * 1024 || retained + size > 32 * 1024 * 1024) details.delete(key);
+      else retained += size;
+    }
+    return details.size === this.state.details.size ? this.state.details : details;
   }
 
   /**
@@ -342,12 +420,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const completed = this.state.details.get(summary.key);
       if (completed?.complete && completed.revision === summary.revision && !patch.complete) return;
       const details = new Map(this.state.details);
-      // A reread keeps the previous window until it settles. Publishing each
-      // incoming page would replace the old window with a partial slice of the
-      // new range: the rendered list collapses to the first page and shifts a
-      // bottom-pinned stream before the tail lands.
+      // Only a full range using the detail-preview fallback needs an atomic
+      // first read: a partial body can split past the render-window boundary,
+      // release its full-range owner and switch back to the preview in a loop.
+      // Host lines (including []) do not use that fallback. Ordinary history
+      // and previews keep incremental reads; rereads retain the previous body.
       const settled = patch.complete === true;
-      const messages = !settled && existing?.messages?.length ? existing.messages
+      const deferFirstBody = !!summary.preview && !summary.lines;
+      const messages = !settled && (existing?.messages?.length || deferFirstBody) ? (existing?.messages ?? [])
         : collected.length ? collected : (existing?.messages ?? []);
       details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });

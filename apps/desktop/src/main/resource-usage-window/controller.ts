@@ -12,7 +12,7 @@ import {
   RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
 } from '../../shared/resourceUsageWindow.js';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');
@@ -47,6 +47,9 @@ export interface ResourceUsageWindowControllerDeps {
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
   /** Runs only when a requested presentation is shown, never during hidden prewarm. */
   onBeforeShow?: (window: BrowserWindow) => void;
+  /** Pointer previews should leave the foreground application's keyboard focus alone. */
+  showWindow?: (win: BrowserWindow) => void;
+  hideWindow?: (win: BrowserWindow) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
   onUnavailable?: () => void;
   isOpenSender: (sender: WebContents) => boolean;
@@ -71,6 +74,8 @@ export class ResourceUsageWindowController {
   private pendingOpen = false;
   private openTimeout: NodeJS.Timeout | null = null;
   private prewarmTimeout: NodeJS.Timeout | null = null;
+  /** 首次挂载后再给首份内容一次有界预热；关闭/主动打开会取消，重复 ready 不续期。 */
+  private prewarmAwaitingRenderer = false;
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private leaveTimeout: NodeJS.Timeout | null = null;
   private samplingActive = false;
@@ -113,6 +118,8 @@ export class ResourceUsageWindowController {
     }
     this.automaticRecoveryAttempts = 0;
     this.clearRecoveryStabilityTimeout();
+    this.prewarmAwaitingRenderer = false;
+    this.clearPrewarmTimeout();
     this.pendingOpen = true;
     this.rememberOwner(sender);
     const win = this.ensureWindow();
@@ -139,6 +146,13 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.rendererReady = true;
+    if (this.prewarmAwaitingRenderer) {
+      this.prewarmAwaitingRenderer = false;
+      // 模块加载可能已耗尽建窗时的预算。ready 是唯一一次继续的事件，避免首份
+      // 快照还没开始就一直暂停到用户打开；重复 ready 不续期，也不轮询重试。
+      this.samplingActive = this.deps.prewarmWork ?? this.platform() !== 'win32';
+      if (this.samplingActive) this.schedulePrewarmFallback(win);
+    }
     if (this.locale) this.sendLocale(win, this.locale);
     this.setSamplingActive(win, this.samplingActive);
     if (!this.samplingActive && !this.visible && !this.pendingOpen) this.clearPrewarmTimeout();
@@ -150,6 +164,7 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.presentationReady = true;
+    this.prewarmAwaitingRenderer = false;
     this.scheduleRecoveryStabilityReset(win);
     this.clearPrewarmTimeout();
     if (this.pendingOpen) {
@@ -256,6 +271,7 @@ export class ResourceUsageWindowController {
     this.rendererReady = false;
     this.presentationReady = false;
     this.visible = false;
+    this.prewarmAwaitingRenderer = !this.pendingOpen;
     // Windows 预热只加载 BrowserWindow / renderer。昂贵且可能触发安全软件管道异常的
     // OS 扫描必须等用户显式 open；其他平台保留既有首份快照预热体验。
     this.samplingActive = this.pendingOpen || (this.deps.prewarmWork ?? this.platform() !== 'win32');
@@ -328,6 +344,7 @@ export class ResourceUsageWindowController {
   }
 
   private showAndFocus(win: BrowserWindow): void {
+    this.prewarmAwaitingRenderer = false;
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearLeaveTimeout();
@@ -339,12 +356,16 @@ export class ResourceUsageWindowController {
     if (win.isMinimized()) win.restore();
     // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
     // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
-    win.show();
-    win.focus();
+    if (this.deps.showWindow) this.deps.showWindow(win);
+    else {
+      win.show();
+      win.focus();
+    }
     this.visible = true;
   }
 
   private hideWindow(win: BrowserWindow, options: { restoreOwner?: boolean } = {}): void {
+    this.prewarmAwaitingRenderer = false;
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearLeaveTimeout();
@@ -358,7 +379,7 @@ export class ResourceUsageWindowController {
       }
       this.visibilityGeneration += 1;
       this.clearLeaveTimeout();
-      if (win.isVisible()) win.hide();
+      if (win.isVisible()) this.hideNativeWindow(win);
       this.visible = false;
       if (options.restoreOwner !== false) this.focusOwnerWindow();
     };
@@ -469,6 +490,8 @@ export class ResourceUsageWindowController {
 
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed()) return;
+    this.prewarmAwaitingRenderer = false;
+    this.clearPrewarmTimeout();
     this.visible = visible;
     if (this.deps.pauseWhenHidden !== false) this.setSamplingActive(win, visible);
     if (!visible && this.pendingOpen) {
@@ -484,6 +507,7 @@ export class ResourceUsageWindowController {
     this.clearLeaveTimeout();
     this.winRef = null;
     this.rendererReady = false;
+    this.prewarmAwaitingRenderer = false;
     this.presentationReady = false;
     this.visible = false;
     this.pendingOpen = false;
@@ -509,7 +533,11 @@ export class ResourceUsageWindowController {
       this.prewarmTimeout = null;
       if (win !== this.winRef || win.isDestroyed() || this.visible || this.pendingOpen) return;
       this.setSamplingActive(win, false);
-      log.warn('resource-usage prewarm timed out; background sampling paused');
+      log.warn('auxiliary window prewarm timed out; background work paused', {
+        webContentsId: win.webContents.id,
+        activityChannel: this.deps.activityChannel ?? RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+        phase: this.rendererReady ? 'presentation' : 'renderer',
+      });
     }, this.deps.prewarmTimeoutMs ?? DEFAULT_PREWARM_TIMEOUT_MS);
     this.prewarmTimeout.unref?.();
   }
@@ -543,12 +571,18 @@ export class ResourceUsageWindowController {
     this.recoveryStabilityTimeout = null;
   }
 
+  private hideNativeWindow(win: BrowserWindow): void {
+    if (this.deps.hideWindow) this.deps.hideWindow(win);
+    else win.hide();
+  }
+
   private onRendererReloadStarted(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     const shouldRestore = this.visible || this.pendingOpen;
-    if (this.visible) win.hide();
+    if (this.visible) this.hideNativeWindow(win);
     this.rendererReady = false;
     this.presentationReady = false;
+    this.prewarmAwaitingRenderer = !shouldRestore;
     this.setSamplingActive(win, shouldRestore || (this.deps.prewarmWork ?? this.platform() !== 'win32'));
     if (shouldRestore) {
       this.pendingOpen = true;

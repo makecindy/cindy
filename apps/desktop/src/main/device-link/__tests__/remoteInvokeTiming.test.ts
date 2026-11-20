@@ -29,3 +29,19 @@ it('reports the live stage before completion and preserves the eventual result',
     expect(report).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }
 });
+
+// Unit, 2026-11-14 logs: each empty 10s remote-agent poll was reported as a slow host
+// execution (~3.9k lines in five days). The protocol hold shifts both thresholds.
+it('does not report a long poll that stays within its intended hold', async () => {
+  vi.useFakeTimers();
+  try {
+    let now = 0;
+    const report = vi.fn();
+    const finish = observeRemoteInvoke(new RemoteInvokeTiming(() => now), report, () => now, 10_000);
+    now = 10_500; await vi.advanceTimersByTimeAsync(10_500); finish();
+    expect(report).not.toHaveBeenCalled();
+    const late = observeRemoteInvoke(new RemoteInvokeTiming(() => now), report, () => now, 10_000);
+    now += 15_000; await vi.advanceTimersByTimeAsync(15_000); late();
+    expect(report.mock.calls.map(([fields]) => fields.outcome)).toEqual(['waiting', 'settled']);
+  } finally { vi.useRealTimers(); }
+});

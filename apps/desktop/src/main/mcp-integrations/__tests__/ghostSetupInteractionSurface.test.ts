@@ -17,7 +17,9 @@ describe('ghostSetupInteractionSessionId', () => {
     ).toBe('desktop-session');
   });
 
-  it.each(['feishu', 'feishu-hook', 'discord', 'slack-hook', 'telegram', 'wecom'])(
+  // Tier 1, #9250/r4501238068: a channel lane has a session ID but no Desktop
+  // setup surface; the production helper must return null before ensureReady.
+  it.each(['feishu', 'feishu-hook', 'discord', 'slack-hook', 'telegram', 'wecom', 'imessage'])(
     'treats %s turns as non-interactive even when they have a business session id',
     (source) => {
       expect(

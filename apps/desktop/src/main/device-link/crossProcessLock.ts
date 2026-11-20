@@ -603,6 +603,24 @@ async function ordinaryReclaimInProgress(lockPath: string): Promise<boolean> {
   return reclaimInProgress(lockPath);
 }
 
+/** Absorb bounded path churn while the previous owner removes the shared gate directory. */
+async function waitForReclaimGatePathRetry(error: unknown, deadline: number): Promise<boolean> {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (
+    code !== 'ENOENT'
+    && code !== 'ENOTDIR'
+    && code !== 'EBUSY'
+    && code !== 'EPERM'
+    && code !== 'EACCES'
+  ) {
+    return false;
+  }
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) return false;
+  await sleep(Math.min(LOCK_RETRY_MS, remainingMs));
+  return true;
+}
+
 async function acquireAdvisoryReclaimGate(
   lockPath: string,
   waitMs = RELEASE_GATE_WAIT_MS,
@@ -618,7 +636,8 @@ async function acquireAdvisoryReclaimGate(
     }
     try {
       await fsp.mkdir(dirPath, { recursive: true });
-    } catch {
+    } catch (error) {
+      if (await waitForReclaimGatePathRetry(error, deadline)) continue;
       return null;
     }
     const nonce = crypto.randomUUID();
@@ -639,9 +658,10 @@ async function acquireAdvisoryReclaimGate(
       } satisfies LockRecord), 'utf8');
       await handle.close();
       handle = null;
-    } catch {
+    } catch (error) {
       await handle?.close().catch(() => undefined);
       await removePathWithRetry(filePath);
+      if (await waitForReclaimGatePathRetry(error, deadline)) continue;
       return null;
     }
 
@@ -1032,7 +1052,8 @@ async function acquireReclaimGate(
     const dirPath = reclaimGateDirPath(lockPath);
     try {
       await fsp.mkdir(dirPath, { recursive: true });
-    } catch {
+    } catch (error) {
+      if (await waitForReclaimGatePathRetry(error, deadline)) continue;
       return null;
     }
     const filePath = path.join(dirPath, `gate-${process.pid}-${crypto.randomUUID()}.json`);
@@ -1044,7 +1065,8 @@ async function acquireReclaimGate(
           ? ((await getProcessIdentity(process.pid))?.key ?? null)
           : null,
       );
-    } catch {
+    } catch (error) {
+      if (await waitForReclaimGatePathRetry(error, deadline)) continue;
       return null;
     }
     if (!lock) return null;

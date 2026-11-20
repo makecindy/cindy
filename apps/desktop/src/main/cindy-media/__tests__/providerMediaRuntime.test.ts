@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
   listReadyProviderMediaModels,
   resolveProviderMediaModel,
+  resolveProviderVideoConnection,
 } from '../providerMediaRuntime.js';
 
 const visible = {
@@ -23,6 +24,27 @@ const hidden = {
 };
 
 describe('provider media runtime display switch', () => {
+  // Unit, #4577490768: the public port must retain the selected owner; Core's
+  // lifecycle harness substitutes this port, so it cannot catch a dropped argument.
+  it('passes a selected video runtime to the configured connection resolver', async () => {
+    const connection = { baseUrl: 'https://pi.example.invalid/v1', headers: {}, revision: 'pi-1', assertCurrent: vi.fn() };
+    const resolveVideoConnection = vi.fn((_provider: string, _model: string, agent?: string) => agent === 'pi' ? connection : null);
+    configureProviderMediaRuntime({ listModels: () => [], resolveVideoConnection,
+      invoke: async () => ({ buffer: Buffer.alloc(0), mimeType: 'video/mp4' }) });
+    expect(await resolveProviderVideoConnection('relay', 'video-model', 'pi')).toBe(connection);
+    expect(resolveVideoConnection).toHaveBeenCalledExactlyOnceWith('relay', 'video-model', 'pi');
+  });
+
+  it('passes the requested capability to image and video source discovery', () => {
+    const listModels = vi.fn(() => [visible]);
+    const listVideoModels = vi.fn(() => []);
+    configureProviderMediaRuntime({ listModels, listVideoModels,
+      invoke: async () => ({ buffer: Buffer.alloc(0), mimeType: 'image/png' }) });
+    expect(resolveProviderMediaModel(visible.providerId, visible.id, 'image.edit')).toEqual(visible);
+    expect(listModels).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+    expect(listVideoModels).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+  });
+
   it('Art listModels hides display-off models; settings readiness still sees them', () => {
     configureProviderMediaRuntime({
       listModels: () => [visible],

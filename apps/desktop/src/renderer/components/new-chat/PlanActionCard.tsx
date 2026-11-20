@@ -10,9 +10,9 @@
  *                   then belongs to the editor — two identical hints were
  *                   confusing, see issue #475 review feedback).
  *   Feedback Row  — pencil icon + placeholder → becomes an inline editor.
- *                   Enter with text → onRespond(false, feedback). The ⏎ send
- *                   affordance only appears when there is text, and is a real
- *                   button (click submits).
+ *                   Enter with text → onRespond(false, feedback). A full-width
+ *                   input contains the same icon send button as the composer;
+ *                   it stays disabled until there is feedback.
  *
  * Cancel(取消本次审阅)是次级动作,不与批准/反馈同级成行:可见入口收在
  * PlanViewerCard 工具条的 X;这里只保留全局 Esc 快捷键(onCancel)。
@@ -27,7 +27,10 @@ import { CornerDownLeft, Pencil } from 'lucide-react';
 
 import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
+import { SendButton } from './SendButton';
 import { ListComposerTextarea } from './ListComposerTextarea';
+import { sixAnswerRows, useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -56,6 +59,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const [submitted, setSubmitted] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerExpanded = useAnswerComposerExpanded(inputRef, feedback, sixAnswerRows);
 
   const handleApprove = useCallback(() => {
     if (submitted) return;
@@ -185,61 +189,56 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
 
       {/* Feedback Row */}
       {isEditing ? (
-        <div className="flex items-start gap-[10px] px-[16px] py-[14px]">
-          <Pencil
-            size={16}
-            className="mt-[2px] shrink-0 text-[var(--plan-action-fb-icon)]"
-          />
-          <ListComposerTextarea
-            ref={inputRef}
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            onInput={handleFeedbackInput}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                handleSubmitFeedback();
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setIsEditing(false);
-                setFeedback('');
-              }
-            }}
-            onBlur={() => {
-              // Keep editing state even on blur — users may click back in.
-              // Only collapse when there is no content at all.
-              if (!feedback) setIsEditing(false);
-            }}
-            placeholder={t('newChat.planReview.feedbackPlaceholder')}
-            rows={1}
-            disabled={submitted}
+        <div className="p-3">
+          <div
+            data-testid="interaction-answer-composer"
             className={cn(
-              'flex-1 resize-none bg-transparent text-14 outline-none',
-              'text-[var(--plan-action-fb-text)]',
-              'placeholder:text-[var(--plan-action-fb-placeholder)]',
-              // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
-              'leading-[1.571]',
-              submitted && 'cursor-not-allowed opacity-60',
+              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
             )}
-          />
-          {/* 发送 ⏎:有文字才出现,且是真按钮(点击即发送)。textarea 的 onBlur 在
-               mousedown 后、click 前触发会把空文本行折叠掉,但有文字时行保持展开,
-               点击顺序安全。 */}
-          {hasFeedbackText && (
-            <button
-              type="button"
-              onClick={handleSubmitFeedback}
+          >
+            <ListComposerTextarea
+              ref={inputRef}
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              onInput={handleFeedbackInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  handleSubmitFeedback();
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setIsEditing(false);
+                  setFeedback('');
+                }
+              }}
+              onBlur={() => {
+                // Keep editing state even on blur — users may click back in.
+                // Only collapse when there is no content at all.
+                if (!feedback) setIsEditing(false);
+              }}
+              placeholder={t('newChat.planReview.feedbackPlaceholder')}
+              rows={1}
               disabled={submitted}
-              aria-label={t('newChat.planReview.submitFeedbackAria')}
-              className="ml-auto mt-[2px] shrink-0 rounded p-0 transition-opacity hover:opacity-75"
-            >
-              <CornerDownLeft
-                size={16}
-                className="translate-y-[0.5px] text-[var(--plan-action-approve-text)]"
-              />
-            </button>
-          )}
+              className={cn(
+                'min-h-[22px] min-w-0 resize-none bg-transparent text-14 outline-none',
+                // One line beside the 28px send button; centred on it by the margin.
+                composerExpanded ? 'w-full' : 'my-[3px] flex-1',
+                'text-[var(--plan-action-fb-text)]',
+                'placeholder:text-[var(--plan-action-fb-placeholder)]',
+                // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
+                'leading-[1.571]',
+                submitted && 'cursor-not-allowed opacity-60',
+              )}
+            />
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
+              <Tip text={t('newChat.planReview.submitFeedbackAria')}>
+                <SendButton onClick={handleSubmitFeedback} disabled={submitted || !hasFeedbackText}
+                  ariaLabel={t('newChat.planReview.submitFeedbackAria')} />
+              </Tip>
+            </div>
+          </div>
         </div>
       ) : (
         <button

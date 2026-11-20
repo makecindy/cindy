@@ -615,13 +615,13 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
     expect((await getCustomProvider(config.id))?.runtimes.pi?.imageApi).toBeUndefined();
   });
-  it('round-trips an explicit standalone Videos API independently of chat wire and hosted tools', async () => {
+  it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('round-trips %s independently of chat wire and hosted tools', async videoApi => {
     mountDb();
     const config = {
       id: 'standalone-videos', name: 'Standalone videos',
       runtimes: { pi: {
         baseUrl: 'http://127.0.0.1:8080/v1', wireProtocol: 'openai-chat' as const,
-        videoApi: 'xai-videos' as const,
+        videoApi,
         models: [{ id: 'private-video', name: 'Video', mode: 'video_generation' }],
       } },
     };
@@ -631,7 +631,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     }).ok).toBe(false);
     await createCustomProvider(config);
     const stored = await getCustomProvider(config.id);
-    expect(stored?.runtimes.pi?.videoApi).toBe('xai-videos');
+    expect(stored?.runtimes.pi?.videoApi).toBe(videoApi);
     expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
     const { videoApi: _removed, ...runtime } = config.runtimes.pi;
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
@@ -902,6 +902,22 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  // #11298: only rows a Settings refresh saw upstream carry this marker; losing it on
+  // save would silently disable withdrawal review, a non-true value must not persist.
+  it('round-trips the upstream listing marker and rejects non-true values', async () => {
+    mountDb();
+    const runtime = (listedUpstream?: unknown) => ({ codex: { baseUrl: 'https://gw.example/v1', models: [
+      { id: 'listed', name: 'Listed', discoveredMetadata: {}, listedUpstream },
+      { id: 'manual', name: 'Manual' },
+    ] } });
+    expect(validateCustomProviderConfig({ id: 'gw', name: 'Gateway', runtimes: runtime(false) } as never).ok).toBe(false);
+    await createCustomProvider({ id: 'gw', name: 'Gateway', runtimes: runtime(true) as never });
+    expect((await getCustomProvider('gw'))?.runtimes.codex?.models).toEqual([
+      { id: 'listed', name: 'Listed', discoveredMetadata: {}, listedUpstream: true },
+      { id: 'manual', name: 'Manual' },
+    ]);
+  });
+
   it('round-trips only an explicitly enabled Codex image-generation capability', async () => {
     mountDb();
     await createCustomProvider({
@@ -957,6 +973,27 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         },
       }).ok,
     ).toBe(false);
+  });
+
+  // #11298 review P2: confirmed withdrawal removes Pi models; the remaining rows are
+  // unchanged and official metadata is looked up per remaining ID, so the marker stays.
+  it('keeps the Pi catalog marker when models are only removed', async () => {
+    mountDb();
+    const model = (id: string) => ({ id, name: id, contextWindow: 1_000_000 });
+    const original = await createCustomProvider({
+      id: 'official-pi-removed', name: 'Official Pi', runtimes: { pi: {
+        baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', piCatalogProviderId: 'deepseek',
+        models: [model('deepseek-v4-pro'), model('deepseek-v4-flash')],
+      } },
+    });
+    const removed = await updateCustomProvider('official-pi-removed', { ...original, runtimes: { pi: {
+      ...original.runtimes.pi!, models: [original.runtimes.pi!.models[0]!],
+    } } });
+    expect(removed?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    const edited = await updateCustomProvider('official-pi-removed', { ...original, runtimes: { pi: {
+      ...original.runtimes.pi!, models: [{ ...original.runtimes.pi!.models[0]!, contextWindow: 64_000 }],
+    } } });
+    expect(edited?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
   });
 
   it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {

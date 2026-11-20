@@ -114,7 +114,10 @@ function trailingStatusRegions(g: WindowGeometry): ReservedRegion[] {
  * widens it), so this follows the reported region and adds the bar's item spacing before it.
  * 0 for bars below the status area or beside a vertical rail.
  */
-export function sharedStatusRowTrailingReserve(g: WindowGeometry): number {
+export function sharedStatusRowTrailingReserve(g: WindowGeometry, nativeHeaderHeight: number): number {
+  // The measured header includes the safe-area top. A full toolbar below that area
+  // does not share its horizontal space; subtracting it again can collapse a phone title.
+  if (!(nativeHeaderHeight > 0) || nativeHeaderHeight >= g.insets.top + navigationChrome.target) return 0;
   if (!g.reservedRegionsSupported || g.barEdge !== 'none') return 0;
   const status = trailingStatusRegions(g);
   if (!status.length) return 0;

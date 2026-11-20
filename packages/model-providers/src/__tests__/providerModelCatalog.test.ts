@@ -1,3 +1,5 @@
+import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
+import { parseModelsListResponse } from '../modelDiscovery.js';
 import { describe, expect, it } from "vitest";
 import {
   providerCatalogForPi,
@@ -8,6 +10,119 @@ import { BUNDLED_CATALOG } from '../builtin.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe("standard provider catalog", () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes newly discovered Copilot Responses models in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const ids = ['gpt-6.2-sol', 'future-with-override', 'undeclared', 'claude-fable-5'];
+    const data = ids.map((id, index) => ({ id, supported_endpoints: index === 2 ? [] : ['/responses'] }));
+    const models = parseModelsListResponse({ data }, baseUrl + '/models')!;
+    const configured = models.map(model => model.id === 'future-with-override'
+      ? { ...model, api: 'openai-completions' as const } : model);
+    const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', models: configured },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(provider.models[agent]?.map(model => model.route?.wireProtocol ?? 'anthropic-messages'))
+      .toEqual(['openai-responses', 'openai-chat', 'anthropic-messages', 'anthropic-messages']);
+    expect(provider.models[agent]?.[0].api).toBe('openai-responses');
+    expect(provider.models[agent]?.[0].userModelConfig).toEqual(configured[0]);
+    expect(parseModelsListResponse({ data }, 'https://relay.example/models')?.[0].discoveredMetadata?.nativeApi)
+      .toBeUndefined();
+  });
+
+  it('clears a withdrawn Copilot Responses declaration on refresh', () => {
+    const url = 'https://api.business.githubcopilot.com/models';
+    const discover = (fields: object) => parseModelsListResponse({ data: [{ id: 'new-model', ...fields }] }, url)!;
+    const first = mergeDiscoveredRuntimeModels([], discover({ supported_endpoints: ['/responses'] }));
+    const sparse = mergeDiscoveredRuntimeModels(first, discover({}));
+    expect(sparse[0].discoveredMetadata?.nativeApi).toBe('openai-responses');
+    const updated = mergeDiscoveredRuntimeModels(sparse, discover({ supported_endpoints: ['/chat/completions'] }));
+    expect(updated[0].discoveredMetadata?.nativeApi).toBeNull();
+  });
+
+  // #10269, unit: discovery supplies only Carbon's ID on a Messages connection.
+  // The Astra regression covers a different API; this must select Chat without
+  // turning defaults into user overrides or changing the other models' routes.
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes ID-only Copilot Carbon through Chat in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const models = ['gemini-4-carbon', 'gemini-4-argon', 'gpt-6-astra', 'claude-fable-5'].map(id => ({ id, name: id }));
+    const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', models },
+    } }, { presets: BUNDLED_CATALOG.presets });
+    expect(provider.models[agent]?.map(model => model.api)).toEqual([
+      'openai-completions', 'openai-completions', 'openai-responses', 'anthropic-messages',
+    ]);
+    expect(provider.models[agent]?.[0]).toMatchObject({
+      route: { baseUrl, wireProtocol: 'openai-chat' }, userModelConfig: models[0],
+    });
+    expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty('api');
+    expect(provider.routing[agent]?.wireProtocol ?? 'anthropic-messages').toBe('anthropic-messages');
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves explicit Carbon routes and custom endpoints in %s', agent => {
+    for (const [baseUrl, override, requestPath] of [
+      ['https://api.individual.githubcopilot.com', { api: 'anthropic-messages' as const }, undefined],
+      ['https://api.individual.githubcopilot.com', { route: {
+        baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'anthropic-messages' as const,
+      } }, undefined],
+      ['https://proxy.example', {}, undefined],
+      ['https://api.individual.githubcopilot.com', {}, '/custom/messages'],
+    ] as const) {
+      const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+        [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', requestPath,
+          models: [{ id: 'gemini-4-carbon', name: 'Carbon', ...override }] },
+      } }, { presets: BUNDLED_CATALOG.presets });
+      const model = provider.models[agent]![0];
+      expect(model.api ?? model.piApi ?? provider.routing[agent]?.wireProtocol ?? 'anthropic-messages').toBe('anthropic-messages');
+      expect(model.route?.baseUrl ?? provider.routing[agent]?.upstream).toBe(baseUrl);
+      expect(model.userModelConfig).toMatchObject(override);
+    }
+  });
+
+  // #9863, unit: an ID-only Copilot discovery previously selected Chat in all three
+  // engines. The mixed OpenCode cases do not cover this supplier's source record.
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes Copilot Astra through Responses in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const models = ['gpt-6-astra', 'gpt-5.5', 'kimi-k3'].map(id => ({ id, name: id }));
+    const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'openai-chat', models },
+    } });
+    expect(provider.models[agent]?.map(model => model.api)).toEqual([
+      'openai-responses', 'openai-responses', 'openai-completions',
+    ]);
+    expect(provider.models[agent]?.[0]).toMatchObject({
+      route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true,
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      ...(agent === 'pi' ? { piApi: 'openai-responses' } : {}),
+      userModelConfig: models[0],
+    });
+    expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty('api');
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'github-copilot')!;
+    const presetProvider = buildUserProvider({ id: 'copilot-preset', name: 'Copilot', runtimes: preset.runtimes });
+    expect(presetProvider.models[agent]?.find(model => model.id === 'gpt-6-astra')).toMatchObject({
+      api: 'openai-responses', route: { baseUrl, wireProtocol: 'openai-responses' },
+      reasoningRequired: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves custom Copilot transport choices in %s', agent => {
+    for (const [baseUrl, override] of [
+      ['https://proxy.example/v1', {}],
+      ['https://api.individual.githubcopilot.com', { api: 'openai-completions' as const }],
+      ['https://api.individual.githubcopilot.com', { route: {
+        baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'openai-chat' as const,
+      } }],
+    ] as const) {
+      const provider = buildUserProvider({ id: 'copilot-test', name: 'Copilot', runtimes: {
+        [agent]: { baseUrl, wireProtocol: 'openai-chat', catalogPresetId: 'github-copilot',
+          models: [{ id: 'gpt-6-astra', name: 'Astra', ...override }] },
+      } });
+      const model = provider.models[agent]![0];
+      expect(model.api ?? model.piApi ?? provider.routing[agent]!.wireProtocol).not.toBe('openai-responses');
+      expect(model.route?.baseUrl ?? provider.routing[agent]!.upstream).toBe(baseUrl);
+      expect(model.userModelConfig).toMatchObject(override);
+    }
+  });
+
   it('carries Cindy canonical model declarations into imported connection details', () => {
     const provider = buildUserProvider({ id: 'my-router', name: 'Router', runtimes: {
       pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
@@ -132,8 +247,11 @@ it('keeps generated defaults consistent with Cindy model preferences', async () 
   const { PROVIDER_MODEL_CATALOG } = await import('../providerModelCatalog.js');
   const { defaultEffortForCapabilities } = await import('../effortResolution.js');
   for (const model of Object.values(PROVIDER_MODEL_CATALOG.providers).flat()) {
+    // A transport-only record makes no reasoning/default declaration. Keep that
+    // distinct from an explicitly empty capability (whose default is null).
     // Explicit official defaults: K2.8 max and Grok 4.7 high.
-    const expected = model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
+    const expected = model.reasoning === undefined ? undefined
+      : model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
       ? 'max' : model.id === 'grok-4.7' && model.upstream === 'https://api.x.ai/v1'
         ? 'high' : defaultEffortForCapabilities(model.efforts ?? []);
     expect(model.defaultEffort, model.id).toBe(expected);

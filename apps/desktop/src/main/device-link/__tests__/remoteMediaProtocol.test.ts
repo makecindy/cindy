@@ -9,6 +9,7 @@
  *   - 同 key 并发首取去重 → media:fetch 只一次
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'node:stream';
 
 vi.mock('electron', () => ({
   protocol: { handle: vi.fn(), registerSchemesAsPrivileged: vi.fn() },
@@ -37,7 +38,7 @@ vi.mock('../index', () => ({ remoteInvoke }));
 const downloadToBuffer = vi.hoisted(() => vi.fn());
 const openMediaStream = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../mediaTransfer', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
+vi.mock('../mediaTransfer.desktop', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
 
 const lookup = vi.hoisted(() => vi.fn());
 const recordLocal = vi.hoisted(() => vi.fn());
@@ -65,7 +66,8 @@ vi.mock('../../file-browser/ssh-media', () => ({ serveSshRemoteMedia }));
 // cindy-media 本地优先短路的依赖:blobStore 解析、ledger LRU 刷新、fs 读盘。
 // 默认(beforeEach)设为「本机无此 blob」,既有远程管线用例语义不变。
 const blobResolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../cindy-media/blobStore', () => ({ resolveSafe: blobResolveSafe }));
+const openBlobFile = vi.hoisted(() => vi.fn());
+vi.mock('../../cindy-media/blobStore.desktop', () => ({ resolveSafe: blobResolveSafe, openBlobFile }));
 const touchBlob = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../cindy-media/ledger', () => ({ touchBlob, hasNonCacheBlob: vi.fn(async () => true) }));
 const fsReadFile = vi.hoisted(() => vi.fn());
@@ -81,7 +83,7 @@ vi.mock('../../lightboxMediaActions', async (importOriginal) => {
   return { ...orig, REMOTE_IMAGE_MAX_BYTES: 16 };
 });
 
-import { __testing, fetchRemoteMediaImageBytes } from '../remoteMediaProtocol';
+import { __testing, fetchRemoteMediaImageBytes, openRemoteMediaForSave } from '../remoteMediaProtocol';
 import { buildRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
 import { invalidateRemoteMediaPersistentWrites } from '../remoteMediaPersistentCache';
 
@@ -107,6 +109,39 @@ beforeEach(() => {
 });
 
 describe('handleRemoteMedia', () => {
+  // #10128: the save consumer must retain a streaming body and cancellation,
+  // whereas annotation/copy keep the tested image collector cap below.
+  it('opens a remote save stream beyond the image cap and releases it on cancellation', async () => {
+    const cancel = vi.fn();
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 1024 });
+    openMediaStream.mockResolvedValue(new Response(new ReadableStream({
+      pull(c) { c.enqueue(new Uint8Array(32)); }, cancel,
+    }), { headers: { 'Content-Type': 'video/mp4' } }));
+    const signal = new AbortController().signal;
+    const response = await openRemoteMediaForSave(URL_VID, signal);
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value?.byteLength).toBe(32);
+    await reader.cancel();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseStream).toHaveBeenCalledOnce();
+    expect(openMediaStream).toHaveBeenCalledWith('video', undefined, signal);
+  });
+
+  it('streams a locally owned blob through its verified handle instead of reading the whole file', async () => {
+    const close = vi.fn(async () => {});
+    openBlobFile.mockResolvedValue({
+      file: { close, createReadStream: () => Readable.from([Buffer.alloc(32)], { objectMode: false }) },
+      totalSize: 32, mimeType: 'video/mp4',
+    });
+    const url = buildRemoteMediaUrl({ kind: 'device', deviceId: 'dev-1' },
+      `cindy-media://blobs/${'a'.repeat(64)}.mp4`);
+    const response = await openRemoteMediaForSave(url, new AbortController().signal);
+    expect((await response.arrayBuffer()).byteLength).toBe(32);
+    expect(openBlobFile).toHaveBeenCalledOnce();
+    expect(fsReadFile).not.toHaveBeenCalled();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
   it.each(['prepare', 'inline', 'peer', 'download', 'retry'])('does not refill caches after clearing during %s', async (phase) => {
     let invokes = 0;
     remoteInvoke.mockImplementation(async () => {

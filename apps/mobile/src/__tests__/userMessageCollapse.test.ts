@@ -13,7 +13,7 @@ import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExp
 
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ fontScale: 1 }),
+  Dimensions: { get: () => ({ fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
   StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) },
 }));
 vi.mock('react-native-uitextview', () => ({ UITextView: (props: SurfaceProps) => UITextView(props) }));
@@ -168,7 +168,8 @@ const bubbleStatements = rendererFunction('MessageBubble').body!.statements;
 const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin', 'MessageBubble'));
 const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
 const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
-const markdownStateCode = ['measuresSettledWidth', 'contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
+const markdownStateCode = ['measuresSettledWidth', 'useRowState', 'contentWidth', 'nativeBodySize',
+  'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'measureTableBootstrap', 'renderSingleBlock']
   .map(name => bodyStatement(name, 'MarkdownBodyBase').getText(rendererSource)).join(String.fromCharCode(10));
 const markdownReturn = rendererFunction('MarkdownBodyBase').body!.statements.find(ts.isReturnStatement);
 if (!markdownReturn) throw new Error('MarkdownBody return was not found');
@@ -197,8 +198,14 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   String.raw`
-function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true }) {
+function MarkdownHarness({ pinContentWidth = false, androidTableSelection = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true, streaming = false }) {
   const styles = {};
+  // The paragraph and code inputs here use the native path. The table document
+  // and its mount/selection lifecycle have dedicated component tests.
+  const tableCandidate = false;
+  const mountTableDocument = false;
+  const showTableDocument = false;
+  const linkActivation = null;
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;
   const spanFor = () => undefined;
@@ -234,14 +241,16 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const isStreamingAssistant = false;
   const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
   const t = i18n.t.bind(i18n);
-  ` + collapseCode + bodyStatement('bubble', 'MessageBubble').getText(rendererSource) + String.raw`
+  ` + collapseCode + ['ownBubbleColors', 'tableFallbackBackground', 'bubble']
+    .map(name => bodyStatement(name, 'MessageBubble').getText(rendererSource)).join(String.fromCharCode(10)) + String.raw`
   return bubble;
 }
 return { BubbleHarness, MarkdownHarness };
 `, {
     useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
-    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState,
-    SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
+    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState, useRowStateHook: () => React.useState,
+    SelectionQuoteContext: React.createContext(null), MarkdownLinkActivationContext: React.createContext(null),
+    useWindowDimensions: () => ({ fontScale: 1 }),
     Platform: harnessPlatform, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
     View: NativeView, Text, MarkdownSelectableText, ScrollView,
@@ -250,7 +259,7 @@ return { BubbleHarness, MarkdownHarness };
     HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),
     // Clipboard behavior has dedicated production-component tests; this stub only
     // exposes action presence for the layout and share-mode assertions.
-    MarkdownCodeCopyButton: ({ text }: { text: string }) => React.createElement('button', { 'data-testid': 'code-copy-stub' }, text),
+    MarkdownBlockCopyButton: ({ text }: { text: string }) => React.createElement('button', { 'data-testid': 'code-copy-stub' }, text),
     mayExceedVisualLineThreshold, resolveUserMessageCollapse,
     AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD, AUTOMATION_USER_MESSAGE_COLLAPSED_LINES,
     LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, LONG_USER_MESSAGE_COLLAPSED_LINES,
@@ -300,10 +309,10 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     // User bubbles hug their content and do not subscribe to width measurement.
     act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
     expect(markdown().getAttribute('data-style')).toBe(before);
-    expect(markdown().firstElementChild?.getAttribute('data-style')).toBe('null');
+    expect(JSON.parse(markdown().firstElementChild!.getAttribute('data-style')!).filter(Boolean)).toEqual([]);
     act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
     act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402 } } }));
-    expect(JSON.parse(markdown().firstElementChild!.getAttribute('data-style')!)).toMatchObject({ width: 402 });
+    expect(JSON.parse(markdown().firstElementChild!.getAttribute('data-style')!)).toContainEqual({ width: 402, maxWidth: '100%' });
     const code = 'code '.repeat(200);
     act(() => root.render(React.createElement(MarkdownHarness, { text: code, code: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
     expect(host.querySelector('code')?.textContent).toBe(code);
@@ -314,12 +323,13 @@ describe('MessageRenderer bounded long-message native behavior', () => {
   // 换 key 重挂 agent 正文,每条回复的原生文本挂载两遍。最小失败输入:Android + agent 正文 + 一次布局回报。
   it('mounts Android agent markdown once at the stretched width', () => {
     harnessPlatform.OS = 'android';
-    act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
+    act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true,
+      androidTableSelection: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
     const markdown = host.querySelector('[data-testid="message.markdownBody"]')!;
     const text = markdown.querySelector('[data-surface]');
-    act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
+    act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402, height: 24 } } }));
     expect(markdown.querySelector('[data-surface]')).toBe(text);
-    expect(markdown.firstElementChild?.getAttribute('data-style')).toBe('null');
+    expect(JSON.parse(markdown.firstElementChild!.getAttribute('data-style')!).filter(Boolean)).toEqual([]);
     expect(JSON.parse(markdown.getAttribute('data-style')!)).toContainEqual({ alignSelf: 'stretch' });
   });
 

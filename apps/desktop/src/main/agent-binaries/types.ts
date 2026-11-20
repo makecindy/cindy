@@ -1,3 +1,4 @@
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import type { Manifest } from '../manifestService.js';
 
 /**
@@ -52,6 +53,8 @@ export interface VendorRuntimeState {
   availableVersion?: string;
   binaryPath?: string;
   downloadProgress?: { received: number; total: number; speedBps: number };
+  /** Standard display progress (retrying / verifying / speed / time left); additive to v1.0. */
+  download?: DownloadProgress;
   error?: { code: string; message: string };
 }
 
@@ -66,6 +69,8 @@ export interface BinaryProvisioner {
 
   /** 显式触发安装/升级流程；幂等：本地已有正确版本时立即返回 ready: true */
   prepare(opts?: {
+    /** Startup lookup: no network; may adopt an already downloaded, verified update. */
+    localOnly?: boolean;
     onProgress?: (p: VendorRuntimeState) => void;
     checkForUpdates?: boolean;
     /** false when a usable Linux fallback only needs an already downloaded update. */
@@ -88,6 +93,8 @@ export interface BinaryProvisioner {
 // ── 上层包壳类型 (供 prepare(kind, opts) 使用) ──────────────────────────────
 
 export interface PrepareOpts {
+  /** Startup lookup: no network; may adopt an already downloaded, verified update. */
+  localOnly?: boolean;
   checkForUpdates?: boolean;
   /** Internal cache adoption path; never prevents normal first-install repair. */
   allowDownload?: boolean;
@@ -127,6 +134,8 @@ export interface BinaryDownloadProgressPayload {
   totalSteps?: 2 | 3;
   reset?: boolean;
   vendor?: VendorKey;
+  /** Standard display progress for the splash status line; `progress` stays the bar value. */
+  download?: DownloadProgress;
 }
 
 /** 同步 binary 状态快查结果 (DropdownMenu / maker-host 用)。 */

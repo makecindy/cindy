@@ -10,14 +10,18 @@
  * Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 不再直连 Anthropic `/v1/models`,
  * 因此这里没有 HTTP 通道:SDK 捕获路径也不得发出任何网络请求。
  */
-import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 // 规则 23:测试涉及路径一律用 os.tmpdir() 下的临时目录,收尾清理。
-const TEST_USER_DATA = path.join(os.tmpdir(), `cindy-anthropic-discovery-test-${process.pid}`);
+const { TEST_USER_DATA } = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return { TEST_USER_DATA: mkdtempSync(join(tmpdir(), 'cindy-anthropic-discovery-test-')) };
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -52,6 +56,12 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
+import {
+  onClaudeCliLoginStatusChange,
+  peekClaudeCliLoginStatus,
+  publishClaudeCliLoginStatus,
+  resetClaudeCliLoginStatusForTest,
+} from '../claude-native-cli-status.js';
 
 function anthropicIds(): string[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
@@ -301,15 +311,17 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[4]!.model.discoveredMetadata?.name).toBe('Opus 4.5');
   });
 
-  it('目录未登记的新版本照样显示,id 与名称按说明里的版本生成(Fable 5.2 不被显示成 5.1)', () => {
+  // 最初的回归是 Fable 5.2 登记进目录之前被显示成 5.1。用目录不会收录的 9.9 作例子,
+  // 这样目录以后补登记新型号时,这条用例仍然在测「未登记」的分支。
+  it('目录未登记的新版本照样显示,id 与名称按说明里的版本生成(不被显示成已登记的旧版本)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const out = mapAnthropicSdkModels([
-      // 简称指向目录还不认识的 5.2:按说明生成 claude-fable-5-2,不映射到已登记的 5.1。
-      { value: 'fable', displayName: 'Fable', description: 'Fable 5.2 · Newest' },
+      // 简称指向目录还不认识的 9.9:按说明生成 claude-fable-9-9,不映射到已登记的 5.1。
+      { value: 'fable', displayName: 'Fable', description: 'Fable 9.9 · Newest' },
       { value: 'claude-fable-5-1', displayName: 'Fable', description: 'Fable 5.1 · Previous' },
     ]);
     expect(out.map(({ model }) => [model.id, model.name])).toEqual([
-      ['claude-fable-5-2', 'Fable 5.2'],
+      ['claude-fable-9-9', 'Fable 9.9'],
       ['claude-fable-5-1', 'Fable 5.1'],
     ]);
     // 目录未知:资料用未知模型默认值,窗口不标记为已核实。
@@ -317,10 +329,10 @@ describe('mapAnthropicSdkModels', () => {
 
     // 显式 id 形态同理,名称按 id 推导,不取目录里 5.1 的名称。
     const explicit = mapAnthropicSdkModels([
-      { value: 'claude-fable-5-2[1m]', displayName: 'Fable', description: 'Fable 5.2 · Newest' },
+      { value: 'claude-fable-9-9[1m]', displayName: 'Fable', description: 'Fable 9.9 · Newest' },
     ]);
     expect(explicit.map(({ model }) => [model.id, model.name])).toEqual([
-      ['claude-fable-5-2', 'Fable 5.2'],
+      ['claude-fable-9-9', 'Fable 9.9'],
     ]);
   });
 
@@ -414,6 +426,23 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await fsp.rm(TEST_USER_DATA, { recursive: true, force: true });
   });
 
+  // unit 回归：2.1.321 实报 resolvedModel，description 不再带版本；旧用例只有带版本说明。
+  // 经主动发现入口验证活动目录，避免内核支持 5.2 而选择器仍只显示 5.1。
+  it('主动探测接受 SDK resolvedModel 并保留 Fable 5.2 的 Fast 能力', async () => {
+    setAnthropicModelProbe(async (onModels) => {
+      onModels([
+        { value: 'fable', resolvedModel: 'claude-fable-5-2', displayName: 'Fable 5.2',
+          description: 'For your toughest challenges', supportsFastMode: true },
+        { value: 'claude-fable-5-1', displayName: 'Fable 5.1' },
+      ]);
+      return true;
+    });
+    await expect(refreshAnthropicModelsFromProbe()).resolves.toBe(true);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-fable-5-2', 'claude-fable-5-1']);
+    expect(anthropicModel('claude-fable-5-2')).toMatchObject({ name: 'Fable 5.2', supportsFastMode: true });
+  });
+
   it('主动探测按发起时的授权世代生效:探测期间换号,旧账号的迟到清单不写入', async () => {
     setAnthropicModelProbe(async (onModels) => {
       onModels([{ value: 'claude-opus-4-8', displayName: 'Opus 4.8' }]);
@@ -496,6 +525,60 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await waitForAnthropicDiscoveryIdleForTest();
     expect(anthropicIds()).toEqual(['claude-sonnet-4-5']);
     setAnthropicModelProbe(null);
+  });
+
+  // Standard / #11036 review: the existing status test checked display notifications,
+  // but not their model-discovery side effects. Ultra -> missing -> Ultra must
+  // update the public status without launching another model probe; a real tier,
+  // identity or logout change must still update the available model catalog.
+  it('keeps display-name changes out of model discovery while preserving login changes', async () => {
+    resetClaudeCliLoginStatusForTest();
+    const display = vi.fn();
+    const stopDisplay = onClaudeCliLoginStatusChange(display);
+    const stopModels = onClaudeCliLoginStatusChange(syncAnthropicModelsWithClaudeLogin, {
+      includeDisplayNameChanges: false,
+    });
+    let modelId = 'claude-opus-4-8';
+    const probe = vi.fn(async (onModels: (models: unknown[]) => void) => {
+      onModels([{ value: modelId }]);
+      return true;
+    });
+    setAnthropicModelProbe(probe);
+    const status = { loggedIn: true, email: 'a@example.test', subscriptionType: 'pro',
+      planTier: 'pro', authMethod: 'claude.ai', planDisplayName: 'Ultra' };
+    try {
+      publishClaudeCliLoginStatus(status);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      for (const planDisplayName of [undefined, 'Ultra']) {
+        publishClaudeCliLoginStatus({ ...status, planDisplayName });
+        await waitForAnthropicDiscoveryIdleForTest();
+        expect(peekClaudeCliLoginStatus()?.planDisplayName).toBe(planDisplayName);
+        expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      }
+      expect(display).toHaveBeenCalledTimes(3);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      const upgraded = { ...status, subscriptionType: 'max', planTier: 'max_20x' };
+      publishClaudeCliLoginStatus(upgraded);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      modelId = 'claude-sonnet-4-5';
+      publishClaudeCliLoginStatus({ ...upgraded, email: 'b@example.test' });
+      await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-sonnet-4-5']));
+      expect(probe).toHaveBeenCalledTimes(3);
+
+      authState.loggedIn = false;
+      publishClaudeCliLoginStatus({ loggedIn: false });
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual([]);
+    } finally {
+      stopDisplay();
+      stopModels();
+      resetClaudeCliLoginStatusForTest();
+      setAnthropicModelProbe(null);
+    }
   });
 
   it('同一账号的重复登录态变化不清空清单', async () => {

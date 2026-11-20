@@ -16,7 +16,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import WebSocket from 'ws';
 
 import {
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
@@ -38,8 +37,8 @@ import {
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
 import { desktopDirectRuntime } from './directLink.js';
@@ -140,7 +139,7 @@ function preserveNewerHostOnline(previous: readonly ProviderShareReceived[], nex
     const live = previousShare ? shareHostOnline.get(previousShare) : undefined;
     if (!previousShare || !live || live.sequence <= requestedSequence
       || sharePermissionFingerprint(previousShare) !== sharePermissionFingerprint(share)) return share;
-    const updated = { ...share, hostOnline: live.online, hostCapable: live.online || share.hostCapable };
+    const updated = { ...share, ...(share.standbyOnline !== undefined ? { hostDeviceOnline: live.online } : {}), hostOnline: live.online || share.standbyOnline === true, hostCapable: live.online || share.hostCapable };
     shareHostOnline.set(updated, live);
     return updated;
   });
@@ -397,8 +396,8 @@ function noteHostOnline(rt: Runtime | null, state: RegionState, client: DeviceLi
   const live = { sequence: ++hostOnlineSequence, online };
   shareHostOnline.set(share, live);
   const hostCapable = online || share.hostCapable;
-  if (share.hostOnline === online && share.hostCapable === hostCapable) return;
-  const updated = { ...share, hostOnline: online, hostCapable };
+  if ((share.hostDeviceOnline ?? share.hostOnline) === online && share.hostCapable === hostCapable) return;
+  const updated = { ...share, ...(share.standbyOnline !== undefined ? { hostDeviceOnline: online } : {}), hostOnline: online || share.standbyOnline === true, hostCapable };
   shareHostOnline.set(updated, live);
   const next = state.shares.map(entry => entry === share ? updated : entry);
   noteSharePermissions(state.shares, next);
@@ -429,10 +428,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       remoteControlEnabled: false,
       busy: false,
     }),
-    createWebSocket: async (url, headers) => new WebSocket(url, {
-      headers,
-      agent: await createOutboundHttpAgent(url),
-    } as WebSocket.ClientOptions),
+    createWebSocket: (url, headers) => openLinkWebSocket('device-link', url, { headers }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -752,7 +748,7 @@ function crossRegionClientStopped(client: DeviceLinkClient | null): boolean {
 }
 
 export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -766,14 +762,15 @@ export async function crossRegionInvoke(peerKey: string, channel: string, args: 
     }
   };
   const preSend = () => { assertActive(); options?.preSend?.(); };
-  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend });
+  const sendOptions = { preSend, beforeDispatch: options?.beforeDispatch };
+  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions);
   return invokeProviderMetadataContinuity(peerKey, channel, args,
-    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend }),
+    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions),
     () => { try { preSend(); return true; } catch { return false; } });
 }
 
 async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -800,11 +797,11 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
     if (!client.isLinkReady(peerKey)) await open();
     let response: InvokeResultPayload;
     try {
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     } catch (error) {
       if (!(error instanceof DeviceLinkError) || error.code !== 'LINK_NOT_OPEN') throw error;
       await open();
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     }
     if (response.ok) noteOnline(true);
     else if (response.error.code === 'DEVICE_OFFLINE') noteOnline(false);
@@ -818,10 +815,25 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
 export async function crossRegionLeave(memberId: string): Promise<boolean> {
   const rt = runtime;
   if (!rt) return false;
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   for (const state of rt.regions.values()) {
     if (!state.shares.some((share) => share.memberId === memberId)) continue;
     if (!state.credential) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Cross-region share is not connected');
     await peerRequest(state.apiBase, `/received/${encodeURIComponent(memberId)}/leave`, {}, state.credential);
+    if (!current(rt)) return true;
+    // Retire only this membership immediately. A pre-leave /session must neither
+    // reinstall it nor rotate the shared client back to an obsolete credential.
+    state.requestRevision++;
+    const next = state.shares.filter((share) => share.memberId !== memberId);
+    noteSharePermissions(state.shares, next);
+    state.shares = next;
+    if (next.length === 0) {
+      state.client?.stop();
+      state.client = null;
+      state.credential = null;
+      state.expiresAt = 0;
+    }
+    rt.events.changed();
     await refreshRegion(rt, state.region);
     return true;
   }
@@ -837,3 +849,14 @@ export const __testing = {
     userDataDir = dir;
   },
 };
+
+/** Same peer credential as the existing cross-region share, never the home region's access token. */
+export async function crossRegionAvailabilityRequest(shareId: string, action: string, body: unknown): Promise<unknown> {
+  const rt = runtime;
+  const state = stateForShare(shareId);
+  if (!rt || !current(rt) || !state?.credential || state.expiresAt <= Date.now()) throw new Error('Provider share session unavailable');
+  const credential = state.credential;
+  const value = await peerRequest(state.apiBase, `/availability/${encodeURIComponent(shareId)}/${action}`, body, credential);
+  if (!current(rt) || stateForShare(shareId) !== state || state.credential !== credential) throw new Error('Provider share session changed');
+  return value;
+}

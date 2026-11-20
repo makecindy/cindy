@@ -6,7 +6,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import '../../src/renderer/styles/cjk-webfont.css';
 import '../../src/renderer/themes/colors';
 import { themeService } from '../../src/renderer/themes/theme-service';
 import { cindyLight } from '../../src/renderer/themes/builtin/cindy-light';

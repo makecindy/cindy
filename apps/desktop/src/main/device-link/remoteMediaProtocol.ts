@@ -1,3 +1,4 @@
+import type { PeerStreamFileResult } from './peerMediaStream';
 import { readRemoteDeviceFile } from './fileAccess';
 /**
  * remoteMediaProtocol.ts — 控制端 `cindy-remote-media://` 自定义 scheme(入方向媒体)。
@@ -26,12 +27,12 @@ import { createLogger } from '../logger';
 import { collectStreamWithLimit, REMOTE_IMAGE_MAX_BYTES } from '../lightboxMediaActions';
 import { parseRemoteMediaUrl, REMOTE_MEDIA_SCHEME } from '../../shared/remoteMediaUrl';
 import { parseRangeHeader } from '../videoProtocol';
-import * as blobStore from '../cindy-media/blobStore';
+import * as blobStore from '../cindy-media/blobStore.desktop';
 import * as ledger from '../cindy-media/ledger';
-import { buildRangedMediaResponse } from '../cindy-media/rangeResponse';
+import { buildRangedFileResponse, buildRangedMediaResponse } from '../cindy-media/rangeResponse';
 import { remoteInvoke } from './index';
 import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
-import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer';
+import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer.desktop';
 import * as cache from './remoteMediaCacheStore';
 import type { RemoteMediaEntry, StreamEntry } from './remoteMediaCacheStore';
 import { activeOwnerScopeKey } from '../appSessionState';
@@ -72,6 +73,7 @@ const LOCAL_BUFFER_MAX = 64 * 1024 * 1024;
 async function serveLocalCindyMediaBlob(
   origUrl: string,
   rangeHeader: string | null,
+  saveSignal?: AbortSignal,
 ): Promise<Response | null> {
   const assertCurrent = captureRemoteMediaOwner();
   let resolved: { absPath: string; mimeType: string; hash: string };
@@ -85,6 +87,20 @@ async function serveLocalCindyMediaBlob(
     // Only current-account attachments may bypass the device-scoped cache index.
     if (!await ledger.hasNonCacheBlob(resolved.hash)) return null;
     assertCurrent();
+    if (saveSignal) {
+      const opened = await blobStore.openBlobFile(origUrl);
+      try {
+        assertCurrent();
+      } catch (error) {
+        await opened.file.close();
+        throw error;
+      }
+      void ledger.touchBlob(resolved.hash);
+      return await buildRangedFileResponse({
+        ...opened, rangeHeader, cacheControl: 'public, max-age=31536000, immutable',
+        signal: saveSignal,
+      });
+    }
     buffer = await fs.readFile(resolved.absPath);
     assertCurrent();
   } catch {
@@ -100,14 +116,14 @@ async function serveLocalCindyMediaBlob(
 }
 
 /** 同 key 取件去重:首次取件期间的并发请求复用同一 Promise。 */
-const inflight = new Map<string, Promise<RemoteMediaEntry>>();
+const inflight = new Map<string, Promise<RemoteMediaEntry | PeerStreamFileResult>>();
 
 function inflightKeyOf(deviceId: string, origUrl: string): string {
   return `${activeOwnerScopeKey()} ${deviceId} ${origUrl}`;
 }
 
 /** 取得缓存条目:命中直接返回,未命中向被控端取件并落缓存(并发去重)。 */
-async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
+async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   const hit = cache.lookup(deviceId, origUrl);
   // A path can change in place. Let the existing host stat/version cache validate it.
   if (hit && (hit.kind === 'stream' || isImmutableRemoteMedia(origUrl))) return hit;
@@ -159,7 +175,7 @@ async function downloadLocalEntry(
   origUrl: string,
   fetched: MediaFetchResult,
   assertCurrent: () => void,
-): Promise<RemoteMediaEntry> {
+): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   let versioned: ReturnType<typeof remoteFileVersionCache> = null;
   try { versioned = remoteFileVersionCache(deviceId, origUrl, { ...fetched, assertCacheCurrent: assertCurrent }); } catch { /* Optional cache. */ }
   try {
@@ -178,7 +194,7 @@ function toEntry(
   origUrl: string,
   fetched: MediaFetchResult,
   assertCurrent: () => void,
-): Promise<RemoteMediaEntry> {
+): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   if (fetched.inlineBase64 !== undefined) {
     assertCurrent();
     return Promise.resolve(
@@ -199,13 +215,15 @@ function toEntry(
   return downloadLocalEntry(deviceId, origUrl, fetched, assertCurrent);
 }
 
-async function fetchAndCache(deviceId: string, origUrl: string, assertCacheCurrent: () => void): Promise<RemoteMediaEntry> {
+async function fetchAndCache(deviceId: string, origUrl: string, assertCacheCurrent: () => void): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   const assertCurrent = captureRemoteMediaOwner();
   const fetched = await readRemoteDeviceFile(deviceId, origUrl, remoteInvoke, {
     maxPeerBytes: LOCAL_BUFFER_MAX,
     stream: true,
+    playback: true,
     assertCacheCurrent,
   });
+  if ('kind' in fetched && fetched.kind === 'peer-stream') return fetched;
   if ('path' in fetched) {
     try {
       const bytes = await fs.readFile(fetched.path);
@@ -357,6 +375,7 @@ async function handleRemoteMedia(
   url: string,
   rangeHeader: string | null,
   signal?: AbortSignal,
+  forSave = false,
 ): Promise<Response> {
   const parsed = parseRemoteMediaUrl(url);
   if (!parsed) return new Response(null, { status: 400 });
@@ -370,12 +389,13 @@ async function handleRemoteMedia(
   const assertCurrent = captureRemoteMediaOwner();
   try {
     if (parsed.origUrl.startsWith('cindy-media://')) {
-      const local = await serveLocalCindyMediaBlob(parsed.origUrl, rangeHeader);
+      const local = await serveLocalCindyMediaBlob(parsed.origUrl, rangeHeader, forSave ? signal : undefined);
       assertCurrent();
       if (local) return local;
     }
     const entry = await ensureEntry(deviceId, parsed.origUrl);
     assertCurrent();
+    if (entry.kind === 'peer-stream') return entry.serve(rangeHeader, signal);
     if (entry.kind === 'local') return serveLocal(entry, rangeHeader);
     try {
       return await serveStream(entry, rangeHeader, signal);
@@ -404,7 +424,7 @@ async function handleRemoteMedia(
       const joined = inflight.get(k);
       if (joined) {
         const fresh = await joined;
-        return fresh.kind === 'local'
+        return fresh.kind === 'peer-stream' ? await fresh.serve(rangeHeader, signal) : fresh.kind === 'local'
           ? serveLocal(fresh, rangeHeader)
           : await serveStream(fresh, rangeHeader, signal);
       }
@@ -434,7 +454,7 @@ async function handleRemoteMedia(
       })().finally(() => inflight.delete(k));
       inflight.set(k, p);
       const fresh = await p;
-      return fresh.kind === 'local'
+      return fresh.kind === 'peer-stream' ? await fresh.serve(rangeHeader, signal) : fresh.kind === 'local'
         ? serveLocal(fresh, rangeHeader)
         : await serveStream(fresh, rangeHeader, signal);
     }
@@ -443,6 +463,11 @@ async function handleRemoteMedia(
     // 502:上游(被控端 / OSS)取件失败 → renderer 媒体占位 + 可重试,不致命。
     return new Response(null, { status: 502 });
   }
+}
+
+/** Save keeps the authorized protocol body as a stream, including local blob hits. */
+export function openRemoteMediaForSave(url: string, signal: AbortSignal): Promise<Response> {
+  return handleRemoteMedia(url, null, signal, true);
 }
 
 /** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */

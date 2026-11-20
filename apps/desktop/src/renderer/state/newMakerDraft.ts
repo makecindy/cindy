@@ -1,3 +1,6 @@
+import {
+  markRemoteDraftEngineManuallySelected, persistedDraftVendor, resetRemoteDraftEngineFollow, vendorAfterRemotePreferenceWrite,
+} from '@/features/cc-agent/remoteDraftEngineFollow';
 /**
  * newMakerDraft —— "/cc-agent/new" 草稿状态 + vendor 偏好的 localStorage 持久化。
  *
@@ -18,6 +21,9 @@
  *     不是偏好记忆;静默还原会让旧目录无感知地带进新会话)
  */
 
+import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
+import { isPluginEngineEffort, isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
+import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
@@ -110,6 +116,8 @@ export interface NewMakerDraft {
   vendor: MakerVendor;
   /** 选中的 workingDir;初次 null,Project 行内 + 会预填到此。 */
   workingDir: string | null;
+  /** 用户明确选过「对话（不在项目中）」；本次草稿不得再由默认目录回填。 */
+  explicitNoProject: boolean;
   /** 远程项目所属 host。null = 本地项目或对话。 */
   remoteHostId: string | null;
   /**
@@ -201,6 +209,17 @@ export interface NewMakerDraft {
    */
   /** 选中的插件模型；底下的模型设置保留，插件没给结果时用它们。 */
   pluginModel: { pluginId: string; modelId: string } | null;
+  /**
+   * 新任务选中的模型组(用户建的路线；旧版的模式读取时丢弃)：第一条消息发出前按它选一个具体模型；记住为新任务默认，
+   * 手动选任何模型或插件模型即清除。底下的模型设置保留，组里没有能用的模型时用它们。
+   */
+  modelGroup: ModelGroupSelection | null;
+  /**
+   * 新任务选中的插件引擎(docs/plans/acp-plugin-bridge.md)：记住为新任务默认，选任何内置模型、插件模型
+   * 或模型组即清除。底下的内置模型设置保留；引擎被停用、卸载或报告不可用时按没选处理，用回它们。
+   * 单独一个字段，不进 vendor / lastByVendor —— 内置 Harness 的类型与记忆保持不变。
+   */
+  pluginEngine: PluginEngineSelection | null;
 }
 
 /**
@@ -254,6 +273,7 @@ function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
     workingDir: null,
+    explicitNoProject: false,
     remoteHostId: null,
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
@@ -277,6 +297,8 @@ function makeDefault(): NewMakerDraft {
     newChatDefaultPermissionMode: null,
     defaultTupleSelectionCustomized: false,
     pluginModel: null,
+    modelGroup: null,
+    pluginEngine: null,
   };
 }
 
@@ -309,7 +331,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
   const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
-  const workingDir = normalizeDraftWorkingDir(r.workingDir);
+  // Device-link identity is transient in an unfinished draft. Never reload its path as local.
+  const workingDir = r.deviceLinkDeviceId ? null : normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
       ? r.remoteHostId.trim()
@@ -489,6 +512,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   return {
     vendor,
     workingDir,
+    explicitNoProject: workingDir == null && r.explicitNoProject === true,
     remoteHostId: workingDir == null ? null : remoteHostId,
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
@@ -516,6 +540,26 @@ function sanitize(raw: unknown): NewMakerDraft {
     newChatDefaultPermissionMode,
     defaultTupleSelectionCustomized,
     pluginModel: sanitizePluginModel(r.pluginModel),
+    modelGroup: sanitizeModelGroupSelection(r.modelGroup),
+    pluginEngine: sanitizePluginEngine(r.pluginEngine),
+  };
+}
+
+/** 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。 */
+function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
+  if (!value || typeof value !== 'object') return null;
+  const { providerId, modelId, permissionMode, effort } = value as {
+    providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown;
+  };
+  if (
+    typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
+    || typeof modelId !== 'string' || !modelId.trim() || modelId.length > 256
+  ) return null;
+  return {
+    providerId,
+    modelId,
+    ...(isPluginEnginePermissionModeId(permissionMode) ? { permissionMode } : {}),
+    ...(isPluginEngineEffort(effort) ? { effort } : {}),
   };
 }
 
@@ -655,13 +699,18 @@ let preferenceSyncFallback: PreferenceSyncFallback = null;
  * 显式 tuple 操作先采用跨窗口持久真相，再只施加自己的字段变更。
  * 这样既不会带着旧整表复活已恢复的 override，也不会吞掉本窗口刚发生的真实选模意图。
  */
+function mergeStoredTuple(stored: StoredDefaultTuplePreference): NewMakerDraft {
+  const following = persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) !== currentDraft.vendor;
+  return { ...currentDraft, ...stored, vendor: following ? currentDraft.vendor : stored.vendor };
+}
+
 function rebaseStoredDefaultTuplePreference(): void {
   const stored = readStoredDefaultTuplePreference();
   if (
     stored !== undefined &&
     !hasSameDefaultTuplePreference(stored, defaultTuplePreferenceOf(currentDraft))
   ) {
-    currentDraft = { ...currentDraft, ...stored };
+    currentDraft = mergeStoredTuple(stored);
     // 等价于 storage event 已到达：即使后续显式操作因同值短路，订阅者也必须看到这次收敛。
     emit();
   }
@@ -710,10 +759,10 @@ function scheduleWrite(
       defaultTuplePreferenceOf(currentDraft),
     )
   ) {
-    currentDraft = { ...currentDraft, ...storedDefaultTuplePreference };
+    currentDraft = mergeStoredTuple(storedDefaultTuplePreference);
   }
   try {
-    window.localStorage.setItem(storageKey(), JSON.stringify(currentDraft));
+    window.localStorage.setItem(storageKey(), JSON.stringify({ ...currentDraft, vendor: persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) }));
     preferenceSyncFallback = null;
   } catch {
     // localStorage 满 / 私密窗口禁写——忽略,不影响内存状态。
@@ -771,8 +820,8 @@ const removeStorageListener = (() => {
     // 只有工作端级偏好跨窗口同步；deviceLinkDeviceId / extraDirs 等单窗口临时目标保持不动。
     currentDraft = {
       ...currentDraft,
+      ...(defaultTupleChanged && nextDefaultTuplePreference ? mergeStoredTuple(nextDefaultTuplePreference) : {}),
       ...(worktreeChanged ? nextWorktreePreference : {}),
-      ...(defaultTupleChanged ? nextDefaultTuplePreference : {}),
     };
     emit();
   };
@@ -800,7 +849,7 @@ export function getDraft(): NewMakerDraft {
  */
 export function getDraftForPreferenceSync(): NewMakerDraft {
   const stored = readStoredDraftRecord();
-  if (!stored || preferenceSyncFallback === 'full-draft') return currentDraft;
+  if (!stored || preferenceSyncFallback === 'full-draft') return { ...currentDraft, vendor: persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) };
   const persistedDraft = sanitize(stored);
   return preferenceSyncFallback === 'worktree-only'
     ? {
@@ -820,6 +869,7 @@ export function getDraftForOwnerPreferenceSync(ownerId: string | null): NewMaker
 export function setNewMakerDraftOwner(ownerId: string | null): void {
   const normalized = typeof ownerId === 'string' && ownerId.trim().length > 0 ? ownerId : null;
   if (activeDataOwnerId === normalized) return;
+  resetRemoteDraftEngineFollow();
   activeDataOwnerId = normalized;
   currentDraft = loadFromStorage();
   preferenceSyncFallback = null;
@@ -838,7 +888,7 @@ export function setWorktreePreference(enabled: boolean): void {
   const worktreePreferenceCustomized = true;
   if (typeof window !== 'undefined') {
     const stored = readStoredDraftRecord();
-    const base = stored ?? currentDraft;
+    const base = stored ?? { ...currentDraft, vendor: persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) };
     if (
       stored?.worktreeEnabled !== worktreeEnabled
       || stored?.worktreePreferenceCustomized !== worktreePreferenceCustomized
@@ -903,6 +953,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
+  if ('workingDir' in normalizedPatch && next.workingDir != null) {
+    next.explicitNoProject = false;
+  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -969,13 +1022,18 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
  *
  * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * 功能引导默认保留「无项目」意图；发送成功后传 explicitNoProject=false，
+ * 让下一次通用新建可以选用用户设置的默认目录。
  * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
  * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
  * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
  */
-export function resetDraftWorkspaceTargets(): void {
+export function resetDraftWorkspaceTargets(
+  { explicitNoProject = true }: { explicitNoProject?: boolean } = {},
+): void {
   patchDraft({
     workingDir: null,
+    explicitNoProject,
     extraDirs: [],
     writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },
@@ -993,8 +1051,11 @@ export function patchCollab(patch: Partial<CollabDraft>): void {
  *   2. 切到新 vendor
  * NewMakerDraftRoute 的 VendorSegmentedSwitcher 切换时调本函数;切回某 vendor 时 ChatInput 通过 lastByVendor[vendor] 取上次值。
  */
-export function switchVendor(next: MakerVendor): void {
-  rebaseStoredDefaultTuplePreference();
+export function switchVendor(next: MakerVendor, options?: { remoteFollow?: boolean; userSelected?: boolean }): void {
+  if (options?.userSelected) markRemoteDraftEngineManuallySelected();
+  if (!options?.remoteFollow) {
+    rebaseStoredDefaultTuplePreference();
+  }
   if (currentDraft.vendor === next) return;
   currentDraft = {
     ...currentDraft,
@@ -1163,7 +1224,7 @@ export function clearDefaultTupleTuningCustomization(args: {
 function patchVendorPrefsInternal(
   vendor: MakerVendor,
   patch: Partial<VendorPrefs>,
-  opts: { markModelChoice: boolean },
+  opts: { markModelChoice: boolean; selectVendor?: boolean },
 ): void {
   rebaseStoredDefaultTuplePreference();
   const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
@@ -1198,6 +1259,7 @@ function patchVendorPrefsInternal(
   }
   currentDraft = {
     ...currentDraft,
+    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || marksSelection,
@@ -1211,8 +1273,12 @@ function patchVendorPrefsInternal(
   emit();
 }
 
-export function patchVendorPrefs(vendor: MakerVendor, patch: Partial<VendorPrefs>): void {
-  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true });
+export function patchVendorPrefs(
+  vendor: MakerVendor,
+  patch: Partial<VendorPrefs>,
+  options?: { selectVendor?: boolean },
+): void {
+  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true, selectVendor: options?.selectVendor });
 }
 
 /**
@@ -1368,6 +1434,7 @@ export function getPersistedVendorModel(vendor: MakerVendor): string {
 
 /** 测试用 —— 重置 store + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
+  resetRemoteDraftEngineFollow();
   currentDraft = makeDefault();
   activeDataOwnerId = null;
   if (typeof window !== 'undefined') {
@@ -1378,6 +1445,18 @@ export function __resetForTest(): void {
     }
   }
   emit();
+}
+
+/**
+ * 测试用 —— 模拟 renderer 重新加载本模块(app 重启):丢弃全部内存态,按模块首次求值的
+ * 方式从 localStorage 恢复,不写盘、不通知。新增模块级状态时要在这里一并复位。
+ */
+export function __reloadForTest(): void {
+  resetRemoteDraftEngineFollow();
+  activeDataOwnerId = null;
+  preferenceSyncFallback = null;
+  listeners.clear();
+  currentDraft = loadFromStorage();
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;

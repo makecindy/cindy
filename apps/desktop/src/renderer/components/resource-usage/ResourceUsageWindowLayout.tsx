@@ -45,7 +45,7 @@ const EMPTY_STATE: ResourceUsageState = {};
 
 export function ResourceUsageWindowLayout() {
   const { t } = useTranslation();
-  const { effectiveLocale, setLocale } = useLocale();
+  const { setDisplayLocale } = useLocale();
   const { isMac, isFullscreen } = useMacFullscreen();
   const presentationReadySentRef = useRef(false);
   const presentationReadyInFlightRef = useRef(false);
@@ -71,11 +71,7 @@ export function ResourceUsageWindowLayout() {
         setWindowChromeRevision((revision) => revision + 1);
       },
     );
-    const offLocaleChanged = window.electronAPI.resourceUsageWindow.onLocaleChanged((locale) => {
-      // Main 广播来自任一 renderer 的语言设置；忽略同值回广播，避免资源窗口
-      // 收到通知后再次 invoke app-menu:set-locale 形成 IPC 回环。
-      if (locale !== effectiveLocale) setLocale(locale);
-    });
+    const offLocaleChanged = window.electronAPI.resourceUsageWindow.onLocaleChanged(setDisplayLocale);
     void window.electronAPI.resourceUsageWindow.rendererReady().catch((err) => {
       log.warn('report renderer ready failed', err);
     });
@@ -88,7 +84,7 @@ export function ResourceUsageWindowLayout() {
         presentationReadyRetryRef.current = null;
       }
     };
-  }, [effectiveLocale, setLocale]);
+  }, [setDisplayLocale]);
 
   const handleFirstSample = useCallback(() => {
     if (
@@ -186,7 +182,8 @@ export function ResourceUsageWindowRoot() {
     <ThemeProvider>
       <FontSettingsProvider>
         <LocaleProvider>
-          <WallpaperSettingsProvider>
+          {/* No native backdrop bridge in this window: keep its opaque themed canvas. */}
+          <WallpaperSettingsProvider desktopBackground={false}>
             <ConfirmDialogProvider>
               <ResourceUsageWindowLayout />
               <ToastContainer />

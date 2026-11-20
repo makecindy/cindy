@@ -22,7 +22,9 @@ import type { BotProfile } from './botStore';
 
 interface Props {
   bot: RemoteBot;
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
+  /** The home is online but cannot be controlled; this never makes it callable. */
+  controlOff?: boolean;
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onBack: () => void;
   onDeleted: () => void;
@@ -50,6 +52,9 @@ export function RemoteTeammateSettings(props: Props) {
 function RemoteTeammateSettingsContent(props: Props) {
   const { bot } = props;
   const { t } = useTranslation();
+  const offlineDescription = t(props.controlOff ? 'bots.cloud.homeControlOff' : 'bots.remote.offlineDescription', {
+    name: bot.name, device: bot.deviceName.trim() || t('bots.cloud.unknownDevice'),
+  });
   const [support, setSupport] = useState<Support>({ state: 'checking' });
   const [attempt, setAttempt] = useState(0);
   // Probe while the computer is reachable; going offline keeps what was already learned.
@@ -83,11 +88,11 @@ function RemoteTeammateSettingsContent(props: Props) {
 
   if (support.state === 'unsupported')
     return <RemoteBotSettings bot={bot} initialPage={props.initialPage === 'memory' || props.initialPage === 'capabilities' ? props.initialPage : undefined} beforeCloseRef={props.beforeCloseRef} onDeleted={props.onDeleted} />;
-  if (support.state === 'ready') return <RemoteSettingsPages {...props} ops={support.ops} />;
+  if (support.state === 'ready') return <RemoteSettingsPages {...props} ops={support.ops} offlineDescription={offlineDescription} />;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5 text-13 text-[var(--text-primary)]">
       {!bot.online ? (
-        <p role="status">{t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })}</p>
+        <p role="status">{offlineDescription}</p>
       ) : support.state === 'failed' ? (
         <div role="alert" className="space-y-2">
           <p>{t('bots.remoteSettings.loadFailed')}</p>
@@ -100,7 +105,7 @@ function RemoteTeammateSettingsContent(props: Props) {
   );
 }
 
-function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', beforeCloseRef, onBack }: Props & { ops: ReadonlySet<BotSettingsOp> }) {
+function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', beforeCloseRef, onBack, offlineDescription }: Props & { ops: ReadonlySet<BotSettingsOp>; offlineDescription: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const online = useRef(bot.online);
@@ -133,10 +138,6 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
     () =>
       window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
         const payload = parseRemoteResourceChangedPayload(push.payload);
-        if (push.deviceId === bot.deviceId && push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL && payload?.collectionId === 'routines' && isDeviceLinkRemotePushCurrent(push, stamp)) {
-          handle.changed('routines');
-          return;
-        }
         if (
           push.deviceId !== bot.deviceId ||
           push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL ||
@@ -163,7 +164,7 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
     return (
       <div className="min-h-0 flex-1 overflow-y-auto p-5 text-13 text-[var(--text-primary)]">
         {!bot.online ? (
-          <p role="status">{t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })}</p>
+          <p role="status">{offlineDescription}</p>
         ) : status === 'failed' || status === 'gone' ? (
           <div role="alert" className="space-y-2">
             <p>{t('bots.remoteSettings.loadFailed')}</p>
@@ -182,7 +183,7 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
         <div className="relative flex min-h-0 flex-1 flex-col">
           {!bot.online ? (
             <p role="status" className="absolute inset-x-0 bottom-0 z-10 border-t border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-2 text-12 leading-5 text-[var(--text-secondary)]">
-              {t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })}
+              {offlineDescription}
             </p>
           ) : null}
           <BotSettings

@@ -30,18 +30,28 @@ import { remotePrStatuses, prStatusQuery, redactSensitiveText } from '@cindy/mak
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
 
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import { prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
+import {
+  areAllTaskPrsMerged,
+  prStatusKey,
+  MAX_STATUS_BATCH,
+  MAX_STATUS_QUERIES,
+  MAX_TASK_STATUS_QUERIES,
+  PR_STATUS_REFRESH_INTERVAL_MS,
+} from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
+import { createDeviceLanes } from '@/lib/deviceLane';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import { createLogger } from '@/lib/logger';
 
@@ -293,6 +303,9 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   const localRefsInFlight = useRef(new Map<string, number>());
   const localRefsFetchedAt = useRef(new Map<string, number>());
   const remoteDeviceBySession = useRef(new Map<string, string>());
+  // Background PR reads to one remote computer run one at a time (see deviceLane).
+  // Recheck owner and consumers inside each queued callback, including provider subreads.
+  const [remoteLanes] = useState(createDeviceLanes);
   // 正在展示 PR 信息的会话(sessionId → {deviceId?, count})。顶栏(打开的会话)
   // 与侧栏行(勾选 pr)都注册到这里;引用计数支持同一会话多处并存。refs 异步
   // 到位(全量加载 / 远程补拉 / 引用变化推送)后,对注册中的会话立即补状态查询。
@@ -399,7 +412,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // ——被控端持有 gh token,且 main 侧按该会话已提取的引用过滤查询
   // (git-context/ipc.ts 的 fail-closed 逻辑),与聊天顶栏同一条安全路径。
   const fetchStatusesForRefs = useRef((sessionId: string, refsInput: readonly SessionPrRef[]) => {
-    const refs = refsInput.slice(0, MAX_STATUS_QUERIES);
+    const refs = refsInput.slice(0, MAX_TASK_STATUS_QUERIES);
     if (refs.length === 0) return;
     const gen = ownerGenRef.current;
     // 同代在飞才挡;旧代尸体(等超时中)不能挡新 owner 的首查,直接覆盖标记。
@@ -417,17 +430,28 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 不写任何状态,重连后的下一个触发点(周期 / 聚焦 / 引用到位)自然恢复。
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
         if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
-        const results = deviceId
-          ? await remotePrStatuses(
-              queries,
-              sessionId,
-              (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
-              (error) =>
-                log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
-            )
-          : await window.electronAPI.gitContext.getPrStatuses(queries);
+        const results: PrStatusResult[] = [];
+        for (let i = 0; i < queries.length; i += MAX_STATUS_BATCH) {
+          const batch = queries.slice(i, i + MAX_STATUS_BATCH);
+          const part = deviceId
+            ? await remoteLanes.run(deviceId, async () => {
+                if (gen !== ownerGenRef.current || !prConsumers.current.has(sessionId)) return;
+                return remotePrStatuses(
+                  batch,
+                  sessionId,
+                  (channel, args) =>
+                    gen === ownerGenRef.current && prConsumers.current.has(sessionId)
+                      ? window.electronAPI.deviceLink.invoke(deviceId, channel, args)
+                      : Promise.resolve([]),
+                  (error) =>
+                    log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
+                );
+              })
+            : await window.electronAPI.gitContext.getPrStatuses(batch);
+          if (!Array.isArray(part)) return;
+          results.push(...part);
+        }
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
-        if (!Array.isArray(results)) return;
         store.applyStatuses(sessionId, results);
         store.setRefreshError(sessionId, 'statuses', false);
       } catch (err) {
@@ -438,7 +462,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (inFlightSessions.current.get(sessionId) === gen) {
           inFlightSessions.current.delete(sessionId);
           if (gen === ownerGenRef.current && prConsumers.current.has(sessionId)) {
-            const latest = store.getRefs(sessionId).slice(0, MAX_STATUS_QUERIES);
+            const latest = store.getRefs(sessionId).slice(0, MAX_TASK_STATUS_QUERIES);
             const requested = new Set(refs.map(prStatusKey));
             if (latest.some((ref) => !requested.has(prStatusKey(ref)))) {
               fetchStatusesForRefs(sessionId, latest);
@@ -476,11 +500,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     remoteRefsInFlight.current.set(sessionId, gen);
     void (async () => {
       try {
-        const refs = (await window.electronAPI.deviceLink.invoke(
-          deviceId,
-          'git-context:pr-refs:list',
-          [sessionId],
-        )) as SessionPrRef[];
+        const refs = (await remoteLanes.run(deviceId, async () => {
+          if (gen !== ownerGenRef.current || !prConsumers.current.has(sessionId)) return;
+          return window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-refs:list', [
+            sessionId,
+          ]);
+        })) as SessionPrRef[] | undefined;
+        if (!refs) return;
         // owner 已切换:结果与簿记(时间戳会抑制新 owner 的重查)都不能落。
         if (gen !== ownerGenRef.current) return;
         if (remoteRefsInvalidated.current.has(sessionId)) return;
@@ -701,4 +727,16 @@ export function usePrStatuses(sessionId: string): PrStatusesContextValue {
 /** 行级动作(value 恒定,订阅不会因 refs/statuses 更新而重渲染)。 */
 export function usePrActions(): PrActionsContextValue {
   return useContext(PrActionsContext);
+}
+
+/** The same task-wide decision drives card hints and the final archive preflight.
+ * Read from the store again after asynchronous checks, not from a render snapshot.
+ */
+export function useTaskPrArchiveEligibility(sessionId: string): { eligible: boolean; checkEligibility: () => boolean } {
+  const store = useContext(PrStoreContext);
+  const checkEligibility = useCallback(() => areAllTaskPrsMerged(
+    store.getRefs(sessionId), store.getStatusesForSession(sessionId), store.hasRefreshError(sessionId),
+  ), [store, sessionId]);
+  const eligible = useSyncExternalStore(store.subscribe, checkEligibility, checkEligibility);
+  return { eligible, checkEligibility };
 }

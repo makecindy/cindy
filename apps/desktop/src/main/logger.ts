@@ -43,7 +43,6 @@
  * 没法按天) 启动期砍头保尾 (keepRecentSync)。
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import util from 'node:util';
@@ -77,6 +76,7 @@ function parseLevel(s: string | undefined, fallback: LogLevel): LogLevel {
 let currentLevel: LogLevel = 'info';
 let isDevMode = false;
 let initialized = false;
+let appVersion = 'unknown';
 
 // ── 落盘 slot + 按天 rotate ───────────────────────────────────────────────────
 // 所有最终日志统一按天: main 与 agent 各一个 DailySlot, 跨天开新文件 + 只保留最近
@@ -100,6 +100,41 @@ interface AgentLogRecord {
   msg: string;
 }
 
+// 失败后的重试节奏:曾经每条日志都重开一次流(失败机器上会把 open 系统调用刷爆,
+// 还把保留期清理的 readdir 变成每条日志一次)。短抖动快速恢复,持续失败退避到上限。
+const STREAM_RETRY_MIN_MS = 1_000;
+const STREAM_RETRY_MAX_MS = 30_000;
+// 流已经失效后再写抛的派生错误:根因另有其人(ENOSPC 之类),不要让它顶掉根因。
+const DERIVED_STREAM_ERROR_CODES = new Set(['ERR_STREAM_DESTROYED', 'ERR_STREAM_ALREADY_FINISHED']);
+
+/**
+ * 落盘失败的原因(#10790)。
+ *
+ * 曾经流开不起来或写不进去时,错误被整段吞掉:当天日志文件 0 字节一整天,
+ * 没人知道是磁盘满了、权限变了还是文件被锁。这里把原因留下来(错误码 + 消息
+ * + 时刻),供健康自检与诊断使用。
+ *
+ * ⚠️ message 里可能带本地绝对路径:要进上报或界面时只带 stage 与 code。
+ */
+export interface LogStreamFailure {
+  /** 失败环节:开文件还是写内容。 */
+  stage: 'open' | 'write';
+  /** 系统错误码(ENOSPC / EACCES / EBUSY …);没有就空串。 */
+  code: string;
+  message: string;
+  at: number;
+}
+
+/** 当天日志流的自检结果:诊断工具或界面据此判断「今天有没有在写」。 */
+export interface LogStreamHealth {
+  /** logger 是否已初始化(未初始化时不该判成故障)。 */
+  initialized: boolean;
+  /** 当天文件当前是否有活跃写流。 */
+  active: boolean;
+  /** 最近一次失败;写入恢复成功后清空,未恢复期间一直留着,便于事后回看。 */
+  lastFailure: LogStreamFailure | null;
+}
+
 // 按天 rotate slot: main 与 agent 共用。文件名 = <prefix><YYYY-MM-DD><ext>。
 // dateKey 变了就切文件; 不砍头 (按天 rotate + 保留期清理)。
 interface DailySlot {
@@ -108,10 +143,34 @@ interface DailySlot {
   dateKey: string; // 'YYYY-MM-DD' (本地)
   prefix: string;  // 'main-' | 'agent-'
   ext: string;     // '.log' | '.ndjson'
+  /** 最近一次落盘失败(开文件或写内容);null = 还没失败过。 */
+  lastFailure: LogStreamFailure | null;
+  /** 下一次允许重试的时刻(epoch ms)。 */
+  nextRetryAt: number;
+  /** 失败后的重试间隔(epoch ms):翻倍退避,恢复后复位。 */
+  retryDelayMs: number;
+  /** 主日志当天文件的格式哨兵是否已落地(读侧只看第 0 字节)。 */
+  sentinelWritten: boolean;
+  /** 已经报告过的失败签名:同一原因不反复刷 stderr。 */
+  reportedFailure: string;
 }
-const mainSlot: DailySlot = { stream: null, dir: '', dateKey: '', prefix: 'main-', ext: '.log' };
+function createDailySlot(dir: string, prefix: string, ext: string): DailySlot {
+  return {
+    stream: null,
+    dir,
+    dateKey: '',
+    prefix,
+    ext,
+    lastFailure: null,
+    nextRetryAt: 0,
+    retryDelayMs: STREAM_RETRY_MIN_MS,
+    sentinelWritten: false,
+    reportedFailure: '',
+  };
+}
+const mainSlot: DailySlot = createDailySlot('', 'main-', '.log');
 // 无 session 关联的 agent 日志 (启动期 / 全局基础设施) → logs 根的 agent-<date>.ndjson。
-const agentSlot: DailySlot = { stream: null, dir: '', dateKey: '', prefix: 'agent-', ext: AGENT_LOG_EXT };
+const agentSlot: DailySlot = createDailySlot('', 'agent-', AGENT_LOG_EXT);
 let agentSeq = 0;
 
 // 有 session 关联的 agent 日志 → sessions/<full-id>/<date>.ndjson (per-session 目录, 目录内按天)。
@@ -289,8 +348,14 @@ export function isTransientNetworkError(err: unknown): boolean {
     case 'UND_ERR_CONNECT_TIMEOUT':
       return true;
     default:
-      return false;
+      break;
   }
+  // `ws` 把 HTTP upgrade 握手超时抛成没有 code 的普通 Error
+  // (ws/lib/websocket.js → abortHandshake)；代理/VPN 抖动时 Discord 网关已经
+  // 在自己的重连循环里，这条错误没有可恢复的调用点，不该带走整个进程 (#11354)。
+  // 只认这一条完整消息: ws 的其它握手失败（例如无效的 Sec-WebSocket-Accept）
+  // 仍应视为致命错误，不能因为都是「握手」就被降级。
+  return (err as Error).message === 'Opening handshake has timed out';
 }
 
 // dev 终端镜像的单行上限。终端只是人眼实时观察通道,超长行(典型:透传大 payload
@@ -353,6 +418,14 @@ export interface InitOptions {
   isDev?: boolean;
   level?: LogLevel;
   logDir?: string;
+  /**
+   * Caller-supplied runtime facts. Keeping them out of an `electron` import is
+   * what lets the same logger (and the modules that depend on it) load in the
+   * Node `cindy-host` process. Desktop passes its Electron values at startup.
+   */
+  isPackaged?: boolean;
+  userDataDir?: string;
+  version?: string;
 }
 
 function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
@@ -369,17 +442,26 @@ function readLevelFromConfigFile(userDataDir: string): LogLevel | undefined {
   return undefined;
 }
 
+/** Packaged logging has no safe default: callers must name the real profile. */
+function requireUserDataDir(userDataDir: string | undefined): string {
+  if (!userDataDir) {
+    throw new Error('initLogger: userDataDir is required when packaged (pass logDir instead)');
+  }
+  return userDataDir;
+}
+
 export function initLogger(opts?: InitOptions): void {
   if (initialized) return;
   initialized = true;
+  appVersion = opts?.version ?? 'unknown';
 
-  isDevMode = opts?.isDev ?? !app.isPackaged;
+  isDevMode = opts?.isDev ?? !(opts?.isPackaged ?? true);
   // dev: 仓库内 apps/desktop/logs/ —— vite 把 main 编译到 apps/desktop/.vite/build/,
   // 所以 __dirname 上跳两级正好是 apps/desktop/。
   // packaged: <userData>/logs/ (asar 内不可写,且用户不该去仓库找日志)。
   const logDir = opts?.logDir ?? (isDevMode
     ? path.resolve(__dirname, '../../logs')
-    : path.join(app.getPath('userData'), 'logs'));
+    : path.join(requireUserDataDir(opts?.userDataDir), 'logs'));
 
   // Level resolution: env > config file > opts.level > built-in default.
   // log-config.json: dev 放 apps/desktop/logs/, packaged 放 <userData>/。
@@ -455,7 +537,7 @@ export function initLogger(opts?: InitOptions): void {
   });
 
   emit('info', 'logger', [
-    `=== App started === v${app.getVersion()} level=${currentLevel} isDev=${isDevMode}`,
+    `=== App started === v${appVersion} level=${currentLevel} isDev=${isDevMode}`,
   ]);
 }
 
@@ -470,6 +552,22 @@ export function getLogLevel(): LogLevel {
 // agent 日志根目录 (= 各 logger 文件所在目录)。host 用它拼 per-session cc-debug 路径。
 export function getLogDir(): string {
   return logRootDir;
+}
+
+/**
+ * 当天日志流的自检入口(#10790)。
+ *
+ * 「今天有没有在写日志」不能只看文件大小:文件可能按设计是空的(会话日志在
+ * sessions/<id>/ 下),也可能是开写失败后留下的 0 字节空壳。这里给出落盘流
+ * 本身的状态,诊断工具或界面据此提示「日志写入异常」。
+ *
+ * ⚠️ lastFailure.message 可能含本地绝对路径:展示或上报时只取 stage 与 code。
+ */
+export function getLogStreamHealth(): { main: LogStreamHealth; agent: LogStreamHealth } {
+  return { main: slotHealth(mainSlot), agent: slotHealth(agentSlot) };
+}
+function slotHealth(slot: DailySlot): LogStreamHealth {
+  return { initialized: slot.dir !== '', active: slot.stream !== null, lastFailure: slot.lastFailure };
 }
 
 // host 用: 拼某 session 的 cc-debug raw 落盘路径 + mkdir, 给 ClaudeCodeAgent 的
@@ -556,38 +654,115 @@ function purgeLegacyAgentLogs(dir: string): void {
  * 故意**绕过 emit 的等级过滤**直接写流: 走 emit 的话, `LOG_LEVEL=warn` 这类配置会让
  * 哨兵不落地, 上报侧于是跳过整个文件、一条也采不到 —— 一个日志等级配置不该把上报能力
  * 静默关掉。
+ *
+ * 写成功(flush 回调无错)才记为已落地: 第一次开流就失败时哨兵会跟着一起丢掉,重试时
+ * 必须再排一次,否则当天文件第 0 字节不是哨兵,整份不可上报。
  */
 function writeRecordFormatSentinel(slot: DailySlot): void {
   if (!slot.stream) return;
   const line =
     `[${localTimestamp(new Date())}] [${LEVEL_TAG.info}] ` +
     `[${RECORD_FORMAT_SENTINEL_SCOPE}] ${RECORD_FORMAT_SENTINEL_MSG}\n`;
-  try { slot.stream.write(line); } catch { /* stream broken — silent */ }
+  try {
+    slot.stream.write(line, (err?: Error | null) => {
+      if (!err) {
+        slot.sentinelWritten = true;
+        markSlotHealthy(slot);
+      }
+    });
+  } catch (err) {
+    reportSlotFailure(slot, 'write', err);
+  }
+}
+
+/**
+ * 记录并报告一次落盘失败(#10790)。
+ *
+ * 失败原因(ENOSPC / EACCES / EBUSY…)必须留下:曾经这里什么都不做,流被置空后
+ * 当天文件就 0 字节一整天,没人看得出是磁盘满了还是文件被锁。同一原因只报一次,
+ * 免得持续故障把 stderr 刷爆。
+ */
+function reportSlotFailure(slot: DailySlot, stage: 'open' | 'write', err: unknown): void {
+  const code = err && typeof err === 'object' && 'code' in err && typeof (err as { code: unknown }).code === 'string'
+    ? (err as { code: string }).code : '';
+  const message = err instanceof Error ? err.message : String(err);
+  // 流已经失效之后再写只会抛派生错误(ERR_STREAM_DESTROYED 之类),根因(例如
+  // ENOSPC)已经在案,不要让派生错误顶掉它。
+  if (slot.lastFailure && DERIVED_STREAM_ERROR_CODES.has(code)) return;
+  slot.lastFailure = { stage, code, message, at: Date.now() };
+  const signature = `${stage}:${code}:${message}`;
+  if (slot.reportedFailure === signature) return;
+  slot.reportedFailure = signature;
+  const where = `${slot.prefix}${slot.dateKey}${slot.ext}`;
+  try {
+    origStderr(`[logger] ${where} ${stage} failed: ${code ? `${code} ` : ''}${message}\n`);
+  } catch {
+    /* stderr 也不可写时只能放弃:健康状态里仍有原因。 */
+  }
+}
+
+/** 失败后按退避节奏安排下一次重试;成功一次就复位。 */
+function scheduleSlotRetry(slot: DailySlot): void {
+  slot.nextRetryAt = Date.now() + slot.retryDelayMs;
+  slot.retryDelayMs = Math.min(slot.retryDelayMs * 2, STREAM_RETRY_MAX_MS);
+}
+
+/**
+ * 一次写入真的落盘了:退避复位,失败原因与去重状态一起清空。
+ *
+ * 判据只能是「写成功」,不能是「文件打开成功」——ENOSPC 时 open 照样成功、写才失败。
+ * 在 open 上复位会同时坏掉两件事:退避永远停在 1 秒(每条日志都重开一次流),以及
+ * 去重状态被清空(同一个错误每一轮重刷一遍 stderr);`lastFailure` 也会在写仍失败的
+ * 时候被清掉,健康自检误报成健康。
+ */
+function markSlotHealthy(slot: DailySlot): void {
+  slot.retryDelayMs = STREAM_RETRY_MIN_MS;
+  slot.lastFailure = null;
+  slot.reportedFailure = '';
 }
 
 // 按天切换: dateKey 变了就关旧 stream、开当天文件, 并触发保留清理。main / agent 共用。
 function ensureDailySlot(slot: DailySlot, now: Date): void {
   if (!slot.dir) return; // 未 init
   const key = dateKeyLocal(now);
-  if (key === slot.dateKey && slot.stream) return;
-  if (slot.stream) {
-    try { slot.stream.end(); } catch { /* ignore */ }
-    slot.stream = null;
+  if (key === slot.dateKey) {
+    if (slot.stream) return;                     // 同一天,流还活着
+    // 刚失败过:等退避窗口,别每条日志都重开。
+    // 注意按墙上时钟判,不按 `now` —— `now` 可能是记录自带的时间戳(cc-debug 重试旧行时
+    // 它一直停在原地),而 nextRetryAt 是墙上时钟设的,拿旧时间戳比会把窗口判成永远没过。
+    if (Date.now() < slot.nextRetryAt) return;
+  } else {
+    if (slot.stream) {
+      try { slot.stream.end(); } catch { /* ignore */ }
+      slot.stream = null;
+    }
+    slot.dateKey = key;
+    // 换了一天:格式哨兵要重新排一次(读侧只看第 0 字节)。
+    slot.sentinelWritten = false;
   }
-  slot.dateKey = key;
   try {
-    slot.stream = fs.createWriteStream(dailyLogPath(slot, key), { flags: 'a' });
-    const stream = slot.stream;
-    stream.on('error', () => {
-      if (slot.stream === stream) slot.stream = null;
+    const stream = fs.createWriteStream(dailyLogPath(slot, key), { flags: 'a' });
+    slot.stream = stream;
+    let opened = false;
+    stream.on('open', () => {
+      opened = true;
+    });
+    stream.on('error', (err) => {
+      if (slot.stream === stream) {
+        slot.stream = null;
+        scheduleSlotRetry(slot);
+      }
+      reportSlotFailure(slot, opened ? 'write' : 'open', err);
     });
   } catch (err) {
-    origStderr(`[logger] failed to open ${slot.prefix}${key}${slot.ext}: ${(err as Error).message}\n`);
     slot.stream = null;
+    scheduleSlotRetry(slot);
+    reportSlotFailure(slot, 'open', err);
   }
   // 只有 main 流是纯文本按行解析的, 需要哨兵; agent / session 流是 NDJSON, 记录边界由
-  // JSON 行本身保证, 不存在伪造记录头的问题。
-  if (slot === mainSlot) writeRecordFormatSentinel(slot);
+  // JSON 行本身保证, 不存在伪造记录头的问题。哨兵只在还没落地时排:第一次开流失败时
+  // 它会跟着一起丢掉,重试时要再排一次,否则当天文件第 0 字节不是哨兵,整份不可上报。
+  if (slot === mainSlot && !slot.sentinelWritten) writeRecordFormatSentinel(slot);
   void cleanupOldDailyLogs(slot.dir, slot.prefix, slot.ext);
 }
 
@@ -612,7 +787,7 @@ function sessionAgentSlot(sessionId: string): DailySlot | null {
   }
   const dir = path.join(logRootDir, SESSIONS_DIR, sessionId);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
-  const slot: DailySlot = { stream: null, dir, dateKey: '', prefix: '', ext: AGENT_LOG_EXT };
+  const slot = createDailySlot(dir, '', AGENT_LOG_EXT);
   sessionSlots.set(sessionId, slot);
   return slot;
 }
@@ -640,11 +815,25 @@ async function cleanupOldSessions(rootDir: string): Promise<void> {
   }
 }
 
+/** main 行写成功:此刻才是真的健康了,退避与失败原因复位(#10790)。 */
+function mainLineFlushed(err?: Error | null): void {
+  if (!err) markSlotHealthy(mainSlot);
+}
+
 // main 纯文本行写入: 按天切 + append。
 function writeMainLine(line: string): void {
   ensureDailySlot(mainSlot, new Date());
   if (!mainSlot.stream) return;
-  try { mainSlot.stream.write(line); } catch { /* stream broken — silent */ }
+  try {
+    mainSlot.stream.write(line, mainLineFlushed);
+  } catch (err) {
+    // 写不进去时不再静默:留下原因,并让下一次写入重新开流。
+    reportSlotFailure(mainSlot, 'write', err);
+    const broken = mainSlot.stream;
+    mainSlot.stream = null;
+    scheduleSlotRetry(mainSlot);
+    try { broken?.destroy(); } catch { /* ignore */ }
+  }
 }
 
 // agent NDJSON 写入点: maker/proxy (经 emit) 与 cc-debug (经 writeCcDebugLine) 都汇到这里。
@@ -667,7 +856,11 @@ function writeAgentRecord(rec: Omit<AgentLogRecord, 'seq'>, retryable = false): 
   const slot = rec.sessionId ? sessionAgentSlot(rec.sessionId) : agentSlot;
   if (!slot) return rejected();
   ensureDailySlot(slot, new Date(rec.ts));
-  if (!slot.stream || !agentLogWriter.write(slot.stream, line)) return rejected();
+  // 落盘成功才算健康:open 成功但写失败(ENOSPC)时不能复位退避,见 markSlotHealthy。
+  const settled = (err?: Error | null): void => {
+    if (!err) markSlotHealthy(slot);
+  };
+  if (!slot.stream || !agentLogWriter.write(slot.stream, line, settled)) return rejected();
   agentSeq++;
   droppedAgentRecords = 0;
   return true;

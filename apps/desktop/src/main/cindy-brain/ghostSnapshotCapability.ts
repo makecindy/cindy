@@ -1,6 +1,3 @@
-import { utilityProcess } from 'electron';
-import path from 'node:path';
-
 import type { GhostInstallReceipt } from './ghostInstallReceipt.js';
 import type { GhostSnapshotParentIdentity } from './ghostSnapshotIdentity.js';
 import type { GhostSnapshotWorkerRequest } from './ghostSnapshotWorkerProcess.js';
@@ -16,14 +13,26 @@ export interface GhostSnapshotMutationRequest {
 
 export type GhostSnapshotTestMutation = (request: GhostSnapshotMutationRequest) => Promise<void>;
 
+export interface GhostSnapshotProcess {
+  postMessage(message: unknown): void;
+  kill(): unknown;
+  on(event: 'message', listener: (message: unknown) => void): unknown;
+  on(event: 'error', listener: (error: unknown) => void): unknown;
+  on(event: 'exit', listener: (code: number | null) => void): unknown;
+}
+
+let createWorker: ((parentDir: string) => GhostSnapshotProcess) | undefined;
+
+/** The shell supplies only a process transport; the shared worker enforces identity and receipts. */
+export function configureGhostSnapshotProcess(factory: (parentDir: string) => GhostSnapshotProcess): void {
+  createWorker = factory;
+}
+
 export function mutateGhostSnapshotWithStableParent(
   request: GhostSnapshotMutationRequest,
 ): Promise<void> {
-  const child = utilityProcess.fork(path.join(__dirname, 'ghostSnapshotWorkerProcess.js'), [], {
-    cwd: request.parentDir,
-    stdio: ['ignore', 'ignore', 'pipe'],
-    serviceName: 'cindy-ghost-snapshot',
-  });
+  if (!createWorker) return Promise.reject(new Error('ghost snapshot process is not configured'));
+  const child = createWorker(request.parentDir);
   return new Promise((resolve, reject) => {
     let settled = false;
     let ready = false;
@@ -31,8 +40,10 @@ export function mutateGhostSnapshotWithStableParent(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
-      error ? reject(error) : resolve();
+      void Promise.resolve().then(() => child.kill()).then(
+        () => { error ? reject(error) : resolve(); },
+        (shutdownError) => reject(error ?? shutdownError),
+      );
     };
     const timer = setTimeout(() => finish(new Error('ghost snapshot worker timed out')), 30_000);
     timer.unref?.();
@@ -42,7 +53,8 @@ export function mutateGhostSnapshotWithStableParent(
       if (!ready && value.type === 'ready') {
         ready = true;
         const { parentDir: _parentDir, ...workerRequest } = request;
-        child.postMessage({ type: 'mutate', request: workerRequest });
+        try { child.postMessage({ type: 'mutate', request: workerRequest }); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
       } else if (value.ok === true) finish();
       else if (value.ok === false) finish(new Error(String(value.message ?? 'ghost snapshot worker failed')));
     });

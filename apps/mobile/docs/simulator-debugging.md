@@ -5,6 +5,10 @@ or Windows Android Emulator. It exists because Expo Go, a development client,
 and an installed distribution build look similar during manual testing but prove
 different things.
 
+For task content that stays blank or frozen despite completed history updates,
+use the [native task-entry replay](blank-task-reproduction.md) to distinguish
+message delivery, list visibility and a stale navigation snapshot.
+
 On Windows, the explicit Mainland China one-command entry starts or reuses the
 `cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
 and then keeps the current worktree's Metro in the foreground:
@@ -19,6 +23,25 @@ SDK tools are resolved from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the standard
 Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
+
+Windows Android identity checks use the following command (replace the serial and
+port with the selected emulator and Metro):
+
+```sh
+pnpm mobile:sim:whoami -- --mock --udid emulator-5554 --port 8082 --json
+```
+
+They read the resolved `android.package`, installed version/debug flag and the APK's
+`assets/fingerprint`, compare it with the Android Expo Updates fingerprint, and reuse
+the Metro worktree/source/environment checks. Failed adb reads remain failures;
+APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
+ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
+Multiple online emulators require an explicit serial. Physical phones are not selected.
+`--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
+`mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.
 
 The three commands share Metro worktree, source, region and environment checks.
 `whoami` success proves identity consistency, not that the app has loaded a bundle
@@ -434,7 +457,9 @@ The native build number only proves native installation. `whoami` also compares
 the installed `EXUpdates.bundle/fingerprint` with the current worktree's Expo
 Updates fingerprint, using the same development environment and workflow as the
 native build. A missing/unreadable fingerprint (`native-unknown`) or difference
-(`native-mismatch`) fails the check even when Metro is correct. Run ordinary
+(`native-mismatch`) fails the check even when Metro is correct. For a read or
+calculation failure, fix the probe and retry before deciding whether to rebuild.
+For a genuinely missing fingerprint or a mismatch, run ordinary
 `mobile:sim:rebuild` without `--clean`; it rejects incompatible cached artifacts
 and checks the built and installed app before handing it off. For example,
 switching worktrees with different `@expo/ui` versions can otherwise silently
@@ -444,9 +469,8 @@ For JavaScript freshness, the Metro terminal must show a new bundle/reload after
 the source change. Matching native fingerprints does not prove page rendering.
 
 If a freshly built app exits before loading JavaScript with `UIScene life cycle
-is required`, check the SDK 57 scene backport: `expo >= 57.0.23` and
-`expo-build-properties` with `ios.enableSceneSupport: true`. The repository enables
-this official path for Xcode 27 / iOS 27. Prebuild should generate an
+is required`, check that SDK 58 prebuild has regenerated the scene lifecycle. Scene support
+is now the default; the SDK 57 `ios.enableSceneSupport` opt-in was removed. Prebuild should generate an
 `EXExpoAppSceneDelegate` manifest for the main app and make AppDelegate conform to
 `ExpoReactNativeFactoryProvider`; it must no longer create the legacy window.
 This native migration changes the runtime fingerprint and requires a new native
@@ -552,6 +576,29 @@ App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离�
 旧版本仅有 `elapsedMs`，其中可能包含后台时间，不能直接解读成用户等待或界面卡死。
 实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
 及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
+
+### 切回任务后跳到旧消息
+
+先对照 `message history surface` 的尺寸、`message list visibility gate` 的定位状态与
+`list scroll` 的原生 offset。`nearBottom` 表示跟随意图，不是当前几何位置；应另外计算
+`contentHeight - viewportHeight - offsetY`。若没有 dragging / momentum / readingOlder /
+reopening，但意图仍贴底而几何突然远离尾部，不能直接归因于用户翻历史或书签恢复。
+保留列表在页面宽度变化后可能晚到一次原生位置修正，发生在 content-size / layout 校验结束之后。
+
+消息定位的边界：
+
+- 晚到的非手势偏移唤醒既有有界 tail follower，不在 onScroll 里直接发滚动命令；原生回执
+  到达底部后不再发命令。手指、惯性、历史分页与未完成的 seek 仍拥有优先权。
+- 页面隐藏或 App 非 active 时暂停定位；失去页面后原生可能不再发送手势结束事件，释放瞬时
+  touch / drag / momentum 状态，但保留用户的阅读历史意图。
+- 隐藏期间不消费首次书签恢复、搜索或消息链接定位，重新可见后才执行；旧版原生包的 inline
+  fallback 同样受定位状态约束。切换列表身份时取消旧的书签校正帧。
+- 后台暂停定位与订阅不等于隐藏页面画面，避免把 App 切换器中的页面变为空白。
+
+自动化回归见 `messageFollowGesture.test.ts`、`messageEntryPositioning.test.ts`、
+`messageReadingRestore.test.ts` 和 `recentMessageHistories.test.tsx`。这些测试覆盖回调顺序与状态
+所有权，不能替代 UIKit 真机验收。验收应覆盖：长任务切换后宽度改变、键盘收放、横竖屏、
+拖动途中离开/锁屏后返回、刻意阅读旧消息、搜索定位后切换，以及旧原生包的备用显示路径。
 
 ### 真机排查与并存测试版
 
@@ -722,3 +769,34 @@ Run this checklist:
 - Manually touch the exact path that regressed in the simulator.
 - Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.
+
+### Generic simulator builds and native library slices
+
+`sim-rebuild.mjs` passes `ARCHS=<simArch>` even for the generic iOS Simulator
+destination used by Cindy-managed devices. Agent-Net builds the simulator slice
+for the host architecture, and the simulator cache is keyed by that same architecture.
+Without this setting, Xcode can request both `arm64 x86_64`; CocoaPods then skips
+copying `CindyAgentNetNative.xcframework` because no slice contains both, and Swift
+reports `Unable to resolve module dependency: CindyAgentNetNative`. Do not patch
+generated Pods or remove the Swift import.
+
+Keep the full `xcodebuild` output (redirect it to a task log when needed), rather
+than using `-quiet`: the full build report identifies the failed target and missing
+module; the quiet log can instead lead with `exit code 0 but produced no further output`.
+
+### 历史分页在中断手势后的恢复合同
+
+不变量：隐藏页面不发历史锚点定位或启动排队分页；回到可定位状态后，原分页事务继续收尾，
+不依赖原生补发手势结束事件，也不把读历史改成跟随最新。
+
+事务字段仍由 MessageRenderer 的既有分页事务拥有；可见性只释放瞬时手势、暂停/恢复既有工作，
+不创建第二份事务或重试机制。统一收尾沿用 `scheduleHistoryPrependUserHandoffSettle`、
+`scheduleHistoryAnchorRestore`、`maybeFinishHistoryPrependTransaction`，排队请求沿用 flush。
+
+| 事件 / 状态 | 已排队未请求 | 请求中、页未提交 | 页已提交、校正中 | 手势接管后暂停 |
+| --- | --- | --- | --- | --- |
+| 页面隐藏 / App 非 active | 保留队列，不启动 | 允许原请求结算，不发定位 | 停止校正帧，保留事务 | 释放手势标记，保留交接 |
+| 请求成功 / 失败 / 重复页在隐藏时返回 | 不适用 | 记录结算/进度，不新发请求 | 等返回再校验 | 等返回再交接 |
+| 页面恢复可定位 | flush 一次 | 等原请求；已结算则完成无坐标变化的交接 | 恢复既有校正，等原生回执 | 恢复交接，再校正或结束无进展事务 |
+| 重复恢复 / 迟到结束事件 | 单一队列帧去重 | 原事务代次隔离 | 单一校正帧去重 | 同一交接路径幂等 |
+| 新手势 / 切换身份 | 手势期间继续暂停 / 身份切换取消 | 捕捉最新阅读锚点 / 代次失效 | 暂停校正 / 取消旧事务 | 新手势优先 / 取消旧事务 |

@@ -27,6 +27,10 @@
         {
           "id": "xai/grok-imagine-video",
           "name": "Grok Imagine Video"
+        },
+        {
+          "id": "xai/grok-imagine-video-1.5",
+          "name": "Grok Imagine Video 1.5"
         }
       ],
       "routing": {
@@ -2351,6 +2355,24 @@
       }
     },
     {
+      "id": "hinoki",
+      "name": "Hinoki",
+      "docsUrl": "https://hinoki.security",
+      "models": [{ "id": "hinoki-offensive", "name": "Hinoki Offensive One" }],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
       "id": "ollama-cloud",
       "name": "Ollama Cloud",
       "docsUrl": "https://docs.ollama.com/cloud",
@@ -2392,6 +2414,45 @@
         "pi": {
           "baseUrl": "http://127.0.0.1:3425/v1",
           "baseUrlEditable": true,
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "iflytek-maas",
+      "name": "iFLYTEK Astron MaaS",
+      "docsUrl": "https://maas.xfyun.cn/doc/guide/index.html",
+      "models": [
+        {
+          "id": "spark-x2.6",
+          "name": "Spark X2.6"
+        }
+      ],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "open-design",
+      "name": "Open Design",
+      "docsUrl": "https://open-design.ai",
+      "models": [],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
           "wireProtocol": "openai-chat"
         }
       }

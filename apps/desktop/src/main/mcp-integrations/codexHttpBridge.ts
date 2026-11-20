@@ -30,113 +30,9 @@ import {
 } from './codexMcpThreadContextStore.js';
 import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from './codexBuiltinToolPolicy.js';
 import { AppToolCancellation, type AppToolCallIdentity } from '../mcp-apps/toolCancellation.js';
-import { appServerIds } from '../mcp-apps/runtime.js';
 import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 
-const SERVER_HEADER = 'Lizi_MCPS/1.0';
-const MCP_PATH_PREFIX = '/mcp/';
-const SHUTDOWN_TIMEOUT_MS = 5_000;
-/**
- * 协同 MCP 的远端 server 名单 — codex/cc 两条远端注入路径共享的唯一真源
- * (remote-ssh/codex-remote-mcp.ts 与 maker-host/cc-remote-mcp.ts 都引用它,
- * 不要各自另立常量)。协同注入随 collab 全局开关走, 与 Maker Memory 的
- * cindy_memory 注入 (随 Maker Memory 开关走) 互相独立。
- */
-export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
-  'cindy_orca',
-  'orca_worker_bridge',
-]);
-/**
- * Maker Memory 的远端 server 名。SSH remote 会话的记忆读写经 bridge 回到
- * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
- */
-export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
-/** Remote helper requires a bound Session and rechecks its live tool surface. */
-export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
-/**
- * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
- * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
- * 放行协同、按 Session 限定能力面的 helper 与 Maker Memory (cindy_memory,
- * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
- * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
- * 本机 server。
- */
-export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
-  ...REMOTE_COLLAB_SERVER_NAMES,
-  REMOTE_MEMORY_SERVER_NAME,
-  REMOTE_BOT_HELPER_SERVER_NAME,
-]);
 
-/**
- * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
- * (collab 开时);memory 段 = cindy_memory (memory 开且 available 含它时)。
- * cc 注入 (cc-remote-mcp) / codex ensure (codex-remote-mcp) / codex drift 的
- * desired 集合 (available 传白名单全集, 保留「provider 恒注册」假设) 三处
- * 必须同走本函数 — drift 与 ensure 的集合靠构造同源, 不靠注释人肉维持
- * (simplify R4)。新增远端 server 时:加常量 + 在这里加一个 gate 分支。
- */
-export function selectRemoteInjectableServerNames(
-  available: readonly string[],
-  gates: { collabEnabled: boolean; memoryEnabled: boolean; botHelperEnabled?: boolean; appServerNames?: readonly string[] },
-): string[] {
-  return [
-    ...available.filter(name => appServerIds().includes(name) && (gates.appServerNames === undefined || gates.appServerNames.includes(name))),
-    ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
-    ...(gates.botHelperEnabled && available.includes(REMOTE_BOT_HELPER_SERVER_NAME)
-      ? [REMOTE_BOT_HELPER_SERVER_NAME]
-      : []),
-    ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
-      ? [REMOTE_MEMORY_SERVER_NAME]
-      : []),
-  ];
-}
-
-/**
- * 远端 MCP 注入代际指纹的唯一公式 (sha256 前 12 hex)。cc 的 per-session
- * applied 指纹与 codex 的 desired/applied 指纹共用 — 成分或格式要变只改
- * 这里, drift 判定与 ensure 落盘天然同构 (simplify R4)。
- */
-export function computeRemoteMcpFingerprint(opts: {
-  token: string;
-  bridgeInstanceId: string;
-  remotePort: number;
-  serverNames: readonly string[];
-  /** Remote Claude query identity; omitted for the shared remote Codex daemon. */
-  sessionInstanceId?: string;
-}): string {
-  const instancePart = opts.sessionInstanceId
-    ? `|session-instance:${opts.sessionInstanceId}`
-    : '';
-  return createHash('sha256')
-    .update(
-      `${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}|${[...opts.serverNames].sort().join(',')}${instancePart}`,
-      'utf8',
-    )
-    .digest('hex')
-    .slice(0, 12);
-}
-
-/** Append the opaque host-owned identity used to route one harness MCP client. */
-export function withMcpRouteIdentity(
-  rawUrl: string,
-  identity: { sessionId?: string; sessionInstanceId?: string },
-): string {
-  const url = new URL(rawUrl);
-  if (identity.sessionId) url.searchParams.set('session', identity.sessionId);
-  if (identity.sessionInstanceId) {
-    url.searchParams.set('instance', identity.sessionInstanceId);
-  }
-  return url.toString();
-}
-/**
- * init request body 上限 (1MB)。codex MCP init payload 实际 < 1KB,
- * 1MB 给极端情况留余量。超限直接 413 拒绝 — 防巨大 body 在 JSON.parse
- * 同步阶段卡 event loop 几秒。
- *
- * 注意: 这只限 init request (无 mcp-session-id 那条路径)。已初始化的
- * POST request 会先解析 JSON 读取 `_meta.threadId` 后交给 transport。
- */
-const INIT_BODY_MAX_BYTES = 1 * 1024 * 1024;
 export interface CodexHttpBridge {
   port: number;
   token: string;
@@ -184,6 +80,8 @@ export interface CodexHttpBridge {
    * 仅靠 expectedToken 无法区分新旧,必须连同代次一起比较。
    */
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
+  /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
+  mcpSessionCount(): number;
   shutdown(): Promise<void>;
 }
 
@@ -209,7 +107,164 @@ export interface StartCodexHttpBridgeOptions {
   logger: Logger;
 }
 
-export async function startCodexHttpBridge(
+interface DispatchOpts {
+  req: http.IncomingMessage;
+  res: http.ServerResponse;
+  createMcpServer: () => McpServer;
+  transports: Map<string, SessionTransport>;
+  serverName: string;
+  log: Logger;
+  threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
+  toolCancellation: AppToolCancellation;
+  discoveryContexts: ReadonlyMap<string, LiziMcpSessionContext>;
+  remoteBotHelper?: boolean;
+  remoteAppServer?: boolean;
+  appServer?: boolean;
+  pluginId?: string;
+  /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
+  sessionTokenCtx?: LiziMcpSessionContext;
+  /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
+  ownerSessionId?: string;
+  /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
+  isOwnerLive?: (sessionId: string) => boolean;
+  /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
+  threadInstanceQuery: string | null;
+}
+
+interface SessionTransport {
+  transport: StreamableHTTPServerTransport;
+  mcpServer: McpServer;
+  ownerSessionId?: string;
+}
+
+/** One policy-controlled tools/call that must not reach its MCP transport. */
+interface BlockedToolCall {
+  reason: 'disabled' | 'missing_thread_context' | 'ambiguous_thread_context';
+  context?: LiziMcpSessionContext;
+}
+
+/**
+ * 协同 MCP 的远端 server 名单 — codex/cc 两条远端注入路径共享的唯一真源
+ * (remote-ssh/codex-remote-mcp.ts 与 maker-host/cc-remote-mcp.ts 都引用它,
+ * 不要各自另立常量)。协同注入随 collab 全局开关走, 与 Maker Memory 的
+ * cindy_memory 注入 (随 Maker Memory 开关走) 互相独立。
+ */
+export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
+  'cindy_orca',
+  'orca_worker_bridge',
+]);
+/**
+ * Maker Memory 的远端 server 名。SSH remote 会话的记忆读写经 bridge 回到
+ * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
+ */
+export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
+/** Remote helper requires a bound Session and rechecks its live tool surface. */
+export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
+/**
+ * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
+ * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
+ * 放行协同、按 Session 限定能力面的 helper 与 Maker Memory (cindy_memory,
+ * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
+ * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
+ * 本机 server。
+ */
+export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
+  ...REMOTE_COLLAB_SERVER_NAMES,
+  REMOTE_MEMORY_SERVER_NAME,
+  REMOTE_BOT_HELPER_SERVER_NAME,
+]);
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createCodexHttpBridgeRuntime(ports: { appServerIds: () => string[]; }) {
+const { appServerIds } = ports;
+
+
+const SERVER_HEADER = 'Lizi_MCPS/1.0';
+const MCP_PATH_PREFIX = '/mcp/';
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+
+/**
+ * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
+ * (collab 开时);memory 段 = cindy_memory (memory 开且 available 含它时)。
+ * cc 注入 (cc-remote-mcp) / codex ensure (codex-remote-mcp) / codex drift 的
+ * desired 集合 (available 传白名单全集, 保留「provider 恒注册」假设) 三处
+ * 必须同走本函数 — drift 与 ensure 的集合靠构造同源, 不靠注释人肉维持
+ * (simplify R4)。新增远端 server 时:加常量 + 在这里加一个 gate 分支。
+ */
+function selectRemoteInjectableServerNames(
+  available: readonly string[],
+  gates: { collabEnabled: boolean; memoryEnabled: boolean; botHelperEnabled?: boolean; appServerNames?: readonly string[] },
+): string[] {
+  return [
+    ...available.filter(name => appServerIds().includes(name) && (gates.appServerNames === undefined || gates.appServerNames.includes(name))),
+    ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
+    ...(gates.botHelperEnabled && available.includes(REMOTE_BOT_HELPER_SERVER_NAME)
+      ? [REMOTE_BOT_HELPER_SERVER_NAME]
+      : []),
+    ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
+      ? [REMOTE_MEMORY_SERVER_NAME]
+      : []),
+  ];
+}
+
+/**
+ * 远端 MCP 注入代际指纹的唯一公式 (sha256 前 12 hex)。cc 的 per-session
+ * applied 指纹与 codex 的 desired/applied 指纹共用 — 成分或格式要变只改
+ * 这里, drift 判定与 ensure 落盘天然同构 (simplify R4)。
+ */
+function computeRemoteMcpFingerprint(opts: {
+  token: string;
+  bridgeInstanceId: string;
+  remotePort: number;
+  serverNames: readonly string[];
+  /** Remote Claude query identity; omitted for the shared remote Codex daemon. */
+  sessionInstanceId?: string;
+}): string {
+  const instancePart = opts.sessionInstanceId
+    ? `|session-instance:${opts.sessionInstanceId}`
+    : '';
+  return createHash('sha256')
+    .update(
+      `${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}|${[...opts.serverNames].sort().join(',')}${instancePart}`,
+      'utf8',
+    )
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/** Append the opaque host-owned identity used to route one harness MCP client. */
+function withMcpRouteIdentity(
+  rawUrl: string,
+  identity: { sessionId?: string; sessionInstanceId?: string },
+): string {
+  const url = new URL(rawUrl);
+  if (identity.sessionId) url.searchParams.set('session', identity.sessionId);
+  if (identity.sessionInstanceId) {
+    url.searchParams.set('instance', identity.sessionInstanceId);
+  }
+  return url.toString();
+}
+/**
+ * init request body 上限 (1MB)。codex MCP init payload 实际 < 1KB,
+ * 1MB 给极端情况留余量。超限直接 413 拒绝 — 防巨大 body 在 JSON.parse
+ * 同步阶段卡 event loop 几秒。
+ *
+ * 注意: 这只限 init request (无 mcp-session-id 那条路径)。已初始化的
+ * POST request 会先解析 JSON 读取 `_meta.threadId` 后交给 transport。
+ */
+const INIT_BODY_MAX_BYTES = 1 * 1024 * 1024;
+
+/**
+ * 本进程所有存活 bridge 上的 MCP 会话总数,写进 memory-usage 采样行。每个会话持有一整个
+ * McpServer(连同全部工具的 zod schema,约 1–2 MB),这个数持续上涨就是会话只开不关。
+ */
+const liveBridges = new Set<CodexHttpBridge>();
+function countLiveBridgeMcpSessions(): number {
+  let n = 0;
+  for (const bridge of liveBridges) n += bridge.mcpSessionCount();
+  return n;
+}
+
+async function startCodexHttpBridge(
   opts: StartCodexHttpBridgeOptions,
 ): Promise<CodexHttpBridge> {
   const log = opts.logger.child('@cindy/mcps-http-bridge');
@@ -408,6 +463,8 @@ export async function startCodexHttpBridge(
         appServer,
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
+        ownerSessionId: sessionQuery ?? undefined,
+        isOwnerLive: (id) => sessionCtxById.has(id),
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
         remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
       });
@@ -485,7 +542,28 @@ export async function startCodexHttpBridge(
     socket.once('close', () => liveSockets.delete(socket));
   });
 
+  // `?session=` 路由的客户端(Pi 会话、远端 Claude)退出时往往不发 DELETE,transport 的
+  // onclose 永远不触发,会话连同整个 McpServer 一直留在表里(2026-11 个人版实测:Pi 桥
+  // 40 分钟新建 77 个会话、关闭 0 个)。该 session 的注册真正注销(不是被重建覆盖后的迟到
+  // dispose)即说明它的进程已结束,名下会话一并关掉;客户端若仍在,下一次请求会因 ctx 已注销
+  // 被 401 挡住,与关不关会话无关。本地 Codex 不带 ?session=,不受影响。
+  const closeSessionOwnedTransports = (sessionId: string): void => {
+    let closed = 0;
+    for (const transports of transportsByServer.values()) {
+      for (const [mcpSessionId, entry] of transports) {
+        if (entry.ownerSessionId !== sessionId) continue;
+        transports.delete(mcpSessionId);
+        closed++;
+        void entry.transport.close().catch((e: unknown) => {
+          log.warn('transport close threw', { message: (e as Error).message });
+        });
+      }
+    }
+    if (closed > 0) log.info('closed MCP sessions of ended session', { session: prefixId(sessionId), closed });
+  };
+
   const shutdown = async (): Promise<void> => {
+    liveBridges.delete(bridge);
     log.info('shutting down http bridge', {
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
@@ -527,7 +605,7 @@ export async function startCodexHttpBridge(
     log.info('http bridge shut down');
   };
 
-  return {
+  const bridge: CodexHttpBridge = {
     port,
     token,
     instanceId: randomBytes(8).toString('hex'),
@@ -557,7 +635,8 @@ export async function startCodexHttpBridge(
       if (expectedCtx !== undefined && sessionCtxById.get(sessionId) !== expectedCtx) {
         return;
       }
-      sessionCtxById.delete(sessionId);
+      if (!sessionCtxById.delete(sessionId)) return;
+      closeSessionOwnedTransports(sessionId);
     },
     registerSessionToken: (sessionId, sessionToken) => {
       const generation = nextTokenGeneration++;
@@ -571,8 +650,11 @@ export async function startCodexHttpBridge(
       if (generation !== undefined && entry.generation !== generation) return;
       sessionTokenBySessionId.delete(sessionId);
     },
+    mcpSessionCount: () => countTransports(transportsByServer),
     shutdown,
   };
+  liveBridges.add(bridge);
+  return bridge;
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -605,31 +687,6 @@ function countTransports(
   return n;
 }
 
-interface DispatchOpts {
-  req: http.IncomingMessage;
-  res: http.ServerResponse;
-  createMcpServer: () => McpServer;
-  transports: Map<string, SessionTransport>;
-  serverName: string;
-  log: Logger;
-  threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
-  toolCancellation: AppToolCancellation;
-  discoveryContexts: ReadonlyMap<string, LiziMcpSessionContext>;
-  remoteBotHelper?: boolean;
-  remoteAppServer?: boolean;
-  appServer?: boolean;
-  pluginId?: string;
-  /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
-  sessionTokenCtx?: LiziMcpSessionContext;
-  /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
-  threadInstanceQuery: string | null;
-}
-
-interface SessionTransport {
-  transport: StreamableHTTPServerTransport;
-  mcpServer: McpServer;
-}
-
 /**
  * 路由 streamable-http request 到对应 transport：
  *   - 带 mcp-session-id header → 复用现有 transport
@@ -651,6 +708,8 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     discoveryContexts,
     pluginId,
     sessionTokenCtx,
+    ownerSessionId,
+    isOwnerLive,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -834,7 +893,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer });
+      transports.set(newId, { transport, mcpServer, ownerSessionId });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   });
@@ -848,6 +907,15 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, body);
+    // 注销时的扫描只看得到已入表的会话;这条 initialize 在 ctx 检查之后、入表之前若遇到
+    // 注销,会错过那次扫描。入表发生在 handleRequest 内,所以在它返回后复查 owner。
+    if (ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId)
+      && transport.sessionId) {
+      transports.delete(transport.sessionId);
+      void transport.close().catch((e: unknown) => {
+        log.warn('transport close threw', { message: (e as Error).message });
+      });
+    }
   } catch (err) {
     try {
       await transport.close();
@@ -856,12 +924,6 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     }
     throw err;
   }
-}
-
-/** One policy-controlled tools/call that must not reach its MCP transport. */
-interface BlockedToolCall {
-  reason: 'disabled' | 'missing_thread_context' | 'ambiguous_thread_context';
-  context?: LiziMcpSessionContext;
 }
 
 function findBlockedToolCall(
@@ -1120,4 +1182,6 @@ function extractCodexThreadIdFromMessage(message: unknown): string | undefined {
 
 function prefixId(value: string | undefined): string | null {
   return value ? value.slice(0, 8) : null;
+}
+return { selectRemoteInjectableServerNames, computeRemoteMcpFingerprint, withMcpRouteIdentity, countLiveBridgeMcpSessions, startCodexHttpBridge };
 }

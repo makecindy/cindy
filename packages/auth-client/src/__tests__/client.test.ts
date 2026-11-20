@@ -21,6 +21,9 @@ function response(status: number, data: unknown): AuthFetchResponse {
   return { ok: status >= 200 && status < 300, status, json: async () => data };
 }
 
+/** 拼接出与真实密钥同形、内容无意义的夹具，避免密钥形态字面量进入仓库历史。 */
+const fakeSecret = (...parts: string[]) => parts.join("-");
+
 function client(fetch: AuthFetch = vi.fn(async () => response(200, {}))) {
   return new CindyAuthClient({
     baseUrl: "https://auth.example.com/",
@@ -79,6 +82,45 @@ describe("CindyAuthClient", () => {
       code: "INVALID_PARAMS", message: "private display name rejected",
     });
     expect(onRequestError).not.toHaveBeenCalled();
+  });
+
+  // #9574 Codex P2: correlation-id redaction must not rewrite AuthApiError.code.
+  // runLoginAction treats TOKEN_EXPIRED as a dead ticket and clears private
+  // state; folding it into AUTH_REQUEST_FAILED leaves that ticket in place.
+  // 测试价值
+  // - 生产入口与可观察结果：CindyAuthClient.refresh；非 429 的 error.code 原样成为 AuthApiError.code，被拒时变成 AUTH_REQUEST_FAILED
+  // - Bug／规则依据：PR #9574 Codex P2；authManager runLoginAction 依赖 TOKEN_EXPIRED
+  // - 现有覆盖缺口：相邻用例只覆盖 INVALID_PARAMS 透传，没有覆盖会被 Token 前缀误伤的码，也没有覆盖错误码上的密钥与手机号形态
+  // - 最小失败输入：401 + error.code=TOKEN_EXPIRED（修复前变成 AUTH_REQUEST_FAILED）；sk- 与纯数字手机号仍必须变成 AUTH_REQUEST_FAILED
+  // - tier：unit，进程内注入 fetch，不打网络
+  it.each([
+    {
+      label: "keeps TOKEN_EXPIRED instead of treating the Token prefix as a credential",
+      code: "TOKEN_EXPIRED",
+      expected: "TOKEN_EXPIRED",
+    },
+    {
+      label: "keeps INVALID_OTP",
+      code: "INVALID_OTP",
+      expected: "INVALID_OTP",
+    },
+    {
+      label: "drops an sk- shaped error code",
+      code: fakeSecret("sk", "proj", "not-an-error-code"),
+      expected: "AUTH_REQUEST_FAILED",
+    },
+    {
+      label: "drops a phone-shaped error code",
+      code: "13800138000",
+      expected: "AUTH_REQUEST_FAILED",
+    },
+  ])("server error code filter: $label", async ({ code, expected }) => {
+    const fetch: AuthFetch = async () =>
+      response(401, { error: { code, message: "unused" } });
+    await expect(client(fetch).refresh("unused-token")).rejects.toMatchObject({
+      code: expected,
+      statusCode: 401,
+    });
   });
 
   // Native SyntaxError.message includes body excerpts even when no response object is logged.
@@ -158,6 +200,138 @@ describe("CindyAuthClient", () => {
     }
   });
 
+  // #9356: RATE_LIMITED stays the client category. The server's own code and a
+  // correlation id must survive so a failed send can be matched later; a missing
+  // or unsafe id is recorded as absent instead of guessed.
+  type RateLimitDiagnosticRow = {
+    label: string;
+    body: unknown;
+    headers: Record<string, string | undefined>;
+    serverCode: string | undefined;
+    requestId: string | undefined;
+    hasRetryAt: boolean;
+  };
+
+  it.each<RateLimitDiagnosticRow>([
+    {
+      label: "keeps a daily-quota code beside the category",
+      body: { error: { code: "SMS_DAILY_LIMIT", message: "daily limit" } },
+      headers: { "x-request-id": "req-9356", "retry-after": "3600" },
+      serverCode: "SMS_DAILY_LIMIT",
+      requestId: "req-9356",
+      hasRetryAt: true,
+    },
+    {
+      label: "records a short retry window without inventing a server code",
+      body: { error: { code: "RETRY_TOO_SOON", message: "retry later" } },
+      headers: { "x-litellm-call-id": "call-60", "retry-after": "60" },
+      serverCode: "RETRY_TOO_SOON",
+      requestId: "call-60",
+      hasRetryAt: true,
+    },
+    {
+      label: "marks a 429 with no wait and no correlation id as absent",
+      body: { message: "slow down" },
+      headers: {},
+      serverCode: undefined,
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      label: "drops a request id that could carry a credential or phone number",
+      body: { error: { code: "not a code", message: "unused" } },
+      headers: { "x-request-id": "+8615100000000" },
+      serverCode: undefined,
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      // #9574: the charset whitelist alone accepts a bare phone number. That value
+      // must stay out of the error object the desktop log copies verbatim.
+      label: "drops a digit-only phone number that the charset whitelist would keep",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: { "x-request-id": "13800138000" },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      // Spaced numbers and "Bearer ..." already fail the charset whitelist. These
+      // shapes pass it (digits, or a credential prefix plus the allowed charset)
+      // and must still drop.
+      label: "drops a spaced-looking digit phone and an sk- key the charset whitelist accepts",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: {
+        "x-request-id": "138-0013-8000",
+        "x-litellm-call-id": fakeSecret("sk", "proj", "not-a-request-id"),
+      },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+    {
+      label: "drops a pk- key and a Bearer token written without a space",
+      body: { error: { code: "RATE_LIMITED", message: "slow down" } },
+      headers: {
+        "x-request-id": fakeSecret("pk", "live", "not-a-request-id"),
+        "x-litellm-call-id": "Bearer" + fakeSecret("sk", "not-a-request-id"),
+      },
+      serverCode: "RATE_LIMITED",
+      requestId: undefined,
+      hasRetryAt: false,
+    },
+  ])("preserves 429 diagnostics: $label", async (row) => {
+    const now = Date.parse("2026-10-07T06:00:00Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const fetch: AuthFetch = async () => ({
+        ...response(429, row.body),
+        headers: { get: (name) => row.headers[name.toLowerCase()] ?? null },
+      });
+      await expect(
+        client(fetch).requestCode("phone", "13800138000"),
+      ).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        statusCode: 429,
+        serverCode: row.serverCode,
+        requestId: row.requestId,
+        retryAt: row.hasRetryAt ? expect.any(Number) : undefined,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // #9574: HTTP 200 with `{}` fails the sent-body contract. The id was already
+  // read from the header and must ride along on INVALID_RESPONSE, same as a
+  // non-JSON body. A phone-shaped or key-shaped header still counts as absent,
+  // and the thrown error must not echo the response body.
+  it.each([
+    {
+      label: "keeps a safe request id when the sent body is empty",
+      header: "req-empty-body",
+      requestId: "req-empty-body",
+    },
+    {
+      label: "drops a phone-shaped request id when the sent body is empty",
+      header: "13800138000",
+      requestId: undefined,
+    },
+  ])("request-code contract failure: $label", async (row) => {
+    const fetch: AuthFetch = async () => ({
+      ...response(200, {}),
+      headers: { get: (name) => (name.toLowerCase() === "x-request-id" ? row.header : null) },
+    });
+    await expect(
+      client(fetch).requestCode("phone", "13800138000"),
+    ).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      statusCode: 200,
+      requestId: row.requestId,
+      message: "Authentication server response did not match the client contract",
+    });
+  });
+
   it("propagates SMS request-code rate limits instead of reporting a successful send", async () => {
     const fetch = vi.fn<AuthFetch>(async () =>
       response(429, {
@@ -169,6 +343,7 @@ describe("CindyAuthClient", () => {
     ).rejects.toMatchObject({
       code: "RATE_LIMITED",
       statusCode: 429,
+      serverCode: "RATE_LIMITED",
     });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0]?.[0]).toBe(
@@ -709,6 +884,13 @@ describe("soleAutoStartSsoMethod", () => {
 });
 
 describe("discoverSsoOrgRealm", () => {
+  // 测试价值
+  // - 生产入口与可观察结果：discoverSsoOrgRealm + CindyAuthClient；显式企业入口可使用唯一有效区域。
+  // - Bug／规则依据：国内发现成功、国际区返回非 JSON 418 时被合成为 ORG_REALM_UNAVAILABLE。
+  // - 现有覆盖缺口：原用例要求另一侧明确未找到，没有覆盖显式入口与默认严格策略的区别。
+  // - 最小失败输入：cn 有可用 SSO 连接，global 返回非 JSON 418，allowPartialSuccess=true。
+  // - tier：unit，进程内注入 fetch；超时使用假时钟，不发网络请求。
+  // - 实测耗时：单文件 0.6 秒。
   const discovery = (region: "cn" | "global") => ({
     region,
     orgName: `${region} Corp`,
@@ -733,6 +915,73 @@ describe("discoverSsoOrgRealm", () => {
       throw new AuthApiError("NETWORK_ERROR", 0, "offline");
     }),
   });
+  const apiClient = (region: "cn" | "global", fetch: AuthFetch) =>
+    new CindyAuthClient({
+      baseUrl: `https://${region}.example.invalid`,
+      region,
+      deviceId: "test-device",
+      clientType: "desktop",
+      fetch,
+    });
+
+  it.each(["cn", "global"] as const)(
+    "uses the valid %s discovery despite a non-JSON HTTP 418 only when opted in",
+    async (region) => {
+      const makeClient = (target: "cn" | "global") => apiClient(target, async () =>
+        target === region
+          ? response(200, discovery(target))
+          : new Response("<html>blocked</html>", { status: 418 }),
+      );
+      const clients = { cn: makeClient("cn"), global: makeClient("global") };
+      await expect(discoverSsoOrgRealm("corp", clients)).rejects.toMatchObject({
+        code: "ORG_REALM_UNAVAILABLE",
+      });
+      await expect(discoverSsoOrgRealm("corp", clients, {
+        allowPartialSuccess: true,
+      })).resolves.toEqual({ region, discovery: discovery(region) });
+    },
+  );
+
+  it.each(["cn", "global"] as const)(
+    "waits for the peer timeout before selecting the valid %s discovery",
+    async (region) => {
+      vi.useFakeTimers();
+      try {
+        const makeClient = (target: "cn" | "global") => apiClient(target, async (_url, init) => {
+          if (target === region) return response(200, discovery(target));
+          return new Promise<AuthFetchResponse>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(
+              new DOMException("timed out", "AbortError"),
+            ), { once: true });
+          });
+        });
+        const settled = vi.fn();
+        const result = discoverSsoOrgRealm("corp", {
+          cn: makeClient("cn"), global: makeClient("global"),
+        }, { allowPartialSuccess: true });
+        const failed = vi.fn();
+        const outcome = result.then(settled, failed);
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await outcome;
+        expect(failed).not.toHaveBeenCalled();
+        expect(settled).toHaveBeenCalledExactlyOnceWith({ region, discovery: discovery(region) });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    ["empty connections", { ...discovery("cn"), connections: [] }, "ORG_SSO_NOT_FOUND"],
+    ["wrong region", discovery("global"), "ORG_REALM_UNAVAILABLE"],
+    ["invalid connection", { ...discovery("cn"), connections: [{ connectionId: "" }] }, "ORG_REALM_UNAVAILABLE"],
+  ] as const)("does not treat %s as a valid hit", async (_label, data, code) => {
+    await expect(discoverSsoOrgRealm("corp", {
+      cn: apiClient("cn", async () => response(200, data)), global: notFound(),
+    }, { allowPartialSuccess: true })).rejects.toMatchObject({ code });
+  });
 
   it.each([
     ["cn", found("cn"), notFound()],
@@ -749,15 +998,15 @@ describe("discoverSsoOrgRealm", () => {
     },
   );
 
-  it("rejects an identifier present in both regions as ambiguous", async () => {
+  it.each([false, true])("rejects dual hits as ambiguous (allowPartialSuccess=%s)", async (allowPartialSuccess) => {
     await expect(
-      discoverSsoOrgRealm("corp", { cn: found("cn"), global: found("global") }),
+      discoverSsoOrgRealm("corp", { cn: found("cn"), global: found("global") }, { allowPartialSuccess }),
     ).rejects.toMatchObject({ code: "ORG_REALM_AMBIGUOUS" });
   });
 
-  it("preserves not-found only when both regions explicitly report it", async () => {
+  it.each([false, true])("preserves dual not-found (allowPartialSuccess=%s)", async (allowPartialSuccess) => {
     await expect(
-      discoverSsoOrgRealm("corp", { cn: notFound(), global: notFound() }),
+      discoverSsoOrgRealm("corp", { cn: notFound(), global: notFound() }, { allowPartialSuccess }),
     ).rejects.toMatchObject({ code: "ORG_SSO_NOT_FOUND" });
   });
 
@@ -765,6 +1014,25 @@ describe("discoverSsoOrgRealm", () => {
     await expect(
       discoverSsoOrgRealm("corp", { cn: found("cn"), global: unavailable() }),
     ).rejects.toMatchObject({ code: "ORG_REALM_UNAVAILABLE" });
+  });
+
+  it.each([
+    [found("cn"), unavailable(), "cn"],
+    [unavailable(), found("global"), "global"],
+  ] as const)("accepts a single valid hit with an unavailable peer when opted in", async (cn, global, region) => {
+    await expect(discoverSsoOrgRealm("corp", { cn, global }, {
+      allowPartialSuccess: true,
+    })).resolves.toEqual({ region, discovery: discovery(region) });
+  });
+
+  it.each([
+    [notFound(), unavailable()],
+    [unavailable(), notFound()],
+    [unavailable(), unavailable()],
+  ])("preserves unavailable when no region has a valid hit", async (cn, global) => {
+    await expect(discoverSsoOrgRealm("corp", { cn, global }, {
+      allowPartialSuccess: true,
+    })).rejects.toMatchObject({ code: "ORG_REALM_UNAVAILABLE" });
   });
 });
 
@@ -814,9 +1082,11 @@ describe("auth session realm record", () => {
 });
 
 describe("reduceAuthFlow", () => {
-  it("keeps a cross-region discovery pending until the user confirms", () => {
+  // 测试价值：两端现有区域确认状态投影；补齐国内版→国际企业的反向用例及取消回原入口。
+  // 依据：显式企业标识跨区单命中仍须确认；原覆盖仅国际版→国内企业。tier：unit，纯状态投影。
+  it.each(["cn", "global"] as const)("keeps a %s enterprise pending until confirmation, or returns to the build region on cancellation", (targetRegion) => {
     const providers = {
-      region: "global" as const,
+      region: targetRegion === "cn" ? ("global" as const) : ("cn" as const),
       attribution: "email" as const,
       email: true,
       phone: false,
@@ -825,22 +1095,22 @@ describe("reduceAuthFlow", () => {
     const methods = [
       {
         type: "sso" as const,
-        connectionId: "cn-sso",
+        connectionId: `${targetRegion}-sso`,
         protocol: "oidc" as const,
-        orgName: "CN Corp",
+        orgName: `${targetRegion} Corp`,
         connectionName: "Enterprise SSO",
         ssoRequired: false,
       },
     ];
     const confirmation = reduceAuthFlow(null, {
       type: "realm-switch-required",
-      targetRegion: "cn",
+      targetRegion,
       providers,
       methods,
     });
     expect(confirmation).toEqual({
       step: "realm-confirmation",
-      targetRegion: "cn",
+      targetRegion,
       providers,
       methods,
     });
@@ -859,6 +1129,10 @@ describe("reduceAuthFlow", () => {
       email: "",
       methods,
     });
+    expect(reduceAuthFlow(confirmation, {
+      type: "providers-loaded",
+      providers: confirmation.providers,
+    })).toEqual({ step: "identifier", providers });
   });
 
   it("projects secret-bearing outcomes into public states", () => {

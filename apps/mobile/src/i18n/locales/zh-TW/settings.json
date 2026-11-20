@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推播診斷",
+    "read": "讀取推播狀態",
+    "busy": "讀取中…",
+    "failed": "無法讀取推播狀態，請重試。",
+    "copyFailed": "無法複製權杖。",
+    "copied": "權杖已複製。",
+    "bundle": "App ID",
+    "build": "建置編號",
+    "environment": "APNs 環境",
+    "permission": "系統權限",
+    "alerts": "橫幅提示",
+    "lockScreen": "鎖定畫面",
+    "notificationCenter": "通知中心",
+    "copy": "複製 APNs 權杖",
+    "hide": "隱藏結果",
+    "unknown": "未知",
+    "on": "已開啟",
+    "off": "已關閉",
+    "hint": "僅點選後讀取。APNs 權杖只在本頁顯示，不寫入診斷記錄，也不由此工具上傳；離開頁面或切至背景後隱藏。複製僅用於 Apple 推播控制台；已複製的內容仍保留在剪貼簿。",
+    "permissions": {
+      "granted": "已允許",
+      "denied": "已拒絕",
+      "undetermined": "尚未請求",
+      "provisional": "靜音傳送"
+    }
+  },
   "localLogs": {
     "upload": "上傳日誌",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "日誌儲存在手機上，最多 7 天、8 MB，不會自動上傳。匯出的完整日誌不含對話內文和憑證；上傳只傳送篩選後的執行記錄和版本資訊。"
   },
   "title": "設定",
+  "promptRecommendation": {
+    "label": "輸入建議",
+    "description": "回覆後建議下一句，僅在這支手機上生效。",
+    "saveFailed": "設定已在本次使用中生效，但未能儲存。",
+    "reset": "恢復預設"
+  },
   "appearance": {
     "title": "外觀",
     "modeLabel": "顯示模式",
@@ -52,6 +85,16 @@
       "reset": "恢復預設",
       "apply": "套用",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用程式圖示",
+      "saveFailed": "無法更換應用程式圖示，請稍後再試",
+      "options": {
+        "default": "預設",
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
+      }
     }
   },
   "language": {
@@ -59,7 +102,7 @@
     "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
     "options": {
       "system": "跟隨系統",
-      "zh-CN": "簡體中文",
+      "zh-CN": "简体中文",
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
@@ -81,7 +124,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言（預設）",
+        "prose": "雅正文言",
         "tang-poetry": "唐詩",
         "song-ci": "宋詞",
         "yuan-qu": "元曲",
@@ -135,11 +178,20 @@
     "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
     "unregisterQueued": "已關閉，連網後自動完成註銷。",
     "preview": "顯示訊息內容預覽",
-    "background": "在背景保持訊息連線",
+    "background": "背景通知",
     "backgroundActive": "正在背景接收訊息",
     "backgroundStop": "停止接收",
-    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
-    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
+    "backgroundHint": "Google 推播可能無法使用時，Cindy 會自動保持背景連線，連線期間會顯示常駐通知。",
+    "googleUnavailable": "Google 推播暫時無法使用，將依通知設定使用背景連線。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "始終開啟",
+      "off": "關閉"
+    },
+    "actionReplyPlaceholder": "輸入回覆",
+    "actionNotDelivered": "沒有送到電腦，請打開 Cindy 處理。",
+    "actionReplyNotDelivered": "回覆沒有送出，請打開 Cindy 重新傳送：{{text}}",
+    "actionRequestEnded": "這項請求已被處理或已過期。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",
@@ -155,11 +207,11 @@
     "lastSynced": "上次同步 {{time}}",
     "canSync": "可以同步遠端任務。",
     "reconnectHint": "網路恢復後會自動重新訂閱遠端任務。",
-    "resumeHint": "回到前臺或重新登入後會恢復連線。"
+    "resumeHint": "回到前景或重新登入後會恢復連線。"
   },
   "header": {
     "notSignedIn": "未登入",
-    "thisPhone": "當前手機"
+    "thisPhone": "這臺手機"
   },
   "debug": {
     "sectionTitle": "除錯 / 開發者",
@@ -190,8 +242,8 @@
     "embeddedFallback": "隨整包（熱更未生效）",
     "unknown": "未知",
     "source": "執行來源",
-    "sourceEmbedded": "內建版本(隨包)",
-    "sourceEmergencyFallback": "內建版本(應急啟動，熱更未生效)",
+    "sourceEmbedded": "內建版本（隨包）",
+    "sourceEmergencyFallback": "內建版本（應急啟動，熱更未生效）",
     "sourceOta": "OTA 熱更新",
     "updateId": "更新 ID",
     "updatedAt": "更新時間",
@@ -211,18 +263,18 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "用於瞭解啟動與留存。上報裝置型號、系統與應用版本、裝置識別符號等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
-    "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
+    "analyticsHint": "開啟後，我們會用匿名代號取代你的帳號 ID，搭配裝置識別碼了解啟動和回訪情形，幫助我們改善產品。儲值使用另一個代號。你的對話、檔案和提示詞都不在統計範圍內。\n舊版紀錄含有原始帳號 ID。能查看舊紀錄的人可能透過相同的裝置識別碼，將新代號連回原帳號。",
+    "analyticsSaveFailed": "設定未能儲存，重新啟動後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
   },
   "account": {
-    "logoutConfirmTitle": "退出登入？",
-    "logoutConfirmRunning": "仍有任務正在執行。退出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端映象也會被清除。",
-    "logoutHint": "退出會清除這臺手機上的全部帳號和遠端映象，不影響電腦上的任務。",
-    "logout": "退出登入",
-    "loggingOut": "退出中",
-    "loggingOutAccessibility": "正在退出登入"
+    "logoutConfirmTitle": "登出？",
+    "logoutConfirmRunning": "仍有任務正在執行。登出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端鏡像也會被清除。",
+    "logoutHint": "登出會清除這臺手機上的全部帳號和遠端鏡像，不影響電腦上的任務。",
+    "logout": "登出",
+    "loggingOut": "登出中",
+    "loggingOutAccessibility": "正在登出"
   },
   "copyRow": {
     "action": "複製",
@@ -273,7 +325,7 @@
     "profile": {
       "title": "聲紋",
       "missing": "尚未錄製聲紋",
-      "missingHint": "錄入聲紋後才會生效。",
+      "missingHint": "錄製聲紋後才會生效。",
       "enrolled": "已錄製聲紋",
       "enrolledAt": "{{date}} 錄製",
       "enroll": "錄製聲紋",
@@ -388,7 +440,92 @@
       "voice": "長按說話",
       "scrollKeys": "右搖桿",
       "scroll": "捲動",
-      "page": "翻頁"
+      "page": "翻頁",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字鍵上/下",
+      "triggerScroll": "捲動目前內容",
+      "sendText": "傳送已輸入文字",
+      "taskHint": "組合鍵與 Start 僅用於任務頁。設為語音鍵時，優先按住說話；放開後文字留在輸入框。"
     }
+  },
+  "projectInfo": {
+    "automatic": "使用專案圖示",
+    "autoLoading": "正在辨識專案圖示…",
+    "autoNone": "使用專案名稱產生的字母圖示。",
+    "autoSource": "來源",
+    "githubAvatar": "使用 GitHub 帳號頭像",
+    "title": "專案設定",
+    "name": "顯示名稱",
+    "saveName": "儲存名稱",
+    "reset": "還原預設",
+    "icon": "圖示",
+    "directory": "專案目錄",
+    "done": "完成",
+    "failed": "儲存失敗，請重試。",
+    "unavailable": "專案設定暫不可用，請連線至已更新的電腦後重試。",
+    "back": "返回",
+    "cancel": "取消",
+    "changeIcon": "更換圖示",
+    "chooseIcon": "選擇圖示",
+    "save": "儲存",
+    "symbols": "圖示",
+    "emoji": "表情",
+    "letters": "字母",
+    "image": "圖片",
+    "upload": "上傳圖片",
+    "imageHint": "PNG、JPG 或 WebP · 自動裁成正方形",
+    "imageError": "無法讀取這張圖片，請嘗試較小的 PNG 或 JPG。",
+    "search": "搜尋圖示",
+    "customEmoji": "也可以貼上一個表情",
+    "lettersHint": "輸入一到兩個文字或數字。",
+    "thisComputer": "這台電腦",
+    "nameHint": "用於專案列表中的顯示，不會重新命名資料夾。",
+    "copy": "複製路徑",
+    "copied": "已複製",
+    "applyIcon": "使用圖示",
+    "noResults": "找不到符合的圖示",
+    "discardHint": "放棄尚未儲存的修改？",
+    "keepEditing": "繼續編輯",
+    "discard": "放棄修改",
+    "colors": {
+      "default": "預設色（跟隨主題）"
+    },
+    "directories": "專案目錄",
+    "directoriesHint": "從下一輪起套用至此專案的所有任務。既有任務個別加入的目錄會保留。",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "完整目錄路徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案",
+    "repository": "儲存庫連結",
+    "repositoryHint": "支援 GitHub、GitLab，以及其他 Git 儲存庫的 HTTPS / SSH 連結。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱",
+    "createNameHint": "取個名字，就可以開始了。",
+    "createFromRepository": "從程式碼儲存庫建立",
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
+  },
+  "navigation": {
+    "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
   }
 }

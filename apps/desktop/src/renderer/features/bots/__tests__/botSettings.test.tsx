@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
@@ -44,6 +45,8 @@ const mocks = vi.hoisted(() => {
   listToolsets: vi.fn(),
   profiles: [] as BotProfile[],
   profilesLoaded: true,
+  profileLoadError: false,
+  refreshBotProfiles: vi.fn(),
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
@@ -59,6 +62,7 @@ const mocks = vi.hoisted(() => {
     avatarColor: 'violet',
   })),
   openPath: vi.fn(async (): Promise<{ success: boolean; error?: string }> => ({ success: true })),
+  projectRepository: vi.fn(),
   };
 });
 
@@ -93,15 +97,14 @@ vi.mock('../botStore', () => ({
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => mocks.profiles,
   hasLoadedBotProfiles: () => mocks.profilesLoaded,
+  useBotProfilesLoadState: () => mocks.profileLoadError ? 'error' : mocks.profilesLoaded ? 'ready' : 'pending',
+  refreshBotProfiles: mocks.refreshBotProfiles,
   canonicalBotSessionId: (bot: BotProfile) => bot.canonicalSessionId,
   getEffectiveBotModelChain: () => mocks.defaultModelChain,
   subscribeBotGlobalModel: (listener: () => void) => {
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
-  useBotAutonomySettings: () => null,
-  setBotSchedulerBotId: vi.fn(),
-  resetBotAutonomySettings: vi.fn(),
 }));
 vi.mock('../BotLifecycleSettings', () => ({
   BotLifecycleSettings: () => <div data-testid="bot-lifecycle-settings" />,
@@ -246,7 +249,10 @@ beforeEach(() => {
   mocks.initialSearch = '';
   mocks.profiles = [];
   mocks.profilesLoaded = true;
+  mocks.profileLoadError = false;
+  mocks.refreshBotProfiles.mockClear();
   mocks.params = {};
+  mocks.projectRepository.mockReset().mockResolvedValue('ready');
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
   mocks.modelListeners.clear();
@@ -270,7 +276,7 @@ beforeEach(() => {
   ] }));
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     openPath: mocks.openPath,
-    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]) } },
+    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]), projectRepository: mocks.projectRepository } },
     maker: {
       onMcpChanged: mocks.onMcpChanged,
       listAgentSkills: mocks.listAgentSkills,
@@ -283,6 +289,67 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+});
+
+// #10985 unit: real settings input/leave guard. Existing transient-error cases
+// did not cover imported oversized originals, equal-length edits, full copy,
+// cancel/discard, or zero invalid host requests. Minimal input: 12001 units.
+it('retains a long original and draft, offers full copy, and resumes saving after correction', async () => {
+  const original = 'x'.repeat(12001);
+  const writeText = vi.fn(async (_text: string) => undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  const view = renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  const input = screen.getByRole('textbox', { name: 'bots.profile.personality' });
+  expect(input).toHaveProperty('value', original);
+  expect(screen.getByText('bots.profile.sourceLength:{"length":12001,"limit":12000}')).toBeTruthy();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  const edited = 'y' + original.slice(1);
+  fireEvent.change(input, { target: { value: edited } });
+  await act(async () => { fireEvent.blur(input); });
+  expect(screen.queryByRole('button', { name: 'bots.autosave.retry' })).toBeNull();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.profile.sourceCopy' })); });
+  expect(writeText).toHaveBeenCalledWith(edited);
+  expect(screen.queryByRole('button', { name: 'chat.messageActionBar.copied' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.continueEditing' }));
+  expect(input).toHaveProperty('value', edited);
+  fireEvent.change(input, { target: { value: edited.slice(0, 12000) } });
+  await act(async () => { fireEvent.blur(input); });
+  expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', { identitySource: edited.slice(0, 12000) });
+  view.unmount();
+});
+
+// A resolved write is not proof of a backup. A silent drop and a rejected write
+// must both leave the draft, without a verified-success claim (#10985 review).
+it.each(['silent-drop', 'denied'] as const)('keeps the draft when clipboard write is %s', async failure => {
+  const original = 'x'.repeat(12001);
+  const writeText = vi.fn(async () => { if (failure === 'denied') throw new Error('write denied'); });
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.profile.sourceCopy' })); });
+  if (failure === 'denied') expect(screen.getByText('chat.media.copyFailed')).toBeTruthy();
+  expect(writeText).toHaveBeenCalledWith(original);
+  expect(screen.queryByRole('button', { name: 'chat.messageActionBar.copied' })).toBeNull();
+  expect(screen.getByRole('textbox', { name: 'bots.profile.personality' })).toHaveProperty('value', original);
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+});
+
+it('only discards an oversized edit on explicit confirmation and never resubmits on unmount', async () => {
+  const original = 'x'.repeat(12001);
+  const view = renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'bots.profile.personality' }), { target: { value: 'y' + original.slice(1) } });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.discard' }));
+  await screen.findByRole('button', { name: 'bots.profile.personality' });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  expect(screen.getByRole('textbox', { name: 'bots.profile.personality' })).toHaveProperty('value', original);
+  view.unmount();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
 });
 
 describe('Bot entry after deletion', () => {
@@ -320,6 +387,53 @@ describe('Bot entry after deletion', () => {
     expect(mocks.readSession).not.toHaveBeenCalled();
   });
 
+  // #9978: a failed first read is neither an empty roster nor endless opening.
+  it('offers read recovery without navigating or creating after a failed first roster read', () => {
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    mocks.profiles = [bot()];
+    view.rerender(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('retains the creation draft after a loaded empty roster refresh fails', () => {
+    const view = render(<BotsHomeView />);
+    const name = screen.getByRole('textbox');
+    fireEvent.change(name, { target: { value: 'My draft buddy' } });
+    mocks.profileLoadError = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+    mocks.profileLoadError = false;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+  });
+
+  it('prioritizes initial roster recovery before provider onboarding', () => {
+    mocks.onboarding = true;
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByTestId('connect-provider-card')).toBeTruthy();
+  });
+
   it('only shows creation once the loaded roster is empty', () => {
     mocks.params = { botId: 'deleted' };
     render(<BotsHomeView />);
@@ -329,6 +443,151 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
+  // PR #11347 review regression (unit/jsdom): the real settings header must
+  // describe the completed commit, not the page entered during its 1.8s hold.
+  // Existing model receipt cases only saved a model on the model page.
+  // Minimal input: save a name, then immediately open the model page.
+  it('does not turn a profile save into a model receipt when switching pages', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Updated name' } });
+    await act(async () => { fireEvent.blur(name); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    await act(async () => { fireEvent.click(screen.getByText('bots.settingsTabs.model')); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    expect(screen.getByRole('status').textContent).not.toContain('bots.autosave.savedModel');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #11347 unit regression: exercise real canLeave, autosave and patch
+  // generation. Existing picker tests used explicit model revisions, so never
+  // covered an ordinary field reverted to baseline while its old write hung.
+  it('keeps a reverted profile on screen after timeout and persists it after forced unmount', async () => {
+    vi.useFakeTimers();
+    let savedName = bot().name;
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+      if (mocks.updateBotProfile.mock.calls.length === 1) {
+        await new Promise<void>(resolve => { finish = resolve; });
+      }
+      if (typeof patch.name === 'string') savedName = patch.name;
+      return { ...bot({ name: savedName }), currentVersion: 2 };
+    });
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    const view = render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />,
+      { wrapper: ConfirmDialogProvider });
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Temporary edit' } });
+    fireEvent.blur(name);
+    await act(async () => {});
+    fireEvent.change(name, { target: { value: bot().name } });
+    let allowed: boolean | undefined;
+    await act(async () => { void beforeCloseRef.current!().then(value => { allowed = value; }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(allowed).toBe(false);
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(name).toHaveProperty('value', bot().name);
+    view.unmount();
+    await act(async () => { finish(); });
+    expect(mocks.updateBotProfile.mock.calls.map(([, patch]) => patch.name)).toEqual(['Temporary edit', bot().name]);
+    expect(savedName).toBe(bot().name);
+    renderSettings({ name: savedName });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('value', bot().name);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression: the real picker + autosave hook previously waited forever
+  // on an unanswered host. Rejection-only tests missed unknown write outcomes,
+  // later selections, navigation, and reopening the confirmed persisted route.
+  it('keeps the latest model after a timed-out save and confirms only the persisted selection', async () => {
+    vi.useFakeTimers();
+    let saved = capabilities({ modelChainOverride: capabilities().modelChain });
+    const receipts: Array<() => void> = [];
+    mocks.updateBotProfile.mockImplementation(async (_id, input) => {
+      await new Promise<void>(resolve => { receipts.push(resolve); });
+      saved = normalizeBotProfileModelChain({ ...saved, ...input.capabilities as object }) as unknown as BotCapabilities;
+      return { ...bot({ capabilities: saved }), currentVersion: 2 };
+    });
+    const view = renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saving');
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(saved.agentDeviceId).not.toBe('share:one');
+    // A newer local route remains editable; retry joins the unknown write.
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { fireEvent.click(screen.getByText('bots.autosave.retry')); });
+    // Returning must finish its wait and stay on the dirty page, rather than
+    // navigating while the host may still be writing the previous choice.
+    await act(async () => { fireEvent.click(screen.getByLabelText('bots.settingsBack')); });
+    expect(screen.getByTestId('bot-primary-model-controls')).toBeTruthy();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    await act(async () => { receipts[0]!(); });
+    expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(saved.agentDeviceId).toBe('share:one');
+    expect(mocks.updateBotProfile.mock.lastCall![1].capabilities).toMatchObject({ agentDeviceId: null });
+    await act(async () => { receipts[1]!(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    expect(saved.agentDeviceId ?? null).toBeNull();
+    view.unmount();
+    renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('custom-model');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['buddy', 'account', 'same-owner refresh'] as const)('fences a detached trailing model choice across a %s switch', async scope => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { id: 'bot-1', currentVersion: 2, ...patch };
+    });
+    const view = renderSettings();
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    view.unmount();
+    if (scope === 'account') setDataOwnerGeneration('different-owner');
+    if (scope === 'same-owner refresh') setDataOwnerGeneration(owner.dataOwnerId);
+    try {
+      renderSettings({ id: 'other-bot' });
+      await act(async () => { finish(); await vi.advanceTimersByTimeAsync(30_000); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(scope === 'buddy' ? 2 : 1);
+      expect(mocks.updateBotProfile.mock.calls.every(([id]) => id === 'bot-1')).toBe(true);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
+  it('accepts a fresh edit after a same-owner runtime refresh', async () => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    renderSettings();
+    try {
+      setDataOwnerGeneration(owner.dataOwnerId);
+      fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+      fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
   it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
     renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
     expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);
@@ -512,24 +771,6 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('saves a task route with its own harness and restores inheritance without changing the primary', async () => {
-    mocks.defaultModelChain = capabilities().modelChain;
-    renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
-    const task = within(screen.getByTestId('bot-task-model-controls'));
-    await act(async () => { fireEvent.click(task.getByTestId('codex-model-selector')); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    const saved = mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities;
-    expect(saved).toHaveProperty('taskModelOverride', { harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
-    expect(saved).not.toHaveProperty('modelChainOverride');
-    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('claude-x');
-    mocks.updateBotProfile.mockClear();
-    await act(async () => { fireEvent.click(task.getByRole('button', { name: 'bots.model.inheritPrimary' })); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities).toHaveProperty('taskModelOverride', null);
-    expect(task.getByTestId('current-model').textContent).toBe('claude-x');
-  });
-
   // Unit regression: edit the actual form, pass its patch through the host's real
   // admission/normalization, and reopen the saved profile. Picker-only tests missed
   // the extra primary mirror rejected by the remote settings field contract.
@@ -563,6 +804,14 @@ describe('Bot settings profile consolidation', () => {
     expect(saved.agentDeviceId ?? null).toBeNull();
     expect(saved.modelChain[1 - index]).toEqual(index === 0 ? fallback : primary);
     reopened.unmount();
+  });
+
+  // 2026-11-09: the task model setting is retired. An older controller's autosave that still carries
+  // it applies its other changes; the retired field alone is refused as an empty patch.
+  it('drops an older controller\'s retired task model from a settings patch', () => {
+    const route = { harness: 'codex', model: 'm', providerId: 'p', effort: 'high', fastMode: false };
+    expect(readBotSettingsPatch({ capabilities: { memory: false, taskModelOverride: route } })).toEqual({ capabilities: { memory: false } });
+    expect(() => readBotSettingsPatch({ capabilities: { taskModelOverride: route } })).toThrow();
   });
 
   it('clears the remote primary mirror when restoring local defaults', async () => {
@@ -650,6 +899,26 @@ describe('Bot settings profile consolidation', () => {
     await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/managed/bots/bot-1'));
   });
 
+  // #10216 unit: the actual settings entry must read without writing, explain
+  // missing identity, and finish an explicit retry without duplicate writes.
+  it('shows the Git identity problem and retries only when requested', async () => {
+    let finish!: (value: string) => void;
+    mocks.projectRepository.mockResolvedValueOnce('needs-identity')
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
+    await screen.findByText('bots.homeFolder.repository.needsIdentity');
+    expect(mocks.projectRepository).toHaveBeenCalledExactlyOnceWith('bot-1', false);
+    const retry = screen.getByRole('button', { name: 'bots.retry' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(mocks.projectRepository).toHaveBeenLastCalledWith('bot-1', true);
+    expect(mocks.projectRepository).toHaveBeenCalledTimes(2);
+    await act(async () => finish('ready'));
+    expect(screen.getByText('bots.homeFolder.repository.ready')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.retry' })).toBeNull();
+  });
+
   it('shows the open-folder failure in place', async () => {
     mocks.openPath.mockResolvedValue({ success: false, error: 'missing' });
     renderSettings();
@@ -658,27 +927,10 @@ describe('Bot settings profile consolidation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
-  it('keeps todos out of the routines page now that they live in 近况', async () => {
-    // 2026-10-21：待办只在聊天头部的近况里看、在对话里改；设置里的例行任务页不再列待办。
-    const api = window.electronAPI as unknown as Record<string, Record<string, unknown>>;
-    api.routines = {
-      list: vi.fn(async () => []), sources: vi.fn(async () => []),
-      history: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined),
-    };
-    const list = vi.fn(async () => ({ items: [] }));
-    (api.localDb.bots as Record<string, unknown>).todos = { list };
-    mocks.initialSearch = 'settings=1&tab=growth';
-    render(<ConfirmDialogProvider><BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} /></ConfirmDialogProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
-    await waitFor(() => expect(api.routines.list).toHaveBeenCalled());
-    expect(screen.queryByRole('region', { name: 'teammateTodo.title' })).toBeNull();
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
     renderSettings({}, 'settings=1&tab=growth');
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.getByRole('button', { name: 'routines.title' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     expect(screen.getByRole('textbox', { name: 'bots.nameLabel' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
@@ -705,6 +957,7 @@ describe('Bot settings profile consolidation', () => {
 
     render(
       <BotSettings bot={bot()} initialPage="channels" onBack={vi.fn()} onOpenSession={vi.fn()} />,
+      { wrapper: ConfirmDialogProvider },
     );
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
@@ -712,7 +965,7 @@ describe('Bot settings profile consolidation', () => {
   it('keeps the current inner page and its draft when saving before navigation fails', async () => {
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
-    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />, { wrapper: ConfirmDialogProvider });
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
@@ -885,7 +1138,7 @@ describe('Bot settings unified autosave', () => {
     });
     renderSettings({ capabilities: capabilities({ memory: false }) });
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
-    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'bots.memory.enabled' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
     expect(screen.getByText('bots.memory.disabledHint')).toBeTruthy();
@@ -1339,13 +1592,13 @@ describe('same-Bot capability updates while editing settings', () => {
 
 it('opens voice settings from the companion settings list and supports the dedicated entry page', async () => {
   const companion = { ...bot(), canonicalSessionId: 'canonical-voice' };
-  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />, { wrapper: ConfirmDialogProvider });
   fireEvent.click(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' }));
   expect(screen.getByTestId('companion-voice-settings').textContent).toBe(`${companion.id}:canonical-voice`);
   fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
   await waitFor(() => expect(screen.queryByTestId('companion-voice-settings')).toBeNull());
   expect(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' })).toBe(document.activeElement);
   view.unmount();
-  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />, { wrapper: ConfirmDialogProvider });
   expect(screen.getByTestId('companion-voice-settings')).toBeTruthy();
 });

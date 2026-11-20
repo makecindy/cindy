@@ -3,7 +3,7 @@ import { PLUGIN_COLLECTION, type DeviceView } from '@cindy/device-link';
 import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
 import { invokePlugin } from '@/plugins/pluginClient';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import type { RemoteMessage } from '@/session/types';
+import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { UI_MOCK_PROJECTS } from '@cindy/maker-shared/ui-mock';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { FileBrowserReadFileResult, FileBrowserListAllFilesResult } from '@/device-link/mobileMakerTransport';
@@ -306,4 +306,63 @@ it('allows preview deep links only for explicit development visual mock fixtures
   expect(pluginVisualPreview('1')).toBeUndefined();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+// Regression: --mock had no sidebar group; deep links alone missed task → group navigation.
+// Unit: exercise the actual roster/get/normalization path, including usable rich message data.
+it('opens the group advertised in the ordinary mock sidebar', async () => {
+  const mock = await import('@/debug/visualMock');
+  const { BOT_GROUP_REMOTE_COLLECTION_ID } = await import('@cindy/maker-shared/botGroupChat');
+  const { botGroupChatDataFromResource, BOT_GROUP_CLIENT_PRIMITIVES } = await import('@/session/botGroupRemote');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
+  const rows = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, BOT_GROUP_REMOTE_COLLECTION_ID), BOT_GROUP_REMOTE_COLLECTION_ID);
+  const row = rows.find(row => row.ref.id === 'visual-switch-group');
+  expect(row).toBeDefined();
+  const resource = await getRemoteResource(link.invoke, host, row!.ref, 'zh-CN', BOT_GROUP_CLIENT_PRIMITIVES);
+  const group = botGroupChatDataFromResource(resource);
+  expect(group?.id).toBe(row!.ref.id);
+  expect(group?.messages).toHaveLength(24);
+  expect(group?.messages.at(-1)?.content).toContain('最后一条模拟消息');
+  const other = rows.find(row => row.ref.id === 'visual-switch-group-second');
+  expect(other).toBeDefined();
+  const second = botGroupChatDataFromResource(await getRemoteResource(link.invoke, host, other!.ref, 'zh-CN', BOT_GROUP_CLIENT_PRIMITIVES));
+  expect(second?.id).not.toBe(group?.id);
+  expect(second?.messages.at(-1)?.content).toContain('第二个群');
+  expect(second?.messages.some(message => group?.messages.some(first => first.id === message.id))).toBe(false);
+});
+
+it('round-trips project profiles and changes image identity on replacement', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const contracts = await import('@cindy/maker-shared/project-alias-sync');
+  const initial = await link.invoke<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ALIASES_GET_CHANNEL, []);
+  const projectKey = 'local:/Users/demo/Projects/cindy-demo';
+  const save = (icon: string | null) => link.invoke<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_SETTINGS_SET_CHANNEL, [{projectKey, field: 'profile', value: {name: 'Cindy', icon}, ...initial.ownerStamp}]);
+  const first = await save('data:image/png;base64,AAAA');
+  const second = await save('data:image/png;base64,BBBB');
+  expect(contracts.parseHostProjectAliasesSnapshot(second)?.settingsVersion).toBe(5);
+  expect(second.icons?.[projectKey]).not.toBe(first.icons?.[projectKey]);
+  expect(second.aliases).toContainEqual({projectKey, alias: 'Cindy'});
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ICON_IMAGE_CHANNEL, [{projectKey}])).toBe('data:image/png;base64,BBBB');
+  await save(null);
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ICON_IMAGE_CHANNEL, [{projectKey}])).toBe(null);
+});
+
+
+it('keeps snooze metadata through fixture list reload and clears it on wake', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const request = <T>(channel: string, args: unknown[]) => link.invoke<T>(mock.VISUAL_MOCK_DEVICE_ID, channel, args);
+  const rows = await request<RemoteSession[]>('local-db:sessions:list', ['all']);
+  const row = rows.find(item => item.title === '反馈手机上的问题')!;
+  expect(row).toBeDefined();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  const saved = await request<RemoteSession>('local-db:sessions:patch-meta', [row.id, { snoozedUntil: until }]);
+  expect(saved).toMatchObject({ snoozedUntil: until, snoozedAt: expect.any(String) });
+  expect((await request<RemoteSession[]>('local-db:sessions:list', ['all'])).find(item => item.id === row.id))
+    .toMatchObject({ snoozedUntil: until, snoozedAt: saved.snoozedAt });
+  await request('local-db:sessions:patch-meta', [row.id, { snoozedUntil: null }]);
+  expect((await request<RemoteSession[]>('local-db:sessions:list', ['all'])).find(item => item.id === row.id))
+    .toMatchObject({ snoozedUntil: null, snoozedAt: null });
 });

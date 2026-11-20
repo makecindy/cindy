@@ -45,8 +45,8 @@
  * 会话不进本进程 maker-core,天然不经过。
  *
  * 写入频率:每个 turn 起止各一次 UPDATE,不在事件热路径,对 maker-core 四指标
- * 无影响(规则 10)。所有写入吞错落日志:这是尽力而为的辅助信号,绝不阻塞
- * turn 主流程。
+ * 无影响(规则 10)。默认写入吞错落日志,不阻塞桌面 turn 主流程。Host 的显式
+ * durable 启动入口把本次失败返回调用方,用于在 provider 启动前确认落盘。
  */
 
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
@@ -170,28 +170,57 @@ export function getSessionNotificationTurnSignal(sessionId: string): { id: strin
   };
 }
 
+/** Capture the first real completion before a persistence barrier can delay it. */
+function captureSessionTurnEnd(sessionId: string, endedAt: number): number {
+  const turn = _notificationTurns.get(sessionId);
+  // A delayed previous-turn completion must not freeze the new turn's clock.
+  if (!turn || endedAt < turn.startedAt) return endedAt;
+  turn.endedAt ??= endedAt;
+  return turn.endedAt;
+}
+
 /** Wait for the turn-marker writes already queued for this session. */
 export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
   return _writeChains.get(sessionId) ?? Promise.resolve();
 }
 
-/** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
-function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
+/** Serialize writes; default callers swallow failures, durable callers receive their own rejection. */
+function chainWrite(sessionId: string, op: () => Promise<void>, propagateFailure = false): Promise<void> {
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();
-  const next = prev.then(op).catch(() => undefined);
+  const pending = prev.then(op);
+  const next = pending.catch(() => undefined);
   _writeChains.set(sessionId, next);
-  return next;
+  return propagateFailure ? pending : next;
+}
+
+/** Freeze the writer at admission, before a queue/barrier can outlive its owner. */
+function captureMarkerDb() {
+  try { return getDbClient().drizzle; }
+  catch { return null; }
 }
 
 /** turn 启动:写 active_turn_started_at = now。fire-and-forget,失败只落日志。 */
 export function markSessionTurnStarted(sessionId: string): void {
-  if (_quitFrozen) return;
+  void queueSessionTurnStarted(sessionId, false);
+}
+
+/** Host requires durable evidence before starting a provider; Desktop remains best effort. */
+export function markSessionTurnStartedDurable(sessionId: string): Promise<void> {
+  return queueSessionTurnStarted(sessionId, true);
+}
+
+function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<void> {
+  if (_quitFrozen) return durable ? Promise.reject(new Error('Turn markers are frozen')) : Promise.resolve();
   const startedAt = Date.now();
+  const db = captureMarkerDb();
   _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
-  chainWrite(sessionId, async () => {
+  return chainWrite(sessionId, async () => {
     try {
-      await getDbClient()
-        .drizzle.update(sessions)
+      if (!db) {
+        if (durable) throw new Error('DbClient not ready');
+        return;
+      }
+      await db.update(sessions)
         .set({ activeTurnStartedAt: startedAt })
         .where(eq(sessions.id, sessionId));
     } catch (err) {
@@ -199,8 +228,9 @@ export function markSessionTurnStarted(sessionId: string): void {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (durable) throw err;
     }
-  });
+  }, durable);
 }
 
 /**
@@ -214,18 +244,19 @@ export function markSessionTurnStarted(sessionId: string): void {
  *
  * 写入用 MAX 守卫(单语句原子,非读改写):延后的写可能晚于后续 turn 的正常
  * 收尾写入队,盲写会把更新的 ended 回退成旧定格值,让"已正常完成的后续 turn"
- * 在重启后误判为中断。只允许时间戳前进。
+ * 在重启后误判为中断。只允许时间戳前进。已完成的当前轮次保留首次结束时刻，
+ * 后续重复终态或空闲关闭不会把空闲时间计入本轮耗时；显式确认仍走 MAX 语义。
  */
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (isEndedWriteSuppressed()) return;
   const notifyContext = captureTurnEndedPersistedContext();
-  const endedAt = Math.min(endedAtOverride ?? Date.now(), Date.now());
-  const notificationTurn = _notificationTurns.get(sessionId);
-  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
+  const endedAt = captureSessionTurnEnd(sessionId, Math.min(endedAtOverride ?? Date.now(), Date.now()));
   enqueueEndedWrite(
     sessionId,
     endedAt,
     notifyContext,
+    undefined,
+    true,
   );
 }
 
@@ -240,13 +271,12 @@ export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number
  */
 export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Promise<unknown>): void {
   if (isEndedWriteSuppressed()) return;
-  const endedAt = Date.now();
+  const endedAt = captureSessionTurnEnd(sessionId, Date.now());
   const notifyContext = captureTurnEndedPersistedContext();
-  const notificationTurn = _notificationTurns.get(sessionId);
-  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
+  const db = captureMarkerDb();
   void barrier.then(
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
   );
 }
 
@@ -288,10 +318,11 @@ export async function ackSessionTurnEndedIfUnchanged(
   if (_quitFrozen) return false;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
+  const db = captureMarkerDb();
   let landed = false;
   await chainWrite(sessionId, async () => {
     try {
-      const db = getDbClient().drizzle;
+      if (!db) return;
       await db
         .update(sessions)
         .set({ lastTurnEndedAt: sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
@@ -321,14 +352,22 @@ export async function ackSessionTurnEndedIfUnchanged(
   return landed;
 }
 
-/** ended 写入的唯一落库实现:MAX 守卫 + per-session 链,见 markSessionTurnEnded 注释。 */
-function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: unknown): Promise<void> {
+/** Normal terminal duplicates preserve the first completion; explicit acknowledgements retain MAX semantics. */
+function enqueueEndedWrite(
+  sessionId: string, endedAt: number, notifyContext: unknown, db = captureMarkerDb(),
+  preserveCompleted = false,
+): Promise<void> {
   return chainWrite(sessionId, async () => {
     try {
-      const db = getDbClient().drizzle;
+      if (!db) return;
       await db
         .update(sessions)
-        .set({ lastTurnEndedAt: sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
+        .set({ lastTurnEndedAt: preserveCompleted
+          ? sql`CASE WHEN ${sessions.activeTurnStartedAt} IS NOT NULL
+              AND ${sessions.lastTurnEndedAt} >= ${sessions.activeTurnStartedAt}
+            THEN ${sessions.lastTurnEndedAt}
+            ELSE MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt}) END`
+          : sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
         .where(eq(sessions.id, sessionId));
       if (_onTurnEndedPersisted) {
         // 广播值必须**读回生效值**:MAX 守卫可能保留了比本次 endedAt 更新的已有值

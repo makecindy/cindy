@@ -8,8 +8,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'fixture-session' }) }));
 vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
-vi.mock('../runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(), readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn() }));
-import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
+vi.mock('../runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(), readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn(), companionEnvironmentStore: { readResource: vi.fn() } }));
+import { companionEnvironmentStore, readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
 import { projectEnvironmentDiscovery } from '../environmentJson.js';
 import { createCompanionConnectionsProvider, readCompanionConnectionsAvailability } from '../connectionProvider.js';
 import { readAgentCapabilityCatalog } from '../../maker-host/agentCapabilityCatalog.js';
@@ -496,4 +496,31 @@ it('offers paginated private import setup only in the owning companion and masks
     expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
     expect(assertOwner).toHaveBeenCalled();
   } finally { await client.close(); await config.instance.close(); }
+});
+
+// Unit #9583: resource preparation shares the command deadline; a fake clock
+// crosses the limit during a vault read, before any command can be spawned.
+it.each(['deadline', 'cancel'])('enforces %s while restoring private Skill resources', async reason => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-command-deadline-'));
+  let now = 1000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const controller = new AbortController();
+  let observed = '';
+  vi.mocked(companionEnvironmentStore.readResource).mockImplementation(async function* (_ref, assertOwner) {
+    if (reason === 'deadline') now += 120001;
+    else controller.abort();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    try { assertOwner(); } catch (error) { observed = (error as Error).message; throw error; }
+    yield '{}';
+  });
+  vi.mocked(readCompanionSessionEnvironment).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: root, assertOwner() {},
+    environment: { version: 1, env: {}, mcp: [], credentials: [], skillArchives: { report: { key: 'fixture', id: 'fixture', digest: 'fixture' } } } });
+  const config = await createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    await expect(client.callTool({ name: 'run_command', arguments: { command: 'echo should-not-run' } }, undefined, { signal: controller.signal })).rejects.toThrow();
+    await vi.waitFor(() => expect(observed).toBe(reason === 'deadline' ? 'AUTOMATION_TIMEOUT' : 'AUTOMATION_CANCELLED'));
+  } finally { clock.mockRestore(); await client.close(); await config.instance.close(); }
 });

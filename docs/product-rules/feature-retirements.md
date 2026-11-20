@@ -33,6 +33,10 @@
 
 内置功能迁为插件、且旧数据由替代插件自行导入时，可以不接上述下线通知，改由版本更新说明告知；Core 只删除旧实现，并在 `REMOVED_BUILTIN_TOOLSET_IDS` 登记旧内置工具 ID，让伙伴已保存的选择不再出现。
 
+伙伴 V1 能力（2026-11-08）：待办、工作台与自动跟进、例行任务引擎与系统技能、委派、伙伴私信、夜间学习、「任务模型」设置
+随伙伴 V2（项目模式）删除，不接上述下线通知；数据迁移由伙伴自己的 V2 升级完成（未完成事项进 `CARRYOVER.md`、
+V1 文件进 `v1-archive/`），规则与兼容见 [伙伴运行时](cindy-bots-runtime.md) 开头与 [例行任务（V1 存档）](bot-routines.md)。
+
 已迁出：智能通讯录（2026-11-01）→ 官方插件「通讯录」（`cindy-contacts`）。按 Chris 裁决不做 Core 内下线提示。Core 不读、不写、不清理旧数据：`<userData>/owners/<ownerId>/maker-contacts/contacts.db` 保留给插件首次启动时只读导入（`ownerNamespaceMigration` 仍负责把旧布局的该目录迁进 owner 目录）；插件电脑间同步沿用原同步的设备密钥文件 `contacts-device-sync-key.v1.enc`（实现位于 `apps/desktop/src/main/device-sync-keys/`，文件名与派生参数不得改）。旧版 Cindy 发来的 `device-link:contacts:sync:v1` 帧直接丢弃。
 
 ## 验证范围

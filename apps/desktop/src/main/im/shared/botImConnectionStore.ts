@@ -10,14 +10,19 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { normalizeDiscordChannelAccess } from '@cindy/im';
+
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../../maker-host/override-settings-file.js';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
+import { discordFinalTextGrantStamp, discordGrantHash, discordGrantTarget, discordGrantTargets, discordGrantValue, reconcileDiscordFinalTextGrants, type DiscordFinalTextGrants } from '../discord/authorizationGrants';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionRecord,
+  type BotImDiscordChannelAccess,
   type BotImFeishuService,
   type BotImTaskArchiveActivity,
 } from '../../../shared/botImConnection.js';
@@ -30,6 +35,8 @@ export function isBotImChannel(value: unknown): value is BotImChannel {
 
 interface BotImConnectionDocument {
   connections: Record<string, Omit<BotImConnectionRecord, 'id'>>;
+  /** Host-local recovery generations; not part of BotImConnectionRecord or any remote projection. */
+  discordFinalTextGrants?: DiscordFinalTextGrants;
 }
 
 const ID_PATTERN = /^[a-f0-9]{12}$/;
@@ -61,6 +68,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const discordChannelAccess = r.channel === 'discord' ? normalizeDiscordAccess(r.discordChannelAccess) : undefined;
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
@@ -70,6 +78,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     ...(service ? { service } : {}),
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
+    ...(discordChannelAccess ? { discordChannelAccess } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
@@ -118,9 +127,15 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const out: Record<string, 'always'> = {};
   for (const [chatId, mode] of Object.entries(raw as Record<string, unknown>)) {
-    if (/^-?\d{1,32}$/.test(chatId) && mode === 'always') out[chatId] = 'always';
+    if (isBotImGroupChatId(chatId) && mode === 'always') out[chatId] = 'always';
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** 只认 Discord 连接上合法的 guild / channel id；空白名单不落盘（缺省就是不开放）。 */
+export function normalizeDiscordAccess(raw: unknown): BotImDiscordChannelAccess | undefined {
+  const access = normalizeDiscordChannelAccess(raw);
+  return access.channels.length > 0 || (access.guilds?.length ?? 0) > 0 ? access : undefined;
 }
 
 function normalizeDocument(raw: unknown): BotImConnectionDocument {
@@ -134,13 +149,28 @@ function normalizeDocument(raw: unknown): BotImConnectionDocument {
     const record = normalizeRecord(id, value);
     if (record) connections[id] = record;
   }
-  return { connections };
+  const keys = Object.entries(connections).flatMap(([id, record]) => record.channel === 'discord'
+    ? discordGrantTargets(record.discordChannelAccess ?? { channels: [] }).map(target => `${id}:${target}`) : []);
+  const grants = reconcileDiscordFinalTextGrants(r.discordFinalTextGrants as DiscordFinalTextGrants | undefined, keys,
+    key => connectionGrantValue(connections, key));
+  return { connections, discordFinalTextGrants: grants };
+}
+
+function connectionGrantValue(connections: BotImConnectionDocument['connections'], key: string): string {
+  const [id, target] = key.split(':');
+  const record = connections[id];
+  if (!record || record.channel !== 'discord') return discordGrantHash('missing');
+  // botContextId is hydrated after READY; the transport/credential generation owns the actual Discord identity.
+  const binding = discordGrantHash(JSON.stringify([id, record.botId, record.channel, record.createdAt]));
+  return discordGrantValue(record.discordChannelAccess ?? { channels: [] }, target, binding);
 }
 
 const file = createOverrideSettingsFile<BotImConnectionDocument>({
   filePath: () => ownerScopedImUserDataPath('bot-im-connections.json'),
   defaults: () => ({ connections: {} }),
   normalize: normalizeDocument,
+  mergeOverrides: ({ next, overrides }) => ({ ...overrides, connections: next.connections,
+    ...(Object.keys(next.discordFinalTextGrants!.targets).length ? { discordFinalTextGrants: next.discordFinalTextGrants } : {}) }),
   log,
   label: 'bot-im-connections',
   scopeKey: activeOwnerScopeKey,
@@ -163,6 +193,15 @@ export function readBotImConnection(id: string): BotImConnectionRecord | null {
   if (!isBotImConnectionId(id)) return null;
   const record = readDocument().connections[id];
   return record ? { id, ...record } : null;
+}
+
+export function botDiscordFinalTextAuthorization(id: string, lane: string): string {
+  const document = readDocument();
+  const record = document.connections[id];
+  const target = discordGrantTarget(record?.discordChannelAccess ?? { channels: [] }, lane);
+  const key = `${id}:${target}`;
+  const value = connectionGrantValue(document.connections, key);
+  return discordFinalTextGrantStamp(document.discordFinalTextGrants ?? reconcileDiscordFinalTextGrants(undefined, [], () => value), key, value);
 }
 
 export function listBotImConnectionsForBot(botId: string): BotImConnectionRecord[] {
@@ -191,7 +230,7 @@ export async function addBotImConnectionRecord(
 
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'discordChannelAccess'>>,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
   let next: BotImConnectionRecord | null = null;
@@ -301,6 +340,16 @@ export async function setBotImConnectionGroupActivation(
   return updateBotImConnectionRecord(id, {
     groupActivation: Object.keys(next).length > 0 ? next : undefined,
   });
+}
+
+/** Discord 连接的服务器频道白名单（整份替换；非 Discord 连接 / 不存在返回 null）。 */
+export async function setBotImConnectionDiscordChannelAccess(
+  id: string,
+  access: unknown,
+): Promise<BotImConnectionRecord | null> {
+  const current = readBotImConnection(id);
+  if (!current || current.channel !== 'discord') return null;
+  return updateBotImConnectionRecord(id, { discordChannelAccess: normalizeDiscordAccess(access) });
 }
 
 export async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionRecord | null> {

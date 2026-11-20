@@ -22,8 +22,6 @@ import { describe, expect, it } from 'vitest';
  */
 
 const MUTATING_GHOST_CHANNELS = [
-  'ghosts:install',
-  'ghosts:update',
   'ghosts:restore-builtin',
 ] as const;
 
@@ -52,6 +50,31 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     });
   }
 
+  it('file and GitHub first installs share the owner lease', () => {
+    expect(handlerBlock(source, 'ghosts:install')).toContain('installLocalFile(event.sender, captureGhostMutationOwner(),');
+    const github = handlerBlock(source, 'ghosts:install-github-release');
+    expect(github).toContain('installLocalFile(event.sender, owner, file,');
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeGreaterThan(-1);
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeLessThan(github.indexOf('await '));
+    const start = source.indexOf('const installLocalFile = async (');
+    expect(start).toBeGreaterThan(-1);
+    expect(source.slice(start, source.indexOf('\n  };', start))).toContain('beginGhostMutation(mutationOwner)');
+  });
+
+  it('file and GitHub release updates share the owner lease and capture the owner before async work', () => {
+    const update = handlerBlock(source, 'ghosts:update');
+    expect(update).toContain('updateLocalFile(event.sender, captureGhostMutationOwner(),');
+    const github = handlerBlock(source, 'ghosts:github-release');
+    expect(github).toContain('updateLocalFile(event.sender, owner, file,');
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeGreaterThan(-1);
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeLessThan(github.indexOf('await '));
+    const start = source.indexOf('const updateLocalFile = async (');
+    expect(start).toBeGreaterThan(-1);
+    const shared = source.slice(start, source.indexOf('\n  };', start));
+    expect(shared).toContain('beginGhostMutation(mutationOwner)');
+    expect(shared).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
+  });
+
   it('ghosts:set-enabled 同步委托共用入口，入口先持 owner 租约再异步修改', () => {
     const block = handlerBlock(source, 'ghosts:set-enabled');
     expect(block).toContain('assertTrustedAppRendererEvent(event)');
@@ -65,10 +88,15 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const lease = fn.indexOf('beginGhostMutation(captureGhostMutationOwner())');
     expect(lease).toBeGreaterThan(-1);
     expect(lease).toBeLessThan(fn.indexOf('await '));
-    expect(fn).toContain('const relId = installedGhostPhysicalRelId(target)');
-    expect(fn).toContain('const storagePart = installedGhostStoragePart(target)');
-    expect(fn).toContain('await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken, assertCurrent)');
-    expect(fn).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
+    expect(fn).toContain('return setPluginEnabled(');
+    expect(fn).toContain('getGhostManager().setEnabled(relId, next, approval, check)');
+    // Both launchers use the same transaction; retain the cross-file lease
+    // contract instead of requiring the old inline implementation.
+    const service = fs.readFileSync(path.join(__dirname, '..', 'pluginEnableService.ts'), 'utf8');
+    expect(service.indexOf('ports.acquire(storagePart)')).toBeLessThan(service.indexOf('await ports.stop'));
+    expect(service).toContain('installedGhostPhysicalRelId(target)');
+    expect(service).toContain('installedGhostStoragePart(target)');
+    expect(service).toMatch(/finally\s*\{\s*release\(\)/);
   });
 
   it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {
@@ -80,10 +108,10 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     expect(outerStart).toBeGreaterThan(-1);
     const outer = source.slice(outerStart, source.indexOf('\n}', outerStart));
     expect(outer).toContain('withGhostInstallLock(identity.ghostId');
-    expect(outer).toContain('installedGhostStoragePart(ghost)');
     const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
     expect(start).toBeGreaterThan(-1);
     const fn = source.slice(start, source.indexOf('\n}', start));
+    expect(fn).toContain('installedGhostStoragePart(ghost)');
     expect(fn).toContain('beginGhostMutation(');
   });
 

@@ -27,7 +27,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => io.owner
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => io.realm }));
 vi.mock('../../device-link/index.js', () => ({ getRemoteLinkCloseEpoch: () => 0,
   getSelfDeviceId: () => io.self, remoteBackgroundInvoke: io.invoke }));
-vi.mock('../../device-link/settings-store.js', () => ({
+vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: io.remoteControl,
     revokedControllers: io.revokedControllers }),
 }));
@@ -85,7 +85,8 @@ function setRemoteControl(enabled: boolean): void {
   syncRemoteControlAccessGeneration();
 }
 beforeEach(() => {
-  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true; io.supported = true;
+  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true;
+  io.supported = true;
   io.remoteControl = true; io.revokedControllers = []; io.prepares.length = 0; io.self = 'M';
   io.slowInspect = false; io.entered = undefined; io.inspectGate = Promise.resolve();
   io.inspectError = undefined;

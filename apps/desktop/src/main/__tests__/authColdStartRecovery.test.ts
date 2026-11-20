@@ -2,15 +2,19 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshBackoff } from '../authRefreshBackoff';
-import { AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
+import { accountVaultKey, AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
 import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
+import { applyRefreshedCredentialsToVault } from '../authRefreshCommit';
 import {
   awaitWithStartupTimeout,
   resolveColdStartTimeoutRecovery,
   ColdStartAuthFallbackRegistry,
   commitColdStartRefreshIfCurrent,
 } from '../authStartupGate';
-import { loginPreparingErrorState } from '../../shared/authIpc';
+import { loginPreparingErrorState, parseDesktopLoginAction } from '../../shared/authIpc';
+import { HOST_NOT_STARTED, readHostUnavailableReason } from '../../shared/hostStartFailure';
+import { createIpcError } from '../../shared/ipc-errors';
+import { accessTokenRefreshDelayMs } from '../authTokenClaims';
 
 // Test value (unit): execute the production cold-start and login-action entrypoints with
 // in-memory credentials/network. On 2026-10-29 three DNS failures stranded a valid login;
@@ -26,8 +30,9 @@ const source = ts.createSourceFile(
 const names = new Set([
   'apiFetch',
   'commitDesktopRefreshCredentials',
-  'writeResourceSessionToVault',
   'initialize',
+  'receiveHostAuthState',
+  'invalidateSession',
   'refresh',
   'scheduleRefresh',
   'scheduleRefreshRetry',
@@ -38,6 +43,10 @@ const names = new Set([
   'waitForColdStartRetry',
   'stopColdStartRecovery',
   'runLoginAction',
+  // The two sign-in entries the window refuses while its Host did not start.
+  'hostNotStartedInClientMode',
+  'dispatchLoginAction',
+  'enterLocalMode',
 ]);
 const compiled = ts.transpileModule(
   `
@@ -47,7 +56,8 @@ let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
-let refreshPromise = null;
+let refreshPromise = null, sessionInvalidationPromise = null;
+let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
@@ -78,17 +88,20 @@ ${source.statements
   .map((node) => node.getText(source).replace(/^export /, ''))
   .join('\n')}
 return {
-  fetch: apiFetch, start: initialize, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
+  fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  hostAuth: (reader) => { authRefreshOverride = reader; },
+  receiveHostAuthState,
+  invalidateSession,
   activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
   backoff: refreshBackoff,
   fallback: () => { coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1); authStateEpoch++; loginFlowEpoch++; },
   changeOwner: () => {
     authStateEpoch++; accessToken = 'test-new-login'; currentUser = { id: 'other' };
     saved.session = { version: 1, realm: 'global', refreshToken: 'other-refresh' };
-    vault.activeAccountKey = 'global:other';
-    vault.resources['global:other'] = { realm: 'global', refreshToken: 'other-refresh' };
+    vault.activeAccountKey = '["global","other"]';
+    vault.resources['["global","other"]'] = { realm: 'global', refreshToken: 'other-refresh' };
   },
   stop: stopColdStartRecovery,
   logoutForTest: () => { stopColdStartRecovery(); authStateEpoch++; saved.session = null;
@@ -97,14 +110,16 @@ return {
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
+const ORIGINAL_KEY = accountVaultKey('global', 'original');
+
 function setup(random = 0) {
   const saved: { session: any } = {
     session: { version: 1, realm: 'global', refreshToken: 'test-refresh' },
   };
   const membership = { id: 'original', kind: 'personal', passportId: 'passport-original' };
   const vault: any = {
-    activeAccountKey: 'global:original',
-    resources: { 'global:original': { realm: 'global', refreshToken: 'test-refresh' } },
+    activeAccountKey: ORIGINAL_KEY,
+    resources: { [ORIGINAL_KEY]: { realm: 'global', refreshToken: 'test-refresh' } },
   };
   const ok = {
     ok: true,
@@ -128,13 +143,13 @@ function setup(random = 0) {
     vault,
     onStartupFallback: vi.fn(),
     transactAuthAccountVault: transaction,
-    accountVaultKey: (realm: string, id: string) => `${realm}:${id}`,
-    loggedOutAccountKeySet: () => new Set(),
+    accountVaultKey,
+    applyRefreshedCredentialsToVault,
     readSafe: () => null,
     writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
     },
-    metadataFromMembership: (membership: unknown) => membership,
+    accessTokenRefreshDelayMs,
     AuthRefreshBackoff: class extends AuthRefreshBackoff {
       constructor() {
         super(
@@ -179,13 +194,20 @@ function setup(random = 0) {
     claimLegacyNamespaceForVerifiedUser: vi.fn(async () => {}),
     mapMembershipToAuthUser: (value: unknown) => value,
     commitCloudAppSession: vi.fn(),
+    commitVolatileAppSession: vi.fn(),
     clearReplacementIntegrationReloadTimers: vi.fn(),
     migrateLocalProviderBindingsAfterCloudCommit: vi.fn(async () => {}),
     scheduleCanaryFlagSync: vi.fn(),
     scheduleXdOrgBetaDefault: vi.fn(),
     notifyAccessTokenRefreshed: vi.fn(),
     mergeMembershipWithExisting: (membership: unknown) => membership,
-    getProviderSecretStore: () => ({ reconcileOwner: vi.fn() }),
+    getProviderSecretStore: () => ({ reconcileOwner: vi.fn(), invalidateCaches: vi.fn() }),
+    HOST_NOT_STARTED,
+    readHostUnavailableReason,
+    createIpcError,
+    parseDesktopLoginAction,
+    browserAuthorizationSlot: { cancelActive: vi.fn(() => false) },
+    withAccountFreeOwnerCommit: vi.fn(async () => {}),
     notifyRenderer: vi.fn(),
     notifyAuthListeners: vi.fn(),
   };
@@ -267,8 +289,8 @@ describe('saved login recovery after startup network failure', () => {
     resolve(h.ok);
     await expect(pending).resolves.toMatchObject({ user: { id: 'other' } });
     expect(h.saved.session.refreshToken).toBe('other-refresh');
-    expect(h.vault.resources['global:original'].refreshToken).toBe('test-rotated');
-    expect(h.vault.activeAccountKey).toBe('global:other');
+    expect(h.vault.resources[ORIGINAL_KEY].refreshToken).toBe('test-rotated');
+    expect(h.vault.activeAccountKey).toBe(accountVaultKey('global', 'other'));
     expect(h.deps.notifyAuthListeners).not.toHaveBeenCalled();
   });
 
@@ -328,12 +350,12 @@ describe('saved login recovery after startup network failure', () => {
       else {
         h.stop();
         h.saved.session.refreshToken = 'newer-refresh';
-        h.vault.resources['global:original'].refreshToken = 'newer-refresh';
+        h.vault.resources[ORIGINAL_KEY].refreshToken = 'newer-refresh';
       }
       resolve(h.ok);
       await pending;
       expect(h.saved.session?.refreshToken).toBe(change === 'logout' ? undefined : 'newer-refresh');
-      expect(h.vault.resources['global:original']?.refreshToken).toBe(
+      expect(h.vault.resources[ORIGINAL_KEY]?.refreshToken).toBe(
         change === 'logout' ? undefined : 'newer-refresh',
       );
     },
@@ -405,7 +427,7 @@ describe('saved login recovery after startup network failure', () => {
       .mockResolvedValueOnce({ ok: false, status: 503, data: {} })
       .mockImplementationOnce(async () => {
         h.saved.session.refreshToken = 'test-replacement';
-        h.vault.resources['global:original'].refreshToken = 'test-replacement';
+        h.vault.resources[ORIGINAL_KEY].refreshToken = 'test-replacement';
         return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
       })
       .mockImplementationOnce(async () => ({
@@ -598,5 +620,89 @@ describe('runtime token rejection after an offline backoff', () => {
     expect(h.request).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.request).toHaveBeenCalledTimes(4);
+  });
+});
+
+// Regression: explicit Host login must establish the process-local data owner,
+// without writing a second account record or rotating credentials from Desktop.
+describe('delegated Host owner state', () => {
+  it('incidental client 401 cannot sign out the Host or write its credentials', async () => {
+    const h = setup();
+    const reader = vi.fn(async (): Promise<{ isAuthenticated: boolean; user: { id: string } | null }> => ({ isAuthenticated: true, user: { id: 'host-owner' } }));
+    h.hostAuth(reader);
+    await h.start();
+    const original = structuredClone(h.saved);
+    await Promise.all([h.invalidateSession('resource-unauthorized-after-refresh'), h.invalidateSession('account-unavailable')]);
+    expect(reader).toHaveBeenCalledTimes(2); // startup plus one coalesced authority read
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    expect(h.saved).toEqual(original);
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    reader.mockRejectedValueOnce(new Error('offline'));
+    await expect(h.invalidateSession('resource-unauthorized-after-refresh')).resolves.toBeUndefined();
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    reader.mockResolvedValueOnce({ isAuthenticated: false, user: null });
+    await h.invalidateSession('resource-unauthorized-after-refresh');
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('signed-out');
+    expect(h.saved).toEqual(original);
+  });
+  it('commits the remote owner at startup and clears it on a logout event', async () => {
+    const h = setup();
+    const state = { isAuthenticated: true, user: { id: 'host-owner' } };
+    h.hostAuth(async () => state);
+    await expect(h.start()).resolves.toEqual(state);
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    h.receiveHostAuthState({ isAuthenticated: false, user: null });
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('signed-out');
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    expect(h.deps.commitCloudAppSession).not.toHaveBeenCalled();
+  });
+
+  it('runtime refresh commits the same owner projection as startup', async () => {
+    const h = setup();
+    h.hostAuth(async () => ({ isAuthenticated: true, user: { id: 'host-owner' } }));
+    await expect(h.runtimeRefresh()).resolves.toBe(true);
+    expect(h.deps.commitVolatileAppSession).toHaveBeenCalledWith('cloud', 'host-owner');
+  });
+
+  // 甲 (2026-11-17): the window's own sign-in and Skip Sign-In write a session, the saved accounts and the
+  // owner. While the Host it serves reports that it did not start, both are refused with one fixed code and
+  // touch nothing; outside client mode, and once the Host state carries no reason, they run as before.
+  it('refuses its own sign-in and Skip Sign-In while the Host reports that it did not start', async () => {
+    const h = setup();
+    h.hostAuth(async () => ({ isAuthenticated: false, user: null }));
+    h.receiveHostAuthState({ isAuthenticated: false, user: null, hostUnavailable: { reason: 'HOST_DATABASE_UNAVAILABLE' } });
+    const original = structuredClone(h.saved);
+
+    await expect(h.dispatchLoginAction({ type: 'discover', email: 'person@example.invalid' }))
+      .resolves.toEqual({ success: false, code: HOST_NOT_STARTED, state: null });
+    await expect(h.enterLocalMode()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', message: `[PRECONDITION_FAILED] ${HOST_NOT_STARTED}` });
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.loadProviders).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    expect(h.saved).toEqual(original);
+    expect(h.deps.commitCloudAppSession).not.toHaveBeenCalled();
+    expect(h.deps.withAccountFreeOwnerCommit).not.toHaveBeenCalled();
+
+    // A Host state with no reason lifts the refusal: the action reaches the ordinary parsing.
+    h.receiveHostAuthState({ isAuthenticated: false, user: null });
+    await expect(h.dispatchLoginAction({ type: 'not-an-action' }))
+      .resolves.toMatchObject({ success: false, code: 'INVALID_AUTH_ACTION' });
+  });
+
+  it('signs in and skips sign-in as before outside client mode', async () => {
+    const h = setup();
+    await expect(h.dispatchLoginAction({ type: 'not-an-action' }))
+      .resolves.toMatchObject({ success: false, code: 'INVALID_AUTH_ACTION' });
+    await h.enterLocalMode();
+    expect(h.deps.withAccountFreeOwnerCommit).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an event without explicit Host mode', () => {
+    const h = setup();
+    expect(() => h.receiveHostAuthState({ isAuthenticated: true, user: { id: 'foreign' } }))
+      .toThrow('explicit client mode');
+    expect(h.deps.commitVolatileAppSession).not.toHaveBeenCalled();
   });
 });

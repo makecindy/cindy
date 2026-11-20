@@ -48,11 +48,14 @@ try {
   app = await _electron.launch({ executablePath: electron, args: [entry], env });
   const page = await app.firstWindow();
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
-  for (const theme of [
+  const themes = [
     { scheme: 'light', surface: '#f2f2ed', elevated: '#ffffff', canvas: 'rgb(242, 242, 237)', control: 'rgb(255, 255, 255)' },
     { scheme: 'dark', surface: '#181818', elevated: '#303030', canvas: 'rgb(24, 24, 24)', control: 'rgb(48, 48, 48)' },
-  ]) {
-    const result = await page.evaluate(async ({ scheme, surface, elevated }) => {
+  ];
+  // Both sources must update the guest without a reload or fading author controls.
+  for (const theme of themes.flatMap(theme => ['data-wallpaper-active', 'data-desktop-background']
+    .map(attribute => ({ ...theme, attribute })))) {
+    const result = await page.evaluate(async ({ scheme, surface, elevated, attribute }) => {
       const root = document.documentElement;
       root.style.cssText = `color-scheme:${scheme};--surface:${surface};--panel-bg:var(--surface);--surface-elevated:${elevated}`;
       const frame = document.createElement('iframe');
@@ -90,18 +93,18 @@ try {
         await settle();
         const off = colors();
         const artworkOff = artwork();
-        root.setAttribute('data-wallpaper-active', 'true');
+        root.setAttribute(attribute, 'true');
         await settle();
         const on = colors();
         const artworkOn = artwork();
-        root.removeAttribute('data-wallpaper-active');
+        root.removeAttribute(attribute);
         await settle();
         return { off, on, restored: colors(), artwork: [artworkOff, artworkOn, artwork()], styles: styles.size };
       } finally {
         unobserve();
         injector.dispose();
         frame.remove();
-        root.removeAttribute('data-wallpaper-active');
+        root.removeAttribute(attribute);
         root.removeAttribute('style');
       }
     }, theme);
@@ -114,7 +117,7 @@ try {
       ], `${theme.scheme}: author background image and layout survive every wallpaper state`);
     }
     assert.equal(result.styles, 1, `${theme.scheme}: stale injected styles removed`);
-    console.log(`PASS ${theme.scheme}: concrete canvas/control colors across off -> on -> off`);
+    console.log(`PASS ${theme.scheme}, ${theme.attribute}: concrete canvas/control colors across off -> on -> off`);
   }
 } finally {
   try { if (app) await app.close(); }

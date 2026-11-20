@@ -114,7 +114,7 @@ it('rechecks active status when using an accessor created before a pause', async
   const service = await botLinkedProjectAccess('bot-1');
   const [project] = await service.read();
   h.status = 'paused';
-  await expect(service.set(project.id, true)).rejects.toThrow('Teammate is not active');
+  await expect(service.set(project.id, true)).rejects.toThrow("Buddy is not active");
   await expect(access(botProfileDir(h.root, 'bot-1'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 

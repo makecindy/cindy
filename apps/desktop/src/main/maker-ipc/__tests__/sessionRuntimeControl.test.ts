@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { clearAllSessionRuntimeAxes, getSessionEffort, setSessionEffort } from '../../maker-host/session-effort-store.js';
 import { buildDeferredRuntimeSelectionProfile } from '../../../shared/runtimeModelSwitchGate';
+import { getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 
 import {
   acceptSessionRuntimeAxisMutation,
@@ -9,6 +10,7 @@ import {
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
+  clearOwnerScopedSessionRuntimeSelection,
   clearSessionRuntimeControlState,
   deferSessionRuntimeAxisMutation,
   getSessionRuntimeControlSnapshot,
@@ -20,6 +22,7 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   resolveSessionRuntimeRefreshEffort,
@@ -41,6 +44,25 @@ const current: SessionRuntimeProfile = {
   effort: 'high',
   fastMode: true,
 };
+
+// Rule: a committed account change drops every task's owner-scoped runtime selection (the desktop's
+// app session commit boundary; the Node Host's boundary hook calls the same step). Gap: the three
+// clears were inline in bootstrap-electron.ts and the Host had none, so an override survived a
+// sign-out. Minimal failing input: a provider, an effort and an accepted override, then the clear.
+describe('clearOwnerScopedSessionRuntimeSelection', () => {
+  it('drops the task provider, its runtime axes and its runtime control, and moves the owner epoch', () => {
+    const epoch = captureSessionRuntimeControlOwnerEpoch();
+    setSessionProvider('owner-task', 'prov-a');
+    setSessionEffort('owner-task', 'high');
+    acceptSessionRuntimeMutation({ sessionId: 'owner-task', source: 'fallback', profile: { ...current, providerId: 'prov-b' }, deferred: false });
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).not.toBeNull();
+    clearOwnerScopedSessionRuntimeSelection();
+    expect(getSessionProvider('owner-task')).toBeNull();
+    expect(getSessionEffort('owner-task')).toBeNull();
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).toBeNull();
+    expect(sessionRuntimeControlOwnerEpochMatches(epoch)).toBe(false);
+  });
+});
 
 function provider(
   id: string,
@@ -79,6 +101,43 @@ function provider(
 }
 
 describe('session runtime control state', () => {
+  // Unit #10271: account handoff must not clear Agent-selected model/axes or a
+  // different pending target. Existing recovery APIs reset that state wholesale.
+  it.each(['same-route', 'other-route', 'other-provider', 'no-override', 'stale-owner', 'stale-generation'] as const)(
+    'remaps only the admitted runtime provider with owner/generation fencing (%s)', mode => {
+      const sessionId = 'account-handoff';
+      const profile = { ...current, providerId: mode === 'other-provider' ? 'another-provider' : 'openai-old' };
+      if (mode !== 'no-override') {
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile, deferred: false });
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', deferred: true, thinking: false,
+          profile: { ...profile, effort: 'max', ...(mode === 'other-route' ? { model: 'other-model' } : {}) } });
+      }
+      const owner = captureSessionRuntimeControlOwnerEpoch();
+      const before = getSessionRuntimeControlSnapshot(sessionId);
+      if (mode === 'stale-owner') clearAllSessionRuntimeControlStates();
+      const expected = getSessionRuntimeControlSnapshot(sessionId);
+      const result = remapSessionRuntimeProvider({ sessionId, fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: owner, expectedGeneration: before.generation + (mode === 'stale-generation' ? 1 : 0) });
+      if (mode === 'stale-owner' || mode === 'stale-generation') {
+        expect(result).toBeNull();
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual(expected);
+      } else if (mode === 'no-override') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1 });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      } else if (mode === 'other-provider') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          pending: { ...before.pending!, generation: before.generation + 1 } });
+      } else {
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          effectiveOverride: { ...profile, providerId: 'openai' }, pending: { ...before.pending!,
+            generation: before.generation + 1, profile: { ...before.pending!.profile,
+              providerId: mode === 'same-route' ? 'openai' : 'openai-old' } } });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      }
+    });
+
   it('uses one monotonic generation for deferred and settled mutations', () => {
     const sessionId = 'runtime-generation';
     expect(sessionRuntimeGenerationMatches(sessionId, 0)).toBe(true);

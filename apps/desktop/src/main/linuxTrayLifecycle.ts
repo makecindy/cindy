@@ -3,12 +3,15 @@ export interface LinuxTray<TMenu> {
   isDestroyed(): boolean;
   destroy(): void;
   setContextMenu(menu: TMenu): void;
+  setToolTip(text: string): void;
   on(event: 'click', listener: () => void): unknown;
 }
 
 export interface LinuxTrayDependencies<TMenu> {
   createTray(): LinuxTray<TMenu>;
   buildMenu(): TMenu;
+  /** Hover label: without it the StatusNotifierItem Title stays empty and panels show the icon id. */
+  tooltip: string;
   showWindow(): void;
   onError(error: unknown): void;
 }
@@ -32,6 +35,7 @@ export function createLinuxTrayController<TMenu>(deps: LinuxTrayDependencies<TMe
       if (tray && !tray.isDestroyed()) return true;
       try {
         tray = deps.createTray();
+        tray.setToolTip(deps.tooltip);
         tray.setContextMenu(deps.buildMenu());
         tray.on('click', deps.showWindow);
         return true;

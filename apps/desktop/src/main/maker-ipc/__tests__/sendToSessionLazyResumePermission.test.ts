@@ -1,3 +1,7 @@
+import * as path from 'node:path';
+import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
+import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
@@ -20,10 +24,15 @@ import ts from 'typescript';
 
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
+import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
+import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
+import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -67,26 +76,24 @@ describe('sendToSessionInternal lazy-resume permission mode', () => {
   });
 
   it('reads the persisted permission mode in the row snapshot used by lazy resume', () => {
-    const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'ipc', 'sessions.ts'), 'utf8');
+    const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'sessionDispatchSnapshot.ts'), 'utf8');
     const select = sessionsSource.slice(sessionsSource.indexOf('async function selectSessionRowSnapshot('));
     expect(select.slice(0, select.indexOf('.from(sessions)'))).toContain('permissionMode: sessions.permissionMode,');
   });
 
-  it('refreshes permissionMode from DB before a queued follow-up starts the harness', () => {
-    const start = registerSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = registerSource.indexOf('const agentSwitchDeps:', start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const reconcile = registerSource.slice(start, end);
-    expect(reconcile).toContain('permissionMode: sessions.permissionMode,');
-    expect(reconcile).toContain('co.permissionMode = permissionModeOrAsk(row.permissionMode);');
+  it('refreshes permissionMode from DB before a queued follow-up starts the harness', async () => {
+    const reconcile = createSessionOptionsReconciler({ log: { warn() {} },
+      readSession: async () => ({ model: 'm', permissionMode: 'ask', agentKind: 'cc' }) });
+    const co = { agentKind: 'claude-code', permissionMode: 'bypassPermissions' } as MakerSessionCreateOpts;
+    await reconcile('task', co);
+    expect(co.permissionMode).toBe('ask');
   });
 });
 
 /**
  * 伙伴后台任务冷启动的行为回归(2026-10-13 真机:按 Auto 委派的任务落库为 Auto,首次派发
  * 经 lazy-resume 被缺省 bypass 启动;绑定它的 PR 心跳每轮都在排队受理时因「落库 ≠ 运行态」
- * 被取消)。截取生产源码原样转译后执行:伙伴后台任务服务的 dispatch 适配器 →
+ * 被取消)。截取生产源码原样转译后执行:按库内档位恢复的 Host 派发 →
  * dispatchBotSessionMessage → 整个 sendToSessionInternal。闭包外依赖用合成桩注入,未声明的
  * 依赖一被读取就报错,避免桩悄悄改变执行路径。断言 lazy-resume 交给 bootstrapSession(随后
  * 进入 maker.createSession)的创建参数。
@@ -105,19 +112,28 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
+    '\n  setBotInvitationWelcomeDispatch(',
   );
-  const delegationDispatch = slice(
-    '({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId, autoReviewUserText }) =>',
-    ',\n    discardDelegationQueuedInputs:',
-    registerSource.indexOf('botDelegationServiceHolder = createBotDelegationService({'),
+  const groupDispatch = slice(
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
+    ',\n    prepareAttachments:',
+    registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
+  const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
+  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+    .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
+${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage =')}
 ${dispatchBotSessionMessage}
-const delegationDispatch = ${delegationDispatch};
-return { delegationDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
+${pluginSource}
+${sendToSession};
+// Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
+const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
+const groupDispatch = ${groupDispatch};
+return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
+enqueueGroupMessage: ${slice('async function enqueueSendToSessionMessage(params: {', '\n  async function buildSessionControlInputItem(')} };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -128,7 +144,10 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
-  sendToSessionInternal: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  enqueueGroupMessage: (input: Record<string, unknown>) => Promise<void>;
+  sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
+  sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
     input: Record<string, unknown>,
@@ -173,7 +192,14 @@ function botTaskDispatchHarness(
     where: () => dbChain,
     limit: async () => [],
   };
+  const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
+    getPluginHostToolCaller: () => undefined,
+    sanitizeSourceName,
+    getInstalledGhostName: () => 'Dashboard',
+    captureDataOwnerBroadcastScope: () => ({}),
+    isDataOwnerBroadcastScopeCurrent: () => true,
+    classifySessionMessagePurpose: async () => ({}),
     touchSessionActivityInDb,
     assertCindyMakeSessionAvailable: noop,
     readSessionSource: asyncNoop,
@@ -186,6 +212,8 @@ function botTaskDispatchHarness(
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,
     beginTurnChangeSetAtDispatch: asyncNoop,
+    // Plugin-engine guards from register.ts use the real helpers.
+    hasBuiltinAgentKind, requireBuiltinAgentKind, builtinAgentKindOrNull,
     clearPendingTurnChangeSets: noop,
     gitSnapshotCoordinator: null,
     deferredProductTurnFailureGate: { clearSession: noop },
@@ -207,7 +235,10 @@ function botTaskDispatchHarness(
       rows[id]
         ? { status: 'active', title: id, userSendAt: null, providerId: 'fixture-provider', ...rows[id] }
         : null,
-    getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+    getDbClient: () => dbClient,
+    getCurrentDbClientSnapshot: () => dbClient,
+    normalizeAutoTitle,
+    refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
@@ -241,10 +272,11 @@ function botTaskDispatchHarness(
     commitAgentIslandUserPrompt: noop,
     rollbackAgentIslandUserPrompt: noop,
     createDbMessage: asyncNoop,
+    persistUserTurnMessage: asyncNoop,
     runAcceptedCallback: async (callback?: () => unknown) => {
       await callback?.();
     },
-    contextOverflowRolloverHolder: undefined,
+    prepareUnhealthySessionForSend: vi.fn(async () => false),
     taskCompletionDeliveryForOwner: () => null,
     buildCreateOptsWithStderr: (opts: Record<string, unknown>) => ({ ...opts }),
     synthesizeOrcaVendorOptionsFromDb: asyncNoop,
@@ -260,6 +292,10 @@ function botTaskDispatchHarness(
     isSessionRunningError: () => false,
     GroupToolAuthorizationError: class extends Error {},
     AcceptedCallbackDispatchCancelled: class extends Error {},
+    // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
+    resolveSendToSessionCreateRoute,
+    isBotGroupInTaskClientId,
+    getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
   const scope = new Proxy(stubs, {
@@ -274,6 +310,130 @@ function botTaskDispatchHarness(
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
 
+// Unit/guard: execute the same service closure as Agent tools. A plugin has no task to
+// impersonate; its approved input carries one Host source for both saved labels and model notes.
+it('stamps plugin Host input without a dispatcher task and preserves target permissions', async () => {
+  const enqueue = vi.fn(async (_input: Record<string, unknown>) => undefined);
+  const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: true } }, {}, {
+    getPluginHostToolCaller: () => ({ caller: { kind: 'plugin', pluginId: 'dashboard' } }),
+    inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => true },
+    enqueueSendToSessionMessage: enqueue,
+  });
+  expect(await h.sendToSession({ targetSessionId: 'child', message: 'Continue the report' })).toMatchObject({ ok: true, wakeKind: 'queued' });
+  const queued = enqueue.mock.calls[0]?.[0] as unknown as { sourcePlugin: { pluginId: string }; dispatcherSessionId?: string; dbRow: { permissionMode: string }; autoReviewUserText: unknown };
+  expect(queued.sourcePlugin).toEqual({ pluginId: 'dashboard', name: 'Dashboard' });
+  expect(queued.dispatcherSessionId).toBeUndefined();
+  expect(queued.dbRow.permissionMode).toBe('ask');
+  expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin: queued.sourcePlugin }))).toContain('dashboard');
+  expect(h.bootstrapped).toEqual([]);
+});
+
+// #9489 review: the runner admitted remote tasks but omitted the cold-resume
+// policy. Existing tests supplied that policy themselves, hiding the escalation.
+// Reuse this guard fixture's production send closure; assert the actual bootstrap
+// permissions for an idle remote task, including the newly persisted fork target.
+it.each(['continue', 'fork'] as const)('preserves stored permissions through plugin %s cold resume', async mode => {
+  for (const { permissionMode, planModeEnabled } of [
+    { permissionMode: 'ask', planModeEnabled: false },
+    { permissionMode: 'auto', planModeEnabled: false },
+    { permissionMode: 'ask', planModeEnabled: true },
+  ]) {
+    const rows: Record<string, { permissionMode: string; planModeEnabled: boolean }> = {
+      source: { permissionMode, planModeEnabled },
+    };
+    const getSessionMeta = async (id: string) => ({ id, agentKind: 'codex' as const,
+      workDir: '/tmp/fixture/source', model: 'remote-model', providerId: 'remote-only-provider',
+      agentDeviceId: 'other-computer', sdkSessionId: `sdk-${id}` });
+    const h = botTaskDispatchHarness(rows, {}, {
+      maker: { getSession: () => undefined, getSessionMeta },
+    });
+    const admitLocalSession = vi.fn(async () => { throw new Error('Remote provider is not in the local catalog'); });
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta: getSessionMeta,
+      admitLocalSession,
+      readPluginName: () => 'GitHub',
+      send: h.sendToSessionInternal,
+      readLatestAssistant: async () => ({ clientId: 'latest-assistant' }),
+      forkSessionAtMessage: async () => {
+        // Production forks inherit permissions but create an unarmed Plan row.
+        rows.forked = { ...rows.source!, planModeEnabled: false };
+        return { id: 'forked' };
+      },
+      broadcastSessionCreated: () => {},
+    });
+    const target = mode === 'continue' ? 'source' : 'forked';
+    expect(await runner({ ghostId: 'github', ghostVersion: '1.5.5', sourceSessionId: 'source',
+      mode, prompt: 'Create a draft PR', persistedContent: 'Create a draft PR' }))
+      .toEqual({ ok: true, sessionId: target, disposition: mode === 'continue' ? 'resumed' : 'forked' });
+    expect(admitLocalSession).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toHaveLength(1);
+    expect(h.bootstrapped[0]).toMatchObject({ id: target, permissionMode, planMode: rows[target]!.planModeEnabled });
+    expect(h.sentTo).toEqual([{ sessionId: target, planMode: false }]);
+  }
+});
+
+// #9489 acceptance gap (guard): a mocked runner send result cannot prove that
+// production queue admission avoids cold bootstrap, or that a startup failure
+// reaches the caller. Exercise both through the existing production send closure.
+describe('plugin continuation through production send admission', () => {
+  function fixture(live: Record<string, object> = {}, overrides: Record<string, unknown> = {}) {
+    const meta = { id: 'source', agentKind: 'codex' as const, workDir: '/tmp/fixture/source',
+      model: 'remote-model', providerId: 'remote-only-provider', agentDeviceId: 'other-computer' };
+    const row = { permissionMode: 'ask', planModeEnabled: true, providerId: meta.providerId };
+    const h = botTaskDispatchHarness({ source: row }, live, {
+      maker: { getSession: (id: string) => live[id], getSessionMeta: async () => meta }, ...overrides,
+    });
+    const admitLocalSession = vi.fn(async () => { throw new Error('Not in local catalog'); });
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta: async () => meta, admitLocalSession, readPluginName: () => 'GitHub',
+      send: h.sendToSessionInternal, readLatestAssistant: async () => undefined,
+      forkSessionAtMessage: async () => { throw new Error('Not a fork'); }, broadcastSessionCreated: () => {},
+    });
+    const request = { ghostId: 'github', ghostVersion: '1.5.5', sourceSessionId: 'source',
+      mode: 'continue' as const, prompt: 'Continue fixture', persistedContent: 'Visible fixture' };
+    return { ...h, meta, row, runner, request, admitLocalSession };
+  }
+
+  it.each(['restored-queue', 'live-turn'] as const)('queues behind %s without starting a second Agent', async state => {
+    const h = fixture(state === 'live-turn' ? { source: { id: 'source', isTurnRunning: () => true } } : {}, {
+      inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => state === 'restored-queue' },
+    });
+    expect(await h.runner(h.request)).toEqual({ ok: true, sessionId: 'source', disposition: 'queued' });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      targetSessionId: 'source', message: h.request.prompt, persistedContent: h.request.persistedContent,
+      meta: expect.objectContaining({ providerId: 'remote-only-provider', agentDeviceId: 'other-computer' }),
+      dbRow: expect.objectContaining({ permissionMode: 'ask', planModeEnabled: true, providerId: 'remote-only-provider' }),
+      sourcePlugin: { pluginId: 'github', name: 'GitHub' },
+    }));
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.admitLocalSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live handle and its permission mode for an idle task', async () => {
+    const live = { id: 'source', permissionMode: 'ask', isTurnRunning: () => false };
+    const h = fixture({ source: live });
+    expect(await h.runner(h.request)).toEqual({ ok: true, sessionId: 'source', disposition: 'active' });
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([{ sessionId: 'source', planMode: false }]);
+    expect(live.permissionMode).toBe('ask');
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns remote startup failure details without sending or silently rerouting', async () => {
+    const ensureRemoteReadyForSessionStart = vi.fn(async () => { throw new Error('Execution computer is offline'); });
+    const h = fixture({}, { ensureRemoteReadyForSessionStart });
+    expect(await h.runner(h.request)).toEqual({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'Execution computer is offline' });
+    expect(ensureRemoteReadyForSessionStart).toHaveBeenCalledExactlyOnceWith({ createOpts: expect.objectContaining({
+      id: 'source', providerId: 'remote-only-provider', model: 'remote-model', permissionMode: 'ask', planMode: true,
+    }) });
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+    expect(h.admitLocalSession).not.toHaveBeenCalled();
+  });
+});
+
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {
   const row = { permissionMode: 'auto', planModeEnabled: false, userSendAt: 123 };
   const current = botTaskDispatchHarness({ child: row }, { child: { id: 'child', agentKind: 'codex' } });
@@ -281,6 +441,62 @@ it('advances an accepted send_to_session with a dispatcher without touching huma
   expect(result).toMatchObject({ ok: true });
   expect(current.activity.get('child')).toBeGreaterThan(123);
   expect(row.userSendAt).toBe(123);
+});
+
+// #9483, bot-group-chat §3: external input into a hidden lane cannot reach the
+// public group timeline. Guard tier executes the real handoff and group-dispatch
+// closures; existing permission tests did not cover role=group or false receipts.
+describe('external handoff to hidden group lanes', () => {
+  function groupHarness(live: boolean) {
+    const sync = vi.fn(async () => undefined);
+    const persist = vi.fn(async () => undefined);
+    const accepted = vi.fn();
+    const links = {};
+    let table: unknown;
+    const dbChain = { from: (value: unknown) => { table = value; return dbChain; }, where: () => dbChain,
+      limit: async () => table === links ? [{ role: 'group', botId: 'companion' }] : [] };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
+      live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        botSessionLinks: links,
+        syncBotLanePermission: sync, persistUserTurnMessage: persist,
+      });
+    return { ...h, sync, persist, accepted };
+  }
+
+  it.each(['cold', 'live', 'queued'] as const)('rejects %s external delivery before changing the target', async (path) => {
+    const h = groupHarness(path === 'live');
+    const result = await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Forward this into the group',
+      dispatcherSessionId: 'lead', clientId: path === 'queued' ? 'bot-group:forged' : 'external-input',
+      forceQueue: path === 'queued', onAccepted: h.accepted });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+      message: expect.stringMatching(/group.*not.*delivered/i) });
+    expect(h.sync).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.accepted).not.toHaveBeenCalled();
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.activity.size).toBe(0);
+  });
+
+  it('preserves managed group delivery through the real group dispatcher', async () => {
+    const h = groupHarness(false);
+    expect(await h.groupDispatch({ targetSessionId: 'child', message: 'Managed group turn',
+      clientId: 'bot-group:managed-turn', onAccepted: h.accepted }))
+      .toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: 'bot-group:managed-turn' });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'child', clientId: 'bot-group:managed-turn', message: 'Managed group turn',
+    }));
+  });
+
+  it('preserves host continuations inside a group lane', async () => {
+    const h = groupHarness(false);
+    expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Host continuation',
+      clientId: 'input-handoff-result:request', onAccepted: h.accepted })).toMatchObject({ ok: true });
+    expect(h.sentTo).toEqual([{ sessionId: 'child', planMode: false }]);
+    expect(h.accepted).toHaveBeenCalledOnce();
+  });
 });
 
 // #6895 review: the cloud-room dispatcher bypassed the ordinary send transaction.
@@ -318,7 +534,7 @@ describe('companion internal delivery after automation', () => {
       limit: async () => [{ role, botId: 'companion' }] };
     const enqueue = vi.fn(async () => undefined);
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {
-      child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' },
+      child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false },
     }, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
       isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
@@ -340,10 +556,10 @@ describe('companion internal delivery after automation', () => {
     const dbChain = { from: () => dbChain, where: () => dbChain,
       limit: async () => [{ role: 'canonical', botId: 'companion' }] };
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
-      path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' } } : {}, {
+      path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
-        createDbMessage: async () => { shadowed = true; },
+        persistUserTurnMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
       .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'shadowed' });
@@ -360,6 +576,7 @@ describe('companion internal delivery after automation', () => {
     const live: Record<string, object> = {};
     let dispatchedModel: string | undefined;
     const makeLive = () => ({ id: 'child', ...current, isTurnRunning: () => false, getStatus: () => 'active',
+      hasRecyclableProjectResourceDrift: () => false,
       send: async () => { dispatchedModel = current.model; return { accepted: true }; } });
     if (path === 'live') live.child = makeLive();
     const scope = createScheduledModelScope({
@@ -420,6 +637,7 @@ describe('idle forwarded request authorization', () => {
   // an existing one; direct send previously left its next handoff without a source.
   it('queues the first verified request of a newly created task', async () => {
     const broadcast = vi.fn();
+    const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
     const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
@@ -427,6 +645,7 @@ describe('idle forwarded request authorization', () => {
         ({ row, value: await create(row, async () => {}) }),
       enqueueSendToSessionMessage: enqueue,
       broadcastSessionCreated: broadcast,
+      refineCreatedTaskTitle: refineTitle,
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
@@ -434,6 +653,7 @@ describe('idle forwarded request authorization', () => {
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);
     expect(broadcast).toHaveBeenCalledWith('new-child');
     expect(broadcast).toHaveBeenCalledTimes(1);
@@ -488,7 +708,57 @@ describe('idle forwarded request authorization', () => {
   });
 });
 
-describe('Bot Session task cold start keeps the persisted permission and Plan', () => {
+// #10631 review, integration tier: stop can win during asynchronous input building.
+// Execute the real group adapter and both enqueue paths; late onAccepted is too late.
+describe('group dispatch cancellation during preparation', () => {
+  it.each([false, true])('never enqueues a stopped execution (attachments=%s)', async attachments => {
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const enqueue = vi.fn();
+    let current = true;
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      path,
+      inputCoordinator: { shouldQueueNewTurn: () => false, ensureQueueRestored: async () => {}, enqueue },
+      buildSessionControlInputItem: async (input: Record<string, unknown>) => {
+        started(); await gate; return { ...input, createOpts: {} };
+      },
+      orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: vi.fn() },
+    });
+    h.scope.enqueueSendToSessionMessage = h.enqueueGroupMessage;
+    const dispatch = h.groupDispatch({ targetSessionId: 'child', clientId: 'bot-group:stopped',
+      message: 'Cancelled group request', persistedContent: 'Cancelled group request',
+      assertDispatchCurrent: () => { if (!current) throw new Error('STALE_EXECUTOR'); },
+      onAccepted: vi.fn(),
+      ...(attachments ? { attachments: [{ id: 'file', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }] } : {}),
+    }).catch(error => ({ ok: false, message: String(error) }));
+    await preparing;
+    current = false; release();
+    expect(await dispatch).toMatchObject({ ok: false });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(h.sentTo).toEqual([]);
+  });
+});
+
+describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
+  // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
+  // account recovery changed the persisted source. Execute the real dispatch closure: a legacy
+  // source becomes OpenAI, lazy bootstrap must use it without changing this entry's permission policy.
+  it.each([true, false])('uses the recovered source for lazy bootstrap (stored permission=%s)', async storedMode => {
+    const row = { permissionMode: 'ask', planModeEnabled: false, providerId: 'openai-old' };
+    const readRecovered = vi.fn(async () => ({ ...row, status: 'active', title: 'child', userSendAt: null, sdkSessionId: null }));
+    const h = botTaskDispatchHarness({ child: row }, {}, {
+      prepareUnhealthySessionForSend: vi.fn(async () => { row.providerId = 'openai'; return true; }),
+      getSessionRowSnapshotStrict: readRecovered,
+    });
+    const result = await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Continue',
+      clientId: 'recovered-source', resumeWithStoredPermissionMode: storedMode });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(h.bootstrapped).toEqual([expect.objectContaining({ providerId: 'openai',
+      resumeSessionId: undefined, permissionMode: storedMode ? 'ask' : 'bypassPermissions' })]);
+    expect(readRecovered).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['auto', false, 'auto'],
     ['ask', false, 'ask'],
@@ -567,39 +837,27 @@ describe('Bot Session task cold start keeps the persisted permission and Plan', 
  * drain 冷启动若照搬它,会话的计划模式就与库内不一致,绑定的心跳又会被判失配。会话起档必须
  * 取库内值;本轮意图由发送事务另按原快照传给 send,不经这里。
  */
-describe('queued cold start keeps the persisted Plan', () => {
-  const reconcileSource = (() => {
-    const start = registerSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = registerSource.indexOf('\n  // 冷 Pi 切模核实前', start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    return ts.transpileModule(`${registerSource.slice(start, end)}\nreturn reconcileCreateOptsAgainstDb;`, {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
-    }).outputText;
-  })();
+/**
+ * 插件引擎任务(agent_kind = 'acp',docs/plans/acp-plugin-bridge.md)的首次发送:lazy-create 前的
+ * 库内对齐曾用只认三种内置引擎的转换,把 'acp' 读成 Claude 并当作「引擎已切换」改写 createOpts,
+ * 第一条消息就会在 Claude 上启动。最小失败输入:库内与 createOpts 都是 'acp'。
+ */
+describe('cold start of a plugin engine task', () => {
+  it('keeps the plugin engine instead of reading the row as Claude', async () => {
+    const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => ({
+      agentKind: 'acp', model: 'deepseek-v4-pro', sdkSessionId: null, providerId: 'acp-plugin:dsh-acp:dsh',
+      fastMode: false, permissionMode: 'ask', planModeEnabled: false,
+    }) });
+    const co = { agentKind: 'acp', workingDir: '/repo', model: 'deepseek-v4-pro', providerId: 'acp-plugin:dsh-acp:dsh' };
+    await reconcile('task-1', co as unknown as MakerSessionCreateOpts);
+    expect(co).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4-pro' });
+  });
+});
 
-  function reconcileWithRow(row: Record<string, unknown>) {
-    const chain = { from: () => chain, where: () => chain, limit: async () => [row] };
-    const stubs: Record<string, unknown> = {
-      getDbClient: () => ({ drizzle: { select: () => chain } }),
-      sessions: {},
-      eq: () => undefined,
-      log: { warn: () => undefined, info: () => undefined, debug: () => undefined },
-      dbToMakerAgentKind: (kind: string) => (kind === 'cc' ? 'claude-code' : kind),
-      permissionModeOrAsk,
-    };
-    const scope = new Proxy(stubs, {
-      has: (target, key) => key in target || !(key in globalThis),
-      get: (target, key) => {
-        if (key === Symbol.unscopables) return undefined;
-        if (key in target) return target[key as string];
-        throw new ReferenceError(`unstubbed dependency of the production slice: ${String(key)}`);
-      },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    return new Function('scope', `with (scope) { return (function () { ${reconcileSource} })(); }`)(
-      scope,
-    ) as (sessionId: string, co: Record<string, unknown>) => Promise<void>;
+describe('queued cold start keeps the persisted Plan', () => {
+  function reconcileWithRow(row: SessionExecutionRow) {
+    const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => row });
+    return (id: string, co: Record<string, unknown>) => reconcile(id, co as MakerSessionCreateOpts);
   }
 
   it.each([true, false])('starts a queued Host input with the stored Plan %s', async (planModeEnabled) => {
@@ -623,5 +881,46 @@ describe('queued cold start keeps the persisted Plan', () => {
     };
     await reconcile('child', co);
     expect(co).toMatchObject({ permissionMode: 'auto', planMode: planModeEnabled });
+  });
+});
+
+// #10692, guard-tier wiring: the real shared send preparation must pass the same
+// read-only canonical history resolver as startup and retain the durable rebuild.
+// Runtime tests cover allocation; this protects ordinary/retry/lazy Host consumers
+// from silently omitting the injected resolver in register.ts's large closure.
+describe('unbound Codex pre-send history wiring', () => {
+  it('resolves history through the host and completes the original recovery before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const order: string[] = [];
+    const assertCurrent = vi.fn();
+    const history = vi.fn(async () => ({ historyHome: 'original-home' }));
+    const rebuild = vi.fn(async (_id: string, check: () => void) => { check(); order.push('durable-handoff'); });
+    const cancelUsageLimitWait = vi.fn(() => { order.push('cancel-wait'); });
+    const failover = vi.fn();
+    const prepare = vi.fn(async (id: string, deps: {
+      resolveCodexHistoryHome(thread: string): Promise<string | undefined>;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(await deps.resolveCodexHistoryHome('legacy-thread')).toBe('original-home');
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+      readCodexThreadStorageReadOnly: history,
+      prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('old-task')).toBe(true);
+    expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
+    expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
+    expect(order).toEqual(['durable-handoff', 'cancel-wait']);
+    expect(failover).not.toHaveBeenCalled();
   });
 });

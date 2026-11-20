@@ -1,9 +1,9 @@
 import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import type { PluginMarketService } from './service.js';
-import type { PluginMarketItem } from '../../shared/pluginMarket.js';
+import { type PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   isPluginMarketPassthroughErrorCode,
@@ -17,7 +17,7 @@ interface InstalledState {
 }
 
 export interface PluginMarketAgentDeps {
-  market: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
+  market: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   installedState(ghostId: string, namespace?: string | null): InstalledState;
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
@@ -29,7 +29,8 @@ export interface PluginMarketAgentDeps {
   captureInstall(signal?: AbortSignal): {
     assertCurrent(): void;
     release(): void;
-    consentPrompt: GhostInstallConsentPrompt;
+    ownerGeneration: number;
+    consentPrompt(publisher: string | null): GhostInstallConsentPrompt;
   };
 }
 
@@ -45,21 +46,21 @@ function catalogItem(item: PluginMarketItem, installed: InstalledState) {
   };
 }
 
+// All task adapters on this Host share pending offers. A second caller never
+// borrows the first task's decision or repeats its mutation.
+const pendingInstalls = new Set<string>();
+
 /** Narrow Agent adapter: live catalog discovery and first install, with no credential projection. */
 export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
   return {
     async search(query: string): Promise<Record<string, unknown>> {
       const assertCurrent = deps.captureRead();
-      const snapshot = await deps.market.snapshot({ discoveryOnly: true });
+      const snapshot = await deps.market.query({ query: query.trim().slice(0, 100), limit: 20, counts: false });
       assertCurrent();
-      const needle = query.trim().toLocaleLowerCase();
-      const matches = snapshot.items.filter(item =>
-        `${item.name} ${item.description ?? ''} ${item.ghostId} ${item.author ?? ''}`
-          .toLocaleLowerCase().includes(needle));
       return {
         ok: true,
-        items: matches.slice(0, 20).map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
-        has_more: matches.length > 20,
+        items: snapshot.items.map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
+        has_more: snapshot.nextCursor !== null,
         complete:
           !snapshot.unavailableReason &&
           !snapshot.organizationAccessError &&
@@ -73,6 +74,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
       };
     },
     async install(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
+      let claimedInstall: string | undefined;
       let release: (() => void) | undefined;
       try {
         const authority = deps.captureInstall(signal);
@@ -89,6 +91,13 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           plugin: catalogItem(detail, installed),
           ghost_id: detail.ghostId,
         };
+        const key = JSON.stringify([authority.ownerGeneration, detail.pluginId, detail.releaseId]);
+        if (pendingInstalls.has(key)) return {
+          ok: false, errorCode: 'INSTALL_IN_PROGRESS',
+          message: 'This release already has an installation in progress on this computer. Do not open another confirmation. Check ghost_info before continuing the unfinished step.',
+        };
+        pendingInstalls.add(key);
+        claimedInstall = key;
         // Recheck at the service's final commit boundary, including concurrent local imports.
         const assertCurrent = () => {
           authority.assertCurrent();
@@ -104,7 +113,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             expectedManifest: detail.manifest,
             allowSourceReplacement: false,
           },
-          { consent: { prompt: authority.consentPrompt, initiator: 'agent' }, assertCurrent },
+          { consent: { prompt: authority.consentPrompt(detail.author), initiator: 'agent' }, assertCurrent },
         );
         // Once committed, cancellation cannot turn the durable installation
         // into a failure. The live check runs at package placement instead.
@@ -122,6 +131,12 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             message: 'The user declined this plugin installation. Do not retry unless the user asks for it again.',
           };
         }
+        if (isIpcError(error) && error.code === 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED') {
+          return {
+            ok: false, errorCode: error.code,
+            message: 'The plugin download authorization expired. Check the system date and time before starting a new installation attempt. This attempt stopped before downloading the package.',
+          };
+        }
         // The service raises catalog-level outages as IPC errors; detail/download
         // failures arrive as server errors. Both carry the same fixed codes.
         const accessCode =
@@ -137,7 +152,10 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           ok: false, errorCode: isIpcError(error) ? error.code : 'INSTALL_UNAVAILABLE',
           message: 'Installation was not confirmed. Inspect the selected plugin before retrying; do not claim an account connection or completed work.',
         };
-      } finally { release?.(); }
+      } finally {
+        if (claimedInstall) pendingInstalls.delete(claimedInstall);
+        release?.();
+      }
     },
   };
 }

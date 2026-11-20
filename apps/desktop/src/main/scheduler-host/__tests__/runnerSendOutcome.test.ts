@@ -1,5 +1,5 @@
 import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 
 import type {
   AgentEvent,
@@ -55,7 +55,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
@@ -173,6 +173,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -495,6 +496,23 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  // Schedules do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md, 排除范围).
+  // A bound one must fail visibly before restore or any engine switch, never run on a built-in
+  // engine. Minimal input: target row agent_kind='acp'. Unit fixture.
+  it('refuses a target task that runs on a plugin engine before restoring or switching it', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp' });
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn();
+    const { runner, maker, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext()))
+      .rejects.toMatchObject({ code: 'PLUGIN_ENGINE_UNSUPPORTED' });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: expect.stringContaining('plugin engine') });
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
   it('keeps the schedule active when the target is archived again during preparation', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active' })
@@ -693,6 +711,10 @@ describe('MakerScheduleRunner send outcome policy', () => {
   });
 
   it('projects tool-loop terminal errors to a safe scheduler notification', async () => {
+    // 终止原因文案随界面语言（imBot.text.shared.*），这里固定中文以核对投影内容。
+    const { setMainLocale } = await import('../../i18n.desktop');
+    setMainLocale('zh-CN');
+    onTestFinished(() => setMainLocale('en'));
     const h = createSessionHarness(async (_message, opts) => {
       await opts?.onAccepted?.();
       return { accepted: true };
@@ -789,5 +811,53 @@ describe('MakerScheduleRunner send outcome policy', () => {
     await lateOnAccepted?.();
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
     expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a recycled runtime in place and dispatches on the rebuilt instance (direct-send degradation)', async () => {
+    // 回归(MagicLizi P1):直发降级的「漂移回收 → 就地重建 → wireSessionToIpc 重接」
+    // 分支此前零覆盖;换实例不重接会让本轮回复与工具记录不进聊天页(两次踩中的隐性契约)。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const rebuilt = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, logger, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    let created = 0;
+    (maker.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      created += 1;
+      return created === 1 ? h.session : rebuilt.session;
+    });
+    const ctx = createFireContext();
+    const firePromise = runner.fire(baseSchedule(), ctx);
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalled());
+    // accepted 后 fire 等 turn 终态:重建实例上发出 done 收口本轮。
+    rebuilt.emit({ type: 'done', data: {} } as AgentEvent);
+    await firePromise;
+
+    expect(maker.recyclePiRuntimeIfResourcesDrifted).toHaveBeenCalledWith(h.session);
+    expect(logger.info).toHaveBeenCalledWith(
+      '[runner] project resources drifted, recycled runtime before dispatch',
+      { sessionId: 'scheduler-session' },
+    );
+    // 投递必须落在重建实例上;旧实例已关闭,打到它只会得到误导性的失败。
+    expect(mocks.wireSessionToIpc).toHaveBeenCalledWith(rebuilt.session);
+    expect(rebuilt.send).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(latestNotifiedRun(notifier).status).toBe('success');
+  });
+
+  it('surfaces rebuild failure loudly after a successful recycle instead of sending to a closed instance', async () => {
+    // 回归(fe45afa803 语义):回收成功(旧实例已关)后的重建失败必须上抛原始原因,
+    // 继续用已关闭实例只会把真实原因换成误导性的「会话已关闭」。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (maker.createSession as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(async () => h.session)
+      .mockRejectedValueOnce(new Error('pi startup failed: model catalog unavailable'));
+    const ctx = createFireContext();
+
+    // 重建失败在 run 组装前裸上抛(不产出 failed run):大声失败正是修复语义。
+    await expect(runner.fire(baseSchedule(), ctx)).rejects.toThrow(/pi startup failed/);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { sessionNavigationTitleMaxWidth } from '@/platform/chrome/navigationTitleWidth';
+import { navigationChrome } from '@/theme/tokens';
 import { foldDesktopLayout } from '@/remote-desktop/foldDesktopLayout';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 
@@ -41,7 +43,7 @@ describe('adaptive window regions', () => {
   // Unit: Duo resize request (2026-10-23). Existing tests cover fixed panes only;
   // dragging beyond either edge must not squeeze the list or message composer away.
   it('clamps manual column widths and reserves at least 400pt for the conversation', () => {
-    for (const [requested, expected] of [[100, 240], [360, 360], [900, 420]]) {
+    for (const [requested, expected] of [[100, 300], [360, 360], [900, 420]]) {
       const p = sessionPaneLayout(window(), requested);
       expect(p.sidebarWidth).toBe(expected);
       expect(p.detail.x + p.detail.width).toBe(840);
@@ -168,13 +170,44 @@ describe('native bar trailing reserve beside the Duo status area', () => {
     insets: { top: 82, left: 0, right: 0, bottom: 20 },
     regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 662 - statusX, height: 82 }], ...patch });
   it('follows the reported status area plus the bar item spacing', () => {
-    expect(sharedStatusRowTrailingReserve(portrait(520))).toBe(158);
-    expect(sharedStatusRowTrailingReserve(portrait(440))).toBe(238);
+    expect(sharedStatusRowTrailingReserve(portrait(520), 82)).toBe(158);
+    expect(sharedStatusRowTrailingReserve(portrait(440), 82)).toBe(238);
   });
   it('reserves nothing for ordinary bars, a centered island or a vertical rail', () => {
-    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [] }))).toBe(0);
-    expect(sharedStatusRowTrailingReserve(portrait(520, { reservedRegionsSupported: false }))).toBe(0);
-    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [{ kind: 'occlusion', x: 270, y: 0, width: 120, height: 37 }] }))).toBe(0);
-    expect(sharedStatusRowTrailingReserve(window())).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { reservedRegionsSupported: false }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [{ kind: 'occlusion', x: 270, y: 0, width: 120, height: 37 }] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(window(), 44)).toBe(0);
   });
+  // Unit regression for the A. title: existing cases omit full-width top occlusions.
+  // A 402pt phone with a bar below its 62pt status area must keep its title width.
+  it('does not subtract the status area from a native bar below it or before measurement', () => {
+    const phone = portrait(0, { width: 402, regularWidth: false,
+      insets: { top: 62, left: 0, right: 0, bottom: 34 },
+      regions: [{ kind: 'occlusion', x: 0, y: 0, width: 402, height: 62 }] });
+    expect(sharedStatusRowTrailingReserve(phone, 116)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520), 0)).toBe(0);
+  });
+  // Regression: Duo portrait task page (2026-11-16). Only Home subtracted the status area; the
+  // task title kept its 240pt budget and ran under the remote-desktop / files / more capsule once
+  // a Live Activity widened the status area. Measured on the iPhone Duo simulator (iOS 27.1):
+  // bar 669pt, status area from 443pt with a Live Activity and from 535pt without.
+  // Minimal failing input: status area at 443pt with the task-list button shown.
+  it('keeps the task title between its toolbars and the status area as that area resizes', () => {
+    const duo = (statusX: number) => window({ width: 669, height: 951, barEdge: 'none',
+      insets: { top: 82, left: 0, right: 0, bottom: 34 },
+      regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 669 - statusX, height: 82 }] });
+    const title = (statusX: number, detailsOnly = false) => sessionNavigationTitleMaxWidth({ barWidth: 669,
+      sessionList: true, detailsOnly, statusRowReserve: sharedStatusRowTrailingReserve(duo(statusX), 82) });
+    // Back and the task list end 116pt in; the capsule is three 44pt targets ending at the status area.
+    const gap = (statusX: number, actions = 3) => statusX - 116 - navigationChrome.target * actions;
+    expect(title(443)).toBeGreaterThan(navigationChrome.target * 2);
+    expect(title(443)).toBeLessThanOrEqual(gap(443));
+    expect(title(535)).toBeGreaterThan(title(443));
+    expect(title(535)).toBeLessThanOrEqual(gap(535));
+    expect(title(443, true)).toBeLessThanOrEqual(gap(443, 1));
+    // An ordinary phone bar sits below the status area and keeps its previous budget.
+    expect(sessionNavigationTitleMaxWidth({ barWidth: 402, sessionList: false, detailsOnly: false })).toBe(170);
+  });
+
 });

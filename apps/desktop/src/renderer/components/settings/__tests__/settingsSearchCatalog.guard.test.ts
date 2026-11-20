@@ -48,7 +48,7 @@ describe('settings search anchor contract', () => {
             definitions.set(local, namespace[exported] as Record<string, SettingsSearchEntry>);
         }
       }
-      for (const match of text.matchAll(/id=\{(\w+)\.(\w+)\.targetId\}/g)) {
+      for (const match of text.matchAll(/\b(?:id|titleId)=\{(\w+)\.(\w+)\.targetId\}/g)) {
         const definition = definitions.get(match[1])?.[match[2]];
         if (definition) definitionTargets.add(definition.targetId);
       }

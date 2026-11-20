@@ -37,6 +37,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { ComputerUseSection } from '../ComputerUseSection';
+import { makePluginUsableInPlace } from '@/features/plugin/lib/pluginInPlace';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -137,6 +138,31 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection browser backend health loading', () => {
+  // PR #7037: retain the slow-success transition through the real component.
+  // Main covers never-settling/timeout reads; this case also verifies that a
+  // delayed successful detection reveals login without a missing-browser flash.
+  // Tier: unit/jsdom; controlled IPC promise, no native process or wall-clock wait.
+  it('keeps Automation usable while browser availability is pending', async () => {
+    const initialBrowser = deferred<BrowserAvailability>();
+    api.getBrowserStatus.mockReturnValueOnce(initialBrowser.promise);
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.configurationRead.loading')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.openForLogin')).toBeNull();
+    expect((screen.getByRole('radio', {
+      name: 'settings.computerUse.browserBackend.rsbWebview.title',
+    }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => { initialBrowser.resolve({
+      detected: true, browserKind: 'chrome', executablePath: '/test/chrome',
+    }); });
+    expect(await screen.findByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.configurationRead.loading')).toBeNull();
+  });
+
   // Regression: the four base reads used to gate the entire page via Promise.all.
   // Existing tests cover slow runtime probes only. A never-settling base read
   // must leave the other cards and their loaded controls usable (unit/jsdom).
@@ -321,8 +347,8 @@ describe('ComputerUseSection browser backend health loading', () => {
     const { rerender } = render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
-    const computerToggle = screen.getByRole('switch', {
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    const computerToggle = await screen.findByRole('switch', {
       name: 'settings.computerUse.directControl.toggleAria',
     });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
@@ -451,7 +477,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
     expect(
-      screen.getByRole('radio', {
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.rsbWebview.title',
       }),
     ).toBeTruthy();
@@ -526,21 +552,24 @@ describe('ComputerUseSection browser backend health loading', () => {
   // and the guidance moves on to step 2 as soon as the host reports the extension as the gap.
   it('installs the My browser plugin from settings and moves on to the extension step', async () => {
     const detail = {
-      pluginId: 'market-opaque-id',
+      pluginId: 'market-opaque-id', ghostId: 'my-browser', namespace: null,
       releaseId: 'release-1',
       manifest: { id: 'my-browser' },
       installState: 'not-installed',
     };
     // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
-    const snapshot = vi.fn().mockResolvedValue({
+    const lookup = vi.fn().mockResolvedValue({
       items: [
-        { pluginId: 'other-id', ghostId: 'other-plugin' },
-        { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
+        { ...detail, pluginId: 'organization-copy', namespace: 'acme' },
+        detail,
       ],
     });
     const marketDetail = vi.fn().mockResolvedValue(detail);
     const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
-    Object.assign(window.electronAPI, { pluginMarket: { snapshot, detail: marketDetail, install } });
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} },
+      pluginMarket: { lookup, detail: marketDetail, install },
+    });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
     api.getBackendHealth
       .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })
@@ -559,7 +588,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     );
 
     expect(
-      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle'),
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'),
     ).toBeTruthy();
     expect(install).toHaveBeenCalledWith('market-opaque-id', {
       expectedReleaseId: 'release-1',
@@ -567,6 +596,21 @@ describe('ComputerUseSection browser backend health loading', () => {
       allowSourceReplacement: false,
     });
     expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
+  });
+
+  // Standard tier: a partial catalog used to stop the shared browser setup at a toast.
+  // The production entry must preserve a recovery route and perform no install.
+  it.each([undefined, 'known-market-id'])('opens plugin settings on incomplete sources (market %s)', async (marketPluginId) => {
+    const install = vi.fn();
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} },
+      pluginMarket: { lookup: vi.fn(async () => ({
+        items: [], unavailableReason: null, unavailableCustomSourceNames: ['offline-source'],
+      })), install },
+    });
+    expect(await makePluginUsableInPlace({ ghostId: 'my-browser', namespace: null, marketPluginId }))
+      .toEqual({ status: 'page', route: marketPluginId ? '/plugins?market=known-market-id' : '/plugins' });
+    expect(install).not.toHaveBeenCalled();
   });
 
   // Copying Chrome logins only serves the standalone browser, so the switch never shows elsewhere,
@@ -596,7 +640,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   // The extension step finishes in Settings: the store page opens in the user's browser rather
   // than routing through the plugin page.
-  it('opens the extension store from Settings when only the extension is missing', async () => {
+  it('offers the store as an optional action when the extension is disconnected', async () => {
     const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
     Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
@@ -610,7 +654,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore',
       }),
     );
 
@@ -618,5 +662,30 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith(
       'settings.computerUse.browserBackend.userBrowserSetup.storeOpened',
     );
+    expect(screen.getByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle')).toBeNull();
+  });
+
+  // 2026-11-16: without Chrome / Edge there is nowhere to add the extension, so My browser asks
+  // for Chrome first instead of sending the user to an extension store that cannot open.
+  it('asks for Chrome first when no browser for My browser is installed', async () => {
+    const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'user-browser',
+      status: 'error',
+      reason: 'browser-missing',
+      canRecover: false,
+    });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installBrowserTitle'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.computerUse.browser.download' }));
+
+    expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.google.com/chrome/');
+    expect(openExtensionStore).not.toHaveBeenCalled();
   });
 });

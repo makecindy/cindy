@@ -1,7 +1,7 @@
 import { Agent, type Dispatcher } from 'undici';
 
 import { createLogger } from '../logger.js';
-import { resolveOutboundDispatcher } from '../maker-host/outbound-fetch.js';
+import { resolveOutboundDispatcher } from '../maker-host/outbound-fetch.desktop.js';
 
 const log = createLogger('voice-input:refine-dispatcher');
 

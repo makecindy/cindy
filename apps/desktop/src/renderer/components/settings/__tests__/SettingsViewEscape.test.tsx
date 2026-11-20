@@ -31,14 +31,21 @@ vi.mock('react-i18next', async (importOriginal) => ({
     'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
   }[key] ?? key) }),
 }));
+const auth = vi.hoisted(() => ({
+  mode: 'local' as 'local' | 'cloud',
+  user: null as { name: string; membershipKind: 'personal' } | null,
+}));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
+  useAuth: () => ({ mode: auth.mode, dataOwnerId: null, user: auth.user }),
 }));
 vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
 }));
 
-const { Stub, voicePage } = vi.hoisted(() => ({ Stub: () => null, voicePage: { real: false } }));
+const { Stub, voicePage, slowSection } = vi.hoisted(() => ({
+  Stub: () => null, voicePage: { real: false },
+  slowSection: { promise: null as Promise<void> | null, attempts: 0 },
+}));
 vi.mock('../VoiceSpeakerFilterCard', () => ({ VoiceSpeakerFilterCard: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
 vi.mock('../VoiceInputSection', async (importOriginal) => {
@@ -54,16 +61,19 @@ vi.mock('../VoiceInputSection', async (importOriginal) => {
     ),
   };
 });
-vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
+vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
+  if (slowSection.promise) { slowSection.attempts += 1; throw slowSection.promise; }
+  return null;
+} }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
 vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
+vi.mock('../AwayFromComputerSection', () => ({ AwayFromComputerSection: Stub }));
 vi.mock('../ComposerSendShortcutSection', () => ({ ComposerSendShortcutSection: Stub }));
 vi.mock('../KeyboardShortcutsSection', () => ({ KeyboardShortcutsSection: Stub }));
 vi.mock('../AgentIslandSection', () => ({ AgentIslandSection: Stub }));
@@ -91,7 +101,11 @@ vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));
 vi.mock('../CindyMakeSection', () => ({ CindyMakeSection: Stub }));
 vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));
-vi.mock('@/features/billing/BillingPage', () => ({ BillingSettingsSection: Stub }));
+vi.mock('@/features/billing/BillingPage', () => ({
+  BillingSettingsSection: ({ accountName }: { accountName?: string | null }) => (
+    <p data-testid="billing-account-name">{accountName ?? 'none'}</p>
+  ),
+}));
 vi.mock('@/features/bots/BotsGlobalSettingsSection', () => ({ BotsGlobalSettingsSection: Stub }));
 vi.mock('../usage/UsageHistorySection', () => ({ UsageHistorySection: Stub }));
 vi.mock('../ImBotSection', () => ({
@@ -161,9 +175,12 @@ const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
   voicePage.real = false;
+  auth.mode = 'local';
+  auth.user = null;
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
+    unobserve() {}
     disconnect() {}
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
@@ -204,18 +221,19 @@ describe('SettingsView Escape', () => {
     await act(async () => { renderSettings('/settings?tab=voice-input'); });
     const missingCredential = 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
     const cannotRefine = 'settings.voiceInput.serviceSource.refiner.cannotRefine';
-    expect(screen.getByText(missingCredential)).toBeTruthy();
+    // 语音页是懒加载分区，第一次等待包含它整棵依赖的冷加载；Windows CI 上会超过默认 1 秒。
+    expect(await screen.findByText(missingCredential, {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByText(cannotRefine)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));
-    expect(location()).toContain('tab=providers');
+    await waitFor(() => expect(location()).toContain('tab=providers'));
     snapshot.readiness.ok = true;
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(missingCredential)).toBeNull());
     expect(screen.getByText(cannotRefine)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.refiner.openAuxiliary' }));
-    expect(location()).toContain('tab=personalization');
+    await waitFor(() => expect(location()).toContain('tab=personalization'));
     snapshot.selection.refinerProviderChain = ['configured-refiner'];
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(cannotRefine)).toBeNull());
@@ -301,6 +319,23 @@ describe('SettingsView Escape', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use English locale' }));
     expect(result()).toBeNull();
   });
+  // Unit through the real provider: a single selection must leave the current
+  // language visible and the window interactive until the host confirms its write.
+  it('applies a language selection only after the profile store confirms it', async () => {
+    let finishSave!: (saved: boolean) => void;
+    window.electronAPI.saveDisplayLanguage = vi.fn(() => new Promise<boolean>(resolve => { finishSave = resolve; }));
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(window.electronAPI.saveDisplayLanguage).toHaveBeenCalledWith('zh-Hans-x-lzh', false);
+    expect(localStorage.getItem('language')).toBeNull();
+    expect(document.documentElement.lang).toBe('en');
+
+    await act(async () => finishSave(true));
+
+    expect(localStorage.getItem('language')).toBe('zh-Hans-x-lzh');
+    expect(document.documentElement.lang).toBe('zh-Hans-x-lzh');
+  });
+
   // Unit regression (#8481): the real preference setter must update search before
   // opening Agent Island, without a native side effect just from searching.
   it('updates mascot search results when Agent Island is enabled and disabled', async () => {
@@ -357,7 +392,7 @@ describe('SettingsView Escape', () => {
     await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
     expect(result()).not.toBeNull();
     fireEvent.click(result()!);
-    expect(location()).toContain('tab=voice-input');
+    await waitFor(() => expect(location()).toContain('tab=voice-input'));
     expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
     fireEvent.change(search, { target: { value: query } });
     fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
@@ -373,9 +408,32 @@ describe('SettingsView Escape', () => {
     expect(setSelection).toHaveBeenCalledTimes(2);
   });
 
-  it('returns from the Pi extensions page to General before leaving Settings', () => {
+  it.each(['escape', 'general'] as const)('cancels a pending section with %s without blanking the current page', async (action) => {
+    let release!: () => void;
+    slowSection.promise = new Promise<void>((resolve) => { release = resolve; });
+    slowSection.attempts = 0;
+    try {
+      await act(async () => { renderSettings('/settings'); });
+      fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.appearance' }));
+      await waitFor(() => expect(slowSection.attempts).toBeGreaterThan(0));
+      expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      if (action === 'escape') pressEscape();
+      else fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.general' }));
+      const destination = action === 'escape' ? '/' : '/settings';
+      await waitFor(() => expect(location()).toBe(destination));
+      await act(async () => { slowSection.promise = null; release(); });
+      expect(location()).toBe(destination);
+      if (action === 'general') expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      else expect(screen.getByText('Home')).toBeTruthy();
+    } finally {
+      slowSection.promise = null;
+      release();
+    }
+  });
+
+  it('returns from the Pi extensions page to General before leaving Settings', async () => {
     renderSettings('/settings?openPanel=pi-extensions');
-    expect(screen.getByText('PI packages')).toBeTruthy();
+    expect(await screen.findByText('PI packages')).toBeTruthy();
 
     pressEscape();
     expect(location()).toBe('/settings');
@@ -386,9 +444,9 @@ describe('SettingsView Escape', () => {
     expect(screen.getByText('Home')).toBeTruthy();
   });
 
-  it('closes the Help panel before leaving Settings', () => {
+  it('closes the Help panel before leaving Settings', async () => {
     renderSettings('/settings?tab=help');
-    fireEvent.click(screen.getByRole('button', { name: 'Ask help' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask help' }));
     expect(
       screen.getByRole('complementary', { name: 'Help assistant' }).getAttribute('aria-hidden'),
     ).not.toBe('true');
@@ -399,4 +457,12 @@ describe('SettingsView Escape', () => {
     pressEscape();
     expect(location()).toBe('/');
   });
+});
+
+// 设置页「计费」是账单的主入口：要把账号昵称交给计费分区，购买礼品卡时署名才能默认填昵称。
+it('passes the account nickname into the billing section', async () => {
+  auth.mode = 'cloud';
+  auth.user = { name: '小鱼', membershipKind: 'personal' };
+  await act(async () => { renderSettings('/settings?tab=billing'); });
+  expect((await screen.findByTestId('billing-account-name')).textContent).toBe('小鱼');
 });

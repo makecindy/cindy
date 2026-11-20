@@ -1,3 +1,4 @@
+import { companionChatTarget, isCompanionChatTarget } from '../bots/companionChatTarget';
 /**
  * SplitGroup — `chat-main` 内部的同窗多任务递归分栏。
  *
@@ -6,6 +7,8 @@
  */
 
 import {
+  lazy,
+  Suspense,
   memo,
   useCallback,
   useEffect,
@@ -20,7 +23,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Columns2, Rows2, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -54,6 +57,12 @@ import {
   type SplitPaneNode,
 } from './splitGroupStore';
 
+const CompanionPane = lazy(() => import('../bots/CompanionSplitPane'));
+
+function resolvePaneRoute(id: string, session?: Parameters<typeof resolveSessionRoute>[1]) {
+  return isCompanionChatTarget(id) ? Promise.resolve(id) : resolveSessionRoute(id, session);
+}
+
 const GUTTER_PX = 6;
 const KEYBOARD_RESIZE_STEP = 0.05;
 const MIN_SPLIT_PANE_WIDTH_PX = 280;
@@ -83,7 +92,7 @@ function showSplitAddBlocked(
 
 interface SplitGroupProps {
   children: ReactNode;
-  /** 仅 `/cc-agent/:sessionId` 传值；其它功能路由保持原样，不展示持久分屏。 */
+  /** 普通任务 ID 或伙伴聊天路径；其它功能页不展示持久分屏。 */
   activeSessionId?: string;
 }
 
@@ -123,7 +132,7 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
 
   const focusSession = useCallback(
     (sessionId: string) => {
-      void resolveSessionRoute(sessionId).then((route) => navigate(route));
+      void resolvePaneRoute(sessionId).then((route) => navigate(route));
     },
     [navigate],
   );
@@ -174,6 +183,7 @@ function SplitGroupActive({
 }: SplitGroupActiveProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const {
     sessions: localSessions,
     isLoading: localSessionsLoading,
@@ -222,7 +232,7 @@ function SplitGroupActive({
     if (!sessionsCatalogReady) return;
     const missingSessionIds = panes
       .map((pane) => pane.sessionId)
-      .filter((sessionId) => !sessionsById.has(sessionId));
+      .filter((sessionId) => !isCompanionChatTarget(sessionId) && !sessionsById.has(sessionId));
     if (missingSessionIds.length === 0) return;
     let cancelled = false;
 
@@ -244,7 +254,7 @@ function SplitGroupActive({
         const survivor = panes.find((pane) => !confirmedStaleSessionIds.includes(pane.sessionId));
         if (survivor) {
           const recoverySequence = staleRecoverySequenceRef.current;
-          void resolveSessionRoute(survivor.sessionId, sessionsById.get(survivor.sessionId) ?? null)
+          void resolvePaneRoute(survivor.sessionId, sessionsById.get(survivor.sessionId) ?? null)
             .then((route) => {
               if (staleRecoverySequenceRef.current === recoverySequence) {
                 navigate(route, { replace: true });
@@ -281,7 +291,7 @@ function SplitGroupActive({
   );
 
   const focusSession = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, paneRoute?: string) => {
       if (!sessionId || sessionId === activeSessionId) {
         return null;
       }
@@ -294,10 +304,12 @@ function SplitGroupActive({
       const requestSequence = ++focusRequestSequenceRef.current;
       pendingFocusSessionIdRef.current = sessionId;
       const session = sessionsById.get(sessionId) ?? null;
-      void resolveSessionRoute(sessionId, session)
+      const destination = paneRoute ? Promise.resolve(paneRoute) : resolvePaneRoute(sessionId, session);
+      void destination
         .then((route) => {
           if (focusRequestSequenceRef.current !== requestSequence) return;
-          const routeOwnerSessionId = getSessionRouteOwnerId(route) ?? sessionId;
+          const [pathname, search] = route.split('?');
+          const routeOwnerSessionId = companionChatTarget(pathname, search) ?? getSessionRouteOwnerId(route) ?? sessionId;
           resolvedRouteOwnersRef.current.set(requestSequence, routeOwnerSessionId);
           if (pendingOwnerCloseRef.current?.requestSequence === requestSequence) {
             pendingOwnerCloseRef.current.routeOwnerSessionId = routeOwnerSessionId;
@@ -439,6 +451,11 @@ function SplitGroupActive({
         pendingOwnerCloseRef.current = null;
       }
       if (pendingFocusSessionIdRef.current === pane.sessionId) {
+        // A lazy route can have received navigate() before React commits its
+        // owner. Supersede that navigation before removing the destination.
+        if (!isOwner && resolvedRouteOwnersRef.current.has(focusRequestSequenceRef.current)) {
+          navigate(location, { replace: true, state: location.state });
+        }
         pendingFocusSessionIdRef.current = null;
         focusRequestSequenceRef.current += 1;
       }
@@ -459,7 +476,7 @@ function SplitGroupActive({
       }
       splitGroupStore.removeSession(pane.sessionId);
     },
-    [focusSession, panes],
+    [focusSession, location, navigate, panes],
   );
 
   return (
@@ -490,7 +507,7 @@ interface SplitPaneSharedProps {
   activeSessionId: string;
   ownerPaneKey?: string;
   sessionsById: Map<string, ReturnType<typeof useCCSessions>['sessions'][number]>;
-  focusSession: (sessionId: string) => void;
+  focusSession: (sessionId: string, paneRoute?: string) => void;
   onSessionNavigate: (
     sourceSessionId: string,
     targetSessionId: string,
@@ -565,27 +582,28 @@ function resolveSplitLayout(
   const maximumFirstSize = Math.max(firstMinimum, axisSize - secondMinimum);
   const firstAxisSize = Math.min(maximumFirstSize, Math.max(firstMinimum, requestedFirstSize));
   const normalizedFirstAxisSize = Math.max(0, Math.min(axisSize, firstAxisSize));
+  const pixelFirstAxisSize = Math.min(axisSize, Math.max(0, Math.round(normalizedFirstAxisSize)));
   const displayedFraction = axisSize > 0 ? normalizedFirstAxisSize / axisSize : requestedFraction;
   branchLayouts.push({
     branch: node,
     rect,
-    firstAxisSize: normalizedFirstAxisSize,
+    firstAxisSize: pixelFirstAxisSize,
     displayedFraction,
   });
 
   const firstRect: SplitLayoutRect = isRow
-    ? { ...rect, width: normalizedFirstAxisSize }
-    : { ...rect, height: normalizedFirstAxisSize };
+    ? { ...rect, width: pixelFirstAxisSize }
+    : { ...rect, height: pixelFirstAxisSize };
   const secondRect: SplitLayoutRect = isRow
     ? {
         ...rect,
-        left: rect.left + normalizedFirstAxisSize + GUTTER_PX,
-        width: Math.max(0, axisSize - normalizedFirstAxisSize),
+        left: rect.left + pixelFirstAxisSize + GUTTER_PX,
+        width: Math.max(0, axisSize - pixelFirstAxisSize),
       }
     : {
         ...rect,
-        top: rect.top + normalizedFirstAxisSize + GUTTER_PX,
-        height: Math.max(0, axisSize - normalizedFirstAxisSize),
+        top: rect.top + pixelFirstAxisSize + GUTTER_PX,
+        height: Math.max(0, axisSize - pixelFirstAxisSize),
       };
   resolveSplitLayout(node.first, firstRect, liveResize, paneLayouts, branchLayouts);
   resolveSplitLayout(node.second, secondRect, liveResize, paneLayouts, branchLayouts);
@@ -593,9 +611,11 @@ function resolveSplitLayout(
 
 function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root: SplitNode }) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [viewportSize, setViewportSize] = useState({
-    width: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
-    height: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
+  const [viewportMetrics, setViewportMetrics] = useState({
+    outerWidth: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
+    outerHeight: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
+    contentWidth: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
+    contentHeight: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
   });
   const [liveResize, setLiveResize] = useState<{
     splitKey: string;
@@ -607,11 +627,31 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
     if (!viewport) return;
     const updateSize = () => {
       const rect = viewport.getBoundingClientRect();
-      const width = Math.max(0, viewport.clientWidth || rect.width);
-      const height = Math.max(0, viewport.clientHeight || rect.height);
-      if (width === 0 || height === 0) return;
-      setViewportSize((current) =>
-        current.width === width && current.height === height ? current : { width, height },
+      // Floor outer CSS box dimensions so subpixel rounding never produces a canvas
+      // larger than the viewport, while tracking outer vs scrollbar-reduced content
+      // sizes separately so classic scrollbars neither oscillate nor mutually latch.
+      const rectWidth = rect.width > 0 ? Math.floor(rect.width) : 0;
+      const rectHeight = rect.height > 0 ? Math.floor(rect.height) : 0;
+      const outerWidth = Math.max(0, rectWidth || viewport.clientWidth);
+      const outerHeight = Math.max(0, rectHeight || viewport.clientHeight);
+      const contentWidth =
+        viewport.clientWidth > 0 && rectWidth > 0
+          ? Math.min(viewport.clientWidth, rectWidth)
+          : outerWidth;
+      const contentHeight =
+        viewport.clientHeight > 0 && rectHeight > 0
+          ? Math.min(viewport.clientHeight, rectHeight)
+          : outerHeight;
+      if (outerWidth === 0 || outerHeight === 0 || contentWidth === 0 || contentHeight === 0) {
+        return;
+      }
+      setViewportMetrics((current) =>
+        current.outerWidth === outerWidth &&
+        current.outerHeight === outerHeight &&
+        current.contentWidth === contentWidth &&
+        current.contentHeight === contentHeight
+          ? current
+          : { outerWidth, outerHeight, contentWidth, contentHeight },
       );
     };
     updateSize();
@@ -622,9 +662,26 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
   }, []);
 
   const requiredSize = useMemo(() => getSplitRequiredSize(root), [root]);
+  const fitsWithoutScrollbars =
+    viewportMetrics.outerWidth >= requiredSize.width &&
+    viewportMetrics.outerHeight >= requiredSize.height;
+  const needsHorizontalScroll =
+    !fitsWithoutScrollbars &&
+    (viewportMetrics.outerWidth < requiredSize.width ||
+      viewportMetrics.contentWidth < requiredSize.width);
+  const needsVerticalScroll =
+    !fitsWithoutScrollbars &&
+    (viewportMetrics.outerHeight < requiredSize.height ||
+      viewportMetrics.contentHeight < requiredSize.height);
+  const effectiveContentWidth = fitsWithoutScrollbars
+    ? viewportMetrics.outerWidth
+    : viewportMetrics.contentWidth;
+  const effectiveContentHeight = fitsWithoutScrollbars
+    ? viewportMetrics.outerHeight
+    : viewportMetrics.contentHeight;
   const canvasSize = {
-    width: Math.max(viewportSize.width, requiredSize.width),
-    height: Math.max(viewportSize.height, requiredSize.height),
+    width: needsHorizontalScroll ? requiredSize.width : effectiveContentWidth,
+    height: needsVerticalScroll ? requiredSize.height : effectiveContentHeight,
   };
   const { paneLayouts, branchLayouts } = useMemo(() => {
     const nextPaneLayouts: SplitPaneLayout[] = [];
@@ -646,14 +703,24 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
   }, [branchLayouts, liveResize]);
 
   return (
-    <div ref={viewportRef} className="h-full min-h-0 w-full min-w-0 overflow-auto">
+    <div
+      ref={viewportRef}
+      className={cn(
+        'h-full min-h-0 w-full min-w-0',
+        needsHorizontalScroll ? 'overflow-x-auto' : 'overflow-x-hidden',
+        needsVerticalScroll ? 'overflow-y-auto' : 'overflow-y-hidden',
+      )}
+    >
       <div
         data-split-canvas
-        className="relative"
-        style={{ width: canvasSize.width, height: canvasSize.height }}
+        className="relative bg-content-area"
+        style={{
+          width: needsHorizontalScroll ? canvasSize.width : '100%',
+          height: needsVerticalScroll ? canvasSize.height : '100%',
+        }}
       >
         {paneLayouts.map(({ pane, rect }) => (
-          <div key={pane.key} className="absolute overflow-hidden" style={rect}>
+          <div key={pane.key} className="absolute overflow-hidden bg-content-area" style={rect}>
             <SplitPaneView {...paneProps} pane={pane} />
           </div>
         ))}
@@ -801,7 +868,23 @@ function SplitGutter({
   );
 }
 
-const SplitPaneView = memo(function SplitPaneView({
+type PaneProps = SplitPaneSharedProps & { pane: SplitPaneNode };
+
+const SplitPaneView = memo(function SplitPaneView(props: PaneProps) {
+  if (!isCompanionChatTarget(props.pane.sessionId)) return <SplitPaneContent {...props} />;
+  return (
+    <Suspense fallback={null}>
+      <CompanionPane key={props.pane.sessionId} target={props.pane.sessionId} focused={props.pane.key === props.ownerPaneKey}>
+        {(name, route, chat) => <SplitPaneContent {...props} companionTitle={name} paneRoute={route}>{chat}</SplitPaneContent>}
+      </CompanionPane>
+    </Suspense>
+  );
+});
+
+function SplitPaneContent({
+  companionTitle,
+  paneRoute,
+  children,
   pane,
   ownerPaneKey,
   sessionsById,
@@ -810,12 +893,12 @@ const SplitPaneView = memo(function SplitPaneView({
   onClosePane,
   unnamedTitle,
   loadingTitle,
-}: SplitPaneSharedProps & { pane: SplitPaneNode }) {
+}: PaneProps & { companionTitle?: string; paneRoute?: string; children?: ReactNode }) {
   const { t } = useTranslation();
   const isOwner = pane.key === ownerPaneKey;
   const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
-  const title = session ? getSessionDisplayTitle(session, unnamedTitle, t) : loadingTitle;
+  const title = companionTitle || (session ? getSessionDisplayTitle(session, unnamedTitle, t) : loadingTitle);
 
   return (
     <SplitDropTarget
@@ -834,7 +917,7 @@ const SplitPaneView = memo(function SplitPaneView({
         data-split-pane-key={pane.key}
         data-split-pane-session-id={viewSessionId}
         data-split-pane-owner={isOwner ? 'true' : 'false'}
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-content-area"
         onPointerDownCapture={(event) => {
           if (
             isOwner ||
@@ -843,7 +926,7 @@ const SplitPaneView = memo(function SplitPaneView({
           ) {
             return;
           }
-          focusSession(viewSessionId);
+          focusSession(viewSessionId, paneRoute);
         }}
         onFocusCapture={(event) => {
           const focusMovedWithinPane = event.currentTarget.contains(
@@ -856,13 +939,13 @@ const SplitPaneView = memo(function SplitPaneView({
           ) {
             return;
           }
-          focusSession(viewSessionId);
+          focusSession(viewSessionId, paneRoute);
         }}
       >
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/40 px-2">
           <button
             type="button"
-            onClick={() => focusSession(viewSessionId)}
+            onClick={() => focusSession(viewSessionId, paneRoute)}
             className={cn(
               'min-w-0 flex-1 truncate rounded-full px-2 py-1 text-left text-xs transition-colors',
               isOwner
@@ -886,7 +969,7 @@ const SplitPaneView = memo(function SplitPaneView({
           </button>
         </div>
         <div className="min-h-0 flex-1">
-          <CCAgentSessionView
+          {children ?? <CCAgentSessionView
             sessionIdProp={viewSessionId}
             routeOwner={isOwner}
             compactToolbar
@@ -898,12 +981,12 @@ const SplitPaneView = memo(function SplitPaneView({
             disableAutofocus={!isOwner}
             viewVisible
             chatRealtime
-          />
+          />}
         </div>
       </div>
     </SplitDropTarget>
   );
-});
+}
 
 function SplitGroupToolbar({ root }: { root: SplitNode }) {
   const { t } = useTranslation();

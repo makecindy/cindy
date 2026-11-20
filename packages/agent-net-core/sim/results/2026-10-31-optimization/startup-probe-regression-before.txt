@@ -1,0 +1,26 @@
+CMD ['cargo', 'test', '--profile', 'sim', '-p', 'agent-net-sim', '--test', 'reliability', 'first_flight_measures_the_path', '--locked', '--offline']
+
+running 1 test
+test first_flight_measures_the_path ... FAILED
+
+failures:
+
+---- first_flight_measures_the_path stdout ----
+
+thread 'first_flight_measures_the_path' (9093375) panicked at sim/tests/reliability.rs:611:5:
+long path took 2586337us
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    first_flight_measures_the_path
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.95s
+
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression)
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression/sim)
+    Finished `sim` profile [optimized] target(s) in 1.68s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression-target/sim/deps/reliability-2b52743125a82e3e)
+error: test failed, to rerun pass `-p agent-net-sim --test reliability`
+
+EXIT 101

@@ -1,13 +1,83 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import { I18nextProvider } from 'react-i18next';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
 import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import { useAccountUsage } from '@/hooks/useAccountUsage';
+import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
+import { resetPluginEnginesStoreForTests, usePluginEngines } from '@/hooks/usePluginEngines';
 
 afterEach(() => { cleanup(); setDataOwnerGeneration(null); vi.unstubAllGlobals(); });
+
+// Unit, PR #11563: switching between two tasks unmounts the first chip while a remote
+// quota request is in flight. A new mount must reuse that request and the settled snapshot.
+it('shares plugin account usage across task switches without leaking it to a new account', async () => {
+  setDataOwnerGeneration('quota-first');
+  const snapshot = { updatedAt: 1234, windows: [{ label: 'Shared quota', remainingPercent: 42 }] };
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue(null);
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: {} } } });
+  const mount = () => render(
+    <I18nextProvider i18n={i18n}>
+      <PluginEngineUsageChip engineKey="demo:acp" deviceId="remote-desk" running={false} />
+    </I18nextProvider>,
+  );
+  const first = mount();
+  await act(async () => {});
+  first.unmount();
+  const second = mount();
+  await act(async () => finish(snapshot));
+  expect(second.getByRole('button').textContent).toContain('Shared quota');
+  second.unmount();
+  const third = mount();
+  await act(async () => {});
+  expect(third.getByRole('button').textContent).toContain('Shared quota');
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('remote-desk', 'maker:get-plugin-engine-usage', ['demo:acp']);
+  third.unmount();
+  setDataOwnerGeneration('quota-second');
+  const otherAccount = mount();
+  await act(async () => {});
+  expect(otherAccount.queryByRole('button')).toBeNull();
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+// Unit, #11563: a catalogue push can arrive while the visible chip awaits its first
+// balance. Switching tasks alone does not exercise this race with model discovery.
+it('shows the pending balance after models change in the local catalogue', async () => {
+  const engine = { key: 'demo:local', providerId: 'acp-plugin:demo:local', name: 'Demo', reportsUsage: true, models: [] as { id: string }[] };
+  let push!: (list: typeof engine[]) => void;
+  let finish!: (value: unknown) => void;
+  const getPluginEngineUsage = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  vi.stubGlobal('electronAPI', { maker: {
+    getPluginEngineUsage,
+    listPluginEngines: async () => [engine],
+    onPluginEnginesChanged: (cb: typeof push) => { push = cb; return () => {}; },
+  } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: { providerAccountUsage: { deepSeek: { chipBalance: '{{balance}}' } } } } } });
+  try {
+    const catalogue = renderHook(() => usePluginEngines());
+    await waitFor(() => expect(catalogue.result.current[0]?.key).toBe(engine.key));
+    const chip = render(<I18nextProvider i18n={i18n}>
+      <PluginEngineUsageChip engineKey={engine.key} deviceId={null} running={false} />
+    </I18nextProvider>);
+    await waitFor(() => expect(getPluginEngineUsage).toHaveBeenCalledTimes(1));
+    await act(async () => { push([{ ...engine, models: [{ id: 'new-model' }] }]); });
+    await act(async () => finish({ updatedAt: 1234, balances: [{ currency: 'USD', amount: '0' }] }));
+    expect(chip.getByRole('button').textContent).toContain('USD');
+    expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+  } finally {
+    cleanup();
+    resetPluginEnginesStoreForTests();
+  }
+});
 
 const sources = [
   { name: 'Anthropic', hook: useClaudeSubscriptionUsage,
@@ -28,6 +98,38 @@ for (const source of sources) {
       } } });
       return { reader, push: (value: unknown) => push?.(value) };
     }
+    // Unit r4389409976: new live-only recovery may queue behind an ordinary
+    // consumer, but clear/unmount must cancel it even while that consumer stays.
+    // The old owner/clear tests had no pending recovery request to cancel.
+    it.each(['clear', 'unmount'] as const)('cancels a live recovery reread after %s', async stop => {
+      let resolve!: (value: unknown) => void;
+      const { reader, push } = setup(vi.fn().mockImplementation(() => new Promise(done => { resolve = done; })));
+      const other = renderHook(() => source.hook(true));
+      const live = renderHook(({ enabled }) => source.hook(enabled, undefined, { live: true }),
+        { initialProps: { enabled: true } });
+      live.rerender({ enabled: false });
+      live.rerender({ enabled: true });
+      expect(reader).toHaveBeenCalledTimes(1);
+      if (stop === 'clear') act(() => push(null));
+      else live.unmount();
+      await act(async () => resolve(previous));
+      expect(reader).toHaveBeenCalledTimes(1);
+      expect(other.result.current).toBe(stop === 'clear' ? null : previous);
+    });
+
+    // Default consumers still supersede old reads; live queuing must stay opt-in.
+    it('retains latest-read priority for ordinary simultaneous consumers', async () => {
+      const replies: Array<(value: unknown) => void> = [];
+      setup(vi.fn().mockImplementation(() => new Promise(resolve => replies.push(resolve))));
+      const first = renderHook(() => source.hook(true));
+      const second = renderHook(() => source.hook(true));
+      expect(replies).toHaveLength(2);
+      await act(async () => replies[1](next));
+      await act(async () => replies[0](previous));
+      expect(first.result.current).toBe(next);
+      expect(second.result.current).toBe(next);
+    });
+
     it('reopens and re-enables synchronously with cached data during refresh failures', async () => {
       const { reader } = setup();
       const first = renderHook(({ enabled }) => source.hook(enabled), { initialProps: { enabled: true } });
@@ -108,6 +210,70 @@ it('xAI instantaneous limits reselect cached pushes without adding a reader', ()
   expect(hook.result.current).toBe(value);
   act(() => setDataOwnerGeneration('next'));
   hook.rerender({ enabled: true });
+  expect(hook.result.current).toBeNull();
+});
+
+// Unit r4391955043: account warm starts previously had no live observation
+// coverage. Exercise the real hook with another ordinary subscriber retained;
+// only the recovering card owns its queued reread, and identity changes fence it.
+it.each(['close', 'clear', 'owner', 'provider'] as const)('cancels a live Codex account recovery queue on %s', async stop => {
+  setDataOwnerGeneration(`account-live-${stop}`);
+  const value = (id: string, usedPercent: number) => ({ providerId: id, primary: { usedPercent } });
+  const pushes = new Map<string, Set<(payload: unknown) => void>>();
+  let finish!: (payload: unknown) => void;
+  const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockImplementation((_kind, id: string) => Promise.resolve(value(id, 96)));
+  vi.stubGlobal('electronAPI', { maker: { usage: {
+    getAccount: reader,
+    onCodexAccountChanged: (callback: (payload: unknown) => void, id: string) => {
+      const listeners = pushes.get(id) ?? new Set();
+      listeners.add(callback); pushes.set(id, listeners);
+      return () => listeners.delete(callback);
+    },
+  } } });
+  const id = 'openai-live-account';
+  const ordinary = renderHook(() => useAccountUsage(undefined, 'codex', 'app-server', undefined, id));
+  const live = renderHook(({ enabled, providerId }) => useAccountUsage(undefined, enabled ? 'codex' : undefined,
+    'app-server', undefined, providerId, { live: true }), { initialProps: { enabled: true, providerId: id } });
+  const second = renderHook(() => useAccountUsage(undefined, 'codex', 'app-server', undefined, id, { live: true }));
+  expect(reader).toHaveBeenCalledTimes(1); // Ordinary + first two live cards share.
+  live.rerender({ enabled: false, providerId: id });
+  live.rerender({ enabled: true, providerId: id }); // One queued recovery behind the first read.
+  expect(reader).toHaveBeenCalledTimes(1);
+  if (stop === 'close') {
+    ordinary.unmount(); // The remaining live card still owns the shared result.
+    live.unmount();
+  }
+  else if (stop === 'clear') act(() => pushes.get(id)?.forEach(push => push(null)));
+  else {
+    if (stop === 'owner') setDataOwnerGeneration('next-account-owner');
+    live.rerender({ enabled: true, providerId: stop === 'provider' ? 'openai-other' : id });
+    await act(async () => {});
+    expect(live.result.current?.primary?.usedPercent).toBe(96);
+  }
+  await act(async () => finish(value(id, 73)));
+  expect(reader).toHaveBeenCalledTimes(stop === 'close' || stop === 'clear' ? 1 : 2);
+  if (stop === 'close' || stop === 'provider') {
+    if (stop === 'provider') expect(ordinary.result.current?.primary?.usedPercent).toBe(73);
+    expect(second.result.current?.primary?.usedPercent).toBe(73);
+  } else expect(ordinary.result.current).toBeNull();
+  if (stop === 'clear') expect(live.result.current).toBeNull();
+  if (stop === 'owner' || stop === 'provider') expect(live.result.current?.primary?.usedPercent).toBe(96);
+});
+
+// The optional live path must not change a normal chip's cancelled warm start.
+it('keeps ordinary Codex warm-start cancellation when no live card shared it', async () => {
+  setDataOwnerGeneration('ordinary-account-cancel');
+  let finish!: (payload: unknown) => void;
+  const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockRejectedValue(new Error('temporarily unavailable'));
+  vi.stubGlobal('electronAPI', { maker: { usage: { getAccount: reader } } });
+  const hook = renderHook(({ enabled }) => useAccountUsage(undefined, enabled ? 'codex' : undefined),
+    { initialProps: { enabled: true } });
+  hook.rerender({ enabled: false });
+  hook.rerender({ enabled: true });
+  expect(reader).toHaveBeenCalledTimes(2);
+  await act(async () => finish({ primary: { usedPercent: 73 } }));
   expect(hook.result.current).toBeNull();
 });
 

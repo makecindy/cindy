@@ -1,3 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { channel } from 'node:diagnostics_channel';
+import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryResponse, type AuxiliaryUsageRecorder } from '../../shared/auxiliaryUsage.js';
 /**
  * provider-diagnostics —— 供应商「测试连接」探测（设置页 / 自定义供应商表单消费）。
  *
@@ -18,6 +22,7 @@ import {
   appendProviderRequestPath,
   providerModelRecord,
   providerPresetModelRecord,
+  providerEndpointBindings,
   providerWireProtocolForApi,
   type PiModelApi,
   type ProviderModelRecord,
@@ -30,19 +35,80 @@ import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
+  providerNetworkErrorCode,
   type ProviderErrorClassification,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { getModelVisibilityOverride } from './model-visibility-mirror.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
-import { outboundFetch } from './outbound-fetch.js';
-import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
+import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
 import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
 import { probeProviderProtocols } from './provider-protocol-probe.js';
+
+const nativeProbeContext = new AsyncLocalStorage<symbol>();
+// DNS suffixes from the bundled AWS SDK partition endpoint rules, including
+// dualstack. Only the Bedrock runtime service host qualifies, never STS/metadata.
+const bedrockRuntimeDnsSuffixes = new Set([
+  'amazonaws.com', 'api.aws', 'amazonaws.com.cn', 'api.amazonwebservices.com.cn',
+  'amazonaws.eu', 'api.amazonwebservices.eu', 'c2s.ic.gov', 'api.aws.ic.gov',
+  'sc2s.sgov.gov', 'api.aws.scloud', 'cloud.adc-e.uk', 'api.cloud-aws.adc-e.uk',
+  'csp.hci.ic.gov', 'api.aws.hci.ic.gov',
+]);
+
+/** SDK-owned transports cannot inject fetch. Observe their existing Node errors
+ * before SDK string conversion, scoped to requests created by this probe. No
+ * transport replacement, trust changes, extra requests or raw error retention.
+ */
+async function withNativeProbeNetworkErrors<T>(baseUrl: string, api: string, run: () => Promise<T>, record: (code: string) => void): Promise<T> {
+  const context = Symbol();
+  const requests = new WeakSet<object>();
+  const destination = new URL(baseUrl).origin;
+  // Bedrock may select its runtime region from IAM profile/env or a model ARN
+  // rather than the catalog default. Token/metadata/STS hosts are not runtimes.
+  const bedrockRuntime = (origin: string) => bedrockRuntimeDnsSuffixes.has(
+    /^https:\/\/bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.([a-z0-9.-]+)$/.exec(origin)?.[1] ?? '');
+  const starts = [channel('undici:request:create'), channel('http.client.request.start'), channel('http2.client.stream.created')];
+  const errors = [channel('undici:request:error'), channel('http.client.request.error'), channel('http2.client.stream.error')];
+  const onStart = (message: unknown) => {
+    try {
+      const { request: httpRequest, stream, headers } = message as {
+        request?: object; stream?: object; headers?: Record<string, string>;
+      };
+      const request = httpRequest ?? stream;
+      if (!request || typeof request !== 'object' || nativeProbeContext.getStore() !== context) return;
+      const transport = request as { origin?: string; protocol?: string; getHeader?: (name: string) => unknown };
+      const origin = new URL(stream ? `${headers?.[':scheme']}://${headers?.[':authority']}`
+        : transport.origin ?? `${transport.protocol}//${transport.getHeader?.('host')}`).origin;
+      if (providerEndpointBindings(destination, origin) !== null
+        || (api === 'bedrock-converse-stream' && bedrockRuntime(destination) && bedrockRuntime(origin))) {
+        requests.add(request);
+      }
+    } catch { /* diagnostics must not change request creation */ }
+  };
+  const onError = (message: unknown) => {
+    // diagnostics_channel subscribers must never throw into the SDK/Node caller.
+    try {
+      const { request: httpRequest, stream, error } = message as { request?: object; stream?: object; error?: unknown };
+      const request = httpRequest ?? stream;
+      if (!request || !requests.has(request)) return;
+      const code = providerNetworkErrorCode(error);
+      if (classifyProviderError({ networkErrorCode: code }).code !== 'UNKNOWN') record(code);
+    } catch { /* diagnostics must not change the request result */ }
+  };
+  for (const event of starts) event.subscribe(onStart);
+  for (const event of errors) event.subscribe(onError);
+  try { return await nativeProbeContext.run(context, run); }
+  finally {
+    for (const event of starts) event.unsubscribe(onStart);
+    for (const event of errors) event.unsubscribe(onError);
+  }
+}
 
 const log = createMakerLogger('provider-probe');
 
@@ -53,6 +119,8 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 
 /** 一次探测的完整参数（adhoc 直填；saved 由 resolve 得到）。 */
 export interface ProviderProbeSpec {
+  /** Main-resolved saved instance, independent of its catalog preset. */
+  providerId?: string;
   agent: AgentKind;
   baseUrl: string;
   modelId: string;
@@ -206,16 +274,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Read the first non-empty SSE data frame so 200-streamed provider errors do not pass the probe. */
-async function readFirstSsePayload(res: Response): Promise<string | null> {
+/** Keep the first payload for protocol validation, while draining later usage frames. */
+async function readFirstSsePayload(
+  res: Response,
+  observe?: (raw: string) => Promise<void>,
+): Promise<string | null> {
   if (!res.body) return null;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let firstPayload: string | null = null;
+  const observed: string[] = [];
+  let observedChars = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: !done });
+      if (value) {
+        const chunk = decoder.decode(value, { stream: !done });
+        observed.push(chunk);
+        observedChars += chunk.length;
+        buffer += chunk;
+      }
       let start = 0;
       let newline: number;
       while ((newline = buffer.indexOf('\n', start)) >= 0) {
@@ -223,22 +302,38 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
         start = newline + 1;
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload) return payload;
+        if (payload && firstPayload === null) {
+          firstPayload = payload;
+          if (payload !== '[DONE]') {
+            try {
+              const event: unknown = JSON.parse(payload);
+              if (isPlainObject(event) && isPlainObject(event.error)) return firstPayload;
+            } catch {
+              return firstPayload;
+            }
+          }
+        }
+        if (payload === '[DONE]') return firstPayload;
       }
       if (start > 0) buffer = buffer.slice(start);
-      if (buffer.length > MAX_ERROR_BODY_BYTES) return null;
+      if (observedChars > MAX_ERROR_BODY_BYTES) return firstPayload;
       if (done) {
         buffer += decoder.decode();
         const line = buffer.replace(/\r$/, '');
-        if (!line.startsWith('data:')) return null;
-        return line.slice(5).trim() || null;
+        if (!line.startsWith('data:')) return firstPayload;
+        return firstPayload ?? (line.slice(5).trim() || null);
       }
     }
   } finally {
     try {
-      await reader.cancel();
-    } catch {
-      /* no-op */
+      await observe?.(observed.join(''));
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* no-op */
+      }
+      reader.releaseLock();
     }
   }
 }
@@ -259,16 +354,6 @@ function classifyStreamedError(error: Record<string, unknown>): ProviderErrorCla
   return classifyProviderError({ status: inferredStatus, bodyText });
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** 上游 origin(协议 + host + 端口),不带路径 / query / 凭证——只用于日志定位。 */
 function probeUpstreamOrigin(baseUrl: string): string {
@@ -317,7 +402,9 @@ export async function runProviderProbe(
 ): Promise<ProviderTestResult> {
   const start = Date.now();
   try {
-    return logProbeFailure(spec, await runProviderProbeUnlogged(spec, fetchImpl));
+    return await withAuxiliaryUsage({ source: 'provider-probe', providerId: spec.providerId,
+      model: spec.modelId, transport: spec.wireProtocol }, async record =>
+      logProbeFailure(spec, await runProviderProbeUnlogged(spec, fetchImpl, record)));
   } catch (err) {
     // 拿到响应头后读首帧时连接中断(readFirstSsePayload 抛错)、请求装配抛错等异常路径
     // 同样要留痕,否则仍是「未知错误、日志无迹」;异常本身原样抛给 IPC,不改变错误语义。
@@ -331,12 +418,17 @@ export async function runProviderProbe(
 async function runProviderProbeUnlogged(
   spec: ProviderProbeSpec,
   fetchImpl: typeof fetch,
+  record: AuxiliaryUsageRecorder,
 ): Promise<ProviderTestResult> {
   if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) {
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
   const start = Date.now();
-  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api);
+  const observe = async (raw: string) => {
+    const observed = parseAuxiliaryResponse(raw, spec.wireProtocol ?? (spec.agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses'));
+    if (observed.tokens) await record(observed.tokens, observed.model ? { model: observed.model } : {});
+  };
+  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api, spec.baseUrl);
   const row = spec.nativeModel
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
     ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)
@@ -351,23 +443,40 @@ async function runProviderProbeUnlogged(
     'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
     const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
       group: 'custom', contextWindow: 4096, maxOutput: 16, efforts: [], defaultEffort: null, api: api as PiModelApi }, spec.baseUrl)!;
+    // Native SDKs may resolve a transport error as an assistant message and
+    // discard its cause. Preserve only the safe code before that conversion.
+    let networkCode: string | undefined;
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      try { return await fetchImpl(input, init); }
+      catch (error) {
+        networkCode = providerNetworkErrorCode(error);
+        throw error;
+      }
+    };
     try {
-      const result = await probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
+      const run = () => probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
         upstream: spec.baseUrl, apiKey: spec.authMethod === 'none' ? '' : spec.apiKey
           ?? new Headers(spec.headers).get('authorization')?.replace(/^Bearer /i, '')
           ?? new Headers(spec.headers).get('x-goog-api-key')
           ?? new Headers(spec.headers).get('x-api-key') ?? '',
-        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl,
+        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      const result = await (['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
+        ? withNativeProbeNetworkErrors(spec.baseUrl, api, run, code => { networkCode = code; }) : run());
+      if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
+        await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
+          cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },
+          result.model ? { model: result.model } : {});
+      }
       if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
       const detail = result.errorMessage ?? 'Native provider probe failed';
       const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
       const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
       const cls = classifyProviderError({ status, bodyText: detail,
-        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
+        networkErrorCode: result.stopReason === 'aborted' ? 'AbortError' : networkCode });
       return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
     } catch (err) {
-      const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+      const cls = classifyProviderError({ networkErrorCode: networkCode ?? providerNetworkErrorCode(err) });
       return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
     }
   }
@@ -376,7 +485,7 @@ async function runProviderProbeUnlogged(
   try {
     res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
   }
   const latencyMs = Date.now() - start;
@@ -400,7 +509,7 @@ async function runProviderProbeUnlogged(
           detail: `expected text/event-stream, got ${contentType || 'no content-type'}`,
         };
       }
-      const firstPayload = await readFirstSsePayload(res);
+      const firstPayload = await readFirstSsePayload(res, observe);
       if (!firstPayload) {
         return {
           ok: false,
@@ -429,17 +538,16 @@ async function runProviderProbeUnlogged(
       }
       return { ok: true, latencyMs };
     }
-    // Non-streaming probes do not need the response body; cancel it to release the connection.
-    try {
-      await res.body?.cancel();
-    } catch {
-      /* no-op */
-    }
+    // Observe this existing response within the original request timeout; never issue a
+    // second generation solely to recover metering.
+    try { await observe(await readBoundedResponseText(res, MAX_ERROR_BODY_BYTES)); }
+    catch { /* Connection classification remains independent of optional metering. */ }
     return { ok: true, latencyMs };
   }
   let bodyText = '';
   try {
     bodyText = (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
+    await observe(bodyText);
   } catch {
     /* 读体失败按空体分类 */
   }
@@ -451,7 +559,7 @@ async function runProviderProbeUnlogged(
  * 解析 saved 入参 → 探测 spec。仅支持自定义(user)供应商 —— 内置 OAuth / 网关来源的连接态
  * 由各自鉴权通道保证，不在此探测。解析失败抛 Error（handler 映射 INVALID_PARAMS）。
  */
-export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): ProviderProbeSpec {
+export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Promise<ProviderProbeSpec> {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) throw new Error(`provider '${providerId}' not found`);
   if (provider.source !== 'user')
@@ -462,9 +570,27 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find((m) =>
-    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
-  );
+  // 列表第一个聊天模型若与上游协议不兼容,也会把整个供应商误报为连不上(issue #9470)。
+  // 用户明确打开的模型优先。镜像只存显式开关:true 是打开,false 是关掉,没拨过则无条目。
+  // 兜底先排除显式隐藏,再按原顺序取第一个可选模型;全部显式隐藏时仍退回第一个可选模型,
+  // 避免测试连接因「没有可见模型」变成空失败。镜像未就绪或读取失败时忽略可见性,走原兜底。
+  const candidates = provider.models[agent] ?? [];
+  const selectable = (m: (typeof candidates)[number]): boolean =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' });
+  let explicitlyShown: (typeof candidates)[number] | undefined;
+  let notHidden: (typeof candidates)[number] | undefined;
+  try {
+    for (const candidate of candidates) {
+      if (!selectable(candidate)) continue;
+      const override = getModelVisibilityOverride(agent, providerId, candidate.id);
+      if (override === true && !explicitlyShown) explicitlyShown = candidate;
+      if (override !== false && !notHidden) notHidden = candidate;
+    }
+  } catch {
+    explicitlyShown = undefined;
+    notHidden = undefined;
+  }
+  const model = explicitlyShown ?? notHidden ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.
@@ -491,8 +617,21 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // `x-api-key: <token>`,而真实 oauth-token 路由明确删除 x-api-key;优先按 x-api-key
   // 鉴权的端点会把 access_token 当 API key 校验得到 401,探测结论就与真实会话相反了。
   if (routing.authStrategy === 'oauth-token') {
-    const oauthToken = oauthProbeTokenReader(providerId);
+    const revision = getProviderRouteCredentialRevision(providerId);
+    const connectionSignature = JSON.stringify({ auth: provider.auth, routing, route: model.route, api: modelApi });
+    const oauthToken = await oauthProbeTokenReader(providerId);
+    const currentProvider = getActiveCatalog().providers.find(p => p.id === providerId);
+    const currentModel = currentProvider?.models[agent]?.find(m => m.id === model.id);
+    const currentSignature = currentProvider && currentModel
+      ? JSON.stringify({ auth: currentProvider.auth, routing: currentProvider.routing[agent], route: currentModel.route, api: currentModel.api ?? currentModel.piApi })
+      : null;
+    if (isProviderRouteMutationInProgress(providerId)
+      || getProviderRouteCredentialRevision(providerId) !== revision
+      || currentProvider?.source !== 'user' || currentSignature !== connectionSignature) {
+      throw new Error('provider_oauth_login_changed');
+    }
     return {
+      providerId,
       agent,
       baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
       modelId: model.id,
@@ -509,6 +648,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   }
   if (routing.authStrategy === 'none') {
     return {
+      providerId,
       agent,
       baseUrl,
       modelId: model.id,
@@ -522,6 +662,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   }
   const apiKey = keyReader(providerId, agent);
   return {
+    providerId,
     agent,
     baseUrl,
     modelId: model.id,
@@ -541,11 +682,11 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   };
 }
 
-// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readCachedGenericOAuthAccessToken）。
-type OAuthProbeTokenReader = (providerId: string) => string | null;
+// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readGenericOAuthAccessToken）。
+type OAuthProbeTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthProbeTokenReader: OAuthProbeTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取（探测用）。 */
+/** host 启动期接通 generic-oauth 的异步 token 读取（探测也等待必要刷新）。 */
 export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): void {
   oauthProbeTokenReader = reader;
 }
@@ -556,8 +697,26 @@ export async function testProviderConnection(
   fetchImpl: typeof fetch = outboundFetch,
   signal?: AbortSignal,
 ): Promise<ProviderTestResult> {
-  const spec =
-    input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  const started = Date.now();
+  let spec: ProviderProbeSpec;
+  try {
+    spec = input.kind === 'saved' ? await resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  } catch (error) {
+    if (error instanceof Error && ['provider_oauth_refresh_failed', 'provider_oauth_login_changed'].includes(error.message)) {
+      return { ok: false, code: 'AUTH_INVALID', latencyMs: Date.now() - started };
+    }
+    throw error;
+  }
+  // 已保存供应商的探测模型由 Main 挑选（第一个聊天模型），结果必须带回去，否则用户看不出测的是哪个。
+  return { ...(await probeConnection(input, spec, fetchImpl, signal)), modelId: spec.modelId };
+}
+
+async function probeConnection(
+  input: ProviderTestInput,
+  spec: ProviderProbeSpec,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<ProviderTestResult> {
   const portable = !spec.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(spec.api);
   // Keep preset/saved SDK-specific authentication and legacy callers on their existing path.
   if (input.kind === 'adhoc' && input.requestId && spec.agent === 'pi' && portable && !spec.catalogPresetId) {

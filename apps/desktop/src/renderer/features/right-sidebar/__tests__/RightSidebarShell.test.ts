@@ -72,6 +72,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 import { RightSidebarShell } from '../RightSidebarShell';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
+import { InlineHtmlPreview } from '../plugins/file-browser/InlineHtmlPreview';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
@@ -469,6 +470,56 @@ describe('RightSidebarShell empty state', () => {
     expect(closeOthers.getAttribute('data-disabled')).not.toBeNull();
     left.unmount();
     right.unmount();
+  });
+
+  // #11392, unit: keep the actual preview's DOM in place across tasks and
+  // release it under the same memory pressure as an ordinary browser page.
+  it('preserves an interactive file preview across tasks until its guest is evicted', async () => {
+    const report = vi.fn(async () => true);
+    Object.assign(window.electronAPI.rsbBrowserBridge, { reportPreviewOpener: report });
+    registerTabKind({
+      kind: 'file-browser', menu: { kind: 'file-browser', labelKey: 'files', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'files'),
+      TabBody: ({ ctx, active, shellVisible }: TabKindBodyProps) => createElement(InlineHtmlPreview, {
+        sessionId: ctx.sessionId, tabId: ctx.tabId, workdir: ctx.workdir, relPath: 'form.html',
+        active: active === true && shellVisible !== false, deviceId: null,
+      }), defaultState: () => ({}),
+    });
+    tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) => sessionId === 'task-a'
+      ? { tabs: [{ id: 'form', kind: 'file-browser', state: {} }], activeTabId: 'form' }
+      : { tabs: [], activeTabId: null });
+    const shell = (sessionId: string) => createElement(RightSidebarShell, { sessionId, workdir: '/docs', remoteHostId: null, isMac: true });
+    const view = render(shell('task-a'));
+    try {
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      const entry = browserWebviewPool.peek('form')!;
+      Object.assign(entry.webview, { getWebContentsId: () => 78 });
+      fireEvent(entry.webview, new Event('did-attach'));
+      expect(report).toHaveBeenCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      const slot = entry.wrapper.parentElement;
+      const observer = new MutationObserver(() => {});
+      observer.observe(view.container, { childList: true, subtree: true });
+      view.rerender(shell('task-b'));
+      expect([...observer.takeRecords()].flatMap(record => [...record.removedNodes]).some(node => node.contains(entry.webview))).toBe(false);
+      expect(entry.wrapper.isConnected).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: false });
+      view.rerender(shell('task-a'));
+      expect(report).toHaveBeenLastCalledWith({ sessionId: 'task-a', tabId: 'form', webContentsId: 78, visible: true });
+      expect(view.container.querySelector('webview')).toBe(entry.webview);
+      expect(entry.wrapper.parentElement).toBe(slot);
+      observer.disconnect();
+      view.rerender(shell('task-b'));
+      act(() => { for (let i = 0; i < 5; i++) browserWebviewPool.acquire('pressure-' + i); });
+      expect(entry.wrapper.isConnected).toBe(false);
+      expect(browserWebviewPool.peek('form')).toBeNull();
+      view.rerender(shell('task-a'));
+      await waitFor(() => expect(view.container.querySelector('webview')?.getAttribute('src')).toContain('form.html'));
+      expect(browserWebviewPool.peek('form')?.webview).not.toBe(entry.webview);
+    } finally {
+      view.unmount();
+      browserWebviewPool.releaseAll();
+      unregisterTabKind('file-browser');
+    }
   });
 
   it.each([
@@ -897,6 +948,32 @@ describe('RightSidebarShell empty state', () => {
     expect(tabsIpc.close).not.toHaveBeenCalled();
     expect(getBucket('s1').tabs.map(tab => tab.id)).toEqual(['old-simulator']);
     view.unmount();
+  });
+
+  // Merge regression: resource-backed task UI needs no classic taskView, but
+  // taskView.remote must never make the resource body run for a remote task.
+  it('mounts approved resource task UI only for a confirmed local task', async () => {
+    const ui = await import('@/cindy-brain/PluginUiView');
+    const resource = vi.spyOn(ui, 'PluginUiView').mockImplementation(() => createElement('div', { 'data-testid': 'resource-task-body' }));
+    try {
+
+      const ghost = { enabled: true, dir: '/fixture/planner', uiCapabilityApproved: true,
+        approval: { state: 'approved', revision: 'one' }, manifest: { id: 'planner', name: 'Planner', mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] },
+        } } };
+
+      installedGhostsMock.list = [ghost];
+      tabsIpc.list.mockResolvedValueOnce({ tabs: [{ id: 'resource', kind: 'plugin-task', state: { instanceId: 'planner', resourceViewId: 'board' } }], activeTabId: 'resource' });
+      const props = { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, deviceLinkDeviceId: null as string | null, isMac: true };
+      const view = render(createElement(RightSidebarShell, props));
+      await waitFor(() => expect(screen.getByTestId('resource-task-body')).toBeTruthy());
+      expect(document.querySelector('webview')).toBeNull();
+      Object.assign(ghost.manifest, { taskView: { html: 'task.html', remote: true } });
+      view.rerender(createElement(RightSidebarShell, { ...props, deviceLinkDeviceId: 'other-device' }));
+      await waitFor(() => expect(screen.queryByTestId('resource-task-body')).toBeNull());
+      expect(document.querySelector('webview')).toBeNull();
+    } finally { resource.mockRestore(); }
   });
 
   // #6861:冷启动归属未知不能收起插件任务页或改写恢复的选择;正文只在确认本机后加载。
@@ -1479,7 +1556,7 @@ describe('RightSidebarShell empty state', () => {
     expect(onDetachTab).toHaveBeenCalledWith('tab-pop');
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.maximizeAria' }).click();
     expect(onMaximize).toHaveBeenCalledOnce();
-    screen.getByRole('button', { name: 'contentHeader.collapsePanel' }).click();
+    screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' }).click();
     expect(onCloseSidebar).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmount();
@@ -1526,7 +1603,7 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
-    expect(screen.getByRole('button', { name: 'contentHeader.collapsePanel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' })).toBeTruthy();
   });
 
   it('keeps the existing 36px TabBar host on Windows', async () => {

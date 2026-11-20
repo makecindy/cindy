@@ -36,9 +36,50 @@ import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefre
 import { UsageLimitAutoResume } from '../../maker-ipc/usageLimitAutoResume';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { CodexAccountUsagePayload } from '../../usageBroadcaster';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 // 远程 Agent 的任务撞上限额时,本机订阅快照属于另一个账号(2026-10-09:与 SSH 同一边界)。
 describe('sessionUsesOtherMachineAccount', () => {
+  // Unit regression, PR #9295: a task reset lookup must retain its exhausted
+  // account's reset time when another account makes the provider pool usable.
+  // Existing remote tests returned a single snapshot without the real pool adapter.
+  it.each(['claude', 'codex'] as const)('keeps the exhausted task account reset time with a usable %s pool', async family => {
+    const reset = Date.now() / 1000 + 3600;
+    const now = Date.now();
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 12, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: reset }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    });
+    const invoke = async (_device: string, channel: string, args: unknown[]) => {
+      const projected = await readLegacySubscriptionQuota(pool, channel, args);
+      return { ok: true, result: projected === undefined
+        ? family === 'claude' ? { fiveHour: { utilization: 100, resetsAt: reset } }
+          : { primary: { usedPercent: 100, resetsAt: reset } }
+        : projected };
+    };
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family,
+      providerId: family === 'claude' ? 'anthropic' : 'openai', agentKind: family === 'claude' ? 'claude-code' : 'codex' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+  });
+
+  it.each(['codex', 'claude-code', 'pi'])('reads the pinned native account reset time for remote %s', async agentKind => {
+    const now = Date.now();
+    const reset = now / 1000 + 3600;
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 100, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = vi.fn(async () => null);
+    const session = vi.fn(async () => ({ codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } }));
+    const invoke = async (_device: string, channel: string, args: unknown[]) => ({ ok: true,
+      result: await readLegacySubscriptionQuota(pool, channel, args, session) });
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family: 'codex',
+      providerId: 'openai', agentKind, sdkSessionId: 'native-task', modelId: 'chatgpt/gpt-5.5' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+    expect(session).toHaveBeenCalledExactlyOnceWith('openai', 'native-task');
+    expect(pool).not.toHaveBeenCalled();
+  });
+
   it('reads the executing computer and rejects an unverified named-account reply', async () => {
     const reset = Date.now() / 1000 + 86400;
     const invoke = vi.fn(async () => ({ ok: true, result: {
@@ -47,7 +88,7 @@ describe('sessionUsesOtherMachineAccount', () => {
     } }));
     const route = { deviceId: 'remote', providerId: 'anthropic', family: 'claude' as const, agentKind: 'claude-code' };
     expect(await readRemoteAccountUsageLimit(route, invoke)).toEqual({ limited: true, resetAtMs: reset * 1000 });
-    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true]);
+    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true, 'default-subscription-account']);
     expect(await readRemoteAccountUsageLimit({ ...route, providerId: 'named' }, invoke)).toBeNull();
     expect(mocks.claude).not.toHaveBeenCalled();
   });

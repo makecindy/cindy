@@ -18,8 +18,8 @@ import { sessions } from '../localDb/schema';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
 import { withPreRunHookDiagnosis, type DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { capAppend, killProcessTree } from './proc-util';
-import type { SchedulerDrizzleDb } from './storage';
-import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target';
+import type { SchedulerDrizzleDb } from './storage.desktop';
+import type { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target.desktop';
 
 const PROTOCOL = 'cindy-script/1' as const;
 const LEGACY_PROTOCOL = 'xdt-maker-script/1' as const;
@@ -141,7 +141,13 @@ function safeError(error: unknown): { code: string; message: string } {
 }
 
 export class ScriptScheduleRunner {
-  constructor(private readonly deps: ScriptScheduleRunnerDeps) {}
+  constructor(
+    private readonly deps: ScriptScheduleRunnerDeps,
+    private readonly targets: {
+      isManagedScheduledTarget: typeof isManagedScheduledTarget;
+      restoreScheduledTarget: typeof restoreScheduledTarget;
+    },
+  ) {}
 
   attachScheduler(scheduler: Scheduler): void {
     this.deps.scheduler = scheduler;
@@ -178,12 +184,12 @@ export class ScriptScheduleRunner {
         .select({ status: sessions.status, workingDir: sessions.workingDir, remoteHostId: sessions.remoteHostId,
           source: sessions.source, orcaRole: sessions.orcaRole, orcaRemoteLead: sessions.orcaRemoteLead }).from(sessions)
         .where(eq(sessions.id, schedule.targetSessionId)).limit(1);
-      if (!owner || owner.status === 'deleted' || (owner.status === 'archived' && isManagedScheduledTarget(owner))) {
+      if (!owner || owner.status === 'deleted' || (owner.status === 'archived' && this.targets.isManagedScheduledTarget(owner))) {
         await this.deps.scheduler.pause(schedule.id, { exemptRunId: ctx.runId });
         return { sessionId: '', skipped: true,
           resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
       }
-      if (restore) await restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
+      if (restore) await this.targets.restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
     }
 
     return null;
@@ -294,6 +300,11 @@ export class ScriptScheduleRunner {
 
     let stdoutBuffer = '';
     let stderr = '';
+    let stderrTail = '';
+    const collectStderr = (chunk: string): void => {
+      stderr = capAppend(stderr, chunk, OUTPUT_CAP);
+      stderrTail = (stderrTail + chunk).slice(-1_000);
+    };
     // chunk 边界可能正好切在一个多字节 UTF-8 字符中间(中文/emoji 常见)——逐 chunk
     // 独立 toString('utf8') 会把被截断的字节解成替换字符(U+FFFD),即使后续 chunk
     // 补全了剩余字节也回不去了(codex review 第七轮发现:CJK resultText/call
@@ -520,7 +531,7 @@ export class ScriptScheduleRunner {
       }
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr = capAppend(stderr, stderrDecoder.write(chunk), OUTPUT_CAP);
+      collectStderr(stderrDecoder.write(chunk));
     });
 
     writeFrame({
@@ -587,7 +598,7 @@ export class ScriptScheduleRunner {
     // 子进程已经没了,decoder 里可能还压着一段没消费的多字节尾巴——在读取
     // stdoutBuffer/stderr 前先 flush,否则被截断的最后一个字符会丢失/半解码。
     stdoutBuffer += stdoutDecoder.end();
-    stderr = capAppend(stderr, stderrDecoder.end(), OUTPUT_CAP);
+    collectStderr(stderrDecoder.end());
 
     // 终态前有界收干净在途 broker 调用。broker 不支持取消——脚本已发出的写操作
     // (sessions.dispatch/jira.add_comment)只能等它落地,不等就抛终态的话,run
@@ -623,7 +634,7 @@ export class ScriptScheduleRunner {
             : exit.spawnError
               ? new Error(`script spawn failed: ${exit.spawnError}`)
               : exit.code !== 0
-                ? new Error(`script exited with code ${exit.code}: ${stderr.slice(0, 1_000)}`)
+                ? new Error(`script exited with code ${exit.code}: ${stderrTail}`)
                 : null);
       if (preTerminalError) {
         await drainInflightCalls();

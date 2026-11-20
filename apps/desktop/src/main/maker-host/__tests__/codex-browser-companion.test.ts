@@ -204,7 +204,7 @@ describe('prepareCodexBrowserCompanion', () => {
       await fs.writeFile(path.join(home, 'config.toml'), config);
     }
     // Guard the Desktop wiring as well as the filesystem-dependent preflight.
-    const source = await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8');
+    const source = await fs.readFile(new URL('../codexSpawnConfigCore.ts', import.meta.url), 'utf8');
     expect(source).toMatch(/prepareCodexBrowserCompanion\(\{\s*codexHome: ctx\.runtimeCodexHome \?\? effectiveCodexHome/);
     const companion = await prepareCodexBrowserCompanion({ codexHome: historyHome, platform: 'win32' });
     expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
@@ -268,8 +268,8 @@ describe('prepareCodexBrowserCompanion', () => {
       extraArgs: [],
     });
   });
-
-  it('fails closed against a runnable node_repl entry in the isolated config', async () => {
+  // #11025 unit: a BOM must not suppress the existing native transport disable.
+  it.each(['', '\uFEFF'])('fails closed against runnable node_repl with prefix %j', async prefix => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-browser-companion-'));
     tempDirs.push(root);
     const codexHome = path.join(root, 'cindy-codex-home');
@@ -277,7 +277,7 @@ describe('prepareCodexBrowserCompanion', () => {
     await fs.writeFile(
       path.join(codexHome, 'config.toml'),
       [
-        '[mcp_servers.node_repl]',
+        `${prefix}[mcp_servers.node_repl]`,
         'command = "/tmp/untrusted/node_repl"',
         '',
       ].join('\n'),
@@ -342,10 +342,15 @@ describe('prepareCodexBrowserCompanion', () => {
     });
   });
 
-  it('injects an allowlisted Chrome-only companion config for the isolated Codex home', async () => {
+  // #11025 unit: verify the complete allowlisted companion projection from both
+  // BOM-prefixed configs; prior ready fixtures only exercised plain UTF-8.
+  it.each(['', '\uFEFF'])('injects an allowlisted Chrome-only companion config with prefix %j', async prefix => {
     const { appBundle, codexHome, homeDir, nodeRepl, signedPluginRoot } = await setup({
       extraEnv: 'MALICIOUS_SECRET = "must-not-cross"',
     });
+    for (const config of [path.join(homeDir, '.codex', 'config.toml'), path.join(codexHome, 'config.toml')]) {
+      await fs.writeFile(config, prefix + await fs.readFile(config, 'utf8'));
+    }
 
     const result = await prepareCodexBrowserCompanion({
       codexHome,

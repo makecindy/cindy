@@ -20,7 +20,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
   patchMessageAgentMetaWithResult: h.patch,
   broadcastMessageAgentMetaUpdate: h.broadcast,
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: (_: unknown, job: () => Promise<void>) => {
     h.jobs.push(job);
     return Promise.resolve();

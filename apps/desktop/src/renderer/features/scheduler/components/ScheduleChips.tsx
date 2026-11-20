@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,6 +22,9 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -41,6 +45,7 @@ import {
   DEFAULT_SCHEDULE_INTERVAL_MS,
   resolveScheduleTimingPresentation,
   summarizeConfig,
+  formatIntervalDuration,
   switchScheduleTimingMode,
   WEEKDAY_LABELS,
   DEFAULT_CONFIG,
@@ -109,7 +114,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-lg',
+  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -239,35 +244,24 @@ export function ScheduleSettingsButton({
 
         {!lockEnabled && (
         <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
-          <button
-            type="button"
-            onClick={() => !switchDisabled && onEnabledChange(!enabled)}
-            disabled={switchDisabled}
+          <label
             className={cn(
               'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
-              'hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-              'disabled:cursor-not-allowed disabled:opacity-50',
+              switchDisabled
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               enabled ? 'text-[var(--msg-assistant-text)] dark:text-[var(--msg-assistant-text)]' : 'text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]',
             )}
-            aria-pressed={enabled}
-            aria-label={t('scheduler.chips.useWorktreeAria')}
           >
-            <span
-              className={cn(
-                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded border-[1.5px] transition-colors',
-                enabled
-                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent',
-              )}
-            >
-              {enabled && (
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-[10px] w-[10px]">
-                  <path d="M3 8l3.5 3.5L13 5" />
-                </svg>
-              )}
-            </span>
+            <Checkbox
+              checked={enabled}
+              disabled={switchDisabled}
+              onChange={() => onEnabledChange(!enabled)}
+              aria-label={t('scheduler.chips.useWorktreeAria')}
+              className="disabled:opacity-100"
+            />
             <span>{t('scheduler.chips.worktree')}</span>
-          </button>
+          </label>
         </Tip>
         )}
       </PopoverContent>
@@ -300,22 +294,6 @@ const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'intervalMinutes',
   'interval',
 ];
-
-function formatIntervalDuration(intervalMs: number, locale: string): string {
-  const units: ReadonlyArray<{ factor: number; unit: string }> = [
-    { factor: 24 * 60 * 60_000, unit: 'day' },
-    { factor: 60 * 60_000, unit: 'hour' },
-    { factor: 60_000, unit: 'minute' },
-    { factor: 1_000, unit: 'second' },
-    { factor: 1, unit: 'millisecond' },
-  ];
-  const selected = units.find(({ factor }) => intervalMs % factor === 0) ?? units[units.length - 1];
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: selected.unit,
-    unitDisplay: 'long',
-  }).format(intervalMs / selected.factor);
-}
 
 const WEEKDAY_SHORT: Record<number, string> = {
   1: 'Mo',
@@ -427,7 +405,7 @@ export function ScheduleChip({
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
             <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
               {(['cron', 'interval'] as const).map((mode) => {
                 const active = timingMode === mode;
@@ -458,7 +436,7 @@ export function ScheduleChip({
             </p>
           </div>
           <div className="flex items-start gap-2">
-            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
               <div className="flex flex-col gap-[2px]">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
@@ -502,7 +480,7 @@ export function ScheduleChip({
 function ExactIntervalPanel({ summary }: { summary: string }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="text-13 font-medium text-[var(--msg-assistant-text)]">
         {t('scheduler.chips.timingMode.currentExact', { schedule: summary })}
       </div>
@@ -531,7 +509,7 @@ function ScheduleConfigPanel({
   };
 
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
         {mode === 'intervalMinutes' && (
           <>
@@ -1067,6 +1045,7 @@ export function ModelEffortChip({
   onNavigateToProviders,
   fastMode,
   onChangeFast,
+  pluginEngines,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
@@ -1088,6 +1067,11 @@ export function ModelEffortChip({
   /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean | 'ultrafast';
   onChangeFast?: (v: boolean | 'ultrafast') => void;
+  /**
+   * 本机的插件引擎(docs/plans/acp-plugin-bridge.md)，只给每次新建任务、在本机运行的自动任务传。
+   * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1180,14 +1164,34 @@ export function ModelEffortChip({
   const agentDeviceTitle = agentDeviceName
     ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
     : null;
+  // 选中插件引擎时触发器写引擎自己的名字、模型与档位(插件停用后用通用名称)，不画内置 Harness 的标志。
+  const activeEngineSelection = pluginEngines?.active ?? null;
+  const activeEngine = activeEngineSelection
+    ? pluginEngines?.engines.find((engine) => engine.providerId === activeEngineSelection.providerId) ?? null
+    : null;
+  const engineDisplay = activeEngineSelection
+    ? [
+        activeEngine?.name ?? t('newChat.pluginEngines.genericName'),
+        pluginEngineModelName(activeEngine, activeEngineSelection.modelId)
+          ?? (activeEngineSelection.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t('newChat.pluginEngines.defaultModel')
+            : t('newChat.modelSelector.trigger.unresolved')),
+        (() => {
+          const level = resolvePluginEngineEffort(activeEngine, activeEngineSelection.modelId, activeEngineSelection.effort);
+          return level ? effortLabel(level as EffortValue) : null;
+        })(),
+      ].filter(Boolean).join(' · ')
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
-          label={display}
-          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
+          icon={engineDisplay
+            ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+            : agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
+          label={engineDisplay ?? display}
+          title={engineDisplay ? engineDisplay : agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
@@ -1200,7 +1204,7 @@ export function ModelEffortChip({
         className={cn(
           // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
           // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-lg',
+          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',
@@ -1237,6 +1241,7 @@ export function ModelEffortChip({
           selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"
           discoveringModels={discovery.pending}
+          {...(pluginEngines ? { pluginEngines } : {})}
           followSession={
             followSession
               ? {

@@ -3,7 +3,7 @@ import { promises as fsp } from 'node:fs';
 
 import { BOT_AVATAR_MAX_BYTES } from '../../shared/botAvatarValue.js';
 import { rewriteToRemoteMediaOrigin } from '../../shared/remoteMediaUrl.js';
-import { resolveSafe } from '../cindy-media/blobStore.js';
+import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { integrationCacheGet, integrationCachePut } from '../cindy-media/integrationCache.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';

@@ -28,6 +28,8 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+export { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { Logger } from '../../interfaces/logger.js';
@@ -416,8 +418,6 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
  * “从此开始是新帧”:那会把同一行的残余 base64 当下一行 JSON。正确做法是继续丢到
  * 下一个 `\n`,再恢复分帧。
  */
-export const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
-
 export function attachJsonlReader(
   stream: NodeJS.ReadableStream,
   onLine: (line: string) => void,

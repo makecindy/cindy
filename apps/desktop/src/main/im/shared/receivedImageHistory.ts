@@ -1,5 +1,9 @@
 import type { IMAttachment } from '@cindy/im';
-import { parseBlobUrl } from '../../cindy-media/blobStore';
+import { stat } from 'node:fs/promises';
+import { getBlobInfo } from '../../cindy-media/ledger';
+import { getCurrentDbClientSnapshot } from '../../localDb/client/current';
+import { getGroupHistoryImages, type GroupHistorySearchLane } from './groupHistorySearch';
+import { parseBlobUrl, resolveSafe } from '../../cindy-media/blobStore.desktop';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
 import { DEFAULT_GROUP_WINDOW_RETENTION, recordGroupWindowEntry } from './groupWindowCore';
 
@@ -58,4 +62,31 @@ export async function recordReceivedImageMessage(args: {
     },
     DEFAULT_GROUP_WINDOW_RETENTION,
   );
+}
+
+/** Materialize only images indexed on the selected window rows in this account and lane. */
+export async function receivedWindowImages(lane: GroupHistorySearchLane, messageIds: readonly string[],
+  currentFiles: readonly IMAttachment[]): Promise<IMAttachment[]> {
+  if (!messageIds.length) return [];
+  const snapshot = getCurrentDbClientSnapshot();
+  if (!snapshot) return [];
+  const available = Math.max(0, 6 - currentFiles.filter(file => file.kind === 'image').length);
+  const seen = new Set(currentFiles.map(file => file.url));
+  const images: IMAttachment[] = [];
+  for (const messageId of [...messageIds].reverse()) {
+    if (images.length >= available) break;
+    if (getCurrentDbClientSnapshot() !== snapshot) return [];
+    const row = await getGroupHistoryImages({ lane, messageId });
+    for (const ref of row?.imageRefs ?? []) {
+      if (images.length >= available || seen.has(ref.fileId) || !parseBlobUrl(ref.fileId)) continue;
+      const blob = resolveSafe(ref.fileId);
+      const info = await getBlobInfo(blob.hash, snapshot.client.drizzle);
+      if (!info || info.bytes > 20 * 1024 * 1024 || info.mimeType !== ref.mimeType) continue;
+      const disk = await stat(blob.absPath).catch(() => null);
+      if (!disk?.isFile() || !disk.size || disk.size !== info.bytes) continue;
+      images.push({ kind: 'image', originalName: ref.name, mimeType: info.mimeType, absPath: blob.absPath, url: ref.fileId });
+      seen.add(ref.fileId);
+    }
+  }
+  return getCurrentDbClientSnapshot() === snapshot ? images : [];
 }

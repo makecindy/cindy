@@ -21,6 +21,7 @@ vi.mock('@cindy/device-link', async () => {
     MetadataContinuityReader: metadata.MetadataContinuityReader,
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     REMOTE_AGENT_CHANNEL: remoteAgent.REMOTE_AGENT_CHANNEL,
   };
@@ -42,6 +43,48 @@ const catalog = () => Promise.resolve({ ok: true as const, result: {
 const oldHostCatalog = () => Promise.resolve({ ok: true as const, result: { providers: [{ id: 'a' }] } });
 const emptyCatalog = () => Promise.resolve({ ok: true as const, result: { providers: [], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
 const hexTarget = (label: string): string => createHash('sha256').update(label).digest('hex');
+
+// Unit regression: successful replies invalidated by a source push must recover
+// without a renderer subscription. Existing tests only covered rejecting the old reply.
+describe('source refresh during metadata admission', () => {
+  const push = (): Envelope => ({ v: 1, kind: 'push', src: 'A', payload: { channel: 'maker:provider:changed' } });
+  it.each(['maker:provider:list', 'maker:get-capabilities'])('rereads %s once after a source change', async (channel) => {
+    let finish!: (value: InvokeResultPayload) => void;
+    const request = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockImplementationOnce(emptyCatalog);
+    const pending = read('A', channel, [], request);
+    handleProviderMetadataSourcePush(push());
+    finish(await catalog());
+    await expect(pending).resolves.toMatchObject({ ok: true, result: { providers: [] } });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['owner', 'permission', 'denial', 'endpoint', 'retirement'])('does not retry a source refresh across %s changes', async (boundary) => {
+    let finish!: (value: InvokeResultPayload) => void;
+    const request = vi.fn(() => new Promise<InvokeResultPayload>(resolve => { finish = resolve; }));
+    let allowed = true;
+    const pending = read('A', 'maker:provider:list', [], request, () => allowed);
+    handleProviderMetadataSourcePush(push());
+    if (boundary === 'owner') identity.owner = 'owner-b:1';
+    if (boundary === 'endpoint') identity.endpoint = 'https://b.invalid';
+    if (boundary === 'permission') allowed = false;
+    if (boundary === 'denial') invalidate('A');
+    if (boundary === 'retirement') handleProviderMetadataSourcePush({ ...push(),
+      payload: { channel: 'maker:provider:changed', payload: { providerContinuity: { stale: true, remainingMs: 0 } } } });
+    finish(await catalog());
+    await expect(pending).rejects.toThrow('Metadata scope changed');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds repeated source changes to one replacement read', async () => {
+    const request = vi.fn(async () => {
+      handleProviderMetadataSourcePush(push());
+      return catalog();
+    });
+    await expect(read('A', 'maker:provider:list', [], request)).rejects.toThrow('Metadata scope changed');
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('Main provider metadata continuity', () => {
   it('retains a catalog for a short outage and bounds both forwarding and a hung refresh', async () => {
@@ -329,6 +372,26 @@ describe('Main provider metadata continuity', () => {
      await expect(success).resolves.toMatchObject({ ok: true });
    } finally { off(); }
  });
+
+  // Field logs (2026-11): an older target refusing one read as unsupported fenced the
+  // target's other in-flight catalog reads, which all failed with "Metadata scope changed".
+  it.each([
+    ['envelope', { ok: false as const, error: { code: 'CHANNEL_NOT_ALLOWED' as const, message: "channel 'maker:agent:status' not allowed remotely" } }],
+    ['ipc', { ok: false as const, error: { code: 'IPC_ERROR' as const, message: '[INVALID_PARAMS] Invalid account command' } }],
+  ])('does not fence sibling reads when the target refuses one read as unsupported (%s)', async (_form, refusal) => {
+    const denied = vi.fn(); const off = onProviderMetadataDenied(denied);
+    try {
+      await read('M', 'maker:provider:list', [], catalog);
+      let resolveSibling!: (value: InvokeResultPayload) => void;
+      const sibling = read('M', 'maker:provider:list', [], () => new Promise<InvokeResultPayload>(resolve => { resolveSibling = resolve; }));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(read('M', 'maker:agent:status', [], async () => refusal)).resolves.toBe(refusal);
+      resolveSibling({ ok: true, result: { providers: [{ id: 'fresh' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
+      await expect(sibling).resolves.toMatchObject({ ok: true, result: { providers: [{ id: 'fresh' }] } });
+      expect(denied).not.toHaveBeenCalled();
+      expect(captureProviderMetadataContinuityScope('M')()).toBe(true);
+    } finally { off(); }
+  });
 
   it('fences siblings after a non-temporary live-read failure', async () => {
     await fillCapacity();
@@ -786,12 +849,15 @@ describe('Main provider metadata continuity', () => {
     expect(bBefore).toMatchObject({ ok: true, result: { binaryReady: true, providerContinuity: { stale: true } } });
 
     let resolveLate!: (value: InvokeResultPayload) => void;
-    const late = read('A', 'maker:agent:status', ['codex'], () => new Promise<InvokeResultPayload>(resolve => { resolveLate = resolve; }));
+    const lateRequest = vi.fn().mockImplementationOnce(() => new Promise<InvokeResultPayload>(resolve => { resolveLate = resolve; }))
+      .mockRejectedValue(failure());
+    const late = read('A', 'maker:agent:status', ['codex'], lateRequest);
     await vi.advanceTimersByTimeAsync(0);
     expect(deliver(push('A', 'maker:agents:changed'))).toBe(true);
     expect(aScope()).toBe(false);
     resolveLate(agentStatus(false, 20 * 60_000));
-    await expect(late).rejects.toThrow(/scope changed|NOT_CONNECTED/);
+    await expect(late).rejects.toThrow('NOT_CONNECTED');
+    expect(lateRequest).toHaveBeenCalledTimes(2);
 
     await expect(read('A', 'maker:agent:status', ['codex'], async () => { throw failure(); }))
       .rejects.toThrow('NOT_CONNECTED');

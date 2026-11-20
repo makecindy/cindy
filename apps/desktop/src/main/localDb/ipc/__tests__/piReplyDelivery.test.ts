@@ -17,7 +17,7 @@ import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent }
 import { piSuccessfulReplyFrames, piReplyText, piReplyThinking } from '../../../../test/fixtures/piSuccessfulReply';
 import { persistSessionStreamEvent } from '../../../maker-ipc/sessionEventStream';
 import type { PreparedSessionEvent } from '../../../maker-ipc/sessionEventPreparation';
-import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster';
+import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,
@@ -95,6 +95,9 @@ function setupDb(): void {
       rewind_at INTEGER
     );
     CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+    CREATE TABLE bot_session_links (
+      bot_id TEXT, session_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER
+    );
   `);
   sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();
   const db = drizzle(sqlite, {

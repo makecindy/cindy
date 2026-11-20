@@ -15,18 +15,20 @@ import type { ScheduleWebhookRemoteDeps } from '../remote';
 // - tier：unit，只用回环地址和临时目录。
 
 const dirs = vi.hoisted(() => ({ root: '' }));
-const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null }));
+const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null, syncs: 0 }));
 
 // Only replace the network boundary; admission, queue transactions and disk IO
 // below still run through the production Host and ScheduleWebhookQueue.
 vi.mock('../remote.js', () => ({
   ScheduleWebhookRemote: class {
     constructor(deps: ScheduleWebhookRemoteDeps) { remoteTransport.deps = deps; }
-    async sync() {}
+    async sync() { remoteTransport.syncs += 1; }
+    async refresh() {}
     stop() {}
     pause() {}
     problem() { return undefined; }
     canDeliver() { return true; }
+    canDeliverGithub() { return true; }
     view() { return { id: 'cloud-endpoint' }; }
   },
 }));
@@ -44,6 +46,7 @@ vi.mock('../../../appSessionState.js', () => ({
 }));
 vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAvailable: () => true }));
 
+import { admitTaskAction, hasTaskActionAuthorization } from '../../../maker-ipc/taskActionAuthorization.js';
 import { ScheduleWebhookHost } from '../index';
 
 class FakeScheduler extends EventEmitter {
@@ -104,6 +107,31 @@ describe('ScheduleWebhookHost', () => {
     await host.start();
     return remoteTransport.deps!.onBatch;
   }
+
+  // PR #9378: queued/ACKed work must survive presentation-only edits. The
+  // network alone is replaced; Host refresh and persistent queue are production.
+  it('preserves durable App events after equivalent scope reorder and discards a real change', async () => {
+    const source = { preset: 'github-app' as const, repositories: ['example/project', 'other/project'] };
+    const events = ['issues.opened', 'release.published'];
+    const original = { ...withTrigger, webhookTrigger: { ...withTrigger.webhookTrigger!, source, events } };
+    await startCloudHost(original);
+    const comment = { deliveryId: 'reordered-scope', event: 'issues', action: 'opened', repository: 'example/project', receivedAt: Date.now() };
+    await remoteTransport.deps!.onGithubBatch!({ endpointId: 'managed', scheduleId: '__github_pr_watch__',
+      events: [comment], omitted: 0 }, () => true);
+    const stateFile = path.join(dirs.root, 'schedule-webhooks', 'state.json');
+    const before = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(before.endpoints.s1.pending).toEqual([comment]);
+    const synced = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger,
+      source: { ...source, repositories: [...source.repositories].reverse() }, events: [...events].reverse() } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(synced));
+    const reordered = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(reordered.endpoints.s1?.pending).toEqual([comment]);
+    const nextSync = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger, events: ['release.published'] } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(nextSync));
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8')).endpoints.s1).toBeUndefined();
+  });
 
   // PR #8470 / discussion_r4488736908, unit: scheduler reconciliation can lag
   // behind a saved filter edit; existing HTTP tests did not exercise cloud admission.
@@ -258,5 +286,55 @@ describe('ScheduleWebhookHost', () => {
       dirs.root = originalRoot;
       await delivery;
     }
+  });
+
+  // #11370: a webhook frame is an independent trigger. The receiver socket is opened
+  // inside the tool call that created the schedule, and that call's authorization
+  // context stays on the socket. An idle target then fails enqueue with
+  // TASK_ACTION_AUTHORIZATION_EXPIRED. Cron and manual run-now have no such store.
+  it('fires a webhook without the tool-call authorization that opened the receiver', async () => {
+    const stateDir = path.join(dirs.root, 'schedule-webhooks');
+    fs.mkdirSync(stateDir, { recursive: true });
+    // Pending is empty, so startup does not arm. firstPendingAt is already older
+    // than the debounce, so the frame accepted below arms a zero-delay timer.
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
+      endpoints: {
+        s1: {
+          endpointId: 'endpoint-1',
+          pending: [],
+          omitted: 0,
+          firstPendingAt: Date.now() - 60_000,
+          received: 0,
+          ignored: 0,
+          receipts: {},
+        },
+      },
+    }));
+    let inherited: boolean | undefined;
+    scheduler.runNow = vi.fn(async () => {
+      inherited = hasTaskActionAuthorization();
+      return { runId: 'r1' };
+    });
+    const onBatch = await startCloudHost();
+    let timerSawStore: boolean | undefined;
+    const decision = await admitTaskAction(
+      { sessionId: 'creator', server: 'cindy_scheduler', tool: 'schedule_create', args: {} },
+      { key: 'mid-turn', ownerInput: true, delegated: true, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('expected the creating tool call to be admitted');
+    await decision.run(async () => {
+      setTimeout(() => { timerSawStore = hasTaskActionAuthorization(); }, 0);
+      await onBatch({
+        endpointId: 'cloud-endpoint',
+        scheduleId: 's1',
+        events: [{ deliveryId: 'wh-11370', event: 'issues', receivedAt: Date.now() }],
+        omitted: 0,
+      });
+    });
+    // The timer proves the store really does cross the queue delay. If it did not,
+    // this test could not tell a correct exit from a context that was never inherited.
+    await vi.waitFor(() => expect(timerSawStore).toBe(true));
+    await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+    expect(inherited).toBe(false);
   });
 });

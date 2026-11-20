@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PeerFileTransport } from "@/device-link/peerFileTransport";
+import { installPeerStreamTransport } from "@/device-link/peerFileRegistry";
 
 const state = vi.hoisted(() => ({
   props: {} as any,
@@ -24,8 +25,10 @@ const state = vi.hoisted(() => ({
   open: vi.fn(),
   stats: vi.fn(),
   holdReceive: false,
+  rangeFile: undefined as any,
   debug: false,
   log: vi.fn(),
+  written: [] as number[],
 }));
 vi.mock("@/debug/mobileDebugLog", () => ({
   mobileDebugEnabled: () => state.debug,
@@ -61,7 +64,7 @@ vi.mock("react-native-webview", async () => {
           if (message.action === "receive" && state.holdReceive) return;
           const result =
             message.action === "invoke"
-              ? JSON.stringify({ ok: true, result: "preview" })
+              ? JSON.stringify({ ok: true, result: state.rangeFile ?? "preview" })
               : message.action === "stats"
                 ? state.stats()
                 : "v=0";
@@ -91,7 +94,7 @@ vi.mock("expo-file-system", () => ({
     uri = "/staging";
     exists = true;
     create() {}
-    open() { return { close() {}, writeBytes() {} }; }
+    open() { return { close() {}, writeBytesSync(bytes: Uint8Array) { state.written.push(bytes.length); } }; }
     delete() { this.exists = false; state.deleted(); }
   },
   Paths: { cache: "/cache", availableDiskSpace: 10 * 1024 ** 3 },
@@ -172,7 +175,9 @@ beforeEach(() => {
   state.app = "active";
   state.commands = [];
   state.holdReceive = false;
+  state.rangeFile = undefined;
   state.debug = false;
+  state.written = [];
   state.log.mockClear();
   state.stats.mockReset().mockReturnValue(JSON.stringify({ path: "relay" }));
   state.deleted.mockClear();
@@ -187,6 +192,7 @@ beforeEach(() => {
         ? {
             version: 1,
             streaming: true,
+            rangeReads: true,
             idleMs: 300_000,
             ...(state.sessionBound ? { sessionBound: true } : {}),
           }
@@ -423,4 +429,68 @@ it.each(["unknown", "timeout", "route-change", "debug-enabled"])("samples paths 
     controller.abort();
     await transfer.catch(() => {});
   }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：PeerFileTransport 的下载入口。电脑在 caps 里声明 streamTransport、这次调用走 Agent-Net 会话时，
+ *   不起 WebRTC（不发 offer、WebView 不收命令），字节经 stream-read 按顺序写进文件，最后一次 0 字节读让电脑关掉源文件。
+ * - Bug／规则依据：docs/dev-rules/protocol-compatibility/agent-net-file-stream.md，手机原来只有 WebRTC。
+ * - 现有覆盖缺口：本文件其余用例都走 WebRTC 运行时。
+ * - 最小失败输入：一个 300 KiB 的文件（一整块加一小块，再加结束读）；去掉会话分支时会去取 ICE、发 offer。
+ * - tier：unit（jsdom，假计时器）。 */
+it.each([false, true])("downloads over the Agent-Net session when the computer offers stream transport, without WebRTC (range=%s)", async (range) => {
+  const off = installPeerStreamTransport((device) => device === "device");
+  const size = 300 * 1024, block = 256 * 1024;
+  state.rpc.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "caps") return { version: 1, streaming: true, idleMs: 300_000, sessionBound: true, streamTransport: true, rangeReads: true };
+    if (request.action === "stream-open") return { connection: "cccccccc-cccc-cccc-cccc-cccccccccccc" };
+    if (request.action === "open") return { ticket: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", size, mimeType: "video/mp4", version: "a".repeat(64) };
+    if (request.action === "stream-rpc") return JSON.stringify({ ok: true, result: { ticket: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", size, mimeType: "video/mp4", version: "a".repeat(64) } });
+    if (request.action === "stream-read") {
+      expect(request).toMatchObject({ connection: "cccccccc-cccc-cccc-cccc-cccccccccccc", ticket: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" });
+      const length = request.offset >= size ? 0 : Math.min(request.maxBytes, size - request.offset);
+      return Buffer.alloc(length, request.offset % 251).toString("base64");
+    }
+    return { ok: true };
+  });
+  try {
+    const progress = vi.fn(), started = vi.fn();
+    const result = await state.download("device", "cindy-file://unit/video.mp4", undefined, 1, undefined, progress, range ? { start: 0, end: size - 1, version: "a".repeat(64) } : undefined, started);
+    expect(started).toHaveBeenCalledTimes(range ? 1 : 0);
+    expect(progress.mock.calls).toEqual([[0, size], [block, size], [size, size]]);
+    expect(result).toMatchObject({ size, mimeType: "video/mp4" });
+    expect(offers()).toHaveLength(0);
+    expect(state.commands.filter((command) => ["offer", "answer", "receive"].includes(command.action))).toEqual([]);
+    const reads = state.rpc.mock.calls.filter(([, , [r]]) => r.action === "stream-read").map(([, , [r]]) => [r.offset, r.maxBytes]);
+    expect(reads).toEqual([[0, block], [block, size - block], [size, 1]]);
+    expect(state.written).toEqual([block, size - block]);
+  } finally { off(); }
+});
+
+// #10142, unit through mounted transport/WebView boundary. Range callbacks were
+// previously discarded. Minimal failure: one held receive, then a queued range.
+it('starts range activity only after dequeue and reports actual acknowledged file bytes', async () => {
+  state.holdReceive = true;
+  const stalled = new AbortController();
+  const first = state.download('device', 'whole-file', stalled.signal);
+  void first.catch(() => {});
+  await vi.advanceTimersByTimeAsync(0);
+  const started = vi.fn(), progress = vi.fn();
+  state.rangeFile = { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 2, mimeType: 'video/mp4', version: 'a'.repeat(64) };
+  const range = { start: 0, end: 1, version: 'a'.repeat(64) };
+  const pending = state.download('device', 'range', undefined, undefined, undefined, progress, range, started);
+  const outcome = expect(pending).resolves.toMatchObject({ size: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(started).not.toHaveBeenCalled();
+  // The earlier operation settles, releasing the production connection queue.
+  const firstReceive = state.commands.find(c => c.action === 'receive');
+  act(() => message({ type: 'reply', id: firstReceive.id, ok: true, result: null }));
+  await first; await vi.advanceTimersByTimeAsync(0);
+  expect(started).toHaveBeenCalledOnce();
+  expect(progress).toHaveBeenLastCalledWith(0, 2);
+  const receive = state.commands.filter(c => c.action === 'receive').at(-1)!;
+  act(() => message({ type: 'write', id: 'range-byte', args: [receive.args[0], 0, 'YWI='] }));
+  expect(progress).toHaveBeenLastCalledWith(2, 2);
+  act(() => message({ type: 'reply', id: receive.id, ok: true, result: null }));
+  await outcome;
 });

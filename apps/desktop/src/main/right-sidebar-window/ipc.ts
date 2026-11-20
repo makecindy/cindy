@@ -7,12 +7,11 @@
  */
 
 import { ipcMain } from 'electron';
-import type { BrowserWindow, WebContents } from 'electron';
+import type { BrowserWindow } from 'electron';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import type {
   RsbWindowCommand,
@@ -93,8 +92,25 @@ function parseContext(raw: unknown): RsbWindowContext {
   };
 }
 
+function parsePluginResource(r: Record<string, unknown>) {
+  if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256)
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+  if (r.resourceViewId !== undefined && (typeof r.resourceViewId !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(r.resourceViewId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin resource view');
+  if (r.resourceInput !== undefined && (!r.resourceInput || typeof r.resourceInput !== 'object' || Array.isArray(r.resourceInput) ||
+    Buffer.byteLength(JSON.stringify(r.resourceInput), 'utf8') > MAX_STATE_JSON_BYTES)) throwIpcError('INVALID_PARAMS', 'Invalid plugin resource input');
+  return { instanceId: r.instanceId,
+    ...(r.resourceViewId === undefined ? {} : { resourceViewId: r.resourceViewId as string }),
+    ...(r.resourceInput === undefined ? {} : { resourceInput: r.resourceInput as Record<string, unknown> }) };
+}
+
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
+  if (r.type === 'open-plugin-view') {
+    if (r.sessionId !== undefined || r.resourceViewId === undefined)
+      throwIpcError('INVALID_PARAMS', 'Global plugin views require a resource and no task');
+    return { type: 'open-plugin-view', ...parsePluginResource(r), resourceViewId: r.resourceViewId as string };
+  }
   if (
     typeof r.sessionId !== 'string' ||
     r.sessionId.length === 0 ||
@@ -153,14 +169,7 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
   if (r.type === 'open-plugin-task') {
-    if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256) {
-      throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
-    }
-    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
-  }
-  if (r.type === 'open-routines-tab') {
-    if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
-    return { type: 'open-routines-tab', sessionId: r.sessionId, botId: r.botId };
+    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r) };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =
@@ -382,29 +391,8 @@ function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
 export function registerRsbWindowIpc(opts: {
   controller: RsbWindowController;
   getMainWindow: () => BrowserWindow | null;
-  allowBotWorkbenchPermission: (botId: string, sessionId: string, requestId: string) => { accepted: boolean };
-  authorizePoppedWorkbench?: (sender: WebContents, botId: string) => Promise<boolean>;
 }): void {
-  const { controller, getMainWindow, allowBotWorkbenchPermission, authorizePoppedWorkbench } = opts;
-
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const request = requireObject(raw, 'workbench permission');
-    for (const key of ['botId', 'sessionId', 'requestId'] as const) {
-      if (typeof request[key] !== 'string' || !request[key] || request[key].length > 128) {
-        throwIpcError('INVALID_PARAMS', `${key} must be a 1–128 character string`);
-      }
-    }
-    const context = event.sender === controller.getVisibleSidebarWebContents() ? controller.getContext() : null;
-    const botOwner = context?.botOwner;
-    const authorizedSidebar = Boolean(botOwner && botOwner.botId === request.botId &&
-      botOwner.canonical && context?.remoteHostId === null);
-    const authorizedPopout = !authorizedSidebar && await authorizePoppedWorkbench?.(event.sender, request.botId as string);
-    if (!authorizedSidebar && !authorizedPopout) {
-      return { accepted: false };
-    }
-    return allowBotWorkbenchPermission(request.botId as string, request.sessionId as string, request.requestId as string);
-  });
+  const { controller, getMainWindow } = opts;
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 

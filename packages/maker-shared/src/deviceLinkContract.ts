@@ -64,7 +64,7 @@ export interface MobileUsageWidgetDay {
   /** Subscription-equivalent value by harness: claude-code, codex, pi. */
   money: [number, number, number];
   paid: number;
-  tokens: [number, number, number];
+  tokens: [number, number, number, ...number[]];
   /** Value per `usage.models` entry, then everything else (one more than the model count). */
   models?: number[];
   /** Tokens per `usage.models` entry, then everything else. */
@@ -85,7 +85,7 @@ export interface MobileUsageWidgetSnapshot {
     days: string[];
     daily: MobileUsageWidgetDay[];
     /** Models with the most tokens in the window, in color order; absent from older desktops. */
-    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' }[];
+    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' }[];
   };
   /** Localized labels and templates from the desktop's menu bar strings. */
   strings: Record<string, string>;
@@ -476,6 +476,10 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:worker:acknowledge-done',
   'maker:worker:archive',
   'maker:collaboration-settings:get',
+  // 创建 Worker 的角色清单与每个角色记的内容：只存在任务所在的电脑上，手机不留副本。
+  // 旧端拒绝时只列内置角色，不能增删也不记忆。
+  'maker:worker-roles:get',
+  'maker:worker-roles:apply',
   'local-db:orca-workflows:list-workers-by-lead',
   'local-db:orca-workflows:get-by-worker-session',
   'maker:schedule:list',

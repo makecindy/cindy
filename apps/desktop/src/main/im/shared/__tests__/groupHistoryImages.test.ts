@@ -10,8 +10,10 @@ const f = vi.hoisted(() => ({
   stat: vi.fn(),
   rollback: vi.fn(),
   blobInfo: vi.fn(),
+  images: vi.fn(),
 }));
-vi.mock('../../../cindy-media/blobStore', () => ({
+vi.mock('../../../cindy-media/blobStore.desktop', () => ({
+  parseBlobUrl: (url: string) => url.startsWith('cindy-media://blobs/'),
   resolveSafe: () => ({ absPath: '/blob/image', hash: 'hash', mimeType: 'image/png' }),
 }));
 vi.mock('../../../cindy-media/ledger', () => ({ getBlobInfo: f.blobInfo }));
@@ -24,6 +26,8 @@ vi.mock('../../../cindy-media/integrationCache', () => ({
 }));
 vi.mock('../../../hook-control/groupImageBridge', () => ({ readOfficialGroupImage: f.official }));
 vi.mock('node:fs/promises', () => ({ readFile: f.read, stat: f.stat }));
+vi.mock('../groupHistorySearch', () => ({ getGroupHistoryImages: f.images }));
+import { receivedWindowImages } from '../receivedImageHistory';
 import { readGroupHistoryImage } from '../groupHistoryImages';
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const lane = { provider: 'telegram-personal:42', chatId: '-1', threadId: '2' };
@@ -50,6 +54,19 @@ beforeEach(() => {
   f.read.mockResolvedValue(png);
 });
 describe('history image bytes and account cache', () => {
+  it.each(['wecom', 'dingtalk'])('attaches indexed %s images in the selected lane and discards them on account change', async channel => {
+    const scope = { ...lane, provider: `${channel}-personal:bot` };
+    const ref = { fileId: 'cindy-media://blobs/one.png', name: 'screen.png', mimeType: 'image/png' };
+    f.images.mockResolvedValue({ imageRefs: [ref, { ...ref, fileId: 'file:///private' }] });
+    f.blobInfo.mockResolvedValue({ mimeType: 'image/png', bytes: png.length });
+    f.stat.mockResolvedValue({ isFile: () => true, size: png.length });
+    const files = await receivedWindowImages(scope, ['old', 'new'], []);
+    expect(files).toEqual([{ kind: 'image', originalName: 'screen.png', mimeType: 'image/png', absPath: '/blob/image', url: ref.fileId }]);
+    expect(f.images.mock.calls).toEqual([[{ lane: scope, messageId: 'new' }], [{ lane: scope, messageId: 'old' }]]);
+    expect(await receivedWindowImages(scope, ['old'], files)).toEqual([]);
+    f.stat.mockImplementation(async () => { f.snapshot = null; return { size: png.length, isFile: () => true }; });
+    expect(await receivedWindowImages(scope, ['new'], [])).toEqual([]);
+  });
   it('requires the current account ledger even when a managed blob exists on disk', async () => {
     const input = args();
     input.ref.fileId = 'cindy-media://blobs/hash.png';

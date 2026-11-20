@@ -1,3 +1,4 @@
+import { parsePluginInstallationSource } from '@cindy/maker-shared/mcp-apps';
 import { MobilePluginPreview, type MobilePreviewReader } from './mobilePreview.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -21,7 +22,7 @@ import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/co
 import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { mobilePluginUsage } from './mobilePluginUsage.js';
 import { readGhostReadmeFromDir } from './ghostReadme.js';
 import type { GhostReadmeContent } from '@cindy/plugin-protocol';
@@ -414,7 +415,7 @@ export class MobilePluginPages {
         if (
           url.origin !== 'https://plugin.invalid' ||
           url.hash ||
-          !/^\/(?:kv|models|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+          !/^\/(?:kv|models|harnesses|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
             url.pathname,
           )
         )
@@ -711,7 +712,7 @@ export class MobilePluginPages {
       collection: {
         id: PLUGIN_COLLECTION,
         resourceKind: 'plugin',
-        title: { fallback: 'Plugins', translations: { 'zh-CN': '插件' } },
+        title: { fallback: 'Plugins', translations: { 'zh-CN': '插件', 'zh-TW': '插件', ja: 'プラグイン', ko: '플러그인', es: 'Complementos', fr: 'Plugins', de: 'Plugins', 'pt-PT': 'Plugins', 'pt-BR': 'Plugins', 'zh-Hant-x-lzh': '法器', 'zh-Hans-x-lzh': '法器' } },
         icon: { name: 'puzzle', fallbackText: 'P' },
         ...(this.deps.management
           ? { actions: [
@@ -785,8 +786,13 @@ export class MobilePluginPages {
               ]
             : []),
           {
+            key: 'source',
+            title: t('mcpApps.sourceLabel', locale),
+            value: t('mcpApps.source.' + parsePluginInstallationSource(ghost.installationSource).kind, locale).replaceAll('{{namespace}}', ghost.installationSource?.namespace ?? ''),
+          },
+          {
             key: 'trust',
-            title: t('settings.ghosts.detail.infoTrust', locale),
+            title: t('mcpApps.signatureLabel', locale),
             value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll(
               '{{publisher}}',
               ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale),
@@ -859,7 +865,7 @@ export class MobilePluginPages {
                   })) ?? [],
                 permissions,
                 details: detailFacts,
-                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
+                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand || ghost.manifest.workspace),
                 // Content is fetched on demand with PLUGIN_README_ACTION; older phones ignore the flag.
                 ...(ghost.manifest.readme ? { readme: true } : {}),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
@@ -905,7 +911,7 @@ export class MobilePluginPages {
           if (
             !settings ||
             !ghost.enabled ||
-            !(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand)
+            !(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand || ghost.manifest.workspace)
           )
             return fail();
           const revision = this.deps.revision(ghost),

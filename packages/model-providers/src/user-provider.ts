@@ -1,10 +1,11 @@
+import { copilotModelsUrl } from './modelDiscovery.js';
 import { previousModelGenerations, generationCapabilities } from './modelGeneration.js';
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
 import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
-import { PI_MODEL_APIS } from "./types.js";
+import { PI_MODEL_APIS, isProviderVideoApi } from "./types.js";
 import { providerModelRecord, providerModelGenerationRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 import { providerMediaField } from "./providerMediaModels.js";
@@ -55,7 +56,7 @@ import {
 } from "./effortResolution.js";
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
-export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
+export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 500_000;
 
 /**
  * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
@@ -490,7 +491,7 @@ export function buildUserProvider(
       rt.supportsImageGeneration,
     );
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
-    if (rt.videoApi === "xai-videos") routing[agent]!.videoApi = rt.videoApi;
+    if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===
@@ -498,8 +499,14 @@ export function buildUserProvider(
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
       (rt.requestPath ?? "") === (presetRuntime.requestPath ?? "");
+    if (followsPreset && preset && rt.models.every(model => !model.route?.baseUrl ||
+        withoutTrailingSlashes(model.route.baseUrl) === withoutTrailingSlashes(resolvedBaseUrl))) {
+      routing[agent]!.usagePresetId = preset.id;
+    }
     // A bound single-API cloud connection keeps its language for new deployment IDs too.
     // This lends only the endpoint protocol, never another model's window or capabilities.
+    const discoverCopilotRoute = rt.catalogPresetId === 'github-copilot' && !rt.requestPath
+      && !!copilotModelsUrl(resolvedBaseUrl);
     const presetApis = new Set<ProviderRuntimeModelConfig['api']>(followsPreset ? presetRuntime.models.map(model => model.api ?? model.piApi) : []);
     const presetApi = presetApis.size === 1 ? [...presetApis][0] : undefined;
     const registrySources = [BUNDLED_CATALOG.modelRegistry, options.modelRegistry].filter(
@@ -569,15 +576,18 @@ export function buildUserProvider(
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
           ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
-            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id, undefined, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
-            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+            ? providerPresetModelRecord(preset?.id, m.id, m.api, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? providerModelGenerationRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire, followsPreset ? preset?.id : undefined)
         : undefined;
       // Existing catalog identities keep their established execution path. A
       // predecessor supplies parameters, not permission to switch their adapter.
       const keepExistingApi = imported?.inheritedFrom && registrySources.some(source => findBaseModel(source, m.id));
-      const importedApi = imported && !keepExistingApi &&
+      const copilotResponses = discoverCopilotRoute && !m.api && !m.piApi && !m.route
+        && !presetModel && (!imported || imported.inheritedFrom)
+        && m.discoveredMetadata?.nativeApi === 'openai-responses';
+      const importedApi = copilotResponses ? 'openai-responses' : imported && !keepExistingApi &&
         PI_MODEL_APIS.some(api => api === imported.execution.pi.api)
           ? imported.execution.pi.api as NonNullable<ProviderRuntimeModelConfig['piApi']>
           : !m.route && presetApi ? presetApi
@@ -654,6 +664,12 @@ export function buildUserProvider(
       return {
         ...(imported?.cost ? { cost: imported.cost } : {}),
         ...projected,
+        // Only the exact current route lends an on/off switch. Explicit user
+        // choices stay authoritative, and derived defaults are never persisted.
+        ...(agent === 'pi' && m.thinkingToggle === undefined && m.reasoning !== false &&
+          projected.efforts.length === 0 && imported?.thinkingToggle && !imported.inheritedFrom &&
+          imported === providerModelRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire)
+          ? { thinkingToggle: true } : {}),
         ...(m.interfaceUnavailable ? { interfaceUnavailable: true, availableInterfaces: m.availableInterfaces } : {}),
         ...(m.selectedInterface ? { selectedInterface: { ...m.selectedInterface, defaults: catalogModelMetadata(projected) }, availableInterfaces: m.availableInterfaces,
           ...(m.selectedInterface.nativeApis !== undefined ? { nativeApis: m.selectedInterface.nativeApis } : {}) } : {}),
@@ -733,20 +749,23 @@ export function buildUserProvider(
     >
   > = {};
   const imageAgents = agents.filter((agent) => routing[agent]?.imageApi === "openai-images");
-  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi === "xai-videos");
+  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi !== undefined);
   for (const [agent, list] of Object.entries(models)) {
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);
       if (!field) continue;
-      // Explicit Images membership owns media routing, independent of chat harness order.
-      // Keep the old projection for connections that have never opted into Images.
+      // Legacy API declarations retain their preferred route; Guide-driven
+      // image/video execution can explicitly select every declared connection.
+      const mediaRoutes = field === 'imageModels' || field === 'videoModels';
       const owners = field === "imageModels" ? imageAgents : field === "videoModels" ? videoAgents : [];
-      if (owners.length && !owners.includes(agent as AgentKind)) continue;
       const items = (mediaLists[field] ??= []);
       const existing = items.find((item) => item.id === model.id);
-      if (existing && owners.length) {
-        // A legacy/manual config with two owners is ambiguous. Never pick a key by order.
-        delete existing.sourceAgent;
+      if (existing && mediaRoutes) {
+        existing.sourceAgents = [...(existing.sourceAgents ?? []), agent as AgentKind];
+        const preferred = existing.sourceAgents.filter(candidate => owners.includes(candidate));
+        const candidates = preferred.length ? preferred : existing.sourceAgents;
+        if (candidates.length === 1) existing.sourceAgent = candidates[0];
+        else delete existing.sourceAgent;
       }
       if (!existing)
         items.push({
@@ -757,6 +776,7 @@ export function buildUserProvider(
           defaultEnabled: model.defaultEnabled,
           discoveredMetadata: model.discoveredMetadata,
           sourceAgent: agent as AgentKind,
+          ...(mediaRoutes ? { sourceAgents: [agent as AgentKind] } : {}),
           ...(model.modalities ? { modalities: model.modalities } : {}),
           ...(model.description ? { description: model.description } : {}),
         });

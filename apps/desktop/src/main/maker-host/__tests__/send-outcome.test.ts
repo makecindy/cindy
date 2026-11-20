@@ -185,6 +185,21 @@ describe('desktop send outcome helper', () => {
     });
   });
 
+  // #9636 / engineering-conventions §3.2: production sanitizer must keep known
+  // runtime categories but reject even identifier-shaped secrets. Unit, no I/O.
+  it('retains explicit runtime codes without exposing message or arbitrary code text', () => {
+    for (const code of ['SESSION_CLOSED', 'SESSION_CLOSING', 'SESSION_ERROR', 'SESSION_CLEANUP_PENDING', 'PRECONDITION_FAILED']) {
+      expect(sanitizeSendOutcomeError(Object.assign(new Error('PROMPT_SECRET /private/file'), { code })))
+        .toEqual({ errorName: 'Error', errorCode: code, safeMessage: code });
+    }
+    for (const code of ['PROMPT_SECRET', 'SESSION_CLOSING_TOKEN_VALUE', 'SESSION_CLOSING /private/file']) {
+      expect(sanitizeSendOutcomeError(Object.assign(new Error('TOKEN_VALUE'), { code })))
+        .toEqual({ errorName: 'Error', safeMessage: 'Error' });
+    }
+  });
+
+  // Protocol contract: selected-plugin skip/block failures must survive the
+  // same sanitizer as other host failures, without exposing their raw message.
   it('exports the host failure code list used for sanitizer allow-listing', async () => {
     expect(HOST_SEND_FAILURE_CODES).toEqual([
       'WORKDIR_MISSING',
@@ -195,6 +210,8 @@ describe('desktop send outcome helper', () => {
       'SESSION_RUNNING',
       'CREDENTIAL_SWITCH_BUSY',
       'SEND_FAILED',
+      'PLUGIN_TURN_SKIPPED',
+      'PLUGIN_TURN_BLOCKED',
     ]);
     for (const code of HOST_SEND_FAILURE_CODES) {
       const err = new Error(code) as Error & { code?: string };

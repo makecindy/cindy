@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { Button } from '@/components/ui/button';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -85,7 +86,10 @@ export function ProviderShareManagePage({
   const selfDeviceName = deviceId ? deviceName ?? devices?.find((device) => device.deviceId === deviceId)?.name ?? null
     : devices?.find((device) => device.isSelf)?.name ?? null;
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
-  const [state, setState] = useState<ProviderShareOwnerState | null>(null);
+  const [rosterRead, setRosterRead] = useState<{
+    state: ProviderShareOwnerState; owner: ReturnType<typeof getDataOwnerGeneration>; deviceId?: string;
+  } | null>(null);
+  const state = rosterRead?.state ?? null;
   const [noteMemberId, setNoteMemberId] = useState<string | null>(null);
   const [modelMemberId, setModelMemberId] = useState<string | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -116,7 +120,7 @@ export function ProviderShareManagePage({
     remoteLoading.current = false;
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (owned.ok) {
-      setState(owned.value);
+      setRosterRead({ state: owned.value, owner, deviceId });
       setLoadFailed(false);
       setLoadErrorKey(null);
       publishProviderShareOwnerState(owned.value, deviceId ? { hostDeviceId: deviceId } : undefined);
@@ -308,7 +312,6 @@ export function ProviderShareManagePage({
   const removeMember = useCallback(
     async (member: ProviderShareMemberView) => {
       const ok = await confirm({
-        presentation: 'standard',
         title: t('providerShare.manage.removeConfirm.title', { name: providerShareMemberName(member) }),
         description: t('providerShare.manage.removeConfirm.description', {
           name: providerShareMemberName(member),
@@ -342,11 +345,12 @@ export function ProviderShareManagePage({
   const modelMember = members.find((member) => member.memberId === modelMemberId);
 
   return (
-    // 这一页自己滚动(设置页外层在「模型供应商」分区不滚)。始终预留滚动条槽位：展开组内电脑的配额、
-    // 加载出已分享的人等让内容超过一屏时，滚动条出现不再把整页挤窄 12px(2026-10-11 用户反馈宽度跳变)。
-    // 槽位用 -mr-3 挪进外层右侧留白，内容宽度与「模型供应商」卡片保持一致。
+    // 这一页自己滚动(设置页外层在「模型供应商」分区不滚)。滚动时也不显示滚动条(2026-11-11 用户要求)：
+    // 滚动条不占宽度，内容超过一屏时整页也不会变窄，宽度与「模型供应商」卡片一致。
+    // 只竖向滚：overflow-y 设了 auto，横向会跟着变成 auto，Windows 125%/150% 缩放下取整多出的 1px
+    // 就能横向滚动。宽内容(明细表、热力图)各自在卡片里横向滚。
     <div
-      className="-mr-3 flex h-full min-h-0 flex-col overflow-y-auto pb-8 [scrollbar-gutter:stable]"
+      className="scrollbar-hide flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden pb-8"
       data-testid="provider-share-manage"
     >
       <button
@@ -366,9 +370,25 @@ export function ProviderShareManagePage({
         >
           {providerIcon}
         </div>
-        <h2 className="min-w-0 flex-1 text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+        <h2 className={`min-w-0 flex-1 ${SETTINGS_PAGE_TITLE_CLASS}`}>
           {t('providerGroup.page.title', { provider: providerName })}
         </h2>
+        {!deviceId && rosterRead && !rosterRead.deviceId && members.length > 0 && (
+          <Button variant="secondary" size="md" disabled={!ready || loadFailed || busy.has('export-roster')}
+            onClick={() => void withBusy('export-roster', async () => {
+              const { owner } = rosterRead;
+              if (!isDataOwnerGenerationCurrent(owner)) return;
+              try {
+                await window.electronAPI.providerShare.exportRoster(providerId, {
+                  dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation,
+                });
+              } catch {
+                if (isDataOwnerGenerationCurrent(owner)) toast.error(t('providerShare.manage.exportRosterFailed'));
+              }
+            })}>
+            {t('providerShare.manage.exportRoster')}
+          </Button>
+        )}
         <Button variant="cta" size="md" disabled={!canCreateLink} onClick={() => setLinkOpen(true)}>
           {t('providerShare.manage.createLink')}
         </Button>
@@ -396,11 +416,15 @@ export function ProviderShareManagePage({
       )}
 
       {(requests.length > 0 || reshares.length > 0) && (
-        <section className="mt-6 shrink-0" aria-labelledby="provider-share-pending-title">
-          <h3 id="provider-share-pending-title" className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
-            {t('providerShare.manage.pending.title')}
-          </h3>
-          <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+        <SettingsSection
+          className="mt-6 shrink-0"
+          aria-labelledby="provider-share-pending-title"
+          headingLevel={3}
+          titleId="provider-share-pending-title"
+          title={t('providerShare.manage.pending.title')}
+        >
+          {/* 待处理的申请是带头像和操作的条目列表，行结构不套设置行。 */}
+          <SettingsCard>
             {requests.map((item, index) => (
               <div
                 key={item.request.requestId}
@@ -504,12 +528,18 @@ export function ProviderShareManagePage({
                 </div>
               </div>
             ))}
-          </div>
-        </section>
+          </SettingsCard>
+        </SettingsSection>
       )}
 
-      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
-      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
+      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+        <div className="mt-6 shrink-0">
+          <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
+        </div>
+      )}
+      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId}
+        {...(providerForApproval?.subscriptionPoolAlias ? { poolName: (deviceId ? remoteCatalog.providers : providers)
+          .find(entry => entry.id === (providerForApproval.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})} />
 
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}

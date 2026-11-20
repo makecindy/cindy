@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseProviderShareInsights } from '../../../shared/providerShareInsights';
 const state = vi.hoisted(() => ({
   owner: 0,
   group: null as unknown,
   providers: [] as unknown[],
   snapshot: null as unknown,
   personal: false,
+  pool: undefined as unknown,
 }));
 const remote = vi.hoisted(() => vi.fn());
 const readers = vi.hoisted(() => ({ claude: vi.fn(), xai: vi.fn(), codex: vi.fn() }));
@@ -30,14 +32,21 @@ vi.mock('../../maker-ipc/usage.js', () => ({
 vi.mock('../../provider-group/managementClient.js', () => ({ invokeProviderManagement: remote }));
 vi.mock('../../provider-group/store.js', () => ({ readProviderGroup: () => state.group }));
 const creditUsage = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: creditUsage }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: creditUsage }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   readClaudeAccountUsageSnapshot: () => state.snapshot,
   readClaudeAccountQuotaClear: () => null,
   triggerClaudeAccountUsageRefresh: async () => {},
 }));
 vi.mock('../index.js', () => ({ remoteBackgroundInvoke: vi.fn() }));
-import { readProviderShareQuota, readProviderShareQuotaAccount } from '../providerShareQuota';
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  readSubscriptionPoolAccountUsages: async () => state.pool,
+}));
+import {
+  readProviderShareQuota,
+  readProviderShareQuotaAccount,
+  readProviderShareQuotaAccountResult,
+} from '../providerShareQuota';
 /* 测试价值：通过真实额度读入口验证组来源边界、展示白名单、0/缺失区分与共享缓存。
  * 旧订阅读取测试未覆盖跨账号投影；最小输入含自有+借来账号、远端多余字段、在途改组。
  * tier: unit；宿主依赖mock，无外网/Agent。单文件耗时见执行报告。 */
@@ -53,6 +62,7 @@ beforeEach(() => {
   state.group = null;
   state.providers = [{ id: 'xd', connected: true, auth: { method: 'apiKey' } }];
   state.snapshot = null;
+  state.pool = undefined;
   remote.mockReset().mockResolvedValue(ready);
 });
 describe('share quota projection', () => {
@@ -125,6 +135,119 @@ describe('share quota projection', () => {
       windows: [{ kind: 'session', remainingPercent: 0, windowMinutes: 300 }],
     });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+  // Regression: a shared multi-account subscription showed only its default account's quota.
+  // #10405, unit: no assignable accounts is not a single-account fallback. A pure
+  // historical alias still serves its original shared account after it moved elsewhere.
+  it.each([false, true])('does not borrow old quota from an empty target pool (compatibility alias: %s)', async alias => {
+    state.providers = [{ id: 'legacy', connected: true, auth: { method: 'oauth', native: 'claude' },
+      ...(alias ? { subscriptionPoolAlias: true } : { subscriptionAccountPool: 'anthropic' }) }];
+    state.pool = [];
+    readers.claude.mockResolvedValue({ updatedAt: 1, sevenDay: { utilization: 25, resetsAt: Date.now() / 1000 + 3600 } });
+    const result = await readProviderShareQuota('legacy');
+    expect(result.accounts[0]).toMatchObject(alias ? { state: 'ready', windows: [{ remainingPercent: 75 }] }
+      : { state: 'unavailable', windows: [] });
+  });
+
+  // #10405 unit: a named target must expand its accounts too, selecting the quota family
+  // from its native auth rather than treating every non-builtin id as Codex.
+  it.each(['claude', 'codex'])('expands the accounts of a named %s target without borrowing its old login', async native => {
+    const providerId = `${native}-target`;
+    state.providers = [{ id: providerId, connected: true, auth: { method: 'oauth', native } }];
+    const resetsAt = Date.now() / 1000 + 3600;
+    state.pool = [25, 60].map(percent => ({ usage: native === 'claude'
+      ? { claudeUsage: { updatedAt: 1, sevenDay: { utilization: percent, resetsAt } } }
+      : { codexUsage: { appServerBuckets: { codex: { updatedAt: 1,
+        secondary: { usedPercent: percent, windowMinutes: 10_080, resetsAt } } } } } }));
+    const result = await readProviderShareQuota(providerId);
+    expect(result.accounts.map(account => account.windows.map(window => window.remainingPercent)))
+      .toEqual([[75], [40]]);
+  });
+
+  it('lists every assignable pooled subscription account with all of its windows', async () => {
+    state.providers = [
+      { id: 'anthropic', connected: true, source: 'builtin', auth: { method: 'oauth', native: 'claude' } },
+    ];
+    const resetsAt = Date.now() / 1000 + 3600;
+    readers.claude.mockResolvedValue({
+      sevenDay: { utilization: 86, resetsAt },
+      updatedAt: 1,
+    });
+    state.pool = [
+      { usage: { claudeUsage: { updatedAt: 1, sevenDay: { utilization: 86, resetsAt } } } },
+      {
+        usage: {
+          claudeUsage: {
+            updatedAt: 2,
+            fiveHour: { utilization: 30, resetsAt },
+            sevenDay: { utilization: 40, resetsAt },
+            scoped: [{ modelId: 'claude-fable', modelDisplayName: 'Fable', utilization: 16, resetsAt }],
+            accountFingerprint: 'secret',
+          },
+        },
+      },
+    ];
+    const result = await readProviderShareQuota('anthropic');
+    expect(result).toMatchObject({ group: true, partial: false });
+    expect(result.accounts.map((account) => account.windows.map((w) => [w.kind, w.label, w.remainingPercent]))).toEqual([
+      [['week', null, 14]],
+      [
+        ['session', null, 70],
+        ['week', null, 60],
+        ['scoped', 'Fable', 84],
+      ],
+    ]);
+    expect(JSON.stringify(result)).not.toContain('secret');
+    // Older group owners read the top-level account; newer ones read the full list.
+    const member = await readProviderShareQuotaAccountResult('anthropic');
+    expect(member).toMatchObject({ windows: [{ kind: 'week' }], accounts: result.accounts });
+    state.owner++;
+    state.pool = [(state.pool as unknown[])[0]];
+    readers.claude.mockClear();
+    expect(await readProviderShareQuota('anthropic')).toMatchObject({ group: false, accounts: [{ windows: [{ kind: 'week' }] }] });
+    expect(await readProviderShareQuotaAccountResult('anthropic')).not.toHaveProperty('accounts');
+    expect(readers.claude).not.toHaveBeenCalled();
+  });
+  it('expands pooled accounts reported by a group member computer and keeps older members readable', async () => {
+    state.group = {
+      members: [
+        { kind: 'device', agentDeviceId: 'new-device', providerId: 'anthropic' },
+        { kind: 'device', agentDeviceId: 'old-device', providerId: 'anthropic' },
+      ],
+    };
+    const second = { ...ready, balance: null, windows: [{ kind: 'week', label: null, remainingPercent: 60, resetsAt: null, windowMinutes: 10080 }] };
+    remote.mockImplementation(async (_invoke: unknown, deviceId: string) =>
+      deviceId === 'new-device' ? { ...ready, accounts: [ready, { ...second, email: 'private@example.test' }] } : ready,
+    );
+    const result = await readProviderShareQuota('anthropic');
+    expect(result.accounts).toEqual([ready, second, ready]);
+    expect(JSON.stringify(result)).not.toContain('private');
+    // A member pool may hold 32 accounts; none of them may be dropped.
+    state.owner++;
+    state.group = { members: [{ kind: 'device', agentDeviceId: 'new-device', providerId: 'anthropic' }] };
+    remote.mockResolvedValue({ ...ready, accounts: Array.from({ length: 33 }, () => second) });
+    expect((await readProviderShareQuota('anthropic')).accounts).toHaveLength(32);
+  });
+  // Unit regression: existing tests cover one member's pool, not the v1 wire limit.
+  // Sixteen full pools fit; a seventeenth used to invalidate the entire insights response.
+  it.each([16, 17])('keeps %i full member pools readable within the existing wire contract', async (members) => {
+    state.group = {
+      members: Array.from({ length: members }, (_, index) => ({
+        kind: 'device', agentDeviceId: `device-${index}`, providerId: 'anthropic',
+      })),
+    };
+    remote.mockResolvedValue({ ...ready, accounts: Array.from({ length: 32 }, () => ready) });
+    const quota = await readProviderShareQuota('anthropic');
+    const response = {
+      version: 1,
+      capabilities: { quota: true, usage: true },
+      status: { quota: 'ready', usage: 'ready' },
+      quota,
+      usage: { todayKey: '2026-11-07', coverageStart: null, parties: [] },
+    };
+    expect(parseProviderShareInsights(response)).toEqual(response);
+    expect(quota.accounts).toHaveLength(512);
+    expect(quota.partial).toBe(members > 16);
   });
   it('excludes borrowed accounts and strips remote identity fields while coalescing repeated queries', async () => {
     state.group = {

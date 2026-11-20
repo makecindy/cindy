@@ -4,11 +4,11 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerView } from '@/session/UnifiedModelPickerView';
 import { UnifiedModelPickerView as IosModelPickerView } from '@/session/UnifiedModelPickerView.ios';
-const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn() }));
+const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn(), scrollToIndex: vi.fn(), props: null as any }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('react-native', async () => {
   const { createElement: el, useImperativeHandle } = await import('react');
-  const View = ({ children, accessibilityElementsHidden, pointerEvents }: any) => el('div', { 'aria-hidden': accessibilityElementsHidden, 'data-pointer-events': pointerEvents }, children);
+  const View = ({ children, accessibilityElementsHidden, pointerEvents, accessibilityValue, accessibilityLabel }: any) => el('div', { 'aria-hidden': accessibilityElementsHidden, 'data-pointer-events': pointerEvents, 'data-quota': accessibilityValue?.now, 'aria-label': accessibilityLabel }, children);
   return {
     Platform: { OS: "android" },
     View, ScrollView: View,
@@ -19,10 +19,12 @@ vi.mock('react-native', async () => {
       renderItem,
       ListHeaderComponent,
       ListEmptyComponent,
+      ...props
     }: any) => {
+      virtualList.props = props;
       useImperativeHandle(
         ref,
-        () => ({ scrollToOffset: virtualList.scrollToOffset }),
+        () => ({ scrollToOffset: virtualList.scrollToOffset, scrollToIndex: virtualList.scrollToIndex }),
         [],
       );
       return el(
@@ -37,19 +39,19 @@ vi.mock('react-native', async () => {
       );
     },
 
-    Pressable: ({ children, onPress, disabled, accessibilityLabel }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel }, children),
+    Pressable: ({ children, onPress, disabled, accessibilityLabel, testID }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel, 'data-testid':testID }, children),
     StyleSheet: { create: (styles: any) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 400, height: 800 }),
   };
 });
 vi.mock('@/components/AppText', async () => {
   const { createElement: el } = await import('react');
-  return { Text: ({ children }: any) => el('span', null, children), TextInput: () => null };
+  return { Text: ({ children }: any) => el('span', null, children), TextInput: ({ onChangeText }: any) => el('input', { 'aria-label': 'Model search', onInput: (event: any) => onChangeText(event.target.value) }) };
 });
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -58,8 +60,8 @@ vi.mock('react-native-svg', () => ({
 }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const { useRef } = await import('react');
-  const Container = ({ children, modifiers, testID }: any) => createElement('div', {
-    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers),
+  const Container = ({ children, modifiers, testID, initialScrollTargetId }: any) => createElement('div', {
+    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers), 'data-initial-scroll': initialScrollTargetId,
     'aria-hidden': modifiers?.some((m:any) => m.accessibilityHidden === true),
   }, children);
   return {
@@ -69,14 +71,17 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
-  ['containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
+  ['id', 'containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), ...Object.fromEntries(
   ['background', 'fixedSize', 'accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
-vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title }: any) => createElement('div', null, title, children) }));
-vi.mock('@/session/ComposerNativeRow', () => ({ ComposerNativeRow: ({ leading, title }: any) => createElement('div', null, leading, title) }));
+vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title, header }: any) => createElement('div', null, header ?? title, children) }));
+vi.mock('@/session/ComposerNativeRow', () => ({
+  ComposerNativeRow: ({ leading, title, subtitleContent, subtitle, testID }: any) =>
+    createElement('div', { 'data-testid': testID }, leading, title, subtitleContent ?? subtitle),
+}));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
 // 远程标记由 mark 自己按 remote 画(字形不缩放不移位),桩里只留一个可数的记号。
@@ -96,12 +101,31 @@ vi.mock('@/theme', async () => {
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 beforeEach(() => {
-  virtualList.scrollToOffset.mockClear();
+  virtualList.scrollToOffset.mockReset();
+  virtualList.scrollToIndex.mockReset();
+  virtualList.props = null;
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   host = document.createElement('div');
   root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
+// A pool is not one synthetic progress bar. Exercise both platform renderers,
+// including the native iOS source row, with separate known and unknown quotas.
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders independent account quota bars before allocation on %s', async (_platform, Component) => {
+    const members = [{ remaining: 34, label: 'first@example.test · 34%' },
+      { remaining: 80, label: 'second@example.test · 80%' }, { label: 'unknown@example.test · —' }];
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'pool', title: 'Models', query: '', filter: 'all', groups: [],
+      filters: [{ id: 'account', label: '3 accounts', providerMark: { name: 'Anthropic' },
+        quota: { label: members.map(member => member.label).join('\n'), members } }],
+    } as any)));
+    await act(async () => (host.querySelector('button[aria-label="models.unified.source"]') as HTMLButtonElement).click());
+    expect([...host.querySelectorAll('[data-quota]')].map(node => node.getAttribute('data-quota'))).toEqual(['34','80']);
+    expect(host.querySelector('[data-quota="34"]')?.getAttribute('aria-label')).toBe('first@example.test · 34%');
+    expect(host.querySelector('[data-quota="80"]')?.getAttribute('aria-label')).toBe('second@example.test · 80%');
+  },
+);
 it.each([null, '2d · 70%'])('keeps both account identities visible with quota %s', async quotaLabel => {
   const rows = ['first@example.com', 'second@example.com'].map(subtitle => ({
     key: subtitle, subtitle, quotaLabel, entry: { displayName: 'Same Model' },
@@ -220,6 +244,8 @@ it.each([
   expect(list.closest('[aria-hidden="true"]')).toBeNull();
 });
 
+// Unit, 2026-11-18 decision. Each platform must render the reason supplied
+// for a single remote copy on both the source and model rows.
 it.each([
   ['Android', UnifiedModelPickerView],
   ['iOS', IosModelPickerView],
@@ -233,7 +259,7 @@ it.each([
   const filters = [
     { id: 'all', label: 'All' },
     { id: 'account', label: 'Local Provider', providerMark: { name: 'Local Provider' } },
-    remote('studio', 'Studio Mac', 'Claude Sub'),
+    { ...remote('studio', 'Studio Mac', 'Claude Sub'), sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable' },
     remote('office', 'Office PC', 'Codex Sub'),
     remote('studio', 'Studio Mac', 'OpenRouter'),
   ];
@@ -251,6 +277,8 @@ it.each([
   expect(text.indexOf('Studio Mac')).toBeLessThan(text.indexOf('Claude Sub'));
   expect(text.indexOf('OpenRouter')).toBeLessThan(text.indexOf('Office PC'));
   expect(text).not.toContain('Claude Sub · Studio Mac');
+  expect(host.querySelector('[data-testid="modelSheet.source.remote:studio:Claude Sub"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
   // 其他电脑的供应商图标带远程标记,本机的不带。
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(3);
 });
@@ -267,11 +295,16 @@ it.each([
     visible: true, testID: 'modelSheet', title: 'Models', query: '', filter: 'all', filters: [],
     groups: [
       { key: 'account', title: 'Local Provider', rows: [row('local')] },
-      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [row('remote', { deviceId: 'studio', name: 'Studio Mac' })] },
+      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [{
+        ...row('remote', { deviceId: 'studio', name: 'Studio Mac' }),
+        sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable',
+      }] },
     ],
   } as any)));
   expect(host.textContent).toContain('Claude Sub · Studio Mac');
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(1);
+  expect(host.querySelector('[data-testid="modelSheet.model.remote"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
 });
 
 it('keeps selection errors visible in the retained native root list', async () => {
@@ -312,3 +345,158 @@ it.each(["query", "filter"])(
     expect(host.textContent).toContain("No results");
   },
 );
+
+// Integration: chosen design C exposes reset warnings once per source and lets
+// a tap reach account details, without selecting a model or changing its route.
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'opens account details from the source average and reset warning on %s', async (_platform, Component) => {
+    const quota = {remaining:57,summary:'Average 57%',resetSoon:true,reset:{remaining:80,time:'6h',level:'crit'},resetParts:['',' 后重置'],resetDescription:'Resets in 6h · Remaining 80%',label:'Account A 34% · Account B 80% · resets in 6h',
+      members:[{remaining:34,label:'Account A 34%'},{remaining:80,label:'Account B 80%'}]};
+    const onSelect=vi.fn(), onFilter=vi.fn();
+    await act(async()=>root.render(createElement(Component, {
+      visible:true,testID:'modelSheet',query:'',filter:'anthropic',onClose:vi.fn(),onSelect,onFilter,
+      filters:[{id:'anthropic',label:'Anthropic',providerMark:{providerId:'anthropic'},quota}],
+      groups:[{key:'anthropic',title:'Anthropic',quota,rows:[]}],
+    } as any)));
+    const button=host.querySelector('button[aria-label="Average 57% · models.unified.quotaResetSoon · Resets in 6h · Remaining 80%"]') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.textContent).toContain('80%6h 后重置');
+    expect(button.textContent).not.toContain('models.unified.quotaResetSoon');
+    expect(button.textContent).not.toContain('Average');
+    expect(button.textContent).toContain('57%');
+    await act(async()=>button.click());
+    expect(host.querySelectorAll('[data-quota="80"]')).toHaveLength(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onFilter).not.toHaveBeenCalled();
+  },
+);
+
+// Regression: opening a long catalog used to leave the selected model offscreen.
+// Existing view tests only exercised row contents. Unit tier: late rows, refresh,
+// and reopen through the production view, asserting the native list scroll command.
+it('locates a late selected model once per opening without snapping back on refresh', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  virtualList.scrollToIndex.mockClear();
+  const row = { key: 'selected', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (visible: boolean, rows: any[]) => act(() => root.render(createElement(UnifiedModelPickerView, {
+    visible, groups: [{ key: 'provider', title: 'Provider', rows }], filters: [], query: '', filter: 'all',
+  } as any)));
+  const flush = () => act(() => { frames.splice(0).forEach(callback => callback(0)); });
+  try {
+    render(true, []);
+    flush();
+    expect(virtualList.scrollToIndex).not.toHaveBeenCalled();
+    render(true, [{ ...row, key: 'first', selected: false }, row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenLastCalledWith({ index: 2, viewPosition: 0.5, animated: false });
+    render(true, [{ ...row, key: 'first', selected: false }, { ...row }]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(1);
+    render(false, [row]);
+    flush();
+    render(true, [row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(2);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+// Native boundary: the Form must receive a unique group + row target, even
+// when a favorite and provider entry share a model key. Native motion needs device verification.
+it('passes the first selected row target to the iOS form after late data', () => {
+  const row = { key: 'same-model', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (groups: any[]) => act(() => root.render(createElement(IosModelPickerView, {
+    visible: true, testID: 'picker', groups, filters: [], query: '',
+  } as any)));
+  render([]);
+  expect(host.querySelector('[data-initial-scroll]')).toBeNull();
+  render([{ key: 'favorites', rows: [row] }, { key: 'provider', rows: [row] }]);
+  expect(host.querySelector('[data-testid="picker.list"]')?.getAttribute('data-initial-scroll')).toBe('favorites:same-model');
+});
+
+// PR #10552 / review r4573357542: exercise the real view's native callback
+// boundary for an unmeasured target outside the first render window. Previously
+// the FlatList stub discarded failure/layout/drag callbacks, so compensation,
+// its bound, and cancellation could all break unnoticed. Unit tier; fake time.
+function mountUnmeasuredModelTarget() {
+  vi.useFakeTimers();
+  let measured = false;
+  let landedIndex: number | null = null;
+  const rows = Array.from({ length: 40 }, (_, index) => ({
+    key: `model-${index}`, selected: index === 39,
+    entry: { displayName: `Model ${index}`, capabilities: {} }, config: { agent: 'codex' },
+  }));
+  const props = {
+    visible: true, groups: [{ key: 'provider', title: 'Provider', rows }],
+    filters: [], query: '', filter: 'all', onQuery: vi.fn(),
+  };
+  const render = (visible = true) => act(() => root.render(createElement(UnifiedModelPickerView, { ...props, visible } as any)));
+  virtualList.scrollToIndex.mockImplementation(({ index }) => {
+    if (measured) landedIndex = index;
+    else virtualList.props.onScrollToIndexFailed({ index, averageItemLength: 60, highestMeasuredFrameIndex: 7 });
+  });
+  render();
+  const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+  tick(20); // First animation frame: target is outside the measured window.
+  return {
+    render, tick, onQuery: props.onQuery,
+    measure: () => { measured = true; },
+    landed: () => landedIndex,
+    cleanup: () => { act(() => root.render(null)); vi.useRealTimers(); },
+  };
+}
+
+it.each(['timer', 'content-size'] as const)('reaches the initially unmeasured selected row after %s recovery', trigger => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    expect(picker.landed()).toBeNull();
+    expect(virtualList.scrollToOffset).toHaveBeenLastCalledWith({ offset: 2400, animated: false });
+    picker.measure();
+    if (trigger === 'timer') picker.tick(50);
+    else act(() => virtualList.props.onContentSizeChange(400, 3000));
+    expect(picker.landed()).toBe(40);
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    picker.tick(1000);
+    act(() => virtualList.props.onContentSizeChange(400, 3100));
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+  } finally { picker.cleanup(); }
+});
+
+it('stops compensation after five failed recovery attempts', () => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6); // Initial try + five recoveries.
+    expect(picker.landed()).toBeNull();
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    picker.measure();
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
+});
+
+it.each(['drag', 'search', 'close'] as const)('keeps pending compensation cancelled after %s', cancel => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    if (cancel === 'drag') act(() => virtualList.props.onScrollBeginDrag());
+    else if (cancel === 'search') act(() => {
+      const search = host.querySelector('input[aria-label="Model search"]') as HTMLInputElement;
+      search.value = 'another';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    else picker.render(false);
+    if (cancel === 'search') expect(picker.onQuery).toHaveBeenCalledWith('another');
+    picker.measure();
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
+});

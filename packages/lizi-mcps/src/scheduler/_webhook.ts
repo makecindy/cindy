@@ -8,10 +8,12 @@ export const webhookSourceSchema = z
     preset: z.string().min(1).max(32),
     signed: z.boolean().optional(),
     format: z.record(z.string(), z.unknown()).optional(),
+    repositories: z.array(z.string().min(1).max(140)).min(1).max(50).optional(),
   })
   .optional()
   .describe(
-    '发送方。preset：github（默认）/ gitea / bitbucket / linear / gitlab / gitlab-token / standard-webhooks / stripe；'
+    '发送方。preset=github-app 使用已连接的 Cindy GitHub App，repositories 必填仓库名列表（owner/repository），无需单独配置地址或密钥；'
+      + '普通 Webhook 的 preset：github（默认）/ gitea / bitbucket / linear / gitlab / gitlab-token / standard-webhooks / stripe；'
       + 'signed=false 关闭签名（拿到地址的人都能触发）；preset=custom 时用 format 给出格式描述。省略 = 不修改',
   );
 
@@ -25,3 +27,8 @@ export function assertWebhookReceiverAvailable(deps: Pick<SchedulerMcpDeps, 'web
     throw new Error('invalid request: 当前环境没有可用的 Webhook 接收服务');
   }
 }
+
+export const schedulePrTriggerSchema = z.strictObject({
+  url: z.string().url(),
+  change: z.enum(['any', 'merged', 'review', 'ci']),
+}).nullable().optional().describe('在指定 GitHub PR 变化时提前运行。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。可与重复定时检查并用。null 关闭 PR 提前触发。');

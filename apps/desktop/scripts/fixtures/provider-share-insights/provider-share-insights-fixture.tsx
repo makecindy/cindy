@@ -1,12 +1,27 @@
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { ProviderShareManagePage } from '../../../src/renderer/features/provider-share/ProviderShareManagePage';
 import { ProviderShareReceivedDetail } from '../../../src/renderer/features/provider-share/ProviderShareReceivedRail';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import type {
   ProviderShareInsights,
   ProviderShareQuotaAccount,
 } from '../../../src/shared/providerShareInsights';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../../src/shared/remoteAgentLimits';
+import type { ProviderGroupConfig, ProviderGroupView } from '../../../src/shared/providerGroup';
+
+const ownerGroupConfig: ProviderGroupConfig = {
+  strategy: 'least', autoSwitch: true, allowFast: true,
+  members: [
+    { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', label: 'Mac mini', limit: 10, weight: 1, paused: false },
+    { key: 'device:work-pc:xd', kind: 'device', agentDeviceId: 'work-pc', providerId: 'xd', label: 'Work PC', limit: 10, weight: 1, paused: false },
+  ],
+};
+const ownerGroup: ProviderGroupView = {
+  providerId: 'xd',
+  config: ownerGroupConfig,
+  members: ownerGroupConfig.members.map(member => ({ ...member, state: 'available', running: 1, appVersion: '0.1.130' })),
+};
 
 const now = Date.parse('2026-10-19T12:00:00Z');
 const share: ProviderShareReceived = {
@@ -124,6 +139,15 @@ void mountPage({
         },
       ],
     };
+    // A second account in the owner's subscription pool, with a model-specific weekly window.
+    const pooledAccount: ProviderShareQuotaAccount = {
+      ...subscriptionAccount,
+      windows: [
+        { ...subscriptionAccount.windows[0], remainingPercent: 98 },
+        { ...subscriptionAccount.windows[1], remainingPercent: 14 },
+        { kind: 'scoped', label: 'Fable', windowMinutes: 10080, remainingPercent: 84, resetsAt: now + 86_400_000 },
+      ],
+    };
     const displayedAccount: ProviderShareQuotaAccount =
       ctx.case === 'subscription'
         ? subscriptionAccount
@@ -167,10 +191,14 @@ void mountPage({
             },
             quota: quota
               ? {
-                  group: ctx.case === 'group',
+                  group: ctx.case === 'group' || ctx.case === 'subscription-pool',
                   partial: ctx.case === 'group',
                   accounts:
-                    ctx.case === 'group' ? [account, subscriptionAccount] : [displayedAccount],
+                    ctx.case === 'group'
+                      ? [account, subscriptionAccount]
+                      : ctx.case === 'subscription-pool'
+                        ? [subscriptionAccount, pooledAccount]
+                        : [displayedAccount],
                 }
               : null,
             usage: allowUsage && cmd.includeUsage ? usage : null,
@@ -194,7 +222,10 @@ void mountPage({
                 providerId: 'xd',
                 providerLabel: 'Cindy AI',
                 createdAt: '2026-10-01T00:00:00Z',
-                members: [],
+                members: [{
+                  memberId: 'fixture-person', displayName: 'Alex', note: 'Team A', region: 'global', avatarUrl: null,
+                  status: 'active', joinedAt: '2026-10-02T00:00:00Z', lastUsedAt: null, runningTasks: 0, models: [],
+                }],
                 requests: [],
               },
             ],
@@ -224,11 +255,20 @@ void mountPage({
         onControlTargetChanged: subscription('controlTarget'),
       },
       providerGroup: {
-        command: async (cmd: { action: string }) => (cmd.action === 'list' ? {} : null),
+        command: async (cmd: { action: string; request?: { action: string; command: Parameters<typeof command>[0] } }) => {
+          if (cmd.action === 'remote-manage' && cmd.request) {
+            if (cmd.request.action === 'manage-share') return command(cmd.request.command);
+            if (cmd.request.action === 'manage-group' && cmd.request.command.action === 'get') return ownerGroup;
+          }
+          if (cmd.action === 'list') return ctx.case.startsWith('owner') ? { xd: ownerGroup.config } : {};
+          if (cmd.action === 'get') return ctx.case.startsWith('owner') ? ownerGroup : { providerId: 'xd', config: null, members: [] };
+          return forbid(`providerGroup.${cmd.action}`)();
+        },
         onChanged: subscription('groupChanged'),
       },
       providerShare: {
         command,
+        exportRoster: async () => { throw new Error('Synthetic roster save failure'); },
         onOwnedChanged: subscription('ownedShares'),
         onReceivedChanged: subscription('receivedShares'),
       },
@@ -236,16 +276,20 @@ void mountPage({
   },
   render: (ctx) => (
     <AppFrame>
+      <ToastContainer />
       <div className="flex h-full min-h-0 flex-col">
         <p className="shrink-0 px-5 py-2 text-12 text-[var(--text-secondary)]">
           UI fixture · 测试数据 · Test data
         </p>
-        {ctx.case === 'owner' ? (
+        {ctx.case.startsWith('owner') ? (
           <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
             <ProviderShareManagePage
               providerId="xd"
               providerName="Cindy AI"
               providerIcon={<span>C</span>}
+              deviceId={ctx.case === 'owner-remote' ? 'fixture-host' : undefined}
+              deviceName={ctx.case === 'owner-remote' ? 'Remote Mac' : undefined}
+              initialGroup={ownerGroupConfig}
               gate="on"
               onBack={() => {}}
             />

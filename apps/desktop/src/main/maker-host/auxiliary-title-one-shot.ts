@@ -57,6 +57,8 @@ type TitleRequest = {
 };
 
 export interface AuxiliaryTextRequest {
+  source?: string;
+  sessionId?: string;
   agentKind: AgentKind;
   prompt: string;
   maxTokens: number;
@@ -99,9 +101,11 @@ export async function requestAuxiliaryText(
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };
-  const beforeSessionAgentDispatch = async () =>
-    !(await isAgentOneShotRouteDisabled(args.agentKind)) && await beforeDispatch();
+  // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+  const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
+    !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
+    source: args.source, sessionId: args.sessionId,
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,
     // Short budgets cannot afford provider-default thinking. Messages /
@@ -125,6 +129,7 @@ export async function requestAuxiliaryText(
   if (canFallbackToSessionAgent) {
     try {
       const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+        source: args.source, sessionId: args.sessionId,
         maxTokens: args.maxTokens,
         timeoutMs: args.timeoutMs,
         signal: args.signal,
@@ -147,6 +152,7 @@ async function generateAuxiliaryTitle(
   deps: AuxiliaryTitleRuntimeDeps,
 ): Promise<TitleOneShotResult> {
   const result = await requestAuxiliaryText({
+    source: 'title', sessionId: args.sessionId,
     agentKind: args.agentKind,
     prompt: args.prompt,
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,

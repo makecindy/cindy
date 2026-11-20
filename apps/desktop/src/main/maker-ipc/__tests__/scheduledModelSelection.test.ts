@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  resolveScheduledModelSelection,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+} from '../scheduledModelSelection';
 
 const selection: ScheduledModelSelection = {
   agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: null, fastMode: false,
@@ -125,6 +134,84 @@ describe('one-run automation model preferences', () => {
     // away from the automation just to capture it again.
     expect(await scope.begin('task')).toBe('scope-1');
     expect(prepareBaseline).toHaveBeenCalledTimes(1);
+  });
+  // #9642, PR #9680: unit coverage through begin/restore. Earlier preparation
+  // cases only injected errors; idle pending switches could still fail hard.
+  // Change both model and source to catch capturing the pre-switch profile.
+  it('captures and restores the applied pending route instead of the old model and source', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, agentKind: 'pi' as const,
+      model: 'switched-owner-model', providerId: 'switched-owner-source' };
+    let pending = true;
+    let finishSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { finishSwitch = resolve; });
+    const applyPendingSwitch = vi.fn(async () => {
+      await switching;
+      await h.deps.apply('task', switched);
+      pending = false;
+      return 'applied' as const;
+    });
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => pending,
+        hasPendingSwitch: () => pending, isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const beginning = scope.begin('task');
+    await vi.waitFor(() => expect(applyPendingSwitch).toHaveBeenCalledOnce());
+    expect(h.state().baseline).toBeNull();
+    finishSwitch();
+    const scopeId = await beginning;
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    h.automate();
+    await scope.restore('task', scopeId);
+    expect(h.state()).toEqual({ profile: switched, baseline: null });
+  });
+  it.each([
+    { idle: false, pendingSwitch: true, label: 'busy switch' },
+    { idle: true, pendingSwitch: true, label: 'unsettled switch' },
+    { idle: true, pendingSwitch: false, label: 'pending runtime mutation' },
+  ])('defers $label without capturing the old baseline', async ({ idle, pendingSwitch }) => {
+    const h = scopeFixture();
+    const applyPendingSwitch = vi.fn(async () => 'staged' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => pendingSwitch, isIdle: () => idle, applyPendingSwitch,
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBeInstanceOf(ScheduledModelSelectionBusyError);
+    expect(h.state().baseline).toBeNull();
+    expect(applyPendingSwitch).toHaveBeenCalledTimes(idle && pendingSwitch ? 1 : 0);
+  });
+  it('captures the reconciled route without reapplying a switch that already settled', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, model: 'reconciled-model', providerId: 'reconciled-source' };
+    let pending = true;
+    const applyPendingSwitch = vi.fn(async () => 'applied' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => { await h.deps.apply('task', switched); pending = false; },
+        hasPendingRoute: () => pending, hasPendingSwitch: () => pending,
+        isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const scopeId = await scope.begin('task');
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    expect(applyPendingSwitch).not.toHaveBeenCalled();
+  });
+  it('preserves an actual switch failure instead of classifying every error as busy', async () => {
+    const h = scopeFixture();
+    const failure = new Error('route unavailable');
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => true, isIdle: () => true,
+        applyPendingSwitch: async () => { throw failure; },
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBe(failure);
+    expect(h.state().baseline).toBeNull();
   });
   // #6895 unit regression: a lane outside the save's lock snapshot can see
   // Profile B after preparation applied A. Do not stamp A with B's revision.
@@ -389,6 +476,13 @@ function provider(id: string, model: Partial<CatalogModel> = {}): ProviderView {
 }
 
 describe('saved effort uses the selected provider and Harness catalog copy', () => {
+  // PR #9900, unit: upgrading a saved source adds a display-only alias marker.
+  // Previous dispatch coverage had no aliases; the original source must still resolve.
+  it('preserves an explicitly saved imported connection at dispatch', () => {
+    const imported = { ...provider('custom'), subscriptionPoolAlias: true as const };
+    expect(resolveScheduledModelSelection(selection, [provider('openai'), imported]))
+      .toMatchObject({ providerId: 'custom', model: 'test-model' });
+  });
   // Main now applies new-route admission to both local and remote restores.
   it('rejects a disabled local model during scheduled resolution', () => {
     expect(() => resolveScheduledModelSelection({ ...selection, agentDeviceId: null, effort: 'high' }, [

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
@@ -65,8 +65,9 @@ import {
   setProviderOAuthTokenReader,
   setProviderViewsReader,
 } from '../provider-route';
-import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider } from '../session-provider-store';
+import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider, setSessionProvider } from '../session-provider-store';
 import { registerPiProxySession } from '../pi-proxy-session-auth';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 const SHARED_UPSTREAM = 'https://shared.example/api/anthropic';
 const OTHER_UPSTREAM = 'https://other.example/api/anthropic';
@@ -81,6 +82,25 @@ async function statusOf(decision: RoutingDecision | null): Promise<number | unde
   const res = { headersSent: false, writeHead: (code: number) => { status = code; return res; }, end: () => res };
   await decision.localHandler({ res } as never);
   return status;
+}
+
+// Unit / provider-groups §6.1: an explicit proxy scope refusal must remain
+// distinguishable from a member losing a model, including Claude and Pi.
+// Existing tests checked only HTTP status, missing the recovery consequence.
+async function expectScopeRefusal(decision: RoutingDecision | null, code = 'shared_provider_only'): Promise<void> {
+  let status = 0;
+  let body = '';
+  await decision!.localHandler!({ res: {
+    writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; },
+  } } as never);
+  const error = JSON.parse(body).error;
+  expect(status).toBe(403);
+  expect(error.code).toBe(code);
+  expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+  expect(body).not.toContain('shared-model');
+  expect(body).not.toContain('other-b');
+  expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run'))
+    .toEqual({ action: 'stay', why: 'policy' });
 }
 
 function installProviders(): void {
@@ -145,6 +165,35 @@ describe('Claude proxy routing for shared-provider guests', () => {
       headerOverride: { 'x-api-key': 'shared-a-key' },
     });
     expect(decision?.headerDelete).toContain(GUEST_ROUTE_HEADER);
+  });
+
+  // Unit / provider-groups §6.1: token validation alone covered stale bindings,
+  // not a provider change between the async catalog check and final routing.
+  it('stops group recovery when an admitted guest request finds a different session provider', async () => {
+    const { token } = registerGuestProviderRoute('guest-session', 'shared-a');
+    const request = () => Promise.resolve(transform(
+      { model: 'shared-model' }, ctxWith({ [GUEST_ROUTE_HEADER]: token }),
+    ));
+    setSessionProvider('guest-session', 'other-b');
+    expect(await statusOf(await request())).toBe(401);
+    setSessionProvider('guest-session', 'shared-a');
+    // The real pending-switch read is after token/model admission and before
+    // the final provider check. Inject only the intervening binding change.
+    setPendingCredentialSwitchReader(sessionId => {
+      setSessionProvider(sessionId, 'other-b');
+      return undefined;
+    });
+    try { await expectScopeRefusal(await request()); }
+    finally { setPendingCredentialSwitchReader(() => undefined); }
+  });
+
+  it('marks a subscription redirect outside an otherwise valid shared custom catalog as a scope refusal', async () => {
+    const model = 'chatgpt/gpt-5.5';
+    setCustomProviders([buildUserProvider({ id: 'shared-a', name: 'Shared', runtimes: {
+      'claude-code': { baseUrl: SHARED_UPSTREAM, wireProtocol: 'anthropic-messages', models: [{ id: model, name: model }] },
+    } })]);
+    const { token } = registerGuestProviderRoute('guest-session', 'shared-a');
+    await expectScopeRefusal(await transform({ model }, ctxWith({ [GUEST_ROUTE_HEADER]: token })));
   });
 
   it.each([
@@ -232,7 +281,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
   it('refuses a body-less request unless the shared provider is the default gateway', async () => {
     const { token } = registerGuestProviderRoute('guest-session', 'shared-a');
     const decision = await Promise.resolve(transform(undefined, ctxWith({ [GUEST_ROUTE_HEADER]: token })));
-    expect(await statusOf(decision)).toBe(403);
+    await expectScopeRefusal(decision);
   });
 
   it('refuses a guest Pi request whose token belongs to another provider', async () => {
@@ -246,7 +295,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
         'x-cindy-pi-session-token': 'child-token',
         'x-cindy-pi-provider-id': 'other-b',
       })));
-      expect(await statusOf(foreign)).toBe(403);
+      await expectScopeRefusal(foreign);
       const gateway = await Promise.resolve(transform({ model: 'other-model' }, ctxWith({
         'x-cindy-pi-session-id': 'pi-guest',
         'x-cindy-pi-session-token': 'root-token',
@@ -263,6 +312,33 @@ describe('Claude proxy routing for shared-provider guests', () => {
       disposeRoot();
       disposeChild();
     }
+  });
+
+  // A loopback mismatch alone is not evidence of shared scope. Only a live
+  // guest binding makes this the same scope family as the child-token refusal.
+  it.each(['guest', 'owner'])('classifies a Pi token/provider mismatch for %s without changing its rejection', async trust => {
+    if (trust === 'guest') registerGuestProviderRoute('pi-mismatch', 'shared-a');
+    else setSessionProvider('pi-mismatch', 'shared-a');
+    const dispose = registerPiProxySession('pi-mismatch', 'root-token', () => 'shared-a');
+    try {
+      const decision = await transform({ model: 'shared-model' }, ctxWith({
+        'x-cindy-pi-session-id': 'pi-mismatch', 'x-cindy-pi-session-token': 'root-token',
+        'x-cindy-pi-provider-id': 'other-b',
+      }));
+      if (trust === 'guest') await expectScopeRefusal(decision, 'pi_provider_mismatch');
+      else {
+        let status = 0;
+        let body = '';
+        await decision!.localHandler!({ res: {
+          writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; },
+        } } as never);
+        const error = JSON.parse(body).error;
+        expect(status).toBe(403);
+        expect(error.code).toBe('pi_provider_mismatch');
+        expect(error.message).not.toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+        expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run').action).toBe('switch');
+      }
+    } finally { dispose(); }
   });
 
   // Unit regression for #6592 / provider-sharing §12: the production routing transform must

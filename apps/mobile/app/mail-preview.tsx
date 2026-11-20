@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -36,7 +37,7 @@ export default function MailPreviewScreen() {
   const url = typeof params.url === 'string' ? params.url : '';
   const { t, i18n } = useTranslation(), styles = useThemedStyles(makeStyles), router = useRouter();
   const { mode, colors } = useTheme(), insets = useSafeAreaInsets();
-  const scroll = useRef<ScrollView>(null), offset = useRef(0), userScrolled = useRef(false);
+  const scroll = useRef<ScrollViewInstance>(null), offset = useRef(0), userScrolled = useRef(false);
   const keyboard = useMobileKeyboardState();
   // Standalone drafts edit inside this page: keep the caret above the keyboard like the chat list does.
   const revealRect = useCallback((rect: { top: number; bottom: number }) => {

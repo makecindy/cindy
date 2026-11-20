@@ -1,4 +1,5 @@
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
+import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
@@ -32,7 +33,7 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
  *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
  *                                   sessionsBus.onRefresh / sessionsPush.onCreated
- *                                   走这条。
+ *                                   走这条，且带 isCurrent：重拉期间保留旧列表。
  *
  * 自订阅（模块加载时一次性挂上，hook 不再重复订阅）：
  *   - sessionsBus.onPatch                → patchLocal
@@ -60,7 +61,11 @@ import {
   onPatch,
   onRefresh,
 } from '@/lib/sessionsBus';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerIdCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 
 // V1.7：取消 16 条上限，全量拉取由 Sidebar 中部滚动条承载。
 // 后端硬上限 1000，覆盖几乎所有真实用户的 Session 总数。
@@ -820,7 +825,7 @@ export const sessionsStore = {
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
    * 强制刷新会让已有等待者跟随替换请求；失败由调用方决定如何展示。
    */
-  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean }): Promise<void> {
+  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean; isCurrent?: () => boolean }): Promise<void> {
     if (!opts?.fresh && cache.has(filter)) return;
     let pending = inflight.get(filter);
     if (!pending) {
@@ -840,9 +845,10 @@ export const sessionsStore = {
           // reset / forceRefresh 会把旧 request 从 inflight 移除。只有仍被
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
-            cache.set(filter, data);
+            const current = !opts?.isCurrent || opts.isCurrent();
+            if (current) cache.set(filter, data);
             inflight.delete(filter);
-            notify();
+            if (current) notify();
             runTrailingFilterBackfill(filter);
           }
           request.resolve();
@@ -860,12 +866,13 @@ export const sessionsStore = {
   },
 
   /** 强制重拉单桶（先 drop 再 ensure）。返回新数据。 */
-  async forceRefresh(filter: ListStatusFilter): Promise<Session[]> {
-    cache.delete(filter);
+  async forceRefresh(filter: ListStatusFilter, isCurrent?: () => boolean): Promise<Session[]> {
+    // Host recovery keeps the last visible list while revalidating it.
+    if (!isCurrent) cache.delete(filter);
     const previous = inflight.get(filter);
     inflight.delete(filter);
     trailingFilterRefreshes.delete(filter);
-    const replacement = this.ensureByFilter(filter, { fresh: true });
+    const replacement = this.ensureByFilter(filter, { fresh: true, isCurrent });
     // 立即转交等待关系，不依赖旧 IPC 返回；连续刷新会自然跟随到最新请求。
     previous?.resolve(replacement);
     await replacement;
@@ -877,11 +884,11 @@ export const sessionsStore = {
    * sessionsBus.onRefresh / sessionsPush.onCreated 走这条 ——
    * 无完整 row 的列表成员变化（main 端新建等）需要让所有活跃订阅者同步刷新。
    */
-  async forceRefreshAll(): Promise<void> {
+  async forceRefreshAll(isCurrent?: () => boolean): Promise<void> {
     // forceRefresh 会暂时移除缓存；这段窗口收到的新建通知仍需触发 fresh 读取。
     const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
-    await Promise.all(filters.map((f) => this.forceRefresh(f)));
+    await Promise.all(filters.map((f) => this.forceRefresh(f, isCurrent)));
   },
 
   /**
@@ -1319,7 +1326,12 @@ export const sessionsStore = {
  * 守卫 window/electronAPI 的存在性，规避 SSR / 测试 / preload 未就绪场景。 */
 
 function refreshAfterNotification(): void {
-  void sessionsStore.forceRefreshAll().catch(() => {
+  // 通知只说明列表有变化，不让当前列表失效：重拉期间保留已显示的行，读回后整体替换。
+  // 先清桶会让 findById 在重拉的这段时间里查不到任何任务，正在显示的任务（例如协同侧栏
+  // 里刚收到消息的 Worker）会被整块卸载再重新挂载。账号切换由 reset 清空，这里只防迟到的
+  // 读结果写进另一个账号的缓存；同账号的代次变化不丢弃这次刷新。
+  const owner = getDataOwnerGeneration();
+  void sessionsStore.forceRefreshAll(() => isDataOwnerIdCurrent(owner)).catch(() => {
     // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
   });
 }
@@ -1402,6 +1414,7 @@ if (typeof window !== 'undefined') {
   if (sessionsPush) {
     sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
+      applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {

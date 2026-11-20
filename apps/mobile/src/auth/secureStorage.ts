@@ -11,13 +11,22 @@ export async function getSecureItem(key: string): Promise<string | null> {
 export async function setSecureItem(
   key: string,
   value: string,
-  /** thisDeviceOnly:只在解锁时可读、不随备份迁移到别的设备(iOS WHEN_UNLOCKED_THIS_DEVICE_ONLY)。 */
-  options?: { thisDeviceOnly?: boolean },
+  /**
+   * thisDeviceOnly:只在解锁时可读、不随备份迁移到别的设备(iOS WHEN_UNLOCKED_THIS_DEVICE_ONLY)。
+   * whileLocked:开机后首次解锁起即可读写,锁屏时也可以(iOS AFTER_FIRST_UNLOCK)。只用于
+   * 登录凭证:用户在锁屏通知或手表上点了按钮,App 要在后台续期登录才能把结果送到电脑
+   * (docs/product-rules/notification-actions.md)。已有条目在下一次写入时改为这一档。
+   */
+  options?: { thisDeviceOnly?: boolean; whileLocked?: boolean },
 ): Promise<void> {
   if (Platform.OS !== 'web') {
     if (options?.thisDeviceOnly) {
       await SecureStore.setItemAsync(key, value, {
         keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+    } else if (options?.whileLocked) {
+      await SecureStore.setItemAsync(key, value, {
+        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
       });
     } else {
       await SecureStore.setItemAsync(key, value);

@@ -113,7 +113,7 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
     if (next && next !== rootState) {
       logDesktopNavigation("cleanup before", navigation.getRootState());
       logDesktopNavigation("cleanup requested", next);
-      navigation.resetRoot(next);
+      navigation.dispatch({ type: "RESET", target: next.key, payload: next });
       logDesktopNavigation("cleanup dispatched", navigation.getRootState());
     }
   }, [rootState, inDesktop, route?.key, navigation]);
@@ -165,7 +165,7 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
                     : "none",
               });
               if (!next) router.replace("/");
-              else if (next !== state) navigation.resetRoot(next);
+              else if (next !== state) navigation.dispatch({ type: "RESET", target: next.key, payload: next });
               logDesktopNavigation(
                 "back dispatched",
                 navigation.getRootState(),

@@ -1,18 +1,18 @@
 /**
  * 渠道工具的逐 turn 作用域租约。
  *
- * `cindy_telegram_bot` / `cindy_feishu_bot` MCP 让 Agent 在渠道轮次里直接驱动平台 API。它和群历史
+ * `cindy_telegram_bot` / `cindy_feishu_bot` / `cindy_discord` MCP 让 Agent 在渠道轮次里直接驱动平台 API。它和群历史
  * 检索一样不信任模型参数或持久 session 配置来判断"当前在哪个 chat、谁触发的":渠道
  * 只在 provider 真正开始当前 turn 前登记作用域,终态 / 重排 / 失败时同步释放。
  * `sessionInstanceId` 阻断同一业务 session 重建后,旧 MCP 请求借用新实例权限。
  *
  * Telegram / 飞书的作用域带 transport(`TelegramToolTransport` / `FeishuToolTransport`),就是这条
  * 连接自己的 TelegramIM / FeishuIM:工具永远经触发本轮的那个 bot 出站,不会串到别的连接(个人
- * 设置页 bot 与伙伴自有连接各走各的)。企业微信 / 钉钉 / Discord 没有渠道直通工具,伙伴专线轮次
+ * 设置页 bot 与伙伴自有连接各走各的)。Discord 同样携带自己的 transport。企业微信 / 钉钉没有渠道直通工具,伙伴专线轮次
  * 只登记不带 transport 的 `LaneTurnScope`,供伙伴技能等按「这一轮是不是主人触发」授权。
  */
 
-import type { FeishuIM, TelegramIM } from '@cindy/im';
+import type { BlueBubblesIM, DiscordIM, FeishuIM, TelegramIM } from '@cindy/im';
 
 /** MCP 侧用到的 TelegramIM 子集(结构类型, 测试可用假对象)。 */
 export type TelegramToolTransport = Pick<
@@ -108,7 +108,33 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
   return channel === 'wecom' || channel === 'dingtalk' || channel === 'discord' || channel === 'wechat' || channel === 'x';
 }
 
-export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | LaneTurnScope) & {
+export interface IMessageToolScope {
+  channel: 'imessage';
+  readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
+  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
+  botId: string;
+  laneUserId: string;
+  chatId: string;
+  chatKind: 'direct' | 'group';
+  requesterIsOwner: boolean;
+  companion: true;
+}
+
+export interface DiscordToolScope {
+  channel: 'discord';
+  im: Pick<DiscordIM, 'captureTools' | 'getStatus' | 'getFinalTextDeliveryStatus' | 'botContextId'>;
+  botId: string;
+  laneUserId: string;
+  chatId: string;
+  chatKind: 'direct' | 'group';
+  requesterIsOwner: boolean;
+  triggerMessageId: string;
+  companion: boolean;
+  /** Captured at ingress; an old scope cannot acquire the next account's reinitialized transport. */
+  assertCurrent?: () => void;
+}
+
+export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | IMessageToolScope | DiscordToolScope | LaneTurnScope) & {
   /** Local durable input, stamped by the IM runner after persistence succeeds. */
   inputClientId?: string;
 };
@@ -154,4 +180,38 @@ export function readChannelToolScope(args: {
 /** 测试/进程级 teardown;生产授权仍必须通过租约 release 收口。 */
 export function resetChannelToolScopeForTests(): void {
   activeBySession.clear();
+  replyMediaBySession.clear();
+}
+
+/** Output-only lease: deliberately separate from requester / channel API authority. */
+export type TelegramReplyMediaScope = Pick<TelegramToolScope, 'im' | 'laneUserId'> & {
+  /** Present for replies continuing a specific requester's question. */
+  requesterIsOwner?: boolean;
+};
+const replyMediaBySession = new Map<string, {
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}>();
+
+export function beginTelegramReplyMediaScope(args: {
+  sessionId: string;
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}): () => void {
+  if (!args.sessionId || !args.sessionInstanceId) throw new Error('reply media scope requires a live session instance');
+  replyMediaBySession.set(args.sessionId, args);
+  return () => {
+    if (replyMediaBySession.get(args.sessionId) === args) replyMediaBySession.delete(args.sessionId);
+  };
+}
+
+export function readTelegramReplyMediaScope(args: {
+  sessionId?: string;
+  sessionInstanceId?: string;
+}): TelegramReplyMediaScope | null {
+  if (!args.sessionId || !args.sessionInstanceId) return null;
+  const entry = replyMediaBySession.get(args.sessionId);
+  return entry && entry.sessionInstanceId === args.sessionInstanceId && entry.isActive() ? entry.scope : null;
 }

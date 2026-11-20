@@ -4,7 +4,7 @@ import { ensureUpstreamMergeSession, assertUpstreamMergeSession } from '../upstr
 import { mergeWorktree } from '../upstreamMerge';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 
 const h = vi.hoisted(() => {
   const reads: unknown[][] = [];

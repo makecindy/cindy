@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { Pin } from 'lucide-react';
@@ -53,7 +54,7 @@ export function CindyDeviceRow({
       )}
     >
       <button
-        type="button"
+        type="button" {...companionDragProps(current.route, bot.name)}
         onClick={onOpen}
         aria-current={selected ? 'page' : undefined}
         onContextMenu={onContextMenu}
@@ -84,7 +85,7 @@ export function CindyDeviceRow({
             className={cn(
               'pointer-events-auto min-w-0 shrink px-1 text-11 text-inherit focus-visible:ring-inset',
               '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
-              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
+              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:hsl(var(--sidebar-item-hover))]',
               selected &&
                 'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
             )}

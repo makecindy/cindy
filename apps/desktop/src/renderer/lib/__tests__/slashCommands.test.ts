@@ -51,6 +51,20 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
   });
 }
 
+// Unit: repeated palette consumers previously logged each identical conflict.
+// Existing merge tests checked precedence but not repeated renderer log IPC.
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { logToMain } });
+  const preferred = skill({ name: 'conflict-diagnostic-test' });
+  const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
+  for (let i = 0; i < 3; i++) expect(mergeCommands([desktop], [], [preferred])).toEqual([preferred]);
+  const warnings = () => logToMain.mock.calls.filter(([level]) => level === 'warn');
+  expect(warnings()).toHaveLength(1);
+  expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
+  expect(warnings()).toHaveLength(2);
+});
+
 describe('loadAllCommands Learn fallback', () => {
   it.each([
     ['the Skill query fails', { success: false }],
@@ -226,6 +240,12 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('matches a Pi invocation alias while preserving the short selection name', () => {
+    const command = { kind: 'agent-skill' as const, name: 'poteto-mode', source: 'skill' as const,
+      runtimeCommandName: 'skill:poteto-mode' };
+    expect(filterSlashCommands([command], 'skill:poteto')).toEqual([command]);
+  });
+
   it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
     const prefixed = Array.from({ length: 30 }, (_, i) => ({
       kind: 'desktop' as const, name: `draw-${i}`, description: '',

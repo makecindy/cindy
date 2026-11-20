@@ -5,6 +5,7 @@
 
 import { useTranslation } from 'react-i18next';
 
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 
 interface BrowserRealProfileSubsectionProps {
@@ -20,24 +21,19 @@ export function BrowserRealProfileSubsection({
 }: BrowserRealProfileSubsectionProps) {
   const { t } = useTranslation();
   return (
-    <div className="border-t border-[var(--settings-theme-card-border)]">
-      <div className="flex items-start justify-between gap-3 px-4 py-[14px]">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <p className="text-12 font-medium leading-[1.4] text-[var(--settings-section-title)]">
-            {t('settings.computerUse.realProfile.title')}
-          </p>
-          <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.computerUse.realProfile.description')}
-          </p>
-        </div>
+    <SettingsRow
+      title={t('settings.computerUse.realProfile.title')}
+      hint={t('settings.computerUse.realProfile.description')}
+      trailing={
         <Switch
+          data-settings-search-action="Copy the user's browser logins into the agent browser"
           checked={enabled}
           disabled={pending}
           onCheckedChange={onToggle}
           aria-label={t('settings.computerUse.realProfile.toggleAria')}
-          className="mt-0.5 shrink-0"
+          className="shrink-0"
         />
-      </div>
-    </div>
+      }
+    />
   );
 }

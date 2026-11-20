@@ -1,3 +1,4 @@
+import type { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 /**
  * device-link-settings-store —— 跨设备远程控制的 main 端持久化设置。
  *
@@ -21,15 +22,22 @@
  * 撤销控制端)能被持有 relay 连接的实例看到;持有者对变化的响应轮询在 index.ts。
  */
 
-import { app } from 'electron';
+import type { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
-const log = createLogger('device-link-settings');
 
 export interface DeviceLinkSettings {
+  /** Device-local V2 preference; absent in existing files means V1. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
+  /** 同账号另一台电脑最近一次远程打开 / 关闭 Agent-Net(开关下面写「由谁在几点」);本机再改后清除。 */
+  agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
+  /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
+  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -46,8 +54,19 @@ export interface DeviceLinkSettings {
   /** deviceId → last known non-placeholder display name, local-only cache. */
   lastKnownDeviceNames: Record<string, string>;
 }
+export interface DeviceLinkSettingsStorePorts {
+getUserDataDir: () => string;
+withAvailabilityPolicyMutation: typeof withAvailabilityPolicyMutation;
+}
+export function createDeviceLinkSettingsStore(ports: DeviceLinkSettingsStorePorts) {
+const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
+
+
+const log = createLogger('device-link-settings');
 
 const DEFAULTS: DeviceLinkSettings = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
@@ -57,13 +76,18 @@ const DEFAULTS: DeviceLinkSettings = {
 };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'device-link-settings.json');
+  return path.join(getUserDataDir(), 'device-link-settings.json');
 }
 
 function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    agentNetEnabled: r.agentNetEnabled === true,
+    agentNetOnlyEncrypted: r.agentNetOnlyEncrypted === true,
+    // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
+    ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
+    ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
@@ -73,6 +97,26 @@ function normalize(raw: unknown): DeviceLinkSettings {
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
+}
+
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+  return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.deviceId !== 'string' || typeof r.deviceName !== 'string' || typeof r.at !== 'number' || typeof r.enabled !== 'boolean') return null;
+  return { deviceId: r.deviceId, deviceName: r.deviceName.slice(0, 120), at: r.at, enabled: r.enabled };
+}
+
+function normalizeAgentNetPendingSwitch(raw: unknown): DeviceLinkSettings['agentNetPendingSwitch'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.switchId !== 'string' || typeof r.controllerId !== 'string' || typeof r.previous !== 'boolean'
+    || typeof r.deadlineAt !== 'number' || typeof r.pid !== 'number') return null;
+  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid,
+    ...(r.restoring === true ? { restoring: true } : {}) };
 }
 
 function normalizeStringList(raw: unknown): string[] {
@@ -104,23 +148,53 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
+/**
+ * Writes require a readable baseline after a filesystem failure or when the Host preserves
+ * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
+ */
+let cachedUnreadable = false;
+const READ_RETRY_DELAY_MS = 1_000;
+let retryReadAt = 0;
 
 function statMtimeMs(file: string): number | null {
   try {
     return fs.statSync(file).mtimeMs;
-  } catch {
-    return null; // 文件不存在
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-export function readDeviceLinkSettings(): DeviceLinkSettings {
+function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
   const file = settingsFilePath();
-  const mtimeMs = statMtimeMs(file);
-  if (cached && mtimeMs === cachedMtimeMs) return cached;
+  let mtimeMs: number | null;
+  let contents: string | undefined;
   try {
-    if (mtimeMs !== null) {
-      cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    mtimeMs = statMtimeMs(file);
+    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
+    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
+    // old grant, and let the next eligible read retry even if the mtime hasn't changed.
+    const now = performance.now();
+    if (now >= retryReadAt) {
+      log.warn('device-link-settings.json read failed → falling back to defaults', {
+        error: error instanceof Error ? error.message : String(error),
+        path: file,
+      });
+      retryReadAt = now + READ_RETRY_DELAY_MS;
+    }
+    cached = null;
+    cachedUnreadable = true;
+    return { ...DEFAULTS };
+  }
+  retryReadAt = 0;
+  try {
+    if (contents !== undefined) {
+      cached = normalize(JSON.parse(contents));
       cachedMtimeMs = mtimeMs;
+      cachedUnreadable = false;
       return cached;
     }
   } catch (err) {
@@ -128,10 +202,17 @@ export function readDeviceLinkSettings(): DeviceLinkSettings {
       error: err instanceof Error ? err.message : String(err),
       path: file,
     });
+    if (isPreservingUnreadableSettingsFilesByDefault()) {
+      cached = { ...DEFAULTS };
+      cachedMtimeMs = mtimeMs;
+      cachedUnreadable = true;
+      return cached;
+    }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
   cachedMtimeMs = null;
+  cachedUnreadable = false;
   return cached;
 }
 
@@ -206,7 +287,7 @@ async function acquireWriteLock(file: string): Promise<(() => void) | null> {
 /** 进程内写序列化:异步 acquire 之间可能交错,同进程写者先排队再抢跨进程锁 */
 let writeChain: Promise<unknown> = Promise.resolve();
 const settingsChangeListeners = new Set<(key: keyof DeviceLinkSettings) => void>();
-export function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
+function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
   settingsChangeListeners.add(listener);
   return () => { settingsChangeListeners.delete(listener); };
 }
@@ -224,9 +305,8 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   tag: string,
 ): DeviceLinkSettings[K] {
   // 强制丢缓存取盘上最新基线(mtime 粒度粗时缓存可能骗过 read)
-  cached = null;
-  cachedMtimeMs = null;
-  const current = readDeviceLinkSettings();
+  const current = readDeviceLinkSettings(true);
+  if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
   const tmp = `${file}.${process.pid}.${tag}.tmp`;
@@ -245,12 +325,12 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
  * lastKnownDeviceNames)的增删改**必须**走本函数,不要在锁外算好整值再
  * writeDeviceLinkSetting(见 writeMergedOnce 注释)。返回最终写入的值。
  */
-export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
+function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
   key: K,
   updater: (current: DeviceLinkSettings[K]) => DeviceLinkSettings[K],
 ): Promise<DeviceLinkSettings[K]> {
   // 同进程写者先排队(异步 acquire 之间会交错),队内再抢跨进程锁
-  const task = writeChain.then(async () => {
+  const write = async () => {
     const file = settingsFilePath();
     const unlock = await acquireWriteLock(file);
     if (!unlock) {
@@ -273,20 +353,22 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
       catch (error) { log.warn('device-link setting listener failed', { error: String(error) }); }
     }
     return written;
-  });
+  };
+  const task = writeChain.then(() => ['remoteControlEnabled', 'disabledControlDeviceIds', 'revokedControllers'].includes(key)
+    ? withAvailabilityPolicyMutation(undefined, write) : write());
   writeChain = task.catch(() => undefined); // 队列不因单次失败断链
   return task;
 }
 
 /** 整值覆盖写(布尔开关等标量 key 用;数组 / map 增删改请用 updateDeviceLinkSetting) */
-export function writeDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
+function writeDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
   key: K,
   value: DeviceLinkSettings[K],
 ): Promise<void> {
   return updateDeviceLinkSetting(key, () => value).then(() => undefined);
 }
 
-export function readLastKnownDeviceNames(): Record<string, string> {
+function readLastKnownDeviceNames(): Record<string, string> {
   const names = { ...readDeviceLinkSettings().lastKnownDeviceNames };
   for (const [deviceId, pending] of pendingLastKnownDeviceNameByDevice) {
     if (pending.name === null) delete names[deviceId];
@@ -295,7 +377,7 @@ export function readLastKnownDeviceNames(): Record<string, string> {
   return names;
 }
 
-export function writeLastKnownDeviceNames(names: Record<string, string>): Promise<void> {
+function writeLastKnownDeviceNames(names: Record<string, string>): Promise<void> {
   return writeDeviceLinkSetting('lastKnownDeviceNames', { ...names });
 }
 
@@ -332,7 +414,7 @@ function enqueueLastKnownDeviceNameMutation<T>(
   return task;
 }
 
-export async function setDeviceControlEnabled(
+async function setDeviceControlEnabled(
   deviceId: string,
   enabled: boolean,
 ): Promise<string[]> {
@@ -352,7 +434,7 @@ export async function setDeviceControlEnabled(
   });
 }
 
-export async function rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean> {
+async function rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean> {
   const normalizedName = normalizeCachedDeviceName(name);
   if (!deviceId.trim() || !normalizedName) return false;
   return enqueueLastKnownDeviceNameMutation(deviceId, normalizedName, async () => {
@@ -374,7 +456,7 @@ export async function rememberLastKnownDeviceName(deviceId: string, name: string
   });
 }
 
-export async function forgetLastKnownDeviceName(deviceId: string): Promise<boolean> {
+async function forgetLastKnownDeviceName(deviceId: string): Promise<boolean> {
   const normalizedDeviceId = deviceId.trim();
   if (!normalizedDeviceId) return false;
   return enqueueLastKnownDeviceNameMutation(normalizedDeviceId, null, async () => {
@@ -398,15 +480,17 @@ export async function forgetLastKnownDeviceName(deviceId: string): Promise<boole
   });
 }
 
-export function normalizeCachedDeviceName(name: string): string | null {
+function normalizeCachedDeviceName(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed || isPlaceholderDeviceName(trimmed)) return null;
   return trimmed;
 }
 
-export function isPlaceholderDeviceName(name: string): boolean {
+function isPlaceholderDeviceName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return normalized === 'unknown' || normalized === 'no';
 }
 
-export const __testing = { normalize };
+const __testing = { normalize };
+return { readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
+}

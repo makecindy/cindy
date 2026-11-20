@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import type { LocalRuntimeInstallProgress } from '../../../shared/localModelRuntime';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
+import {
+  installDownloadProgress,
+  type LocalRuntimeInstallProgress,
+} from '../../../shared/localModelRuntime';
 import { LocalRuntimeInstallView } from './LocalModelDownloadUI';
 
 /** Mac / Windows 上，本机还没 Ollama 时默认给出 Cindy 内安装；主进程明确拒绝才藏。 */
@@ -22,6 +26,8 @@ export function LocalOllamaInstall({
 }) {
   const { t } = useTranslation();
   const [progress, setProgress] = useState<LocalRuntimeInstallProgress | null>(null);
+  // Steps after the archive (starting, result) carry no bytes; keep the last ones shown.
+  const [download, setDownload] = useState<DownloadProgress | null>(null);
   const installing = Boolean(
     progress &&
     progress.phase !== 'cancelled' &&
@@ -44,7 +50,9 @@ export function LocalOllamaInstall({
 
   useEffect(() => {
     return window.electronAPI.maker.onLocalModelInstallProgress((next) => {
-      setProgress(next as LocalRuntimeInstallProgress);
+      const install = next as LocalRuntimeInstallProgress;
+      setProgress(install);
+      setDownload((last) => installDownloadProgress(install, last));
     });
   }, []);
 
@@ -85,6 +93,7 @@ export function LocalOllamaInstall({
 
   const handleInstall = async () => {
     setProgress({ phase: 'resolving', done: false });
+    setDownload(installDownloadProgress({ phase: 'resolving', done: false }));
     try {
       const result = await window.electronAPI.maker.localModelInstall({ consent: true });
       if (result.stopped === 'cancel') {
@@ -117,15 +126,15 @@ export function LocalOllamaInstall({
             })
           : t('settings.providers.local.onboardingBody')
       }
-      progress={
+      download={
         progress
           ? {
-              label: t(`settings.providers.local.installPhase.${progress.phase}`),
-              percent: progress.percent,
-              completed: progress.completed,
-              total: progress.total,
-              bytesPerSecond: progress.bytesPerSecond,
-              error: progress.phase === 'error',
+              label: 'Ollama',
+              progress: installDownloadProgress(progress, download),
+              error:
+                progress.phase === 'error'
+                  ? t('settings.providers.local.installPhase.error')
+                  : null,
             }
           : undefined
       }

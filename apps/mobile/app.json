@@ -69,7 +69,9 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/with-agent-net-native",
       "./plugins/with-message-menu-icons",
+      "./plugins/with-app-icons",
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
       "./plugins/with-wechat-opensdk-modulemap",
@@ -82,8 +84,7 @@
             "enableShrinkResourcesInReleaseBuilds": true
           },
           "ios": {
-            "buildReactNativeFromSource": true,
-            "enableSceneSupport": true
+            "buildReactNativeFromSource": true
           }
         }
       ],
@@ -110,6 +111,7 @@
       "expo-apple-authentication",
       "expo-notifications",
       "./plugins/with-communication-notifications",
+      "./plugins/with-notification-content",
       "./plugins/with-usage-widgets",
       "expo-secure-store",
       "expo-web-browser",

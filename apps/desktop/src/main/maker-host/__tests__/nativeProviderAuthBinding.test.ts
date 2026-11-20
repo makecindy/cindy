@@ -8,18 +8,11 @@ import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js
 const userDataDir = '/tmp/native-provider-auth-binding-test';
 const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
 
-vi.mock('electron', () => ({
-  app: { getPath: () => userDataDir },
-}));
-
-vi.mock('../../appSessionState.js', () => ({
-  LOCAL_DATA_OWNER_ID: 'local-v1',
-  getActiveAppSession: () => ({
-    mode: session.dataOwnerId ? 'cloud' : 'signed-out',
-    dataOwnerId: session.dataOwnerId,
-    generation: 1,
-  }),
-  isAppSessionBoundaryPending: () => session.boundaryPending,
+vi.mock('../../userDataPath.js', () => ({ userDataPath: (...parts: string[]) => path.join(userDataDir, ...parts) }));
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  activeDataOwnerId: () => session.dataOwnerId,
+  isOwnerBoundaryPending: () => session.boundaryPending,
 }));
 
 import {
@@ -27,6 +20,7 @@ import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
+  isNativeProviderAuthBoundToSharedSystemCredential,
   isNativeProviderAuthRevoked,
   isNativeProviderCredentialRejected,
   isNativeProviderAuthSelfAuthorized,
@@ -56,6 +50,28 @@ afterEach(() => {
 });
 
 describe('native provider auth legacy binding', () => {
+  // Unit: the quota selector must reject a stale authorization when the owner changes
+  // while the async read of an otherwise valid shared binding is in flight.
+  it('rejects a shared binding read that crosses an owner change', async () => {
+    bindNativeProviderAuth('openai', { sharedSystem: true });
+    await expect(isNativeProviderAuthBoundToSharedSystemCredential('openai')).resolves.toBe(true);
+
+    const read = isNativeProviderAuthBoundToSharedSystemCredential('openai');
+    session.dataOwnerId = 'owner-b';
+    await expect(read).resolves.toBe(false);
+  });
+
+  it('rejects revoked or unavailable shared authorization', async () => {
+    bindNativeProviderAuth('openai', { sharedSystem: true });
+    fs.renameSync(bindingFile, `${bindingFile}.bak`);
+    await expect(isNativeProviderAuthBoundToSharedSystemCredential('openai')).resolves.toBe(false);
+    expect(fs.existsSync(bindingFile)).toBe(false);
+
+    fs.renameSync(`${bindingFile}.bak`, bindingFile);
+    unbindNativeProviderAuth('openai', { revoked: true });
+    await expect(isNativeProviderAuthBoundToSharedSystemCredential('openai')).resolves.toBe(false);
+  });
+
   it('persists only the rejected digest and retains it across disconnect and unrelated binding writes', async () => {
     const digest = 'a'.repeat(64);
     bindNativeProviderAuth('anthropic', { sharedSystem: true });

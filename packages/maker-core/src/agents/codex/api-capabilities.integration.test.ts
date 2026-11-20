@@ -2,7 +2,7 @@
  * Regression: API-key models omitted native Ultra/Fast capabilities.
  * Production entry: CodexAgent.refreshLocalModels + startSession; asserts both
  * discovery and the emitted Responses request, beyond mocked protocol coverage.
- * Minimal input: GPT-6.1 Sol, Ultra, Fast, private HOME and loopback Responses.
+ * Minimal input: Sol/Terra, Ultra, Fast, private HOME and loopback Responses.
  * Integration tier: real child process/socket; no accounts or paid inference.
  * Standalone duration: 1.31s with Codex 0.166.0 (2026-11-06).
  */
@@ -20,7 +20,11 @@ const logger: Logger = {
   trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
 };
 
-it.skipIf(!binaryPath)('discovers GPT-6.1 Ultra/Fast on the API route and passes both through native Codex', async () => {
+it.skipIf(!binaryPath).each([
+  { modelId: 'gpt-6.1-sol', expectedEffort: 'xhigh' },
+  { modelId: 'gpt-5.6-terra', expectedEffort: 'max' },
+  { modelId: 'gpt-6.1-terra', expectedEffort: 'xhigh' },
+])('discovers and routes Ultra/Fast for $modelId on the API route', async ({ modelId, expectedEffort }) => {
   const root = await mkdtemp(path.join(tmpdir(), 'cindy-api-capabilities-'));
   const home = path.join(root, 'codex');
   const work = path.join(root, 'work');
@@ -61,7 +65,7 @@ it.skipIf(!binaryPath)('discovers GPT-6.1 Ultra/Fast on the API route and passes
       codexProxyActive: true, codexOpenAiWebSocketsEnabled: false,
       codexDefaultModelProviderId: 'cindy_custom_probe',
       codexCustomProviderRoutes: [{ providerId: 'openai-api', modelProviderId: 'cindy_custom_probe',
-        capabilities: {}, responseModels: ['gpt-6.1-sol'] }],
+        capabilities: {}, responseModels: [modelId] }],
     }),
     auth: {
       getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
@@ -76,14 +80,14 @@ it.skipIf(!binaryPath)('discovers GPT-6.1 Ultra/Fast on the API route and passes
     let models: readonly CodexModelListItem[] = [];
     expect(await agent.refreshLocalModels({ credentialMode: 'provider-oauth',
       onModelsListed: result => { models = result; } })).toBe(true);
-    const sol = models.find(model => model.model === 'gpt-6.1-sol');
-    expect(sol?.supportedReasoningEfforts?.map(item => item.reasoningEffort)).toContain('ultra');
-    expect(sol?.additionalSpeedTiers).toContain('fast');
+    const discovered = models.find(model => model.model === modelId);
+    expect(discovered?.supportedReasoningEfforts?.map(item => item.reasoningEffort)).toContain('ultra');
+    expect(discovered?.additionalSpeedTiers).toContain('fast');
     expect(publishedOAuth).toBe(false);
     expect(requests).toHaveLength(0);
 
     handle = await agent.startSession({ sessionId: 'api-ultra-fast', providerId: 'openai-api',
-      model: 'gpt-6.1-sol', effort: 'ultra',
+      model: modelId, effort: 'ultra',
       fastMode: true, workingDir: work, permissionMode: 'bypassPermissions', makerMemoryEnabled: false });
     let complete: (() => void) | undefined;
     let fail: ((error: Error) => void) | undefined;
@@ -109,16 +113,16 @@ it.skipIf(!binaryPath)('discovers GPT-6.1 Ultra/Fast on the API route and passes
       expect(requests).toHaveLength(1);
       expect(handle.getEffort?.()).toBe('ultra');
       // Native Ultra activates proactive delegation and resolves its HTTP effort
-      // through the model's multi_agent_reasoning_effort (GPT-6.1 Sol: xhigh).
+      // through the model's multi_agent_reasoning_effort.
       // https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/protocol/src/openai_models/reasoning_effort.rs
       expect(JSON.stringify(requests[0]!.input)).toContain('Proactive multi-agent delegation is active.');
       expect(JSON.stringify(requests[0]!.input)).not.toContain('Any earlier instruction enabling proactive multi-agent delegation');
-      expect(requests[0]).toMatchObject({ model: 'gpt-6.1-sol', reasoning: { effort: 'xhigh' }, service_tier: 'priority' });
+      expect(requests[0]).toMatchObject({ model: modelId, reasoning: { effort: expectedEffort }, service_tier: 'priority' });
       expect(events.join('')).toContain('API_CAPABILITIES_OK');
-      console.info('CODEX_API_CAPABILITIES', JSON.stringify({ model: sol?.model,
+      console.info('CODEX_API_CAPABILITIES', JSON.stringify({ model: discovered?.model,
         selectedEffort: handle.getEffort?.(), nativeProactiveDelegation: true,
-        efforts: sol?.supportedReasoningEfforts?.map(item => item.reasoningEffort),
-        speedTiers: sol?.additionalSpeedTiers,
+        efforts: discovered?.supportedReasoningEfforts?.map(item => item.reasoningEffort),
+        speedTiers: discovered?.additionalSpeedTiers,
         request: { model: requests[0]!.model, reasoning: requests[0]!.reasoning, service_tier: requests[0]!.service_tier },
       }));
     } finally { clearTimeout(timer); }

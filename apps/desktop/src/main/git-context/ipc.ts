@@ -1,6 +1,6 @@
 import { glabCliTokenSource } from './glabCliTokenSource';
 import { fetchGitlabMr } from './gitlabPrSummary';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
 /**
@@ -25,7 +25,10 @@ import { manageSessionPrs } from './manageSessionPrs';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
-import { prStatusKey, isPrHost } from '@cindy/maker-shared';
+import { prStatusKey, isPrHost, sessionPrUrl } from '@cindy/maker-shared';
+import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
+import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
+import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
 import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
@@ -67,6 +70,7 @@ import {
 import {
   filterPrStatusQueriesForRefs,
   PrStatusService,
+  withoutPrMetadata,
   type PrStatusQuery,
   type PrStatusResult,
   type PrRemoteState,
@@ -74,7 +78,7 @@ import {
 
 import { fetchPrSummary } from './prSummary';
 import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
+import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -145,6 +149,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       mergeable: metadata.mergeable ?? null,
       merge_state: metadata.mergeable_state ?? null,
       updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
       labels: metadata.labels ?? [],
       review_requests: metadata.requested_reviewers ?? [],
     },
@@ -172,15 +177,36 @@ const prFollowWatch = new PrFollowWatch({
   // A passive instance (dev beside a release build on the same data) never starts runs by itself.
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (id, trigger, expectedSchedule) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
   },
   log,
 });
+/** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function refreshSchedulePr(url: string): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  const [, owner, repo, , number] = new URL(url).pathname.split('/');
+  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
+    { waitForFresh: true, refresh: true });
+  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+}
+
+export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  return cachedGithubPrHeads(prStatusService, urls);
+}
+
+export async function notifyGithubPrEvents(urls: readonly string[], isCurrent: () => boolean, refresh: GithubPrRefresh): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  await refreshGithubPrEvents(prStatusService, prFollowWatch, urls, isCurrent, refresh);
+  if (isCurrent()) log.info('github app: refreshed PR statuses', { reason: refresh.reason, count: urls.length, gates: refresh.notify.length });
+}
+
 export async function manageGithubPrs(
   sessionId: string,
   args: Record<string, unknown>,
@@ -220,6 +246,9 @@ export function registerGitContextIpc(): void {
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
+    eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
+      ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
+    onInvalidated: () => prFollowWatch.reset(),
     onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
   app.on('browser-window-focus', () => {
@@ -481,7 +510,8 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    return statuses.map(withoutPrMetadata);
   };
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
   ipcMain.handle('git-context:mr-status', statusHandler);
@@ -519,6 +549,30 @@ export async function readSessionPrStatus(
     return status;
   } catch {
     return undefined;
+  }
+}
+
+/** 与电脑端任务页 areAllTaskPrsMerged 同一上限:超过这么多关联 PR 的任务不算可归档。 */
+const MAX_TASK_ARCHIVE_PRS = 30;
+const PR_STATUS_BATCH = 10;
+
+/**
+ * 手机读插件卡片的归档按钮用：任务记录的每个 PR 都确认已合并才算完成(与电脑端任务页同一判据)。
+ * 没有关联 PR、超过上限、任一 PR 查不到或失败都返回 false,卡片上不露出归档。
+ */
+export async function readSessionPrsAllMerged(sessionId: string): Promise<boolean> {
+  if (!prStatusService) return false;
+  try {
+    const refs = await listPrRefs(sessionId);
+    if (refs.length === 0 || refs.length > MAX_TASK_ARCHIVE_PRS) return false;
+    for (let i = 0; i < refs.length; i += PR_STATUS_BATCH) {
+      const batch = refs.slice(i, i + PR_STATUS_BATCH);
+      const statuses = await prStatusService.getStatuses(batch, { remote: true });
+      if (statuses.length !== batch.length || !statuses.every((status) => status.ok && status.status === 'merged')) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 

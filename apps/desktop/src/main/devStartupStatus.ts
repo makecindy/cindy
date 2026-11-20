@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
+import type { DesktopRuntimeKind } from './hostDelegationEnv.js';
 import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 import {
@@ -26,6 +27,8 @@ export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
 export interface DesktopDevInstanceRecord {
   schemaVersion: 1;
   worktreeLeaseProtocol?: 1;
+  /** Local developer restart handshake; absent on packaged and older instances. */
+  quitRequestProtocol?: 1;
   instanceId: string;
   pid: number;
   /** Main reports the actual window renderer; Linux zygote children may retain argv. */
@@ -46,6 +49,11 @@ export interface DesktopDevInstanceRecord {
   isolationIntent?: boolean;
   /** 解析后的实际 profile 归属。 */
   profileKind?: DevProfileKind;
+  /**
+   * `client`: a client of the Node Host (CINDY_HOST_API), which never opens this profile's database;
+   * `embedded`: runs its own runtime. Absent on older instances, which readers treat as `embedded`.
+   */
+  runtime?: DesktopRuntimeKind;
   userDataDir: string;
   state: DesktopDevInstanceState;
   failure?: {
@@ -66,6 +74,7 @@ export interface BeginDesktopDevInstanceOptions {
   isolated: boolean;
   isolationIntent?: boolean;
   profileKind?: DevProfileKind;
+  runtime?: DesktopRuntimeKind;
   pid?: number;
   startedAtMs?: number;
   instanceId?: string;
@@ -175,6 +184,7 @@ export async function beginDesktopDevInstance(
     isolated: options.isolated,
     ...(options.isolationIntent !== undefined ? { isolationIntent: options.isolationIntent } : {}),
     ...(options.profileKind !== undefined ? { profileKind: options.profileKind } : {}),
+    ...(options.runtime !== undefined ? { runtime: options.runtime } : {}),
     userDataDir: path.resolve(options.userDataDir),
     state: 'starting',
   };
@@ -233,6 +243,33 @@ function settleDesktopDevReadyIfPossible(): void {
     instance: trackedInstance?.record ?? null,
   });
   publishDesktopStartupResult(true);
+}
+
+/** Installed only by Windows dev after lifecycle handlers exist. Requests live beside
+ * provenance, never in the checkout, and are bound to this random instance generation. */
+export function enableDesktopDevQuitRequests(quit: () => void): () => void {
+  const instance = trackedInstance;
+  if (!instance) return () => {};
+  const { record, filePath } = instance;
+  const requestPath = path.join(path.dirname(filePath), `${record.pid}-${record.instanceId}.quit`);
+  let consumed = false;
+  const check = () => {
+    if (consumed || trackedInstance?.record.instanceId !== record.instanceId) return;
+    const request = readJson(requestPath);
+    if (request?.action !== 'quit' || request.instanceId !== record.instanceId || request.pid !== record.pid
+      || typeof request.expiresAt !== 'number' || request.expiresAt < Date.now()
+      || request.expiresAt > Date.now() + 30_000) return;
+    consumed = true;
+    quit();
+  };
+  fs.watchFile(requestPath, { persistent: false, interval: 250 }, check);
+  instance.record = { ...instance.record, quitRequestProtocol: 1 };
+  updateTrackedInstance(instance.record.state);
+  return () => {
+    consumed = true;
+    fs.unwatchFile(requestPath, check);
+    try { fs.rmSync(requestPath, { force: true }); } catch { /* Best-effort dev cleanup. */ }
+  };
 }
 
 /** Record that the main BrowserWindow can render, without claiming the database is ready. */

@@ -167,10 +167,66 @@ export function buildExtractFnSource(spec: ExtractSpec): string {
 }`;
 }
 
+/** What a page shows as text, and how far along the document is. */
+export const PageTextSpecSchema = z.object({
+  /** CSS selector of the part to read; omit = the whole page. */
+  selector: z.string().optional(),
+  /** Character offset into the text, for continuing a read that was cut. */
+  offset: z.number().int().nonnegative().optional(),
+  /** Characters of text to return; 0 returns none (state and length only). */
+  maxChars: z.number().int().nonnegative().max(100_000).optional(),
+});
+export type PageTextSpec = z.infer<typeof PageTextSpecSchema>;
+
+export interface PageText {
+  ok: boolean;
+  /** Set when `selector` is not valid CSS. */
+  error?: string;
+  url: string;
+  title: string;
+  readyState: string;
+  /** False when `selector` matched nothing. */
+  found: boolean;
+  /** Length of the whole text, not of the returned part. */
+  length: number;
+  /**
+   * Set by a backend that could only fetch a prefix of the text and cannot continue past it (My browser on a
+   * page that refuses scripts): `length` is then the length of that prefix, not of the page.
+   */
+  capped?: boolean;
+  text: string;
+}
+
+/**
+ * Compile a text read into a zero-arg JS function source string. It returns the rendered text
+ * (`innerText`: what a person sees, without scripts, styles or hidden parts), with runs of blank
+ * lines collapsed. The spec is embedded as a JSON literal, so it is data and never code.
+ */
+export function buildPageTextFnSource(spec: PageTextSpec): string {
+  const specLiteral = javascriptLiteral({
+    selector: spec.selector ?? null,
+    offset: spec.offset ?? 0,
+    maxChars: spec.maxChars ?? 8000,
+  });
+  return `() => {
+  const SPEC = ${specLiteral};
+  const state = { url: location.href, title: document.title, readyState: document.readyState };
+  let root = document.body;
+  if (SPEC.selector) {
+    try { root = document.querySelector(SPEC.selector); }
+    catch (e) { return { ok: false, error: 'invalid CSS selector: ' + SPEC.selector, ...state, found: false, length: 0, text: '' }; }
+  }
+  const raw = root ? (typeof root.innerText === 'string' ? root.innerText : (root.textContent || '')) : '';
+  const text = raw.replace(/[ \\t\\u00a0]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
+  return { ok: true, ...state, found: !!root, length: text.length, text: text.slice(SPEC.offset, SPEC.offset + SPEC.maxChars) };
+}`;
+}
+
 /** Fixed internal reads, not an assertion that arbitrary JavaScript is safe. */
 export const BrowserDomReadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("extract"), extract: ExtractSpecSchema }).strict(),
   z.object({ kind: z.literal("login-wall") }).strict(),
+  z.object({ kind: z.literal("text"), text: PageTextSpecSchema }).strict(),
 ]);
 export type BrowserDomRead = z.infer<typeof BrowserDomReadSchema>;
 
@@ -188,7 +244,6 @@ export const LOGIN_WALL_FN = `() => {
 
 export function buildDomReadSource(input: unknown): string {
   const read = BrowserDomReadSchema.parse(input);
-  return read.kind === "extract"
-    ? buildExtractFnSource(read.extract)
-    : LOGIN_WALL_FN;
+  if (read.kind === "extract") return buildExtractFnSource(read.extract);
+  return read.kind === "text" ? buildPageTextFnSource(read.text) : LOGIN_WALL_FN;
 }

@@ -6,7 +6,7 @@ import { assertCindyMakeWorkspace, withCindyMakeProjectUse } from '../projectAcc
 import { makeSourceCheckoutPath, makeTaskWorktreePath } from '../sourcePaths.js';
 
 vi.mock('node:fs/promises', () => ({ lstat: vi.fn() }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 
 const userData = path.join(os.tmpdir(), 'cindy-make-access-fixture');
 const workingDir = makeTaskWorktreePath(userData, 'task-run');

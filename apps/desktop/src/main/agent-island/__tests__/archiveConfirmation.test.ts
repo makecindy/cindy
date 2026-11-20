@@ -3,11 +3,11 @@ import { confirmIslandArchive } from '../archiveConfirmation.js';
 
 const h = vi.hoisted(() => ({ preview: vi.fn(), list: vi.fn(), invoke: vi.fn(), confirm: vi.fn() }));
 vi.mock('electron', () => ({ dialog: { showMessageBox: h.confirm } }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) =>
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) =>
   key.endsWith('scheduleName') ? '「{{name}}」' : key.includes('scheduleWarning') ? 'scheduleWarning {{names}}' : key,
 }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ getRemovalPreview: h.preview }));
-vi.mock('../../scheduler-host/index.js', () => ({ getScheduleStorageIfInitialized: () => ({ list: h.list }) }));
+vi.mock('../../scheduler-host/index.desktop.js', () => ({ getScheduleStorageIfInitialized: () => ({ list: h.list }) }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: h.invoke }));
 
 // Production archive preflight entry. Existing renderer preflight tests cannot

@@ -56,6 +56,9 @@ export interface ChannelGroupContextArgs {
   cursorScope?: string;
   /** 触发消息的渠道原生 message id —— 从上下文中精确剔除「当前消息」。 */
   triggerMessageId: string;
+  replyMessageId?: string;
+  reservedChars?: number;
+  reservedMessages?: number;
 }
 
 export interface ChannelGroupWindow {
@@ -126,6 +129,9 @@ export function createChannelGroupWindow(options: {
         cursors: contextCursors,
         cursorKey,
         triggerMessageId: args.triggerMessageId,
+        replyMessageId: args.replyMessageId,
+        reservedChars: args.reservedChars,
+        reservedMessages: args.reservedMessages,
         neutralize: neutralizeFenceTags,
         log,
       });
@@ -176,6 +182,11 @@ export const DINGTALK_PERSONAL_GROUP_WINDOW = createChannelGroupWindow({
   log: createLogger('dingtalk-group-window'),
 });
 
+export const IMESSAGE_GROUP_WINDOW = createChannelGroupWindow({
+  providerPrefix: 'imessage-local', retention: { ...DEFAULT_GROUP_WINDOW_RETENTION },
+  log: createLogger('imessage-group-window'),
+});
+
 /** 登出 / 换账号 / 删除账号数据时与 Telegram 同口径清理企业微信与钉钉的游标。 */
 export async function resetChannelGroupContextCursors(options?: {
   clearPersisted?: boolean;
@@ -183,6 +194,7 @@ export async function resetChannelGroupContextCursors(options?: {
   await Promise.all([
     WECOM_PERSONAL_GROUP_WINDOW.resetCursors(options),
     DINGTALK_PERSONAL_GROUP_WINDOW.resetCursors(options),
+    IMESSAGE_GROUP_WINDOW.resetCursors(options),
   ]);
 }
 

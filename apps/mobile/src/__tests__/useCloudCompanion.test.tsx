@@ -28,12 +28,13 @@ vi.mock('@/chat/useChatServer', async () => {
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ readDeviceList: h.readDeviceList }) }));
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
-import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { clearRemoteResourceCache, cacheChatRoster, patchCachedCloudHome } from '@/device-link/remoteResourceCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let result: ReturnType<typeof useCloudCompanionHome>;
-function Probe() { result = useCloudCompanionHome(true); return null; }
+let renders = 0;
+function Probe() { renders++; result = useCloudCompanionHome(true); return null; }
 const render = () => act(async () => root.render(createElement(Probe)));
 const actor = { id: 'actor', kind: 'bot', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'studio' };
 beforeEach(async () => {
@@ -109,4 +110,16 @@ it('retains preset identities alongside computer labels and drops them across ac
   h.capabilities.mockImplementation(() => new Promise(() => {}));
   await render();
   expect(result.cindyIds).toEqual([]);
+});
+
+// Behavior/performance: unrelated task/chat writes must not repaint the companion header.
+it('isolates companion renders from ten unrelated roster updates and still publishes real changes', async () => {
+  await render();
+  const before = renders;
+  for (let i = 0; i < 10; i++) await act(async () => cacheChatRoster('owner', 'global', [], [String(i)]));
+  expect(renders - before).toBe(0);
+  await act(async () => patchCachedCloudHome('owner', 'global', { deviceNames: [['studio', 'Renamed']] }, () => true));
+  expect(result.deviceNames.get('studio')).toBe('Renamed');
+  await act(async () => clearRemoteResourceCache());
+  expect(result.actors).toEqual([]);
 });

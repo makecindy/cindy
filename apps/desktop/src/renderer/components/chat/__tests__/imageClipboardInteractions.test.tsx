@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -89,6 +90,11 @@ async function copyFromMenu(image: HTMLElement) {
   fireEvent.click(await screen.findByRole('menuitem', { name: label('chat.media.copyImage') }));
 }
 
+async function downloadFromMenu(image: HTMLElement) {
+  fireEvent.contextMenu(image);
+  fireEvent.click(await screen.findByRole('menuitem', { name: label('chat.shareImage.download') }));
+}
+
 async function previewAction(key: string) {
   fireEvent.pointerDown(screen.getByRole('button', { name: label('attachmentPreview.more') }), { button: 0, ctrlKey: false });
   fireEvent.click(await screen.findByRole('menuitem', { name: label(key) }));
@@ -102,7 +108,7 @@ describe('shared production image interactions', () => {
         <MemoryRouter>
           <Tooltip.Provider>
             <ConfirmDialogProvider>
-              <AssistantMessage
+              <AssistantMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
                 workingDir="/fixture"
                 content="![preview](/fixture/preview.png)"
                 simplifiedBotConversation={simplified}
@@ -118,6 +124,8 @@ describe('shared production image interactions', () => {
         expect(fileCopy).toHaveBeenCalledWith({ filePath: '/fixture/preview.png' }),
       );
       expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));
+      await downloadFromMenu(img);
+      expect(save).toHaveBeenCalledWith({ url: img.getAttribute('src') });
       // Both task and companion message toolbars expose Copy directly. It copies
       // Markdown text, never the image or its path; the image menu stays separate.
       fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
@@ -181,6 +189,9 @@ describe('shared production image interactions', () => {
     await copyFromMenu(img);
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(1));
     expect(readBytes).toHaveBeenCalledWith({ url: remoteSrc });
+    await downloadFromMenu(img);
+    expect(save).toHaveBeenCalledWith({ url: remoteSrc });
+    save.mockClear();
     fireEvent.click(img);
     await previewAction('chat.media.copyImage');
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(2));

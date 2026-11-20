@@ -1,3 +1,4 @@
+import { receivedWindowImages } from '../shared/receivedImageHistory';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
@@ -174,6 +175,9 @@ export function buildWecomAdapter(
           chatId,
           threadId: '',
           triggerMessageId: event.messageId,
+          replyMessageId: replyContext?.messageId,
+          reservedChars: replyBlock.length,
+          reservedMessages: replyContext ? 1 : 0,
         });
       })().catch((err: unknown) => {
         log.warn(`wecom group window context failed (degraded): ${String(err)}`);
@@ -188,7 +192,11 @@ export function buildWecomAdapter(
           ...(replyContext ? { replyContext } : {}),
         };
       }
+      const images = await receivedWindowImages({ provider: WECOM_PERSONAL_GROUP_WINDOW.providerOf(event.contextId),
+        chatId: chatId, threadId: '' }, assembly.attachmentMessageIds ?? [], event.attachments)
+        .catch(() => { log.warn('wecom history images unavailable'); return []; });
       return {
+        ...(images.length ? { contextAttachments: images } : {}),
         agentText: `${assembly.prefix}${replyBlock}${event.text}`,
         contextSnapshot: captureImContext({
           groupPrefix: assembly.prefix,

@@ -1,3 +1,6 @@
+import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
+import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
+import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -38,6 +42,16 @@ export interface FolderPickerOption {
     deviceId: string;
     deviceName: string;
   };
+}
+
+function PickerProjectIcon({ project }: { project: FolderPickerOption }) {
+  const deviceId = project.remoteDevice?.deviceId ?? null;
+  const info = useProjectInfo(deviceId);
+  // The path belongs to the selected computer; UI option keys can also contain device IDs.
+  const projectKey = `local:${project.path}`;
+  return <ProjectIcon value={resolveProjectIcon(info, projectKey)} projectKey={projectKey}
+    projectName={project.name} deviceId={deviceId}
+    automaticEnabled={(info?.settingsVersion ?? 0) >= 4} size={24} />;
 }
 
 /**
@@ -109,24 +123,29 @@ export function addRecentFolder(folderPath: string): void {
   }
 }
 
-function normalizeWheelDeltaY(e: React.WheelEvent): number {
+function normalizeWheelDeltaY(e: WheelEvent): number {
   if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) return e.deltaY * WHEEL_LINE_HEIGHT;
   if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) return e.deltaY * window.innerHeight;
   return e.deltaY;
 }
 
-function handleFolderPickerWheel(e: React.WheelEvent<HTMLElement>) {
+function handleFolderPickerWheel(e: WheelEvent) {
   e.stopPropagation();
 
   const current = e.currentTarget;
-  const target = e.target instanceof HTMLElement ? e.target : null;
-  const scrollRoot =
-    target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]') ??
-    current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
+  if (!(current instanceof HTMLElement)) return;
+  const target = e.target instanceof Element ? e.target : null;
+  // Keep native wheel/trackpad scrolling inside the list (including SVG icons).
+  // Its overscroll-contain prevents scrolling the page at either boundary.
+  if (target?.closest('[data-folder-picker-scroll="true"]')) return;
 
+  // Heading, search and footer forward to the list. Cancel first so the browser
+  // cannot also scroll an ancestor; a non-cancelable event must not be forwarded.
+  if (!e.cancelable || e.defaultPrevented) return;
+  e.preventDefault();
+  const scrollRoot = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
   if (!scrollRoot || scrollRoot.scrollHeight <= scrollRoot.clientHeight) return;
 
-  e.preventDefault();
   scrollRoot.scrollTop += normalizeWheelDeltaY(e);
 }
 
@@ -153,6 +172,7 @@ interface FolderPickerPopoverProps {
    * 上层按当前可用的 SSH / device-link 目标决定是否传入,这里不做判断。
    */
   onAddRemoteProject?: (deviceId?: string) => void;
+  onCreateProject?: () => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
   align?: 'start' | 'center' | 'end';
   sideOffset?: number;
@@ -170,6 +190,7 @@ export function FolderPickerPopover({
   deviceScope,
   onRemoveRemoteProject,
   onAddRemoteProject,
+  onCreateProject,
   side,
   align = 'end',
   sideOffset = 4,
@@ -178,13 +199,26 @@ export function FolderPickerPopover({
 }: FolderPickerPopoverProps) {
   const { t } = useTranslation();
   const isProjectPicker = projectOptions !== undefined;
-  const effectiveProjectOptions = projectOptions ?? [];
-  const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
+  // A teammate's project is reached from the teammate, not offered as a place for new work.
+  const effectiveProjectOptions = useMemo(
+    () => (projectOptions ?? []).filter((option) => !isTeammateProjectPath(option.path)),
+    [projectOptions],
+  );
+  const recentFolders = (open && !isProjectPicker ? getRecentFolders() : [])
+    .filter((folder) => !isTeammateProjectPath(folder.path));
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
   const [browseFailed, setBrowseFailed] = useState(false);
   const projectSearchRef = useRef<HTMLInputElement>(null);
+  const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!popoverEl) return;
+    // React onWheel is passive. Track the actual portal node so late mounting
+    // and closing/reopening both attach and remove the cancelable listener.
+    popoverEl.addEventListener('wheel', handleFolderPickerWheel, { passive: false });
+    return () => popoverEl.removeEventListener('wheel', handleFolderPickerWheel);
+  }, [popoverEl]);
   // 用 state 持有列表元素:内容经 Radix Portal 渲染,首个 commit 时还没挂进 DOM,
   // 普通 ref 配依赖数组的 effect 会在元素出现前测量一次,之后列表不变就再也不测。
   const [projectScrollEl, setProjectScrollEl] = useState<HTMLDivElement | null>(null);
@@ -297,13 +331,9 @@ export function FolderPickerPopover({
             'outline-none',
           )}
         >
-          <Folder
-            size={20}
-            className={cn(
-              'shrink-0 text-[var(--folder-item-icon)]',
-              project.missing && 'opacity-50',
-            )}
-          />
+          <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
+            <PickerProjectIcon project={project} />
+          </span>
           <div className="flex min-w-0 flex-1 flex-col items-start">
             <span
               className={cn(
@@ -358,6 +388,11 @@ export function FolderPickerPopover({
   };
 
   const handleChooseDifferent = async () => {
+    if (onCreateProject) {
+      onOpenChange(false);
+      onCreateProject();
+      return;
+    }
     // 远程设备语境下绝不能开本机原生目录对话框:选出来的是**控制端**路径,而草稿里的
     // deviceId 仍指向对端 —— 发送时要么被被控端 path guard 拒掉,要么(路径恰好在对端也存在)
     // 在一个毫不相关的远程目录里把会话建起来。改为打开设备域的远程浏览器,并带上当前设备。
@@ -386,6 +421,7 @@ export function FolderPickerPopover({
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent
+        ref={setPopoverEl}
         side={side}
         align={align}
         sideOffset={sideOffset}
@@ -395,7 +431,6 @@ export function FolderPickerPopover({
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}
-        onWheel={handleFolderPickerWheel}
         onOpenAutoFocus={(e) => {
           // 项目多到需要搜索时,打开后的下一个动作多半是输入:直接聚焦搜索框。
           const input = projectSearchRef.current;
@@ -630,9 +665,11 @@ export function FolderPickerPopover({
           <FolderPlus size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
           {/* CJK label 视觉重心比 icon 偏高,nudge 1px 居中。与 chip 上 "对话" 同样处理。 */}
           <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-            {isProjectPicker
-              ? t('newChat.folderPicker.browseProjectFolder')
-              : t('newChat.folderPicker.browseFolder')}
+            {onCreateProject
+              ? t('projectSettings.createTitle')
+              : isProjectPicker
+                ? t('newChat.folderPicker.browseProjectFolder')
+                : t('newChat.folderPicker.browseFolder')}
           </span>
         </button>
 

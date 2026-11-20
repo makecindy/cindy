@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { type ReactNode, type Ref } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -28,7 +29,7 @@ export function SharedTaskScreen({ title, onClose, children, management = false 
   </SafeAreaView>;
 }
 
-export function SharedTaskAction({ action, grow = false, compact = false, buttonRef }: { action: MainWindowAction; grow?: boolean; compact?: boolean; buttonRef?: Ref<View> }) {
+export function SharedTaskAction({ action, grow = false, compact = false, buttonRef }: { action: MainWindowAction; grow?: boolean; compact?: boolean; buttonRef?: Ref<ViewInstance> }) {
   const styles = useThemedStyles(makeStyles);
   return <MainWindowActionButton action={action} grow={grow} buttonRef={buttonRef} density="compact" style={styles.action} textStyle={[compact ? styles.compactActionText : styles.actionText, action.tone === 'danger' && styles.dangerText]} />;
 }

@@ -5,8 +5,6 @@ export interface BotTaskCoordination {
   senderSessionId: string;
 }
 
-export type SessionMessagePurpose = 'coordination' | 'user-visible';
-
 /** Per-input model instruction; never included in visible queue/history text. */
 export function coordinationModelPrefix(receipt: BotTaskCoordination): string {
   return `[Internal task coordination from session ${receipt.senderSessionId}; delegation ${receipt.delegationId}; run ${receipt.runSequence}]\n`

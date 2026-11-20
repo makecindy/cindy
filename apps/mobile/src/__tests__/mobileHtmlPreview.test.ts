@@ -73,7 +73,7 @@ vi.mock("expo-file-system", () => {
       if (!source) throw new Error("ENOENT");
       mocks.contents.set(target.uri, source);
     }
-    write(text: string | Uint8Array) {
+    writeSync(text: string | Uint8Array) {
       mocks.contents.set(
         this.uri,
         typeof text === "string" ? new TextEncoder().encode(text) : text,

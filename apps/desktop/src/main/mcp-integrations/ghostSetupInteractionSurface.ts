@@ -12,6 +12,7 @@ const NON_DESKTOP_SETUP_SOURCES = new Set([
   'slack-hook',
   'telegram',
   'wecom',
+  'imessage',
 ]);
 
 const headlessTurnDepthBySession = new Map<string, number>();

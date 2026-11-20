@@ -61,8 +61,6 @@ describe('ChatInput steer shortcut contract', () => {
     expect(paletteGuard).toBeLessThan(modifiedSend);
     expect(chatInputSource).toContain("'Alt-Enter': () => this.editor.commands.setHardBreak()");
     expect(chatInputSource).toContain('ComposerHardBreak');
-    expect(chatInputSource).toContain('turnRunning={showStopButton}');
-    expect(chatInputSource).toContain('onSteer={onQueueSteer ? handleQueueSteer : undefined}');
     expect(editorEnterBlock).toContain('resolveComposerEnterIntent(');
     expect(editorEnterBlock).toContain('getComposerSendShortcutPreference()');
     expect(editorEnterBlock).toContain('turnRunning: showStopButtonRef.current');
@@ -137,11 +135,9 @@ describe('ChatInput steer shortcut contract', () => {
   it('wires Settings preference updates to ChatInput copy while preserving row-level steer', () => {
     expect(composerSettingsSource).toContain('useComposerSendShortcutPreference()');
     expect(composerSettingsSource).toContain("setPreference(enabled ? 'modifier-enter' : 'enter')");
-    expect(composerSettingsSource).toContain("setPreference('enter');");
     expect(chatInputSource).toContain('useComposerSendShortcutPreference()');
     expect(chatInputSource).toContain('getComposerSendShortcutLabel(');
-    expect(chatInputSource).toContain("composerSendShortcutPreference === 'modifier-enter'");
-    expect(chatInputSource).toContain('newChat.sendButton.queueTooltipSendMode');
+    expect(chatInputSource).toContain('${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`');
     expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
     expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
   });

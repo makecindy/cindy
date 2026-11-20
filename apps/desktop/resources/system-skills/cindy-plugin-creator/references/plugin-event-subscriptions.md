@@ -1,6 +1,36 @@
 ## 4.6 订阅:旁听事件 + 钩子处理消息(subscribe 能力)
 
-一种事件模型,两个类型:
+工具输入、结果与错误使用独立的 [`tool-execution` 主题](plugin-tool-observation.md)，
+不改变以下消息、状态或旧元数据主题的内容边界。
+
+新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，在安装或更新确认中展示。
+接受即整体授予该版本的全部已知能力。已启用且整体安装批准有效的插件按 manifest 声明接收事件，不另存 topic 批准，也没有详情补批或调用时确认。旧 receipt 的分项批准字段读取时忽略。
+
+```json
+"subscribe": { "topics": ["message", "task-state"] }
+```
+
+`did-message-created` 的 `data` 包含 `{sessionId,messageId,role,content,createdAt,historyCursor}`。
+覆盖宿主已经保存的用户消息和 AI 回复，更新同一行时按 `messageId` 合并，不是逐 token 流。
+结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；已有宿主授权的本机媒体与交接引用可用
+`cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，manifest 另需声明 `history` 组；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
+`did-task-state-changed` 的 `data` 为 `{sessionId,state}`，只在生命周期变化时发布：一轮开始、结束、出错、等待权限、等待回答、排队或取消，
+以及归档、恢复和删除。归档等变化提供相应状态字段，运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
+活动摘要、进度、流式输出和仅隐藏状态的变化不触发此主题。
+仅含阶段、时间、运行/等待/注意状态与代次，不含活动摘要、标题派生标签、工具参数或消息内容。
+两种新 topic 包含宿主实际保存的各类任务，不套用下文旧 topic 的主任务/轮次过滤。
+消息事件不主动订阅其它电脑；跨电脑历史读取仍使用原工具的设备参数。
+
+它们复用既有 `onHostMessage`、`seq`、100 条缓冲、唤醒与 `dropped` 语义，没有持久事件日志。
+使用原有逐事件投递，不增加合批、进度折叠或 timer；`running → completed → running` 按顺序完整送达。
+每条保留单调 `seq`，熄灯队列最多 100 条，溢出沿用 `dropped` 标记。
+没有已启用、整体安装批准有效且声明该主题的订阅者时，不投影内容、不取游标、不发事件或唤醒插件。
+断线、重启或 `dropped` 后，用最后保存的 `historyCursor` 调用 `get_chat_history({session_ids:[sessionId],cursor,order:'asc'})`
+补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
+首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。
+停用、卸载、移除声明、更新安装或账号切换后，旧缓冲不会继续投递给新安装或新账号。
+
+以下为原有元数据旁听与消息钩子，行为保持：一种事件模型,两个类型:
 - **监听(`did-`)** = 纯数据通知,事后告诉你发生了什么,你改变不了流程——适合做
   统计面板、成本记账、工作流水、"跟随用户正在看的会话"联动等纯观察型能力;
 - **钩子(`will-`)** = 主机在对话流的关键点**停下来把数据交给你,做完再继续**。
@@ -16,8 +46,8 @@
     (图表、评分卡、警告卡、摘要卡都行)——见 §4.6.1。
   纯副作用场景(审计留痕、上报你自己的系统、记账)两头都支持:干完活回 allow
   即可,对话零感知。
-- 除了这两个消息钩子,Cindy 还在自动化流程里预埋了**控制节点**(自动化运行前、伙伴例行任务
-  运行前…),同样用 `subscribe.hooks` 声明、回 `event-verdict`;只问用户在任务「前置检查」里选了
+- 除了这两个消息钩子,Cindy 还在自动化流程里预埋了**控制节点**(自动化运行前、新任务选模型
+  时…),同样用 `subscribe.hooks` 声明、回 `event-verdict`;只问用户在任务「前置检查」里选了
   本插件的任务,出错处理也由用户在任务里设置,见 §4.6.2。
 
 主机经管子把事件下发到你的电子脑 `onHostMessage`;钩子还要你回一条 `event-verdict`。
@@ -145,3 +175,21 @@ cindy.onHostMessage(function (msg) {
   改,而不是单纯说不;
 - **权限最重**:声明 hooks 在插件详情里是最重的一条(「可读取、拦截或改写你
   发出的消息」),用户会看得很清楚,只在真需要时申请。
+
+### 原生恢复边界
+
+在 `subscribe.topics` 声明 `native-recovery`，并在 `onHostMessage` 监听 `did-native-recovery`。
+仅本机 Claude Code、Codex、Pi 的普通任务提供此主题。引擎会话启动时按已启用且获整体安装批准的订阅注册。
+事件实时投递给该版本已运行的插件。需要持续接收时，可声明 `launch: "resident"`。
+
+`data` 包含 `{sessionId,engine,nativeEvent,metadata}`。字段按原生事件提供，仅含下表列出的状态。
+
+| 引擎 | `nativeEvent` 与 `metadata` |
+| --- | --- |
+| Claude Code | `PreCompact`、`PostCompact` 带 `trigger`，`Stop` 带 `stop_hook_active`，`StopFailure` 带错误分类 `error`。使用当前 SDK 提供的事件。 |
+| Codex | `contextCompaction`，当前轮的 `turn/completed` 带 `status`，原生 `error` 带 `willRetry`。 |
+| Pi | `auto_retry_start` 可带 `attempt`，`auto_retry_end` 带 `success`，`compaction_start`，`compaction_end` 和 `agent_settled` 带 `aborted`。 |
+
+此主题用于观察。消息、压缩摘要、转录路径、原生错误详情和模型凭据不进入事件。
+主动重试任务或手动压缩可调用 [`control_session`](plugin-queue-control.md)。
+此主题不提供自动重试开关、任意上下文改写、文件检查点或继续执行裁决。

@@ -92,6 +92,27 @@ it('finishing an older archive preview keeps a newer preview hidden and cannot r
 // Unit: side-chat details are omitted by the Host list. A list refresh must
 // retain opened details without leaking them into Home, and deletion must still
 // remove them. Existing tests only cover ordinary listed task reconciliation.
+it.each(['side-chat', 'bot'] as const)('retains hidden %s details across list refresh without changing composer availability', source => {
+  remoteSessionStore.clear();
+  try {
+    const detail = session('hidden', { source });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Computer', detail);
+    const previous = remoteSessionStore.getSessions().find(row => row.id === 'hidden');
+    const observed: boolean[] = [];
+    const off = remoteSessionStore.subscribe(() => observed.push(remoteSessionStore.getSessions().some(row => row.id === 'hidden')));
+    try {
+      for (let i = 0; i < 3; i++) remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [session('ordinary')]);
+      expect(remoteSessionStore.getSessions().find(row => row.id === 'hidden')).toBe(previous);
+      expect(observed).not.toContain(false);
+      expect(remoteSessionStore.getHomeSessions().map(row => row.id)).toEqual(['ordinary']);
+      remoteSessionStore.applySessionPatch('dev-1', 'hidden', { status: 'deleted' });
+      expect(remoteSessionStore.getSessions().some(row => row.id === 'hidden')).toBe(false);
+      remoteSessionStore.setDeviceSessions('dev-1', 'Computer', []);
+      expect(remoteSessionStore.getSessions()).toEqual([]);
+    } finally { off(); }
+  } finally { remoteSessionStore.clear(); }
+});
+
 it.each(['deleted', 'archived'] as const)('retains hidden side-chat details across refresh, then reports %s after removal', status => {
   remoteSessionStore.clear();
   const parent = session('main');
@@ -252,6 +273,37 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it.each(['superseded', 'resolved', 'session_closed'])('releases an edited async question on %s', (reason) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const item: PendingInteraction = { request: { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Q?' }] } };
+    remoteSessionStore.setPendingInteractions('s1', [item]);
+    remoteSessionStore.protectAsyncQuestion('s1', item);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'q1', reason, decision: { dismissed: true },
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  // Regression: editing a second async question must not drop the first one's unsent supplement when it is withdrawn.
+  it('keeps every edited async question when an earlier one is withdrawn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const ask = (requestId: string): PendingInteraction => ({ persistId: `p-${requestId}`,
+      request: { kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: `${requestId}?` }] } });
+    const [a, b] = [ask('qa'), ask('qb')];
+    remoteSessionStore.setPendingInteractions('s1', [a, b]);
+    remoteSessionStore.protectAsyncQuestion('s1', a);
+    remoteSessionStore.protectAsyncQuestion('s1', b);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'qa', reason: 'question_withdrawn', withdrawalReason: '已确认',
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qa', 'qb']);
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0]).toMatchObject({
+      retainedDraft: true, request: { withdrawalReason: '已确认' },
+    });
+    remoteSessionStore.releaseProtectedQuestion('s1', 'qa');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qb']);
+  });
+
   it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const item: PendingInteraction = { persistId: 'p1',
@@ -259,7 +311,7 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.setPendingInteractions('s1', [item]);
     remoteSessionStore.protectAsyncQuestion('s1', item);
     remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
-      sessionId: 's1', requestId: 'q1', reason: 'resolved', decision: { dismissed: true },
+      sessionId: 's1', requestId: 'q1', reason: 'turn_completed', decision: { dismissed: true },
     });
     const visible = remoteSessionStore.getVisiblePendingInteractions('s1');
     expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toBe(visible);

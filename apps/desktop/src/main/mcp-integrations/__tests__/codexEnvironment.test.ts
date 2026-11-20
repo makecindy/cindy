@@ -13,7 +13,7 @@ import {
   setCodexEnvironmentShutdownHook,
   shutdownCodexEnvironment,
   unregisterCodexMcpThreadContext,
-} from '../codexEnvironment.js';
+} from '../codexEnvironment.desktop.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY, CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
@@ -124,6 +124,7 @@ describe('codexEnvironment', () => {
     const appProxy = vi.fn((read: () => AppServerConfig, context: McpProviderContext) => {
       expect(read()).toEqual({
         id: 'custom_test',
+        name: 'Custom Test',
         url: 'https://example.test/mcp',
         transport,
         headers: { Authorization: 'Bearer test-only-token' },

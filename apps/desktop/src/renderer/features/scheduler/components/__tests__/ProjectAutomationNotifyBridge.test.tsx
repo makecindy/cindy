@@ -10,14 +10,15 @@ import { ToastContainer } from '@/components/ui/toast/ToastContainer';
 // or loses the review action after StrictMode's effect replay.
 // PR 8246: use real Toast dismissal; cancellation must retain an action without
 // another discovery event. Three imports must leave room for unrelated alerts.
-const state = vi.hoisted(() => ({
+const state = vi.hoisted(() => ({ dbStatus: 'ready',
   t: (key: string, values?: Record<string, unknown>) => `${key} ${JSON.stringify(values ?? {})}` }));
+vi.mock('@/contexts/AppShellCoverContext', () => ({ useAppShellCover: () => ({ localDbGateStatus: state.dbStatus }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: state.t }) }));
 
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { ProjectAutomationNotifyBridge } from '../ProjectAutomationNotifyBridge';
 
-afterEach(async () => { cleanup(); toast.dismissAll(); await vi.advanceTimersByTimeAsync(400);
+afterEach(async () => { state.dbStatus = 'ready'; cleanup(); toast.dismissAll(); await vi.advanceTimersByTimeAsync(400);
   vi.useRealTimers(); vi.clearAllMocks(); window.history.replaceState({}, '', '/'); });
 
 it('requires a visible confirmation and reopens review for changed imports', async () => {
@@ -86,4 +87,22 @@ it.each(['secondaryWindow', 'sidebarWindow'])('does not offer imports in %s', as
   await act(async () => {});
   expect(listPendingImports).not.toHaveBeenCalled();
   expect(onEvent).not.toHaveBeenCalled();
+});
+
+// Startup regression, unit/jsdom: this bridge lives outside LocalDbGate.
+// Delay its existing readiness status; no polling or lost first snapshot.
+it('waits for local DB readiness before querying pending imports', async () => {
+  vi.useFakeTimers();
+  state.dbStatus = 'pending';
+  const listPendingImports = vi.fn().mockResolvedValue([]);
+  const onEvent = vi.fn(() => vi.fn());
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { projectAutomation: {
+    listPendingImports, onEvent,
+  } } } });
+  const view = render(<ConfirmDialogProvider><ProjectAutomationNotifyBridge /></ConfirmDialogProvider>);
+  expect(listPendingImports).not.toHaveBeenCalled();
+  state.dbStatus = 'ready';
+  view.rerender(<ConfirmDialogProvider><ProjectAutomationNotifyBridge /></ConfirmDialogProvider>);
+  await act(async () => {});
+  expect(listPendingImports).toHaveBeenCalledOnce();
 });

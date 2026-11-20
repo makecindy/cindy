@@ -75,6 +75,35 @@ describe('SpeakerModelStore', () => {
     });
   });
 
+  it('reports all models as one download, counting models already on disk', async () => {
+    fs.writeFileSync(
+      path.join(dir, speakerModelLocalName(SPEAKER_MODEL_ASSETS[0])),
+      Buffer.alloc(8),
+    );
+    let seen: unknown;
+    const store: InstanceType<typeof SpeakerModelStore> = new SpeakerModelStore({
+      dir: () => dir,
+      cdnBaseUrl: () => 'https://cdn.example.com/',
+      download: (async (options: DownloadCall & { onProgress?: (event: unknown) => void }) => {
+        await Promise.resolve(); // the real downloader reports progress after starting asynchronously
+        options.onProgress?.({ loaded: 4, total: 16, percent: 25, speedBps: 2 });
+        seen = store.getState().download;
+        fs.writeFileSync(options.targetPath, Buffer.alloc(16));
+        return { path: options.targetPath, size: 16, sha256: options.sha256, fromCache: false };
+      }) as never,
+    });
+    await store.ensureDownloaded();
+    // 8 bytes already present + 4 of 16 = 12 of 24; 12 bytes left at 2 B/s.
+    expect(seen).toMatchObject({
+      phase: 'downloading',
+      loaded: 12,
+      total: 24,
+      percent: 50,
+      etaSeconds: 6,
+    });
+    expect(store.getState().download).toBeUndefined();
+  });
+
   it('joins a running download instead of starting another', async () => {
     const calls: DownloadCall[] = [];
     const store = createStore(fakeDownload(calls));

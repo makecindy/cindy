@@ -303,6 +303,15 @@ export function isSilentAgentIslandSoundChoice(choice: AgentIslandSoundChoice): 
   return choice.type === 'builtin' && choice.id === 'none';
 }
 
+/** Task notification sound ownership is per event; no chosen sound means OS defaults. */
+export function hasAgentIslandNotificationSound(
+  settings: AgentIslandSoundSettings,
+  kind: 'done' | 'needs-reply' | 'error',
+): boolean {
+  const event = kind === 'done' ? 'complete' : kind === 'needs-reply' ? 'attention' : 'error';
+  return settings.enabled && !isSilentAgentIslandSoundChoice(settings.sounds[event]);
+}
+
 export function isAgentIslandSoundEvent(value: unknown): value is AgentIslandSoundEvent {
   return typeof value === 'string' && (AGENT_ISLAND_SOUND_EVENTS as readonly string[]).includes(value);
 }

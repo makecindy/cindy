@@ -243,7 +243,7 @@ export function companionImportReasonKey(code?: string): string {
     MEMORY_DESCRIPTION_TOO_LONG: 'memoryMetadata', MEMORY_TITLE_TOO_LONG: 'memoryMetadata', MEMORY_METADATA_INVALID: 'memoryMetadata',
     MEMORY_CONTENT_TOO_LARGE: 'fileTooLarge', MEMORY_WRITE_FAILED: 'memoryWrite', MEMORY_CHANGED: 'memoryChanged',
     MEMORY_STORAGE_UNAVAILABLE: 'memoryWrite', MEMORY_ATTACHMENT_UNSUPPORTED: 'attachmentUnsupported',
-    SOURCE_FILE_TOO_LARGE: 'fileTooLarge', SOURCE_SNAPSHOT_TOO_LARGE: 'fileTooLarge', SOURCE_ITEM_TOO_LARGE: 'fileTooLarge',
+    SOURCE_FILE_TOO_LARGE: 'sourceFileTooLarge', SOURCE_SNAPSHOT_TOO_LARGE: 'snapshotTooLarge', SOURCE_ITEM_TOO_LARGE: 'itemTooLarge',
     IMPORT_DISK_FULL: 'diskFull', IMPORT_PERMISSION_DENIED: 'permissionDenied',
     IMPORT_SETUP_DEFERRED: 'setupDeferred', SOURCE_TOOL_POLICY_NEEDS_MAPPING: 'toolMapping', AUTOMATION_MODEL_NEEDS_MAPPING: 'modelMapping',
     AUTOMATION_CONTEXT_NEEDS_MAPPING: 'contextMapping', AUTOMATION_WORKDIR_NEEDS_MAPPING: 'contextMapping',
