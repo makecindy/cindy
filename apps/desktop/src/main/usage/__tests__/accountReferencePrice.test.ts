@@ -332,6 +332,35 @@ describe('API-key preset reference prices and static cost precedence', () => {
       },
     },
   });
+  it('prices removed DeepSeek models only on an official historical route', () => {
+    const runtime = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,
+      catalogPresetId: 'deepseek', models: [{ id: 'deepseek-flash', name: 'Flash' }] };
+    const relay = { ...runtime, baseUrl: 'https://relay.example/v1' };
+    const project = (runtimes: Parameters<typeof buildUserProvider>[0]['runtimes']) =>
+      getReferenceModelPricing({ at: '2026-11-20', providers: [buildUserProvider({
+        id: 'deepseek', name: 'DeepSeek', runtimes,
+      })] });
+    const model = 'deepseek-v4-pro';
+    const expected = { inputPerMtok: 1.32, outputPerMtok: 3.96 };
+    const official = project({ pi: runtime });
+    expect(getModelPriceQuote(official, 'deepseek', model, 'pi')).toMatchObject(expected);
+    expect(getModelPriceQuote(official, 'deepseek', model)).toMatchObject(expected);
+    const mixed = project({ pi: runtime, codex: relay });
+    expect(getModelPriceQuote(mixed, 'deepseek', model, 'pi')).toMatchObject(expected);
+    expect(getModelPriceQuote(mixed, 'deepseek', model, 'codex')).toBeUndefined();
+    expect(getModelPriceQuote(mixed, 'deepseek', model)).toBeUndefined();
+    expect(getModelPriceQuote(project({ pi: { ...runtime, requestPath: '/custom' } }), 'deepseek', model, 'pi')).toBeUndefined();
+  });
+  it('retains removed Gemini models on the declared native endpoint until the tariff expires', () => {
+    const provider = buildUserProvider({ id: 'google-gemini-api', name: 'Native', runtimes: { pi: {
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
+      models: [{ id: 'gemini-4-carbon', name: 'Carbon' }],
+    } } });
+    const quote = (at: string) => getModelPriceQuote(getReferenceModelPricing({ at, providers: [provider] }),
+      provider.id, 'gemini-2.5-pro', 'pi');
+    expect(quote('2026-11-20')).toMatchObject({ inputPerMtok: 1.25, outputPerMtok: 10 });
+    expect(quote('2026-12-01')).toBeUndefined();
+  });
   it.each([true, false])('keeps relay estimates local when a discovered price is present: %s', hasCost => {
     const relay = buildUserProvider({ id: 'openai-api', name: 'Relay', runtimes: { pi: {
       baseUrl: 'https://relay.example/v1', catalogPresetId: 'openai-api',

@@ -8,12 +8,13 @@
  * the Desktop window broadcast (broadcastReferenceModelPricing) and re-exports this module.
  */
 
-import type { AgentKind, Catalog, CatalogModel } from '@cindy/model-providers';
+import { providerEndpointBindings, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
   modelPricingKey,
   registryPricingCatalog,
+  providerReferencePriceQuote as registryQuoteForModel,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
@@ -83,6 +84,51 @@ function modelCostQuote(
   };
 }
 
+/** Retain dated public prices for removed models on engines still using that public channel.
+ * Models currently configured on an engine are priced separately using their actual model route.
+ */
+function historicalAccountPrices(
+  provider: Provider, catalog: Catalog, publicPrices: Record<string, ModelPriceQuote> | undefined,
+  at: string | Date | undefined,
+): Record<string, ModelPriceQuote> {
+  const prices: Record<string, ModelPriceQuote> = Object.create(null);
+  if (!publicPrices) return prices;
+  const preset = catalog.presets?.find(candidate => candidate.id === provider.id);
+  if (!preset) return prices;
+  const engines = Object.entries(provider.routing);
+  const official = engines.flatMap(([engine, routing]) => {
+    const agent = engine as AgentKind;
+    const runtime = preset.runtimes[agent];
+    if (!runtime || routing.disabled) return [];
+    const defaultWire = agent === 'pi' ? 'openai-chat' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+    const matches = (url: string, wire = runtime.wireProtocol, path = runtime.requestPath) =>
+      (routing.wireProtocol ?? defaultWire) === (wire ?? defaultWire) &&
+      (routing.requestPath ?? '') === (path ?? '') &&
+      providerEndpointBindings(url, routing.upstream) !== null;
+    const defaultRoute = matches(runtime.baseUrl);
+    // A preset can also declare a separate native endpoint for individual models (e.g. Gemini).
+    const nativeModels = defaultRoute ? undefined : new Set(runtime.models
+      .filter(model => model.route && matches(model.route.baseUrl, model.route.wireProtocol, model.route.requestPath))
+      .map(model => model.id));
+    if (nativeModels?.size === 0) return [];
+    return [{ agent, nativeModels, current: new Set(provider.models[agent]?.map(model => model.id)) }];
+  });
+  if (!official.length) return prices;
+  for (const [modelId, publicQuote] of Object.entries(publicPrices)) {
+    let quoted = 0;
+    for (const { agent, nativeModels, current } of official) {
+      if (current.has(modelId) || (nativeModels && !nativeModels.has(modelId))) continue;
+      const quote = registryQuoteForModel(provider.id, modelId, catalog.modelRegistry, { agent, at });
+      if (quote) {
+        prices[modelPricingKey(modelId, agent)] = quote;
+        quoted++;
+      }
+    }
+    if (quoted === engines.length) prices[modelId] = publicQuote;
+  }
+  return prices;
+}
+
 /**
  * Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。
  *
@@ -111,7 +157,10 @@ export function getReferenceModelPricing(
     if (provider.source === 'user') {
       // A local account can have the same ID as a public route. Rebuild its bucket
       // from verified engine/model quotes so an unmatched relay cannot inherit the generic price.
-      if (provider.auth.method === 'apiKey') pricing[provider.id] = Object.create(null);
+      if (provider.auth.method === 'apiKey') {
+        const publicPrices = Object.hasOwn(pricing, provider.id) ? pricing[provider.id] : undefined;
+        pricing[provider.id] = historicalAccountPrices(provider, catalog, publicPrices, at);
+      }
       const nativeOAuth = provider.auth?.method === 'oauth' && Boolean(provider.auth.native);
       for (const [agent, models] of Object.entries(provider.models)) {
         const agentKind = agent as AgentKind;
