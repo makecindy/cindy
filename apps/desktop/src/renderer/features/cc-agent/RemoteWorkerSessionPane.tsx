@@ -29,6 +29,7 @@ export interface RemoteWorkerSessionPaneProps {
   device: WorkerExecutionDevice;
   viewVisible: boolean;
   chatRealtime: boolean;
+  readOnly?: boolean;
   onHistoryCommit?: () => void;
 }
 
@@ -39,6 +40,7 @@ export function RemoteWorkerSessionPane({
   device,
   viewVisible,
   chatRealtime,
+  readOnly = false,
   onHistoryCommit,
 }: RemoteWorkerSessionPaneProps) {
   const { t } = useTranslation();
@@ -146,7 +148,7 @@ export function RemoteWorkerSessionPane({
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
-            readOnly={!runsHere && (reachable === false || state !== 'ready')}
+            readOnly={readOnly || (!runsHere && (reachable === false || state !== 'ready'))}
             navigationMode="sidebar-embedded"
             sidebarTargetSessionId={leadSessionId}
           />

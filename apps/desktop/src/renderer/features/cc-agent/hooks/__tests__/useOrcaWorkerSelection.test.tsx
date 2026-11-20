@@ -102,12 +102,56 @@ describe('useOrcaWorkerSelection', () => {
       status: 'applied',
       workers: mocks.workers,
     });
-    mocks.switchFocus.mockClear();
+    mocks.switchFocus.mockReset().mockResolvedValue(undefined);
     mocks.idleWorker.mockClear();
     mocks.idleWorker.mockResolvedValue({ ok: true, workerId: 'worker-b' });
     mocks.toastError.mockClear();
     __resetWorkerAttentionStoreForTest();
     mocks.createWorker.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('shows the latest click immediately and applies A → B → A in write order', async () => {
+    let applyB!: () => void;
+    let applyA!: () => void;
+    let authoritative = 'worker-a';
+    mocks.workers.push(makeWorker('worker-c', 'session-c'));
+    mocks.switchFocus
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { applyB = () => { authoritative = 'worker-b'; resolve(); }; }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { applyA = () => { authoritative = 'worker-a'; resolve(); }; }));
+    const { result } = renderHook(() => useOrcaWorkerSelection({ leadSessionId: 'lead-1' }), { wrapper });
+
+    act(() => result.current.handleSwitchFocus('worker-b'));
+    expect(result.current.workerSessionId).toBe('session-b');
+    await waitFor(() => expect(mocks.switchFocus).toHaveBeenCalledTimes(1));
+    act(() => result.current.handleSwitchFocus('worker-c'));
+    act(() => result.current.handleSwitchFocus('worker-a'));
+    expect(result.current.workerSessionId).toBe('session-a');
+    expect(mocks.switchFocus).toHaveBeenCalledTimes(1);
+
+    await act(async () => applyB());
+    expect(mocks.switchFocus.mock.calls).toEqual([
+      [{ leadSessionId: 'lead-1', workerIdOrLabel: 'worker-b' }],
+      [{ leadSessionId: 'lead-1', workerIdOrLabel: 'worker-a' }],
+    ]);
+    expect(authoritative).toBe('worker-b');
+    expect(result.current.workerSessionId).toBe('session-a');
+    await act(async () => applyA());
+    expect(authoritative).toBe('worker-a');
+    expect(result.current.workerSessionId).toBe('session-a');
+  });
+
+  it('rolls back the current failed click to the authoritative selection', async () => {
+    let fail!: (error: Error) => void;
+    mocks.switchFocus.mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+    const { result } = renderHook(() => useOrcaWorkerSelection({ leadSessionId: 'lead-1' }), { wrapper });
+
+    act(() => result.current.handleSwitchFocus('worker-b'));
+    expect(result.current.workerSessionId).toBe('session-b');
+    await waitFor(() => expect(mocks.switchFocus).toHaveBeenCalledTimes(1));
+    await act(async () => fail(new Error('focus unavailable')));
+
+    expect(result.current.workerSessionId).toBe('session-a');
+    expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith('focus unavailable');
   });
 
   it('acknowledges a done worker after switching focus and clears attention after success', async () => {

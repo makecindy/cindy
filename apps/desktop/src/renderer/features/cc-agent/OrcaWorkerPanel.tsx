@@ -6,11 +6,12 @@
  * 双栏布局与独立 resize/maximize。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -138,6 +139,7 @@ export function OrcaWorkerPanel({
     refreshCreationState,
     selectedWorkerRecord,
     selectedWorkerId,
+    focusWritePending,
     workerSessionId,
     createOpen,
     setCreateOpen,
@@ -158,6 +160,8 @@ export function OrcaWorkerPanel({
     onFocusWorkerSessionIdConsumed,
     onSelectionIntentCleared,
   });
+  const deferredWorkerSessionId = useDeferredValue(workerSessionId);
+  const workerPaneReady = deferredWorkerSessionId === workerSessionId;
   const switchTrace = useRef<{
     lead: string;
     target: string;
@@ -308,7 +312,7 @@ export function OrcaWorkerPanel({
           pluginEngineDeviceId={typeof deviceId === 'string' ? deviceId : undefined}
           onArchiveWorker={handleArchiveWorker}
           onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
-          clearAttentionWhenVisible={workerConversationVisible}
+          clearAttentionWhenVisible={workerConversationVisible && workerPaneReady && !focusWritePending}
         />
       </div>
       <div className="chat-rail-compact min-h-0 flex-1">
@@ -327,6 +331,10 @@ export function OrcaWorkerPanel({
               </Button>
             )}
           </div>
+        ) : workerSessionId && (!workerPaneReady || !workerOriginReady) ? (
+          <div aria-busy="true" className="flex h-full items-center justify-center">
+            <Spinner size={16} />
+          </div>
         ) : workerSessionId && remoteDevice ? (
           <RemoteWorkerSessionPane
             key={workerSessionId}
@@ -335,8 +343,9 @@ export function OrcaWorkerPanel({
             onHistoryCommit={onWorkerHistoryCommit}
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
+            readOnly={focusWritePending}
           />
-        ) : workerSessionId && !workerOriginReady ? null : workerSessionId ? (
+        ) : workerSessionId ? (
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}
@@ -346,6 +355,7 @@ export function OrcaWorkerPanel({
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
+            readOnly={focusWritePending}
             searchJumpProp={searchJump}
             onSearchJumpConsumed={onSearchJumpConsumed}
             navigationMode="sidebar-embedded"
