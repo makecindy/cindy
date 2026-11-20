@@ -70,6 +70,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import { InlineHtmlPreview } from '../plugins/file-browser/InlineHtmlPreview';
@@ -325,6 +326,41 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // #11546, unit: an empty task sidebar and its + menu share the session's Review eligibility.
+  it.each([
+    ['guest', sharedTaskHostPeer('task', 'host'), false],
+    ['owner', null, true],
+    ['paired device', 'paired-device', true],
+  ] as const)('filters both Review creation surfaces for %s', async (_role, deviceLinkDeviceId, available) => {
+    const name = 'rightSidebar.tabs.kinds.review';
+    registerTabKind({
+      kind: 'review',
+      menu: { kind: 'review', labelKey: name, icon: (() => null) as unknown as LucideIcon, order: 1, enabled: true },
+      TabPillTitle: () => null, TabBody: () => null, defaultState: () => null,
+    });
+    try {
+      render(createElement(RightSidebarShell, {
+        sessionId: 's1', workdir: 'repo', remoteHostId: null, deviceLinkDeviceId, shellVisible: true, isMac: true,
+      }));
+      await screen.findByText('rightSidebar.tabs.empty.title');
+      expect(Boolean(screen.queryByRole('button', { name }))).toBe(available);
+      const add = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(add.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 20, 24, 24));
+      fireEvent.pointerDown(add, { button: 0, ctrlKey: false });
+      await screen.findByRole('menu');
+      const entry = screen.queryByRole('menuitem', { name });
+      expect(Boolean(entry)).toBe(available);
+      if (entry) {
+        fireEvent.click(entry);
+        await waitFor(() => expect(tabsIpc.upsert).toHaveBeenCalled());
+      } else {
+        expect(tabsIpc.upsert).not.toHaveBeenCalled();
+      }
+    } finally {
+      unregisterTabKind('review');
+    }
   });
 
   // 测试价值
