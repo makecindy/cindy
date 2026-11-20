@@ -33,6 +33,7 @@ export default {
     ]))),
     'appearance-desktop-hidden': { about: 'Hidden desktop retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'none' } },
     'appearance-wallpaper-hidden': { about: 'Hidden wallpaper retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'cindy-window' } },
+    'liquid-glass': { about: 'Liquid Glass is searchable and applies immediately in Interface material', data: { tab: 'personalization', liquidGlass: true } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
     'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
@@ -46,6 +47,49 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.liquidGlass) {
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      const control = page.getByRole('switch', { name: await ui.t('settings.personalization.liquidGlass.label') });
+      await search.fill('Liquid Glass');
+      await page.locator('[id="settings-search-result-settings.personalization.liquidGlass.label"]').click();
+      const initial = ui.platform === 'darwin' ? 'true' : 'false';
+      await control.and(page.locator('[aria-checked="' + initial + '"]')).waitFor();
+      await control.click();
+      await control.and(page.locator('[aria-checked="' + (initial === 'true' ? 'false' : 'true') + '"]')).waitFor();
+      const clarityLabel = await ui.t('settings.personalization.liquidGlass.clarity');
+      await search.fill(clarityLabel);
+      await page.locator('[id="settings-search-result-settings.personalization.liquidGlass.clarity"]').click();
+      const slider = page.getByRole('slider', { name: clarityLabel });
+      if (initial === 'true') await control.click();
+      await slider.and(page.locator('[aria-valuenow="50"]')).waitFor();
+      const track = slider.locator('xpath=..').locator('xpath=..');
+      const bounds = await track.boundingBox();
+      assert.ok(bounds?.width);
+      const before = await page.evaluate(() => window.glassWrites.length);
+      const point = (value) => page.mouse.move(bounds.x + bounds.width * value / 100,
+        bounds.y + bounds.height / 2);
+      const expectClarity = (value) => slider.and(page.locator(`[aria-valuenow="${value}"]`)).waitFor();
+      await point(50);
+      await page.mouse.down();
+      for (const [pointer, expected] of [[26, 25], [27, 27], [49, 50], [74, 75]]) {
+        await point(pointer);
+        await expectClarity(expected);
+      }
+      const moved = 75;
+      assert.equal(await page.evaluate(() => window.glassWrites.length), before);
+      await page.mouse.up();
+      await page.waitForFunction((expected) => window.glassWrites.at(-1)?.liquidGlassClarity === expected, moved);
+      assert.equal(await page.evaluate(() => window.glassWrites.length), before + 1);
+      await control.click();
+      await slider.and(page.locator('[data-disabled]')).waitFor();
+      assert.equal(await slider.getAttribute('aria-valuenow'), String(moved));
+      await control.click();
+      await slider.and(page.locator(':not([data-disabled])')).waitFor();
+      assert.equal(await slider.getAttribute('aria-valuenow'), String(moved));
+      await slider.press('ArrowRight');
+      await expectClarity(76);
+      await page.waitForFunction(() => window.glassWrites.at(-1)?.liquidGlassClarity === 76);
+    }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
     if (ui.data.modelTokens) {

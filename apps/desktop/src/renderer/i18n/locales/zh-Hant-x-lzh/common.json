@@ -5436,6 +5436,14 @@
       "toggleAria": "切換應答文字漸顯之效"
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "通透度",
+        "clarityHint": "數愈高，玻璃後之景愈明。",
+        "section": "界面材質",
+        "label": "液態玻璃",
+        "hint": "使側欄、輸入欄、選單與浮層呈玻璃之質。",
+        "saveFailed": "未能儲存液態玻璃設定。"
+      },
       "title": "個性",
       "subtitle": "自訂提示詞",
       "description": "為君之助手添指令與上下文。",

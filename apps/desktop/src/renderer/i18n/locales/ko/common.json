@@ -5372,6 +5372,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "투명도",
+        "clarityHint": "값이 높을수록 유리 뒤의 배경이 더 잘 보입니다.",
+        "section": "인터페이스 재질",
+        "label": "Liquid Glass",
+        "hint": "사이드바, 입력창, 메뉴, 팝업에 유리 효과를 적용합니다.",
+        "saveFailed": "Liquid Glass 설정을 저장하지 못했습니다."
+      },
       "title": "개인화",
       "subtitle": "사용자 정의 프롬프트",
       "description": "어시스턴트에 추가 지침과 컨텍스트를 제공합니다.",

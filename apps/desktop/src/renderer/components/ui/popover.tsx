@@ -28,6 +28,7 @@ const PopoverContent = React.forwardRef<
       ref={ref}
       align={align}
       sideOffset={sideOffset}
+      data-glass-popover
       className={cn(
         'z-50 w-72 rounded-xl border bg-popover p-4 text-popover-foreground shadow-[shadow:var(--shadow-menu)] outline-none',
         'origin-[var(--radix-popover-content-transform-origin)]',

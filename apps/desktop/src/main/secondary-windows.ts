@@ -44,7 +44,7 @@ import {
 } from '../shared/windowBackdrop.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
-import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
+import { applyAppearanceToWindow, getPersistedGlassMaterial, installWindowZoomRestoration } from './appearance-settings-ipc.js';
 import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
 import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
@@ -125,11 +125,11 @@ export function openSessionInNewWindow(
         persistedTheme?.resolvedIsDark,
       )
     : nativeTheme.shouldUseDarkColors;
-  const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
     process.platform,
+    { liquidGlass: getPersistedGlassMaterial().liquidGlass },
   );
   // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
   const windowTransparent =
@@ -165,7 +165,7 @@ export function openSessionInNewWindow(
       : path.join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     show: false,
-    backgroundColor: bgColor,
+    backgroundColor: winBackdropConfig.backgroundColor,
     transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
@@ -296,10 +296,10 @@ export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boo
 
 // 开关 vibrancy(仅 CINDY 透壁纸)。副窗 renderer 首帧/切 family 时 IPC theme:apply-vibrancy
 // → main applyWindowVibrancy → 调主窗 + 本函数(副窗)。
-export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
+export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean, liquidGlass: boolean): void {
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
-    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform, { liquidGlass });
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))

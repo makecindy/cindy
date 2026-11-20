@@ -5473,6 +5473,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "Transparence",
+        "clarityHint": "Plus la valeur est élevée, plus l’arrière-plan est visible à travers le verre.",
+        "section": "Matériau de l’interface",
+        "label": "Liquid Glass",
+        "hint": "Applique un effet de verre à la barre latérale, au champ de saisie, aux menus et aux fenêtres contextuelles.",
+        "saveFailed": "Impossible d’enregistrer le réglage Liquid Glass."
+      },
       "title": "Personnalisation",
       "subtitle": "Prompts personnalisés",
       "description": "Donnez à vos assistants des instructions et un contexte supplémentaires.",

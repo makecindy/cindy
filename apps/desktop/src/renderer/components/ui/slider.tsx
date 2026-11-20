@@ -5,9 +5,14 @@ import * as SliderPrimitives from '@radix-ui/react-slider';
 import { cn } from '@/lib/utils';
 import './slider.css';
 
+type SliderProps = React.ComponentPropsWithoutRef<typeof SliderPrimitives.Root> & {
+  /** Opt-in detents for a single thumb. Keyboard input keeps the normal step. */
+  snapPointerValue?: (value: number) => number;
+};
+
 const Slider = React.forwardRef<
   React.ComponentRef<typeof SliderPrimitives.Root>,
-  React.ComponentPropsWithoutRef<typeof SliderPrimitives.Root>
+  SliderProps
 >(
   (
     {
@@ -21,6 +26,7 @@ const Slider = React.forwardRef<
       onPointerCancel,
       onLostPointerCapture,
       onValueChange,
+      snapPointerValue,
       value,
       defaultValue = [0],
       ...props
@@ -56,7 +62,12 @@ const Slider = React.forwardRef<
         className={cn('cindy-slider', className)}
         {...props}
         value={values}
-        onValueChange={change}
+        onValueChange={(next) => {
+          const adjusted = gesture.current && snapPointerValue && next.length === 1
+            ? [snapPointerValue(next[0])]
+            : next;
+          change(adjusted);
+        }}
         data-pressed={pressed || undefined}
         onPointerDown={(event) => {
           onPointerDown?.(event);

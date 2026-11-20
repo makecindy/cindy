@@ -5473,6 +5473,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "Transparência",
+        "clarityHint": "Quanto maior o valor, mais se vê o fundo através do vidro.",
+        "section": "Material da interface",
+        "label": "Liquid Glass",
+        "hint": "Aplica um efeito de vidro à barra lateral, à caixa de mensagem, aos menus e aos painéis flutuantes.",
+        "saveFailed": "Não foi possível guardar a definição de Liquid Glass."
+      },
       "title": "Personalização",
       "subtitle": "Prompts personalizados",
       "description": "Dê aos seus assistentes instruções e contexto adicionais.",

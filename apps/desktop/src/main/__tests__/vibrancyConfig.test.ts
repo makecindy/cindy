@@ -120,6 +120,25 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     }
   });
 
+  // Unit: disabling interface glass removes the default native material but
+  // must not discard the explicit desktop blur preference.
+  it('disables native chrome glass while preserving explicitly requested desktop blur', () => {
+    const windows = { getSystemVersion: () => '10.0.22631', liquidGlass: false };
+    expect(resolveVibrancyConfig('cindy', false, 'win32', windows)).toMatchObject({
+      backgroundMaterial: 'none',
+    });
+    expect(resolveVibrancyConfig('cindy', false, 'win32', { ...windows, desktopBlur: 12 })).toMatchObject({
+      backgroundMaterial: 'acrylic',
+    });
+    expect(resolveVibrancyConfig('cindy', false, 'darwin', { liquidGlass: false })).toMatchObject({
+      vibrancy: null,
+      backgroundColor: '#f8f8f6',
+    });
+    const macDesktop = resolveVibrancyConfig('cindy', false, 'darwin', { liquidGlass: false, desktopBlur: 12 });
+    expect(macDesktop.desktopBlurRadius).toBe(12);
+    expect(macDesktop.sidebarMaterial).toBeUndefined();
+  });
+
   it('win32 × Win11 × CINDY:默认 acrylic + 浅色侧栏 backing', () => {
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {

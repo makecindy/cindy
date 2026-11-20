@@ -19,6 +19,8 @@ Windows 托盘面板（2026-11-18）沿用这里的内容顺序、默认任务�
 首页和详情按内容测量高度，仅超过屏幕可用高度的 86% 才滚动。所有页面复用
 `QuotaPanelController` 的取数、隐私处理、设置持久化和操作派发。
 
+两端的额度浮层外观跟随「个性化 → 界面材质 → 液态玻璃」。关闭时使用共享的不透明底色，并保留额度数据和液柱反馈。
+
 两端的尺寸、短屏密度和语义色正本在 `src/shared/quotaPanelDesign.ts`（相对 Desktop）；
 controller 随视图发送，Swift 的 `PanelDesign`／`Palette` 与 Windows 的 CSS 变量共同消费。
 Swift 内的旧值只供旧预览数据缺字段时兼容，调整设计时改共享正本。平台渲染器仍各自维护页面

@@ -160,6 +160,16 @@ describe('appearance settings IPC authorization', () => {
     expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
     expect(mocks.readAppearanceSettings()).toEqual(latest);
   });
+  // Unit: the preference parser bounds finite slider values before persistence.
+  it('validates Liquid Glass clarity as a finite, bounded percentage', () => {
+    for (const [input, expected] of [[0, 0], [73.4, 73], [-10, 0], [110, 100]]) {
+      expect(__testing.parsePatch({ liquidGlassClarity: input })).toEqual({ liquidGlassClarity: expected });
+    }
+    for (const input of ['50', false, NaN, Infinity, null]) {
+      expect(() => __testing.parsePatch({ liquidGlassClarity: input })).toThrow('INVALID_PARAMS');
+    }
+  });
+
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });

@@ -21,6 +21,24 @@ body { margin: 0; }
     linear-gradient(125deg, transparent, var(--panelGlow2)),
     linear-gradient(var(--panelTint), var(--panelTint)), var(--panelBase);
 }
+.panel[data-liquid-glass='false'] {
+  background: var(--panelBase);
+}
+@media (prefers-reduced-transparency: no-preference) and (forced-colors: none) {
+  .panel[data-liquid-glass='true'] {
+    --quota-glass-opacity: calc(40% + 60% * var(--quota-glass-clarity));
+    background: radial-gradient(ellipse at top left,
+      color-mix(in srgb, var(--panelGlow) var(--quota-glass-opacity), transparent), transparent 60%),
+      linear-gradient(125deg, transparent,
+        color-mix(in srgb, var(--panelGlow2) var(--quota-glass-opacity), transparent)),
+      linear-gradient(var(--panelTint), var(--panelTint)),
+      color-mix(in srgb, var(--panelBase) calc(100% - 22% * var(--quota-glass-clarity)), transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ink) calc(6% + 16% * var(--quota-glass-clarity)), transparent);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .panel { background: var(--panelBase); }
+}
 header, footer { flex: none; display: flex; align-items: center; gap: 8px; }
 header { padding: 12px 12px 4px 18px; min-height: 44px; }
 header > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

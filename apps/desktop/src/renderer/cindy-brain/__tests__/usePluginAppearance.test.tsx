@@ -318,6 +318,29 @@ describe('plugin appearance renderer', () => {
     }
   });
 
+  // Unit: the real presenter must turn the style off on Mac and on on Windows
+  // from a settings notification, without reloading the renderer.
+  it.each([
+    ['darwin', true],
+    ['win32', false],
+  ] as const)('applies and clears the Liquid Glass override on %s', (platform, defaultEnabled) => {
+    let publish!: (settings: ReturnType<typeof normalizeAppearanceSettings>) => void;
+    window.electronAPI = { platform, appearanceSettings: {
+      getSync: () => normalizeAppearanceSettings({}),
+      onChanged: (receive: typeof publish) => { publish = receive; return () => {}; },
+    } } as unknown as typeof window.electronAPI;
+    const release = installAppearancePresenter(applyFontSettings);
+    const enabled = () => document.documentElement.dataset.liquidGlass === 'on';
+    try {
+      expect(enabled()).toBe(defaultEnabled);
+      publish(normalizeAppearanceSettings({ liquidGlass: !defaultEnabled }));
+      expect(enabled()).toBe(!defaultEnabled);
+      publish(normalizeAppearanceSettings({}));
+      expect(enabled()).toBe(defaultEnabled);
+    } finally { release(); }
+    expect(document.documentElement.dataset.liquidGlass).toBeUndefined();
+  });
+
   // Complete-theme contract: startup and React share one document presenter;
   // density/motion derive from foundation tokens and restore without compounding.
   // Unit, real installer + settings events, observing CSSOM and subscription lifecycle.

@@ -23,6 +23,9 @@ const analyticsState = {
 };
 const emptyDirectory = { bytes: 0, fileCount: 0 };
 const visibilityWrites: unknown[] = [];
+let chatAppearance = DEFAULT_APPEARANCE_SETTINGS;
+const glassWrites: unknown[] = [];
+Object.assign(window, { glassWrites });
 Object.assign(window, { visibilityWrites });
 
 void mountPage({
@@ -36,6 +39,18 @@ void mountPage({
         setPatch: ctx.data.previewBackground
           ? async (patch: unknown) => { visibilityWrites.push(patch); }
           : forbid('appearance.setPatch'),
+      },
+    } : {}),
+    ...(ctx.data.liquidGlass ? {
+      appearanceSettings: {
+        getSync: () => chatAppearance,
+        onChanged: subscription('appearance'),
+        setPatch: async (patch: Partial<typeof chatAppearance>) => {
+          glassWrites.push(patch);
+          chatAppearance = { ...chatAppearance, ...patch };
+          window.__uiPage.emit('appearance', chatAppearance);
+          return chatAppearance;
+        },
       },
     } : {}),
     platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',

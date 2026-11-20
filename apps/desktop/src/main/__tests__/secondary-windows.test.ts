@@ -31,6 +31,7 @@ vi.mock('../window-behavior-settings-store.js', () => ({
 }));
 vi.mock('../selection-context-menu.js', () => ({ installSelectionContextMenu: vi.fn() }));
 vi.mock('../appearance-settings-ipc.js', () => ({
+  getPersistedGlassMaterial: () => ({ liquidGlass: true, clarity: 50 }),
   applyAppearanceToWindow: vi.fn(),
   installWindowZoomRestoration: mocks.installWindowZoomRestoration,
 }));
