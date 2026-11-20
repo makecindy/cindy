@@ -462,6 +462,34 @@ function directoryFor(provider: SubscriptionProvider, id: string): string {
     : accountDirectory(provider, id);
 }
 
+export async function refreshCodexSubscriptionAccountAfterReset(scope = 'openai'): Promise<void> {
+  const target = pooledCodexResetTarget(scope);
+  if (target) return target.refresh();
+
+  const resolveAccountId = () => scope === 'openai' ? 'default' : readLegacyCodexAccountId(scope);
+  const id = resolveAccountId();
+  if (!id) return;
+  const state = currentRuntime();
+  if (!accountStillPresent(state, 'openai', id)) return;
+  const directory = directoryFor('openai', id);
+  await refreshCodexPoolQuotaAfterReset(state, id, () => {
+    if (!accountStillPresent(state, 'openai', id) || resolveAccountId() !== id
+      || directoryFor('openai', id) !== directory || (id === 'default' && !defaultAccountBound('openai'))
+      || [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id))
+      throw new Error('PRECONDITION_FAILED: Subscription account unavailable');
+  });
+}
+
+async function refreshCodexPoolQuotaAfterReset(state: OwnerRuntime, id: string, assertCurrent: () => void): Promise<void> {
+  assertCurrent();
+  // A forced read already in progress may still have observed the pre-reset quota.
+  await state.flights.get(keyOf('openai', id))?.promise.catch(() => {});
+  assertCurrent();
+  await snapshot(state, 'openai', id, true, true);
+  assertCurrent();
+  changed('openai', id);
+}
+
 /** Resolve only a saved account of this owner. Default/legacy connections retain their adapters. */
 export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServiceDeps & { refresh(): Promise<void> }) | null {
   if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
@@ -517,12 +545,7 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
       // The reset service projects only the default bucket. The pool retains its
       // full model table, refreshed once after redemption rather than on every read.
     },
-    refresh: async () => {
-      assertCurrent();
-      await snapshot(state, 'openai', id, true, true);
-      assertCurrent();
-      changed('openai', id);
-    },
+    refresh: () => refreshCodexPoolQuotaAfterReset(state, id, assertCurrent),
   };
 }
 

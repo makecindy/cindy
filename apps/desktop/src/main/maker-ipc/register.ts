@@ -15,7 +15,6 @@ import { createRuntimePluginTaskPrompt, createPrepareTaskRuntimePluginTurn, crea
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, ghostTaskSystemPrompt, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
-import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -838,7 +837,11 @@ import {
   type MemorySettings,
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
-import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
+import {
+  createMemorySettingsSection,
+  type NativeMemoryPatch,
+  updateMakerMemorySettings,
+} from '../app-settings/memory.js';
 import {
   assertCollabProjectEnabled,
   resolveLocalCollabPolicyWorkingDir,
@@ -9375,11 +9378,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A V1 teammate-to-teammate background task: not a teammate conversation to rebuild.
         return 'not-bot';
       }
-      if (
-        expectedSession.isTurnRunning() ||
+      const isRuntimeBusy = () => expectedSession.isTurnRunning() ||
         expectedSession.listBackgroundTasks().length > 0 ||
-        hasPendingAgentInteractionForSession(expectedSession.id)
-      ) {
+        expectedSession.countPendingWakeContinuations() > 0 ||
+        hasPendingAgentInteractionForSession(expectedSession.id);
+      if (isRuntimeBusy()) {
         await recordBotCompactRuntimeLifecycle({
           botId: row.botId,
           sessionId: expectedSession.id,
@@ -9474,6 +9477,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts);
             },
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
+            isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
             bootstrap: async () => (await bootstrapSession(createOpts)).session,
           });
@@ -13343,6 +13347,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
+    isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
     readGroupTaskStatus: async (taskId) => {
       const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status, model: sessions.model })
@@ -22749,33 +22754,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => { return restoreMemorySettings(); });
 
-  registerRuntimeSettingsSection({
-    id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
-    effective: 'immediate-or-when-idle',
-    schema: settingsSchema.strictObject({ maker: settingsSchema.boolean().optional(), claudeCode: settingsSchema.boolean().optional(),
-      codex: settingsSchema.boolean().optional(), pi: settingsSchema.boolean().optional() }),
-    read: () => ({ ...memorySettingsWire(), runtime: { maker: maker.makerMemory?.isEnabled() ?? null } }),
-    update: async patch => {
-      const next = { ...readMemorySettingsState().value, ...patch };
-      if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
-        throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
-      let result: unknown;
-      if (patch.maker !== undefined) {
-        const nativePatch: NativeMemoryPatch = {};
-        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
-          if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
-        }
-        return updateMakerMemorySetting(patch.maker, nativePatch);
-      }
-      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
-        if (patch[key] !== undefined) {
-          await updateNativeMemorySetting(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
-          if (readMemorySettingsState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
-        }
-      }
-      return result;
-    }, reset: restoreMemorySettings,
-  });
+  registerRuntimeSettingsSection(createMemorySettingsSection({
+    read: memorySettingsWire,
+    readState: readMemorySettingsState,
+    isMakerEnabled: () => maker.makerMemory?.isEnabled() ?? null,
+    updateMaker: updateMakerMemorySetting,
+    updateNative: updateNativeMemorySetting,
+    reset: restoreMemorySettings,
+  }));
 
   ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_RESET, async () => {
     if (!maker.makerMemory) {

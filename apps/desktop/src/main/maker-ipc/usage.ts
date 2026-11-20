@@ -74,7 +74,12 @@ import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
-import { observeSubscriptionAccountUsage, pooledCodexResetTarget, onSubscriptionAccountsChanged } from '../subscription-accounts/runtime.js';
+import {
+  observeSubscriptionAccountUsage,
+  onSubscriptionAccountsChanged,
+  pooledCodexResetTarget,
+  refreshCodexSubscriptionAccountAfterReset,
+} from '../subscription-accounts/runtime.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
@@ -419,12 +424,13 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       if (accountKey !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
-      if (providerId && (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed')) {
-        await pooledCodexResetTarget(providerId)?.refresh().catch(() => {
+      if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      if (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed') {
+        // The completed redemption can return while the account pool re-reads its full quota.
+        void refreshCodexSubscriptionAccountAfterReset(providerId).catch(() => {
           log.warn('Codex account quota refresh after reset could not complete');
         });
       }
-      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai',
           autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) } : null };
