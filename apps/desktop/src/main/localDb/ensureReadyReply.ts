@@ -1,3 +1,4 @@
+import { isSqliteCorruption } from './client/sqliteCorruption.js';
 import { performance } from 'node:perf_hooks';
 
 import { issueLocalDbFatalDetails } from './fatalDetailsClipboard.js';
@@ -40,7 +41,7 @@ export async function replyToEnsureReady(userId: unknown, deps: EnsureReadyReply
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error(JSON.stringify({ event: 'localDb.ipc.ensure-ready.failed', userId, error: message }));
-    result = { ready: false, error: { code: 'DB_INIT_FAILED', message } };
+    result = { ready: false, error: { code: isSqliteCorruption(err) ? 'DB_RUNTIME_CORRUPT' : 'DB_INIT_FAILED', message } };
   }
   finish(result);
   log.info(JSON.stringify({

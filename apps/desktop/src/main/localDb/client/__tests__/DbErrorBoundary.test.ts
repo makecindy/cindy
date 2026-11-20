@@ -33,3 +33,23 @@ describe('DbErrorBoundary', () => {
     process.off('unhandledRejection', handler);
   });
 });
+
+// #9555: code-based isolation must not turn syntax/constraint/busy errors or
+// arbitrary prose into a permanent outage. No native resources in this matrix.
+it.each(['SQLITE_CORRUPT', 'SQLITE_CORRUPT_INDEX', 'SQLITE_CORRUPT_SEQUENCE', 'SQLITE_CORRUPT_VTAB'])('blocks re-entry and restart after %s', async (code) => {
+  const notify = vi.fn();
+  const boundary = new DbErrorBoundary({ onCorruption: notify });
+  const cause = Object.assign(new Error('native failure'), { code });
+  await expect(boundary.wrap('query', async () => { throw cause; })).rejects.toBe(cause);
+  const next = vi.fn(async () => 1);
+  await expect(boundary.wrap('query', next)).rejects.toMatchObject({ code: 'DB_TRANSPORT_NOT_SENT', cause });
+  expect(next).not.toHaveBeenCalled();
+  expect(notify).toHaveBeenCalledOnce();
+  expect(boundary.onWorkerTerminated({ code: 1, signal: null }).shouldRestart).toBe(false);
+  await expect(boundary.wrap('dispose', next)).resolves.toBe(1);
+});
+it.each(['SQLITE_BUSY', 'SQLITE_ERROR', 'SQLITE_CONSTRAINT', 'SQLITE_CORRUPT_FAKE', undefined])('keeps ordinary error %s recoverable', async (code) => {
+  const boundary = new DbErrorBoundary();
+  await expect(boundary.wrap('query', async () => { throw Object.assign(new Error('malformed'), { code }); })).rejects.toThrow('malformed');
+  await expect(boundary.wrap('query', async () => 7)).resolves.toBe(7);
+});

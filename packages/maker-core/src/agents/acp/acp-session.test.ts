@@ -323,6 +323,31 @@ describe('AcpSession turns', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
+  // 协作 Worker 的角色说明：插件引擎不收 Cindy system prompt，只能随第一条消息送达（docs/plans/acp-plugin-bridge.md 第二期「协作」）。
+  // 缺口：未覆盖时说明可能每条都带（浪费上下文）或恢复后重复；最小失败输入：新会话连发两条、恢复后发一条。
+  it('sends the host briefing once, ahead of the first message of a new session only', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { briefing: 'You are a Worker.' });
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([
+      { type: 'text', text: 'You are a Worker.' },
+      { type: 'text', text: 'one' },
+    ]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.send({ type: 'user', content: 'two' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
+  });
+
+  it('does not repeat the briefing in a resumed session, which already has it in its history', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { loadSession: true }, handlers: { 'session/load': () => ({}) } });
+    const { session } = await open(agent, { resumeSessionId: 'old-1', briefing: 'You are a Worker.' });
+    await session.send({ type: 'user', content: 'next' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'next' }]);
+  });
+
   it('passes attachments as resource links when the agent does not take images', async () => {
     const agent = createFakeAgent();
     const { session } = await open(agent);
@@ -626,6 +651,25 @@ describe('AcpAgent (the acp engine)', () => {
     expect(seen).toEqual(['dsh-acp:dsh']);
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'anthropic' })).rejects.toThrow('harness id');
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' })).rejects.toThrow("'remoteSession' not supported");
+  });
+
+  // 用户决定（2026-11-19）：协作 Worker 整体信任插件 Agent，它的工具调用按任务自己发起（能回报 Lead）；
+  // 其他插件引擎任务仍是「来源未知」。最小失败输入：同一引擎，一次带信任标记、一次不带。
+  it.each([
+    { trusted: true, kind: 'root', attested: true },
+    { trusted: undefined, kind: 'unknown', attested: false },
+  ])('tool calls count as the task own calls only when the host trusts the engine as a whole ($trusted)', async ({ trusted, kind, attested }) => {
+    const contexts: Array<Record<string, unknown>> = [];
+    const agent = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => createFakeAgent().transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => { contexts.push(ctx as unknown as Record<string, unknown>); return null; },
+    });
+    await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
   });
 
   // Unit regressions for PR #11549. Simulate a failed resume with and without

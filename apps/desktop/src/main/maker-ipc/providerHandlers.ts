@@ -1,3 +1,5 @@
+import { isGeminiChatEndpoint } from '../../shared/geminiApiConnection.js';
+import { bindGeminiImageConnection, geminiImageConnectionId } from '../maker-host/gemini-image-connection.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
@@ -111,6 +113,7 @@ import {
   createLocalProviderImport,
   editLocalProviderImport,
   isLocalProviderImport,
+  needsLocalProviderDestinationConsent,
   checkLocalProviderImportSource,
   localProviderImportDraft,
   equivalentLocalProvider,
@@ -139,6 +142,7 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 const log = createLogger('maker-ipc:provider');
 
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
+const LOCAL_DESTINATION_RETRY_DELAY_MS = 5_000;
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -221,9 +225,12 @@ function parseRuntimeKeys(input: unknown): RuntimeKeys | null {
   return Object.fromEntries(entries) as RuntimeKeys;
 }
 
-function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateOptions | null {
+function parseCustomProviderUpdateOptions(input: unknown, creating = false): CustomProviderUpdateOptions | null {
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  if ('bindGeminiImages' in input) {
+    return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
+  }
   const entries = Object.entries(input as Record<string, unknown>);
   if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
@@ -370,6 +377,7 @@ export interface ProviderHandlerDeps {
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
   /** Main's native file picker; no renderer-supplied paths or file contents. */
   selectProviderImportFile?(event: unknown): Promise<string | null>;
+  confirmLocalProviderDestination?(event: unknown, destination: string): Promise<boolean>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
@@ -1301,6 +1309,8 @@ export function registerProviderHandlers(
       }
       assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
+      const geminiImageSettingsConnectionId = trusted && providers.some(provider => provider.id === 'gemini')
+        ? geminiImageConnectionId() : null;
       const remoteAccess = deps.getRemoteProviderInvocationEnabled
         ? (providerId: string) => deps.getRemoteProviderInvocationEnabled!(providerId)
         : null;
@@ -1315,6 +1325,8 @@ export function registerProviderHandlers(
           const safe = withoutProviderHeaderCredentials(provider);
           const view = {
             ...safe,
+            ...(safe.id === 'gemini' && geminiImageSettingsConnectionId !== null
+              ? { geminiImageSettingsConnectionId } : {}),
             ...(safe.models ? {
               models: Object.fromEntries(
                 Object.entries(safe.models).map(([agent, models]) => [
@@ -1421,6 +1433,8 @@ export function registerProviderHandlers(
   // Different new IDs can describe the same connection. Only local-import final
   // comparisons/confirmation share this queue; scans and ordinary CRUD do not.
   let localImportTail: Promise<unknown> = Promise.resolve();
+  let destinationConfirmPending = false;
+  let retryDestinationAfter = 0;
   const serializeLocalImport = <T,>(task: () => Promise<T>): Promise<T> => {
     const run = localImportTail.then(task, task);
     localImportTail = run.catch(() => undefined);
@@ -1573,6 +1587,7 @@ export function registerProviderHandlers(
       importId: unknown,
       target?: unknown,
       interrupt?: unknown,
+      destinationPromptReserved = false,
     ): Promise<import('../../shared/providerImport.js').ProviderImportConfirmResult> => {
       assertTrustedProviderMutationSender(event);
       if (interrupt !== undefined && interrupt !== true)
@@ -1600,13 +1615,34 @@ export function registerProviderHandlers(
         }
         const providers = await deps.listProviders({ allowSideEffects: false });
         assertProviderMutationOwner(ownerAtIngress);
-        const { draft, resolution } = beginProviderImportConfirm(
+        const { draft, resolution, destinationToConfirm } = beginProviderImportConfirm(
           importId,
           ownerAtIngress,
           providers,
           target,
         );
         started = true;
+        if (destinationToConfirm) {
+          if (!destinationPromptReserved || !deps.confirmLocalProviderDestination)
+            throwIpcError('MUTATION_CANCELLED', 'Saved credential confirmation is unavailable');
+          let approved = false;
+          try {
+            approved = await deps.confirmLocalProviderDestination(event, destinationToConfirm);
+          } finally {
+            if (!approved) retryDestinationAfter = performance.now() + LOCAL_DESTINATION_RETRY_DELAY_MS;
+          }
+          if (!approved)
+            throwIpcError('MUTATION_CANCELLED', 'Saved credential use was not approved');
+          assertTrustedProviderMutationSender(event);
+          assertProviderMutationOwner(ownerAtIngress);
+          try { await checkLocalProviderImportSource(importId, ownerAtIngress, true); }
+          catch {
+            assertProviderMutationOwner(ownerAtIngress);
+            throwIpcError('PRECONDITION_FAILED', 'saved API source changed; scan again');
+          }
+          assertTrustedProviderMutationSender(event);
+          assertProviderMutationOwner(ownerAtIngress);
+        }
         if (draft.kind === 'builtin') {
           if (!deps.builtinApiKeyDeps)
             throwIpcError('INTERNAL', 'built-in API-key bridge unavailable');
@@ -1702,10 +1738,21 @@ export function registerProviderHandlers(
         );
       }
     };
-  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, (event, id, target, interrupt) =>
-    isLocalProviderImport(id)
-      ? serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt))
-      : confirmProviderImport(event, id, target, interrupt));
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, async (event, id, target, interrupt) => {
+    if (!isLocalProviderImport(id)) return confirmProviderImport(event, id, target, interrupt);
+    if (!needsLocalProviderDestinationConsent(id))
+      return serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt));
+    assertTrustedProviderMutationSender(event);
+    if (destinationConfirmPending || performance.now() < retryDestinationAfter)
+      throwIpcError('MUTATION_CANCELLED', 'Saved credential confirmation is busy');
+    // Reserve before enqueueing to prevent a burst from replaying after dismissal.
+    destinationConfirmPending = true;
+    try {
+      return await serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt, true));
+    } finally {
+      destinationConfirmPending = false;
+    }
+  });
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (event === MAIN_PROCESS_SENDER) return;
@@ -2418,9 +2465,17 @@ export function registerProviderHandlers(
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
-    const options = parseCustomProviderUpdateOptions(optionsInput);
+    const options = parseCustomProviderUpdateOptions(optionsInput, true);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider create options');
     const config = input as CustomProviderConfig;
+    if (options.bindGeminiImages) {
+      const routes = Object.entries(config.runtimes);
+      if (config.auth && config.auth.method !== 'apiKey' || !routes.length || routes.some(([agent, route]) =>
+        !isGeminiChatEndpoint(route?.baseUrl) || !keys[agent as AgentKind]?.trim())
+        || new Set(Object.values(keys).map(key => key.trim())).size !== 1) {
+        throwIpcError('INVALID_PARAMS', 'Gemini image generation requires one Google AI Studio key');
+      }
+    }
     if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
@@ -2464,6 +2519,15 @@ export function registerProviderHandlers(
         try {
           await createCustomProvider(separated.config);
           assertProviderMutationOwner(ownerAtIngress);
+          if (options.bindGeminiImages) {
+            try {
+              await bindGeminiImageConnection(config.id);
+            } catch (error) {
+              assertProviderMutationOwner(ownerAtIngress);
+              await deleteCustomProvider(config.id);
+              throw error;
+            }
+          }
         } catch (error) {
           // 换号后不在 B 的 secret store 执行 A 的回滚。
           assertProviderMutationOwner(ownerAtIngress);
@@ -2599,6 +2663,16 @@ export function registerProviderHandlers(
         // 用原值回滚，确保并发窗口不能把另一份配置和密钥拼在一起。
         // key/header 的 storage key 按当前 owner 动态解析，写入前必须仍是发起方。
         assertProviderMutationOwner(ownerAtIngress);
+        // Only the explicitly bound connection shares rotations between its official
+        // Google routes. An independently configured proxy always keeps its own key.
+        const googleAgents = (VALID_AGENTS as readonly AgentKind[]).filter(agent =>
+          isGeminiChatEndpoint(config.runtimes[agent]?.baseUrl));
+        if (googleAgents.some(agent => keys[agent]?.trim()) &&
+          googleAgents.length > 1 && geminiImageConnectionId() === config.id) {
+          const replacements = new Set(googleAgents.map(agent => keys[agent]?.trim()).filter(Boolean));
+          if (replacements.size > 1) throwIpcError('INVALID_PARAMS', 'Use one Google Gemini API key');
+          for (const agent of googleAgents) keys[agent] = [...replacements][0];
+        }
         const keyMutations = effectiveProviderKeyMutations(
           config.id,
           planProviderKeyMutations(config, keys, 'update', previous),

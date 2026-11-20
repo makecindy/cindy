@@ -211,7 +211,10 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
-import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
+import {
+  createPiRemoteProviderForwardLease,
+  probePiRemoteProviderEndpoint,
+} from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -2253,6 +2256,11 @@ export function getMaker(): Maker {
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
+      probeRemotePiProviderEndpoint: async (remoteHostId, baseUrl) => {
+        const host = getRemoteSshPool().get(remoteHostId);
+        if (!host || host.getStatus() !== 'ready') return false;
+        return probePiRemoteProviderEndpoint(host, baseUrl);
+      },
       getRemotePiTransport: async (
         remoteHostId,
         {

@@ -13077,6 +13077,7 @@ assertRouteCurrent();
             reasoningTokens: last.reasoningOutputTokens ?? 0,
             model: (typeof observed === 'object' ? observed.model : undefined)
               ?? turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            modelConfirmed: typeof observed === 'object' && Boolean(observed.model?.trim()),
             priceVariant: (typeof observed === 'object' ? observed.priceVariant : observed) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
               : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)

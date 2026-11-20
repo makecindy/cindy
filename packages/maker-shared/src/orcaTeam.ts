@@ -182,7 +182,13 @@ export interface OrcaTeamWorker {
   label: string | null;
   status: OrcaWorkerStatus;
   focused: boolean;
+  /** 插件引擎 Worker 时只是占位(旧端口径)，以 pluginEngineProviderId 为准。 */
   agentKind: OrcaWorkerAgentKind;
+  /**
+   * 仅插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：哪一个引擎(acp-plugin:<插件>:<引擎>)。
+   * 界面据此显示引擎名，而不是 agentKind 的占位 Harness。
+   */
+  pluginEngineProviderId?: string;
   model: string | null;
   effort: string | null;
   title: string | null;
@@ -275,6 +281,9 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       status: workerStatus(row.status),
       focused: row.focused === true,
       agentKind: agentKind(session?.agentKind),
+      ...(session?.agentKind === 'acp' && text(session?.providerId)
+        ? { pluginEngineProviderId: text(session?.providerId)! }
+        : {}),
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),

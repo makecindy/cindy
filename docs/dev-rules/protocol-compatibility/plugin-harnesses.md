@@ -42,7 +42,7 @@ ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消�
 任务中换引擎（2026-11-19，第二期）：`sessions:patched` 的 `agentSwitchIntent`（`PublicAgentSwitchIntent`）与
 `maker:get-session-agent-switch-intent` 的 `targetAgentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>`）。
 这是既有字段的新取值。被控端仅向声明 `plugin-engine-switch-intent-v1` 的控制端推送和返回插件引擎意图，旧控制端收到空意图。
-新端遇到不带引擎标识的 `acp` 同样按无意图处理。`maker:switch-session-agent` 新接受 `targetAgentKind = acp`；旧控制端不会发出，
+新端遇到不带引擎标识的 `acp` 同样按无意图处理。`maker:switch-session-agent` 新接受 `targetAgentKind = acp`（Agent 原在另一台电脑时意图的 `agentDeviceId` 为 `null`，即回到被控端本机；请求点名别的电脑时拒绝）；旧控制端不会发出，
 新控制端对旧被控端发出时旧端以 INVALID_PARAMS 拒绝。`agent_switch` 边界行的 `fromAgentKind` / `toAgentKind` 可为 `acp`，
 追加可选 `fromEngineName` / `toEngineName`；旧端把 `acp` 显示为 Claude Code，停泊会话查找只匹配内置引擎，不会误续接。
 回归见 `pluginEngineSessionSwitch.test.ts`、`pluginEngineSessionAdmission.test.ts` 与 renderer `sessionAgentSwitchRemoteRouting.test.ts`。
@@ -64,3 +64,27 @@ Agent 工具：`list_available_models` / `schedule_list_models` 的 host 结果�
 过滤时），`list_available_models` 输出为 `plugin_engines`；`schedule_create` / `schedule_update` 的引擎枚举追加 `acp`。旧 host 不带该字段。
 回归见 maker-scheduler `scheduler.test.ts`「plugin engine」、`runnerModelSelection.test.ts`「plugin engine schedules」与
 renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
+
+协同 Worker（2026-11-19，第二期）：`maker:session:enable-orca` 的 `workerAgent`、`maker:worker:create` 的 `agent`、`create_worker` /
+`create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。只由本机新版电脑的创建面板与 Lead 的
+工具发起，远程控制与手机不列插件引擎；旧版被控端从不会收到。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置、
+worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
+`session.providerId`；`list_workers` / `get_workspace_info` 的 agent 字段同样可为 `acp`。共享解析器 `parseOrcaTeamWorkers` 给手机追加可选
+`pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响。插件引擎任务当 Lead
+的所有入口统一拒绝（`[PLUGIN_ENGINE_CANNOT_LEAD]`），`set_worker_runtime` 对插件引擎 Worker 返回 UNSUPPORTED_CAPABILITY。远端 Worker
+回报通道（`orcaRemoteWorkerBridge`）拒绝插件引擎 Worker。maker-core 内部新增 `StartSessionOptions.pluginEngineBriefing` /
+`pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
+`acp-session.test.ts`（briefing / trusted caller）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
+
+## 引擎账号用量
+
+执行引擎通过 `PUT /harnesses` 的可选布尔标志 `reportsUsage: true` 表示其主 JSON-RPC worker
+可以处理 `usage({harnessId})`。Host 在调用及返回前检查该实例、批准和可用状态，broker 校验当前账号。
+主进程只把校验并裁剪过的 `GhostHarnessUsage` 返回给发起读取的界面；快照不落盘，也不进入模型列表广播。
+快照使用毫秒时间戳，最多 24 个窗口和 8 个币种余额。读取失败或未提供数据时显示为空，零值保留。
+桌面任务和手机菜单按账号代次、执行电脑、引擎共用在途读取与一分钟缓存。切换任务可复用结果，隐藏期间缓存到期只释放数据，账号切换后丢弃原账号的回包。
+模型目录刷新保留仍可上报用量的引擎读数。引擎被移除或停止上报时，控制端清掉该引擎的缓存并丢弃迟到的回包。手机暂时连不上执行电脑时保留上次读到的目录。
+
+同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
+旧插件继续使用现有状态与模型，新插件在旧 Host 上仍可在自己的设置页获取用量。旧 Host 缺少该 channel 时控制端按无数据处理。
+既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。

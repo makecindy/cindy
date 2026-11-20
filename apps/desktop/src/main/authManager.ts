@@ -3552,6 +3552,8 @@ function snapshotAuthState(): AuthState {
           orgName: currentUser.orgName,
           orgSlug: decodeAccessTokenOrgSlug(accessToken),
           orgLogoUrl: currentUser.orgLogoUrl,
+          tapdbChargeAlias: currentUser.tapdbChargeAlias,
+          tapdbUsageAlias: currentUser.tapdbUsageAlias,
           passportId: currentUser.passportId,
         }
       : null,

@@ -8055,6 +8055,84 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     },
   );
 
+  // #9679: real coordinator stop/enqueue/close paths with a deferred abort.
+  // Existing stale-abort tests keep the replacement busy; they do not cover a
+  // lost terminal after it becomes idle, or the close-cleared null-token risk.
+  // Unit tier: memory ports and fake timers, no real network or user database.
+  it.each(['lost-terminal', 'busy-to-idle', 'busy-then-closed', 'normal-terminal', 'closed', 'new-stop', 'paused', 'live-busy', 'unknown-live'] as const)(
+    'rechecks the replacement after a stale Stop without reviving it: %s',
+    async (boundary) => {
+      vi.useFakeTimers();
+      try {
+        const h = createHarness();
+        const sid = `stale-stop-recheck-${boundary}`;
+        const abort = deferred<void>();
+        const beforeDispatch = deferred<void>();
+        h.setAgentKind('pi');
+        h.abortSession.mockImplementationOnce(() => abort.promise);
+        h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+        h.coordinator.enqueue(sid, makeItem('first', 'first'));
+        await flush();
+        h.coordinator.stop(sid, { keepQueue: false });
+        h.setRunning(false);
+        beforeDispatch.resolve();
+        await flush();
+        h.coordinator.enqueue(sid, makeItem('replacement', 'replacement'));
+        await flush();
+        h.coordinator.enqueue(sid, makeItem('queued', 'queued'));
+        await flush();
+        expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+        h.setLiveRunning(['live-busy', 'busy-to-idle', 'busy-then-closed'].includes(boundary) ? true : boundary === 'unknown-live' ? 'unknown' : false);
+        h.reconcileTurnIdle.mockImplementation(() => { h.setRunning(false); return true; });
+        if (boundary === 'closed') {
+          h.coordinator.stop(sid, { keepQueue: true, pauseQueue: false });
+          h.setRunning(false);
+          h.setLiveSessionPresent(false);
+          h.coordinator.onSessionClosed(sid);
+        } else if (boundary === 'normal-terminal') {
+          h.setRunning(false);
+          h.coordinator.onTurnEvent(sid, 'done');
+        } else if (boundary === 'new-stop' || boundary === 'paused') {
+          const newerAbort = deferred<void>();
+          h.abortSession.mockImplementationOnce(() => newerAbort.promise);
+          h.coordinator.stop(sid, { keepQueue: true, pauseQueue: boundary === 'paused' });
+        }
+        abort.resolve();
+        await flush();
+        if (boundary === 'busy-to-idle' || boundary === 'busy-then-closed') {
+          // The old abort can settle before the replacement goes idle. No
+          // terminal or user action will provide another wakeup afterwards.
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+          expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+          if (boundary === 'busy-then-closed') {
+            h.setRunning(false);
+            h.setLiveSessionPresent(false);
+            h.coordinator.onSessionClosed(sid);
+          }
+          h.setLiveRunning(false);
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+        await flush();
+
+        const shouldDispatch = boundary === 'lost-terminal' || boundary === 'busy-to-idle' || boundary === 'normal-terminal';
+        expect(h.sendToAgent).toHaveBeenCalledTimes(shouldDispatch ? 3 : 2);
+        expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+          .toEqual(shouldDispatch ? [] : ['queued']);
+        if (boundary === 'lost-terminal' || boundary === 'busy-to-idle') {
+          expect(h.reconcileTurnIdle).toHaveBeenCalledOnce();
+          expect(h.sendToAgent.mock.calls[2]![3].persistUserMessage?.clientId).toBe('queued');
+        } else {
+          expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+        }
+        if (boundary === 'closed') expect(h.coordinator.getProjection(sid).turnInProgress).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
     const sid = 'stop-codex';

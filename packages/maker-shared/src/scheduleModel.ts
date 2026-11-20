@@ -620,6 +620,37 @@ export interface FailedScheduleRunSnapshot {
   errorMsg?: string;
   /** The check script belongs to a plugin that is not installed or not enabled. */
   missingPlugin?: ScheduleMissingPlugin;
+  prCheckDiagnosis?: PrCheckDiagnosis;
+}
+
+export interface PrCheckDiagnosis {
+  kind: 'dns' | 'timeout' | 'auth' | 'rate-limit' | 'unknown';
+  host?: string;
+  device: string;
+  failures: number;
+  retryAt: number;
+}
+
+/** Validate hook output and records from older or remote hosts before presenting them. */
+export function readPrCheckDiagnosis(raw: unknown): PrCheckDiagnosis | undefined {
+  if (!isRecord(raw)) return;
+  const { kind, host, device, failures, retryAt } = raw;
+  if (kind !== 'dns' && kind !== 'timeout' && kind !== 'auth' && kind !== 'rate-limit' && kind !== 'unknown') return;
+  if (typeof device !== 'string' || !device.trim() || device.length > 256) return;
+  if (typeof failures !== 'number' || !Number.isSafeInteger(failures) || failures < 1) return;
+  if (typeof retryAt !== 'number' || !Number.isSafeInteger(retryAt) || retryAt <= 0 || retryAt > 8640000000000000) return;
+  if (kind === 'dns') {
+    if (typeof host !== 'string' || !/^[a-z0-9.-]{1,253}$/i.test(host)) return;
+    return { kind, device, failures, retryAt, host };
+  }
+  return { kind, device, failures, retryAt };
+}
+
+export function scheduleFailureMessageParams(run: FailedScheduleRunSnapshot, locale?: string) {
+  const d = run.prCheckDiagnosis;
+  if (!d) return { name: run.missingPlugin?.name };
+  return { device: d.device, host: d.host, failures: d.failures,
+    retry: new Date(d.retryAt).toLocaleString(locale) };
 }
 
 /** Host diagnosis of a blocked check: its script belongs to an unavailable plugin. */
@@ -676,6 +707,9 @@ export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): strin
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;
+  }
+  if ((run.failureKind === 'precheck' || run.failureKind === 'rate-limit') && run.prCheckDiagnosis) {
+    return `prCheck_${run.prCheckDiagnosis.kind}`;
   }
   if ((!run.failureKind || run.failureKind === 'execution') && isScheduleActionExpired(run.errorMsg)) {
     return run.nextFireAt && run.nextFireAt > Date.now() ? 'actionScheduled' : 'actionExpired';
