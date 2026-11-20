@@ -246,7 +246,12 @@ import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, r
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
-import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import {
+  isPluginEngineKind,
+  parseOfferedPluginEngines,
+  PLUGIN_ENGINES_INVOKE,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
   AgentEvent,
@@ -11167,6 +11172,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     describeAgentDevice,
     // 任务中换到插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入。
     admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitRemotePluginEngineTarget: async (deviceId, target) => {
+      const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+      if (!reply.ok) {
+        throwIpcError(isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : 'REMOTE_AGENT_DEVICE_UNREACHABLE',
+          'could not check the plugin engines on the selected computer');
+      }
+      return admitPluginEngineSwitchTarget(target, parseOfferedPluginEngines(reply.result));
+    },
     describePluginEngine: (providerId) => {
       const key = pluginEngineKeyFromProviderId(providerId);
       return key ? getPluginHarnessRegistry().list().find((harness) => harness.key === key)?.name ?? null : null;

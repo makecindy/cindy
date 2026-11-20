@@ -242,16 +242,23 @@ describe('a task running on a plugin engine', () => {
     })]);
   });
 
-  it('lists an unavailable engine with its hint but does not let it be picked', () => {
+  // 2026-11-20 用户反馈：只安装了插件但尚未登录/不可用(unavailable)的引擎不在模型选择器里占位；仅当前已选该引擎时保留提示。
+  it('omits an unavailable engine unless it is already the active selection', () => {
     const [unavailable] = normalizePluginEngines([{ ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy',
       name: 'Antigravity', availability: { state: 'unavailable', message: 'Install agy' } }]);
     const groups = buildPluginEngineGroups({ engines: [unavailable!, engine], active: { providerId: DSH, modelId: 'deepseek-v4' } }, '', {
       ...labels,
       unavailable: (name, hint) => `${name} unavailable: ${hint}`,
     });
-    expect(groups[0]?.rows[0]).toMatchObject({ disabled: true, notice: 'Antigravity unavailable: Install agy', selected: false });
-    // The selected model shows the level it will run at (its default here).
-    expect(groups[1]?.rows[0]).toMatchObject({ disabled: false, selected: true, effort: 'high', effortLabel: 'level:high' });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.rows[0]).toMatchObject({ disabled: false, selected: true, effort: 'high', effortLabel: 'level:high' });
+
+    const activeUnavailable = buildPluginEngineGroups(
+      { engines: [unavailable!], active: { providerId: unavailable!.providerId, modelId: 'default' } },
+      '',
+      { ...labels, unavailable: (name, hint) => `${name} unavailable: ${hint}` },
+    );
+    expect(activeUnavailable[0]?.rows[0]).toMatchObject({ disabled: true, notice: 'Antigravity unavailable: Install agy', selected: true });
     expect(buildPluginEngineGroups({ engines: [engine], active: null }, 'nothing matches', {
       ...labels, unavailable: () => '',
     })).toEqual([]);

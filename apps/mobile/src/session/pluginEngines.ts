@@ -334,6 +334,8 @@ export function buildPluginEngineGroups(
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
     const active = options.active?.providerId === engine.providerId ? options.active : null;
+    // 只装了插件但未登录 / 未就绪的引擎不在模型选择器里占位；仅当前任务已选该引擎时保留以便识别状态。
+    if (!selectable && !active) continue;
     const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches
