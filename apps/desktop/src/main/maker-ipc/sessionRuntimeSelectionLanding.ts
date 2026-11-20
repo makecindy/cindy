@@ -159,6 +159,9 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
         row.remoteHostId || row.agentDeviceId) return;
     const providers = await getDesktopProviderService().listProviders({
       allowSideEffects: false,
+      // Rename recovery needs the current catalog, not a native account/quota refresh
+      // or account presentation. Keep those reads off every ordinary send's lock.
+      snapshotOnly: true,
       catalog: getActiveCatalog(),
     });
     const profiles = await readSessionRuntimeProfiles(sessionId);
