@@ -4215,8 +4215,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     if (!selectableDevicesLoaded) return;
     if (selectableDevices.some((d) => d.deviceId === effectiveAgentDeviceId)) return;
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
+    if (localAlternate) {
+      setAlternateModel(null);
+      setDlSel(null);
+      return;
+    }
     patchDraft({ agentDeviceId: null, agentDeviceName: null });
-  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded]);
+  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded, localAlternate, setAlternateModel, setDlSel]);
 
   // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，

@@ -288,7 +288,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       selectableDevices: [{ deviceId: 'task-device' }],
       selectableDevicesLoaded: true,
       controlledModelRoute: { catalogHostDeviceId },
-      isProviderShareAgentDeviceId, patchDraft, log: { warn: vi.fn() },
+      isProviderShareAgentDeviceId, patchDraft, localAlternate: null, log: { warn: vi.fn() },
     })();
     return patchDraft;
   }
@@ -299,6 +299,35 @@ describe('Agent location chosen on a controlled new-task draft', () => {
 
   it('still drops a location missing from the device list when this computer owns that list', () => {
     expect(runLocationFallback(undefined)).toHaveBeenCalledWith({ agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it.each([
+    { loaded: true, listed: false, clears: true, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: false, listed: false, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: true, listed: true, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: undefined },
+    { loaded: true, listed: false, clears: false, deviceId: 'alternate-device', catalogHostDeviceId: 'task-device' },
+    { loaded: true, listed: false, clears: false, deviceId: 'share:alternate', catalogHostDeviceId: undefined },
+  ])('invalidates a temporary Agent only after authoritative device removal: %o', ({ loaded, listed, clears, deviceId, catalogHostDeviceId }) => {
+    const setAlternateModel = vi.fn();
+    const setDlSel = vi.fn();
+    const patchDraft = vi.fn();
+    effect('selected agent computer is no longer selectable', {
+      effectiveAgentDeviceId: deviceId,
+      localAlternate: { agentDevice: { deviceId } },
+      selectableDevices: listed ? [{ deviceId, online: false }] : [],
+      selectableDevicesLoaded: loaded,
+      controlledModelRoute: { catalogHostDeviceId },
+      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel,
+      log: { warn: vi.fn() },
+    })();
+    if (clears) {
+      expect(setAlternateModel).toHaveBeenCalledWith(null);
+      expect(setDlSel).toHaveBeenCalledWith(null);
+      expect(patchDraft).not.toHaveBeenCalled();
+    } else {
+      expect(setAlternateModel).not.toHaveBeenCalled();
+      expect(setDlSel).not.toHaveBeenCalled();
+    }
   });
 
   it('does not reseed the chosen model when its catalog is read through the task computer', () => {
