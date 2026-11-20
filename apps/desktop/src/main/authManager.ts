@@ -3476,7 +3476,7 @@ async function recoverActiveResourceSession(
   if (!vault.passports[passportVaultKey(realm, metadata.passportId)]) return null;
   const epoch = authStateEpoch;
   const loginEpoch = loginFlowEpoch;
-  const assertCurrent = (): void => {
+  const assertCurrent = (retryAt?: number): void => {
     const latest = readAuthAccountVault();
     const session = readPersistedAuthSession();
     if (
@@ -3490,7 +3490,7 @@ async function recoverActiveResourceSession(
       session.refreshToken !== rejectedRefreshToken
     ) {
       // Cancellation is not evidence that the Resource is irrecoverable.
-      throw new AuthApiError('AUTH_FLOW_SUPERSEDED', 409, 'Saved session recovery was superseded');
+      throw new AuthApiError('AUTH_FLOW_SUPERSEDED', 409, 'Saved session recovery was superseded', retryAt);
     }
   };
   assertCurrent();
@@ -3499,7 +3499,7 @@ async function recoverActiveResourceSession(
   try {
     account = await refreshPassportSessionSingleFlight(client, realm, metadata.passportId);
   } catch (error) {
-    assertCurrent();
+    assertCurrent(error instanceof AuthApiError ? error.retryAt : undefined);
     throw error;
   }
   assertCurrent();
@@ -3507,7 +3507,7 @@ async function recoverActiveResourceSession(
   try {
     pair = await client.exchangeAccountMembership(account.accountToken, metadata.membershipId);
   } catch (error) {
-    assertCurrent();
+    assertCurrent(error instanceof AuthApiError ? error.retryAt : undefined);
     throw error;
   }
   // Preserve a minted result even after a switch: the caller commits under the vault

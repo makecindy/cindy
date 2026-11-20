@@ -1064,6 +1064,28 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     expect(h.saved.session?.refreshToken).toBe('test-refresh');
   });
 
+  it.each([['passport', 503], ['exchange', 429]] as const)(
+    'keeps the server cooldown when cancellation supersedes %s with status %s',
+    async (stage, status) => {
+      const { h, exchange } = recoverySetup();
+      const rejectDuringCancellation = async () => {
+        h.cancelRecovery();
+        throw new AuthApiError('AUTH_REQUEST_FAILED', status, 'busy', Date.now() + 600_000);
+      };
+      if (stage === 'passport') {
+        h.deps.refreshPassportSessionSingleFlight.mockImplementationOnce(rejectDuringCancellation);
+      } else {
+        exchange.mockImplementationOnce(rejectDuringCancellation);
+      }
+      await rejectAfterLoss(h);
+      expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+      const count = h.request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(500_000);
+      expect(h.request).toHaveBeenCalledTimes(count);
+      expect(h.saved.session?.refreshToken).toBe('test-refresh');
+    },
+  );
+
   it('recovers an already-rejected Resource after real 20s timeout cleanup and a transport failure', async () => {
     const { h } = recoverySetup();
     const fresh = setup();
