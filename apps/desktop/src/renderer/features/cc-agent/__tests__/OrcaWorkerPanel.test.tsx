@@ -3,6 +3,8 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { installPerformanceTraceProbe } from '@/lib/performanceTraceProbe';
+import type { PerformanceTraceEvent } from '../../../../shared/performanceTrace';
 import { OrcaWorkerPanel } from '../OrcaWorkerPanel';
 import { requestNewWorkerFromShortcut } from '../lib/newWorkerShortcut';
 import { OrcaWorkersTabBody } from '../../right-sidebar/plugins/orca-workers/OrcaWorkersTabBody';
@@ -276,6 +278,37 @@ describe('OrcaWorkerPanel worker on another computer', () => {
       workingDir: '/Users/demo/Interviews',
     },
   };
+
+  it('only records commits for the latest switch, including a remote worker history', () => {
+    const events: PerformanceTraceEvent[] = [];
+    const stop = installPerformanceTraceProbe(batch => events.push(...batch));
+    const showWorker = (workerId: string) => {
+      const row = { ...remoteWorker, workerId, sessionId: workerId };
+      mocks.selection = { workers: [row], selectedWorkerRecord: row, selectedWorkerId: workerId, workerSessionId: workerId };
+    };
+    try {
+      showWorker('old');
+      const panel = render(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      const select = mocks.toolbarProps.onSwitchFocus as (target: string) => void;
+      select('superseded');
+      select('latest');
+      showWorker('superseded');
+      panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      (mocks.remotePaneProps!.onHistoryCommit as () => void)();
+      showWorker('latest');
+      panel.rerender(<OrcaWorkerPanel leadSessionId="lead" deviceId={null} viewVisible />);
+      const ready = mocks.remotePaneProps!.onHistoryCommit as () => void;
+      ready();
+      ready();
+    } finally {
+      stop();
+    }
+    const ops = events.filter(e => e.kind === 'operation');
+    expect(ops.map(e => e.label)).toEqual([
+      'worker-switch', 'worker-switch', 'worker-selection-commit', 'worker-history-commit',
+    ]);
+    expect(ops.slice(2).map(e => e.at)).toEqual([ops[1].at, ops[1].at]);
+  });
 
   it('shows the task on the execution device instead of the local proxy task', () => {
     mocks.selection = {

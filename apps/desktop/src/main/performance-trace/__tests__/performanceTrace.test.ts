@@ -663,6 +663,11 @@ describe('report boundary', () => {
     expect(f.deps.upload).not.toHaveBeenCalled();
     expect(f.deps.reveal).not.toHaveBeenCalled();
   });
+  it('projects fixed UI milestones without accepting worker identifiers or DOM data', () => {
+    const event = { at: 1100, kind: 'operation', label: 'worker-history-commit', durationMs: 75 };
+    expect(projectTraceEvent({ ...event, sessionId: 'private' }, 1000, 2000)).toEqual(event);
+    expect(projectTraceEvent({ ...event, label: 'private' }, 1000, 2000)).toBeNull();
+  });
   it.each(['keydown', 'sidebar-wheel-to-frame', 'sidebar-pointermove-to-frame'])('projects only fixed event labels and bounded numeric timings (%s)', label => {
     const input = {
       at: 1200,

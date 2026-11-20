@@ -590,6 +590,7 @@ interface CCAgentSessionViewProps {
    * 仍 keep-alive，但这里传 false 避免每批 text delta 触发 Markdown/MessageStream。
    */
   chatRealtime?: boolean;
+  onHistoryCommit?: () => void;
   /** RSB 协同 tab 注入的消息定位意图；detached 子窗不能依赖主窗 location.state。 */
   searchJumpProp?: ConversationSearchJump | null;
   onSearchJumpConsumed?: () => void;
@@ -880,6 +881,7 @@ function CCAgentSessionContent({
   showRsbToggle = false,
   viewVisible = true,
   chatRealtime = true,
+  onHistoryCommit,
   searchJumpProp,
   onSearchJumpConsumed,
   navigationMode = 'route-owner',
@@ -2008,8 +2010,12 @@ function CCAgentSessionContent({
   // 能力、登录检查与发送只看切到内置引擎的意图，与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
   const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  const visibleHistorySessionId = viewVisible && session?.id === sessionId && historyLoaded ? sessionId : null;
+  useLayoutEffect(() => {
+    if (visibleHistorySessionId) onHistoryCommit?.();
+  }, [visibleHistorySessionId, onHistoryCommit]);
   useBotIslandVisibleSession(
-    viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,
+    visibleHistorySessionId ?? null,
     ownsWindowRoute && !isCompactRail && !isOrcaMode,
   );
   const clearQueueComposerEditDraft = useCallback(

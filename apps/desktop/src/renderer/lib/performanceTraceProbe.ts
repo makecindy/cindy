@@ -1,4 +1,22 @@
-import type { PerformanceTraceEvent } from '../../shared/performanceTrace';
+import type { PerformanceTraceEvent, TraceUiOperation } from '../../shared/performanceTrace';
+
+let operationSink: ((event: PerformanceTraceEvent) => void) | undefined;
+
+export function beginTraceOperation(label: TraceUiOperation) {
+  const sink = operationSink;
+  if (!sink) return;
+  const start = performance.now();
+  const mark = (stage: TraceUiOperation, end: number) => {
+    const name = `cindy.${stage}`;
+    performance.mark(name);
+    performance.clearMarks(name);
+    sink({ at: performance.timeOrigin + start, kind: 'operation', label: stage, durationMs: end - start });
+  };
+  mark(label, start);
+  return (stage: TraceUiOperation) => {
+    if (operationSink === sink) mark(stage, performance.now());
+  };
+}
 
 /** Only fixed interaction labels and timings leave the renderer. */
 export function installPerformanceTraceProbe(
@@ -17,6 +35,7 @@ export function installPerformanceTraceProbe(
     pending.push(event);
     if (pending.length >= 100) flush();
   };
+  operationSink = record;
   const observe = (type: string, callback: (entries: PerformanceEntry[]) => void) => {
     try {
       const observer = new PerformanceObserver((list) => callback(list.getEntries()));
@@ -99,6 +118,7 @@ export function installPerformanceTraceProbe(
   visibility();
   const timer = setInterval(flush, 1000);
   return () => {
+    if (operationSink === record) operationSink = undefined;
     for (const type of ['wheel', 'pointermove']) document.removeEventListener(type, sampleSidebar, true);
     cancelSidebarFrames();
     clearInterval(timer);

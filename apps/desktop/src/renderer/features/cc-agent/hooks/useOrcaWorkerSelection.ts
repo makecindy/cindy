@@ -366,7 +366,7 @@ export function useOrcaWorkerSelection({
   );
 
   const handleSwitchFocus = useCallback(
-    (workerId: string) => {
+    (workerId: string, onFailure?: () => void) => {
       clearSelectionHints();
       const worker = workersRef.current.find((item) => item.workerId === workerId);
       const isDone = worker?.status === 'done';
@@ -374,12 +374,14 @@ export function useOrcaWorkerSelection({
       // 不清提醒，等对话可见后由 visibleDoneWorkerId 的 effect 确认。
       const acknowledgeDone = isDone && viewVisible;
       void (async () => {
+        let focusApplied = false;
         try {
           const workflows = orcaWorkflowsFor(leadSessionId);
           await workflows.switchFocus({
             leadSessionId,
             workerIdOrLabel: workerId,
           });
+          focusApplied = true;
           let acknowledged = false;
           if (acknowledgeDone) {
             try {
@@ -392,6 +394,7 @@ export function useOrcaWorkerSelection({
           if (!isDone || acknowledged) clearWorkerAttention(workerId);
           await refresh();
         } catch (err: unknown) {
+          if (!focusApplied) onFailure?.();
           const msg = err instanceof Error ? err.message : String(err);
           toast.error(msg);
         }

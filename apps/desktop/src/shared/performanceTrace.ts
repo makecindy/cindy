@@ -5,6 +5,12 @@ export const PERFORMANCE_TRACE_STATE_CHANNEL = 'performance-trace:state';
 export const TRACE_MAX_DURATION_MS = 60_000;
 export const TRACE_MAX_EVENTS = 3000;
 
+export const TRACE_UI_OPERATIONS = [
+  'model-list-open', 'model-list-open-commit', 'model-list-close', 'model-list-close-commit',
+  'worker-switch', 'worker-selection-commit', 'worker-history-commit', 'worker-switch-failed',
+] as const;
+export type TraceUiOperation = (typeof TRACE_UI_OPERATIONS)[number];
+
 export type PerformanceTracePhase =
   'idle' | 'starting' | 'recording' | 'saving' | 'ready' | 'uploading';
 export interface PerformanceTraceState {
@@ -19,7 +25,7 @@ export type PerformanceTraceCommand = 'state' | 'start' | 'stop' | 'show-local' 
 export interface PerformanceTraceEvent {
   /** Epoch milliseconds; renderer uses performance.timeOrigin + entry.startTime. */
   at: number;
-  kind: 'long-task' | 'input' | 'composition' | 'visibility' | 'ipc';
+  kind: 'long-task' | 'input' | 'composition' | 'visibility' | 'ipc' | 'operation';
   durationMs: number;
   /** Fixed vocabulary, never DOM text, keys, identifiers or IPC arguments. */
   label: string;

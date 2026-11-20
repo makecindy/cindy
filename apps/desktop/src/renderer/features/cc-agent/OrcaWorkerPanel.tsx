@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { beginTraceOperation } from '@/lib/performanceTraceProbe';
 import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -157,6 +158,38 @@ export function OrcaWorkerPanel({
     onFocusWorkerSessionIdConsumed,
     onSelectionIntentCleared,
   });
+  const switchTrace = useRef<{
+    lead: string;
+    target: string;
+    mark: NonNullable<ReturnType<typeof beginTraceOperation>>;
+    selected: boolean;
+    history: boolean;
+  } | null>(null);
+  const switchWorker = useCallback((target: string) => {
+    const mark = target !== selectedWorkerId && workerConversationVisible
+      ? beginTraceOperation('worker-switch') : undefined;
+    const pending = mark ? { lead: leadSessionId, target, mark, selected: false, history: false } : null;
+    switchTrace.current = pending;
+    handleSwitchFocus(target, pending ? () => {
+      if (switchTrace.current !== pending) return;
+      pending.mark('worker-switch-failed');
+      switchTrace.current = null;
+    } : undefined);
+  }, [handleSwitchFocus, leadSessionId, selectedWorkerId, workerConversationVisible]);
+  const markWorkerCommit = useCallback((stage: 'selected' | 'history') => {
+    const pending = switchTrace.current;
+    if (!pending || pending.lead !== leadSessionId || pending.target !== selectedWorkerId ||
+        !workerConversationVisible || pending[stage]) return;
+    pending[stage] = true;
+    pending.mark(stage === 'selected' ? 'worker-selection-commit' : 'worker-history-commit');
+    if (pending.selected && pending.history) switchTrace.current = null;
+  }, [leadSessionId, selectedWorkerId, workerConversationVisible]);
+  useLayoutEffect(() => {
+    if (workerConversationVisible) markWorkerCommit('selected');
+    else switchTrace.current = null;
+  }, [workerConversationVisible, markWorkerCommit]);
+  const onWorkerHistoryCommit = useCallback(() => markWorkerCommit('history'), [markWorkerCommit]);
+
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
   const shownWorker = selectedWorkerRecord ?? focusedWorker;
   // 在另一台电脑运行的 Worker：本机代理任务不跑 Agent，展示运行设备上的真实任务。
@@ -269,7 +302,7 @@ export function OrcaWorkerPanel({
           activeWorkerCount={activeWorkerCount}
           softLimit={softLimit}
           hardLimit={hardLimit}
-          onSwitchFocus={handleSwitchFocus}
+          onSwitchFocus={switchWorker}
           onOpenCreate={() => void handleOpenCreate()}
           onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
           pluginEngineDeviceId={typeof deviceId === 'string' ? deviceId : undefined}
@@ -299,6 +332,7 @@ export function OrcaWorkerPanel({
             key={workerSessionId}
             leadSessionId={leadSessionId}
             device={remoteDevice}
+            onHistoryCommit={onWorkerHistoryCommit}
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
           />
@@ -306,6 +340,7 @@ export function OrcaWorkerPanel({
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}
+            onHistoryCommit={onWorkerHistoryCommit}
             compact
             orcaMode
             compactToolbar

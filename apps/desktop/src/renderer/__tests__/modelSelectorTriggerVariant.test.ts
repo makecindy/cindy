@@ -4,6 +4,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { installPerformanceTraceProbe } from '@/lib/performanceTraceProbe';
+import type { PerformanceTraceEvent } from '../../shared/performanceTrace';
 import type { Effort } from '@/lib/userPreferences.types';
 
 const modelSelectorI18nRef = vi.hoisted(() => ({
@@ -961,6 +963,24 @@ describe('ModelSelector trigger variants', () => {
     );
     await clickTrigger();
     expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('records separate request and commit stages for opening and dismissing the model list', async () => {
+    const events: PerformanceTraceEvent[] = [];
+    const stop = installPerformanceTraceProbe(batch => events.push(...batch));
+    try {
+      render(React.createElement(ModelSelector, {
+        remoteAgent: undefined, modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc',
+        useMorphPopover: true, onModelChange: vi.fn(), onEffortChange: vi.fn(),
+      }));
+      fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }); });
+    } finally {
+      stop();
+    }
+    expect(events.filter(e => e.kind === 'operation').map(e => e.label)).toEqual([
+      'model-list-open', 'model-list-open-commit', 'model-list-close', 'model-list-close-commit',
+    ]);
   });
 
   it('keeps short model discovery out of the morph opening geometry', async () => {

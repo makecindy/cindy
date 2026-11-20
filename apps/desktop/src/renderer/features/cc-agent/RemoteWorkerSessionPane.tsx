@@ -29,6 +29,7 @@ export interface RemoteWorkerSessionPaneProps {
   device: WorkerExecutionDevice;
   viewVisible: boolean;
   chatRealtime: boolean;
+  onHistoryCommit?: () => void;
 }
 
 type LoadState = 'loading' | 'ready' | 'failed';
@@ -38,6 +39,7 @@ export function RemoteWorkerSessionPane({
   device,
   viewVisible,
   chatRealtime,
+  onHistoryCommit,
 }: RemoteWorkerSessionPaneProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>('loading');
@@ -139,6 +141,7 @@ export function RemoteWorkerSessionPane({
           <CCAgentSessionView
             key={`${deviceId}:${remoteSessionId}`}
             sessionIdProp={remoteSessionId}
+            onHistoryCommit={onHistoryCommit}
             compact
             compactToolbar
             viewVisible={viewVisible}
