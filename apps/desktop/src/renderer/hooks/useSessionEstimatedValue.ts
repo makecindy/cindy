@@ -32,7 +32,8 @@ interface EstimatedValueStoreSnapshot {
 
 interface EstimatedValueStoreSyncResult {
   costs: Map<string, RegionalMoney>;
-  storeClientIds: Set<string>;
+  /** Loaded window clientIds, oldest first; the next sync uses the order. */
+  storeClientIds: string[];
 }
 
 interface EstimatedValueTurnCostPayload {
@@ -161,24 +162,35 @@ export function shouldApplyEstimatedValueEntry(
   return hasVisibleClientId(snapshot, clientId);
 }
 
+/**
+ * The loaded chat window is only the newest slice of a task: it is trimmed,
+ * reseeded with the latest page and replaced on reconnect. Rows that leave the
+ * top of the window (older than the oldest row still loaded) remain persisted,
+ * so their DB-backed value stays in the total. Only rows missing from inside
+ * the still-loaded range were deleted, rewound or dropped by an edit.
+ */
 export function syncEstimatedValueCostsFromStoreSnapshot(
   currentCosts: ReadonlyMap<string, RegionalMoney>,
-  previousStoreClientIds: ReadonlySet<string>,
+  previousStoreClientIds: readonly string[],
   snapshot: EstimatedValueStoreSnapshot,
 ): EstimatedValueStoreSyncResult | null {
   if (snapshot.messages.length === 0 && !snapshot.historyLoaded) return null;
 
-  const storeClientIds = new Set<string>();
   const next = new Map(currentCosts);
   if (isAuthoritativeEmptyTranscript(snapshot)) {
-    return { costs: new Map(), storeClientIds };
+    return { costs: new Map(), storeClientIds: [] };
   }
 
+  const loaded = new Set<string>();
   for (const message of snapshot.messages) {
-    if (message.clientId) storeClientIds.add(message.clientId);
+    if (message.clientId) loaded.add(message.clientId);
   }
-  for (const clientId of previousStoreClientIds) {
-    if (!storeClientIds.has(clientId)) next.delete(clientId);
+  const storeClientIds = [...loaded];
+  const oldestRetained = previousStoreClientIds.findIndex((clientId) => loaded.has(clientId));
+  if (oldestRetained >= 0) {
+    for (const [index, clientId] of previousStoreClientIds.entries()) {
+      if (index > oldestRetained && !loaded.has(clientId)) next.delete(clientId);
+    }
   }
   for (const message of snapshot.messages) {
     if (!message.clientId) continue;
@@ -237,7 +249,7 @@ export function useSessionEstimatedValue(
   const displaySnapshotRef = useRef(displaySnapshot);
   const shouldListenForDirectTurnCost = !displaySnapshot || displaySnapshot.chatRealtime;
   const costsRef = useRef<Map<string, RegionalMoney>>(new Map());
-  const storeClientIdsRef = useRef<Set<string>>(new Set());
+  const storeClientIdsRef = useRef<string[]>([]);
   const transcriptClearedRef = useRef(false);
   const [valueMoney, setValueMoney] = useState<RegionalMoney | null>(null);
   const subscribeSnapshot = useCallback(
@@ -259,7 +271,7 @@ export function useSessionEstimatedValue(
 
   useEffect(() => {
     costsRef.current = new Map();
-    storeClientIdsRef.current = new Set();
+    storeClientIdsRef.current = [];
     transcriptClearedRef.current = false;
     setValueMoney(null);
   }, [enabled, sessionId]);
