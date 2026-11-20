@@ -228,6 +228,17 @@ describe('GhostScheduleSlot 推送内容', () => {
     expect(pushes[0].prompt).toContain('不要传 namespace');
   });
 
+  it('derives the execution binding from an approved device-sync plugin, never from draft input', () => {
+    const ghost = scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' });
+    const sendToMobile = vi.fn(() => true);
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, primaryDeviceOnly: true })).toMatchObject({ ok: false });
+    ghost.manifest.deviceSync = true;
+    expect(slot.handleRequest('sched-ghost', { ...validReq, primaryDeviceOnly: true, mobilePageId: 'controller', primaryHostKey: 'public/other' })).toEqual({ ok: true });
+    expect(pushes[0].primaryHostKey).toBe('org.acme/sched-ghost');
+    expect(sendToMobile).not.toHaveBeenCalled();
+  });
+
   it('已确认 root 显式带上 namespace null', () => {
     const { slot, pushes } = makeSlot({
       getGhost: () => scheduleGhost({ namespace: null, namespaceState: 'confirmed' }),

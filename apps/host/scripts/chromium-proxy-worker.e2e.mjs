@@ -346,7 +346,8 @@ try {
     pacServer.closeAllConnections();
     await closed;
   }
-  fs.rmSync(root, { recursive: true, force: true });
+  // On Windows, Chromium file handles can outlast the helper process briefly.
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
 }
 
 console.log(process.exitCode ? 'Chromium proxy helper acceptance FAILED' : 'Chromium proxy helper acceptance passed');
