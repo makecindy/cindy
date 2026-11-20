@@ -2298,8 +2298,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-visible', 'Plan:\n1. **验证**\n2. **交付**', ['验证', '交付']],
     ['thinking-headerless', '1. 验证\n2. 交付', ['验证', '交付']],
     ['thinking-separated', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-detail-paragraph', '1. 验证\n\nDetails...\n\n2. 交付', ['验证', '交付']],
     ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
     ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
+    ['thinking-heading-intro', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-visible-whole', 'Plan:\n1. Investigate alternatives', ['1. 实现\n1. 验证']],
     ['thinking-visible-prose', 'Plan:\n1. Investigate alternatives', ['先验证，再交付。']],
     ['thinking-final-lists', 'Options:\n1. A\n2. B\n\nFinal steps:\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
@@ -2319,9 +2321,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       if (String(_name).startsWith('thinking')) {
         response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
           .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
-        if (['thinking-visible', 'thinking-empty-heading', 'thinking-visible-whole', 'thinking-visible-prose'].includes(String(_name))) response = response.replace('event: message_delta', sse([
+        if (['thinking-visible', 'thinking-empty-heading', 'thinking-heading-intro', 'thinking-visible-whole', 'thinking-visible-prose'].includes(String(_name))) response = response.replace('event: message_delta', sse([
           { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
-          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : _name === 'thinking-visible-whole' ? '1. 实现\n1. 验证' : _name === 'thinking-visible-prose' ? '先验证，再交付。' : 'Here is the plan.' } } },
+          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : _name === 'thinking-heading-intro' ? 'Plan:\nHere is the plan.' : _name === 'thinking-visible-whole' ? '1. 实现\n1. 验证' : _name === 'thinking-visible-prose' ? '先验证，再交付。' : 'Here is the plan.' } } },
           { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
         ]) + 'event: message_delta');
       }

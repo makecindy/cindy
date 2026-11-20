@@ -26,6 +26,13 @@ function isPlanHeader(line) {
     || /^(?:实施|执行|工作|行动)?计划\s*[:：]?$/.test(title)
     || /^(?:final\s+(?:plan|steps)|最终(?:计划|步骤))\s*[:：]?$/i.test(title);
 }
+function hasPlanBody(lines) {
+  return lines.some(line => {
+    const text = line.text.trim();
+    return text && !isPlanHeader(text)
+      && !/^(?:here(?:'s| is) (?:the|my|a) plan|计划如下|以下是计划)[.!:：。]?$/i.test(text);
+  });
+}
 function selectPlanText(content) {
   const visible = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
   // A visible plan is authoritative. Native Pi also accepts plans in thinking
@@ -35,10 +42,7 @@ function selectPlanText(content) {
   const visibleHeader = visibleLines.findLastIndex(line => isPlanHeader(line.text));
   // Valid whole plans need not have parseable ids. Only a bare introduction
   // (with no actual body) should defer to a plan carried in thinking.
-  const substantiveVisible = visibleLines.slice(visibleHeader + 1).some(line => {
-    const text = line.text.trim();
-    return text && !/^(?:here(?:'s| is) (?:the|my|a) plan|计划如下|以下是计划)[.!:：。]?$/i.test(text);
-  });
+  const substantiveVisible = hasPlanBody(visibleLines.slice(visibleHeader + 1));
   if (substantiveVisible) return visible;
   // A dangling visible heading is not a plan. Do not let it become the last
   // header of the combined response and hide the actual thinking steps.
@@ -46,7 +50,7 @@ function selectPlanText(content) {
   let linesWithoutEmptyHeaders = visibleLines;
   while (true) {
     const header = linesWithoutEmptyHeaders.findLastIndex(line => isPlanHeader(line.text));
-    if (header < 0 || linesWithoutEmptyHeaders.slice(header + 1).some(line => line.text.trim())) break;
+    if (header < 0 || hasPlanBody(linesWithoutEmptyHeaders.slice(header + 1))) break;
     nativeVisible = nativeVisible.slice(0, linesWithoutEmptyHeaders[header].start);
     linesWithoutEmptyHeaders = planLines(nativeVisible);
   }
@@ -69,10 +73,9 @@ function selectPlanText(content) {
       const gap = native.slice(previous.start + previous.text.length, roots[i].start);
       const restarts = i - start >= 2 && i + 1 < roots.length
         && Number(roots[i].text.trim().match(/^\d+/)[0]) === 1;
-      // Separate Markdown lists can restart numbering, or be divided by an
-      // outer paragraph. Blanks/continuations within one list stay intact.
-      if ((restarts && /\n[ \t]*\n/.test(gap))
-        || /\n[ \t]*\n[^\s\n][^\n]*\n[ \t]*\n/.test(gap)) start = i;
+      // A fresh list can restart numbering after a completed enumeration.
+      // Paragraphs and blank lines alone are still valid step details.
+      if (restarts && /\n[ \t]*\n/.test(gap)) start = i;
     }
     return native.slice(roots[start].start);
   }

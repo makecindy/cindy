@@ -38,7 +38,7 @@ describe('Pi plan title extraction', () => {
     expect(selectPlan([{ type: 'thinking', thinking }])).toBe(expected);
   });
 
-  it.each(['Plan:', '## **计划：**', 'Plan:\n```\n1. Example\n```', 'Plan:\n\n计划：'])('ignores a visible heading without a plan body: %s', visible => {
+  it.each(['Plan:', '## **计划：**', 'Plan:\n```\n1. Example\n```', 'Plan:\n\n计划：', 'Plan:\nHere is the plan.', '计划：\n计划如下'])('ignores a visible heading without a plan body: %s', visible => {
     for (const plan of ['Plan:\n1. 验证\n2. 交付', '1. 验证\n\nDetails...\n2. 交付']) {
       const selected = selectPlan([{ type: 'thinking', thinking: plan }, { type: 'text', text: visible }]);
       expect(selected.trim()).toBe(plan);
@@ -48,6 +48,7 @@ describe('Pi plan title extraction', () => {
 
   it.each([
     '1. 验证\n\nDetails...\n2. 交付',
+    '1. 验证\n\nDetails...\n\n2. 交付',
     '3. 验证\n   1. 子项\n\n说明\n7. 交付',
     '1. 验证\n```\n9. 示例\n```\n2. 交付',
     '1. 验证\n\n1. 交付',
