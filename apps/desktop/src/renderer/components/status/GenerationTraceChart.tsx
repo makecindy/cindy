@@ -116,7 +116,7 @@ export function GenerationTraceChart({
     strokeTop + thinkingStrokeLength(tokens, maxThinking, strokeHeight, STROKE_FLOOR);
 
   // There is a moment to pick once the curve exists.
-  const pickable = xy.length > 1 && span > 0;
+  const pickable = xy.length > 0;
   const picked = pickable && pick ? pick.column : null;
   const cursorTime = picked === null ? 0 : fromMs + ((picked + 0.5) / THINKING_COLUMNS) * span;
   // Pick a reading that was actually measured. A line between two settled requests
@@ -132,7 +132,10 @@ export function GenerationTraceChart({
     const box = event.currentTarget.getBoundingClientRect();
     if (box.width <= 0) return;
     const x = ((event.clientX - box.left) / box.width) * width;
-    const column = Math.min(THINKING_COLUMNS - 1, Math.max(0, Math.floor(((x - PAD_LEFT) / plotWidth) * THINKING_COLUMNS)));
+    const fraction = points.length === 1
+      ? (span > 0 ? (points[0].at - fromMs) / span : 1)
+      : (x - PAD_LEFT) / plotWidth;
+    const column = Math.min(THINKING_COLUMNS - 1, Math.max(0, Math.floor(fraction * THINKING_COLUMNS)));
     if (pick?.column === column) return;
     setPick({ column });
   };
@@ -241,7 +244,7 @@ export function GenerationTraceChart({
             <span>{sample?.settled
               ? `${t('chat.runningStatus.lastRequestRate')} · ${t('chat.runningStatus.tokenRate', { rate: Math.round(pickedRate * 10) / 10 })}`
               : t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate * 10) / 10 })}</span>
-            <span className="opacity-60">{formatClock(pickedAt - fromMs)}</span>
+            <span className="opacity-60">{formatClock(span > 0 ? pickedAt - fromMs : pickedAt)}</span>
           </div>
           {/* Only a real amount is worth a line: nothing finished in the slice, nothing reported,
               or no reasoning at all says nothing more than the missing line does. */}
