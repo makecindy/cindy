@@ -194,6 +194,12 @@ export class OverlayPool {
       skipTransformProcessType: true,
     });
     window.setAlwaysOnTop(true, 'screen-saver', 1);
+    // macOS: 置顶时 Chromium 会把窗口标成受「空间」管理 (Managed)。任一应用 (含 Cindy 自己)
+    // 退出系统全屏、全屏空间被收回后, 隐藏复用的浮层只剩桌面 1 的归属, 重设「所有空间可见」
+    // 也加不回去, 之后在全屏空间里截图会被切回桌面 1。再叠加临时窗口标记 (Transient) 后,
+    // 实测 (Electron 42 / macOS 26.4, 单屏) 每次显示都重新加入全部空间。AppKit 文档里这两个
+    // 标记互斥, 这里依赖的是未文档化的实际行为: 升级 Electron 或 macOS 后须实机复测。
+    if (process.platform === 'darwin') window.setHiddenInMissionControl(true);
     // 页面重新加载 (开发热更新、意外导航) 会丢掉会话状态: 视为这块浮层失效, 让当前会话结束,
     // 结束当前会话，等页面重新挂载后才允许再次使用。
     window.webContents.on('did-start-loading', () => {

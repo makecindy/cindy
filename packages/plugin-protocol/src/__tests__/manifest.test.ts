@@ -21,6 +21,7 @@ import {
   supportsCindyVersion,
   validateGhostManifest,
   validateStoredGhostManifest,
+  getGhostGithubReleaseRepository,
 } from '../manifest.js';
 
 const validManifest = {
@@ -34,7 +35,43 @@ const validManifest = {
   tools: [{ name: 'help', description: 'Help with Acme tasks' }],
 } as const;
 
+// 测试价值：validateGhostManifest 的主视图图标提示须在安装解析后保留，
+// 依据 plugin-security-and-authoring §6 的双解析器契约；既有 icon 用例未覆盖 preferredIcon。
+// 最小输入：mainView.preferredIcon='future-icon'；非字符串应忽略而保留兼容 icon。
+// tier=unit，纯内存解析，无新增资源。单文件实测耗时 0.424s。
+it.each([2, 3])('preserves preferred navigation icons and ignores malformed hints in schema v%s', schemaVersion => {
+  const base = {
+    schemaVersion, minCindyVersion: '0.1.61', id: 'icon-hint', name: 'Icon hint',
+    version: '1.0.0', entry: 'index.js',
+    ...(schemaVersion === 2 ? { slots: ['main-view'] } : {}),
+  };
+  for (const preferredIcon of ['podcast', 'future-icon', undefined, 42, null, {}]) {
+    const mainView = { html: 'view.html', icon: 'globe', preferredIcon };
+    const result = validateGhostManifest({ ...base, mainView });
+    expect(result).toMatchObject({ ok: true, manifest: { mainView: { html: 'view.html', icon: 'globe' } } });
+    if (!result.ok) throw new Error(result.reason);
+    if (typeof preferredIcon === 'string') {
+      expect(result.manifest.mainView?.preferredIcon).toBe(preferredIcon);
+    } else {
+      expect(result.manifest.mainView).not.toHaveProperty('preferredIcon');
+    }
+  }
+});
+
 describe('Ghost manifest contract', () => {
+  // Unit: the declared source survives parsing, and a URL-like path cannot become a release endpoint.
+  it('validates new release declarations without breaking existing manifests', () => {
+    const base = { ...validManifest, settingsHtml: 'settings.html' };
+    expect(validateGhostManifest({ ...base, githubRelease: 'Example/Plugin' }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: 'Example/Plugin' } });
+    expect(validateGhostManifest({ ...base, githubRelease: 'example/..' })).toMatchObject({ ok: false });
+    expect(validateGhostManifest({ ...validManifest, githubRelease: 'example/plugin' })).toMatchObject({ ok: false });
+    const historical = { rollback: true };
+    expect(validateStoredGhostManifest({ ...base, githubRelease: historical }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: historical } });
+    expect(getGhostGithubReleaseRepository({ ...base, githubRelease: historical })).toBeUndefined();
+  });
+
   // 第23项：沿用已批准的 network.hosts 字段，以精确 origin 开放端口、内网和 WS。
   // 旧域名语义不变；最小失败输入为 http://127.0.0.1:8080，tier=unit。
   it('validates exact network origins without accepting paths, credentials or wildcard origins', () => {
@@ -56,6 +93,57 @@ describe('Ghost manifest contract', () => {
     expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
     if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
   });
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `harnesses` 的
+   *   接受、拒绝与规范化结果（作者打包、服务端上架与已存 Release 都读这一份）。
+   * - Bug／规则依据：plugin-security-and-authoring.md §1.2 / §5（v3 未知字段保留、存量不因新校验失效）；
+   *   docs/plans/acp-plugin-bridge.md「接口约定」的清单字段。
+   * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+   * - 最小失败输入：entry 写成 node.entry 主入口；已存 Release 里不合规的历史 harnesses。
+   * - tier：unit（纯函数矩阵）。实测耗时：随本文件整体 < 1s。
+   */
+  describe('harnesses', () => {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] };
+    const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+    const v3 = (extra: Record<string, unknown>) => ({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, node, ...extra });
+
+    it('keeps a valid declaration, its locales, unknown protocols and extension fields', () => {
+      const declared = [
+        { ...harness, description: 'Local agent', icon: 'dsh.png', locales: { 'zh-CN': { name: '深度求索' } } },
+        { id: 'future', name: 'Future', protocol: 'acp/2', entry: 'engine.js' },
+      ];
+      expect(validateGhostManifest(v3({ harnesses: declared }))).toMatchObject({ ok: true, manifest: { harnesses: declared } });
+    });
+
+    it.each([
+      ['not an array', { harnesses: harness }],
+      ['empty', { harnesses: [] }],
+      ['more than four', { harnesses: ['a', 'b', 'c', 'd', 'e'].map(id => ({ ...harness, id })) }],
+      ['bad id', { harnesses: [{ ...harness, id: 'DSH' }] }],
+      ['duplicate id', { harnesses: [harness, harness] }],
+      ['empty name', { harnesses: [{ ...harness, name: ' ' }] }],
+      ['long name', { harnesses: [{ ...harness, name: 'x'.repeat(65) }] }],
+      ['long description', { harnesses: [{ ...harness, description: 'x'.repeat(201) }] }],
+      ['missing protocol', { harnesses: [{ ...harness, protocol: undefined }] }],
+      ['main entry', { harnesses: [{ ...harness, entry: 'worker.js' }] }],
+      ['undeclared entry', { harnesses: [{ ...harness, entry: 'other.js' }] }],
+      ['bad locale text', { harnesses: [{ ...harness, locales: { 'zh-CN': { name: '' } } }] }],
+      ['no node', { node: undefined, harnesses: [harness] }],
+    ])('rejects %s for a new package but drops it from a stored release', (_label, extra) => {
+      expect(validateGhostManifest(v3(extra)).ok).toBe(false);
+      const stored = validateStoredGhostManifest(v3(extra));
+      expect(stored.ok).toBe(true);
+      if (stored.ok) expect(stored.manifest.harnesses).toBeUndefined();
+    });
+
+    it('does not map a v2 manifest', () => {
+      const v2 = validateGhostManifest({ ...validManifest, slots: ['tool', 'node'], node, harnesses: [harness] });
+      expect(v2.ok).toBe(true);
+      if (v2.ok) expect(v2.manifest.harnesses).toBeUndefined();
+    });
+  });
+
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });

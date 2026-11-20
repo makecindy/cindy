@@ -352,7 +352,8 @@ export function OrcaTeamPanelView({
                     ? [t('session.collab.deviceUnreachable')]
                     : [orcaAgentLabel(worker.agentKind), worker.model]),
                 ]
-              : [orcaAgentLabel(worker.agentKind), worker.model]
+              // 插件引擎 Worker 只在被控电脑本机运行；显示通用的插件引擎名，不显示占位 Harness。
+              : [worker.pluginEngineProviderId ? t('models.pluginEngines.genericName') : orcaAgentLabel(worker.agentKind), worker.model]
             ).filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}

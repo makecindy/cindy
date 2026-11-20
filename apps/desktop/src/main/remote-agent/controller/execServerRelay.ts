@@ -659,7 +659,7 @@ export class ExecServerRelay {
     connection.child.stdout.pause();
     const next = (connection.output ?? Promise.resolve()).then(async () => {
       if (connection.closed) return;
-      const projected = await this.projectOutbound(line);
+      const projected = await this.projectOutbound(line, connId);
       if (!connection.closed) this.sendMessage(connId, projected);
     }).catch(() => {
       // 不发送未投影的本机路径；只结束这条连接，不能影响同一设备上的其它任务。
@@ -676,13 +676,21 @@ export class ExecServerRelay {
     });
   }
 
-  private async projectOutbound(line: string): Promise<string> {
+  private async projectOutbound(line: string, connId: string): Promise<string> {
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch {
       const projection = await this.deps.workspace.prepareAgentProjection();
       return projection.mapTextForAgent(line);
+    }
+    const reply = asJsonRecord(value);
+    const error = asJsonRecord(reply?.error);
+    if (error?.code === -32602 && error.message === 'sandbox intent cannot be enforced on this executor') {
+      this.deps.log?.warn('remote agent: exec-server cannot enforce sandbox', {
+        connId, platform: process.platform, code: error.code,
+      });
+      error.message += '. Check sandbox support and the Codex version on the executing computer before retrying with the requested restrictions.';
     }
     return JSON.stringify(await mapExecServerResult(value, this.deps.workspace));
   }

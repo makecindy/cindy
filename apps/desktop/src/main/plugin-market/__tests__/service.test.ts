@@ -278,6 +278,10 @@ import { PluginMarketEndpointUnsupportedError, PluginMarketApi } from '../api';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
+import { createPluginMarketAgentTools } from '../agentTools';
+import { extractIpcError } from '../../../shared/ipcError';
+import { pluginMarketErrorKey } from '../../../renderer/features/plugin/lib/pluginMarketErrorKey';
+
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 const RELEASE_ID = `c${'b'.repeat(24)}`;
@@ -5656,7 +5660,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
 
     await expect(h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT)).rejects.toThrow(
-      '[PRECONDITION_FAILED]',
+      '[GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED]',
     );
     expect(runtime.install).not.toHaveBeenCalled();
   });
@@ -7127,6 +7131,63 @@ describe('PluginMarketService install consent', () => {
     expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：PluginMarketService.install 的 onProgress；插件页据此显示
+  //   准备、下载、校验、等待确认、安装、完成／失败这些步骤。
+  // - Bug／规则依据：verified-downloads.md「下载进度与界面」登记的缺口——插件市场安装没有进度通道，
+  //   界面只能转圈然后突然结束。
+  // - 现有覆盖缺口：既有用例只断言安装结果，不关心中途向界面报告了什么。
+  // - 最小失败输入：一次带 onProgress 的首装；下载失败；用户在确认框里取消；监听方抛错。
+  // - tier：unit（沿用本文件的内存 harness，下载器已 mock）。
+  it.each([
+    {
+      name: 'reports every step of a confirmed install',
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'installing', 'completed'],
+    },
+    { name: 'ends as failed when the download fails', downloadFails: true, steps: ['preparing', 'failed'] },
+    {
+      name: 'ends as cancelled, not failed, when the user declines',
+      declined: true,
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'cancelled'],
+    },
+    { name: 'still installs when the progress listener throws', listenerThrows: true, steps: [] },
+  ] as Array<{ name: string; steps: string[]; downloadFails?: true; declined?: true; listenerThrows?: true }>)(
+    '$name',
+    async ({ steps, downloadFails, declined, listenerThrows }) => {
+      const item = summary();
+      const h = harness([item]);
+      runtime.install.mockResolvedValue({
+        manifest: manifest(), dir: path.join(os.tmpdir(), 'market-install'), enabled: true,
+      });
+      vi.mocked(downloadVerifiedPlugin).mockImplementationOnce(async (_url, expected, _target, progress) => {
+        if (downloadFails) throw new Error('Plugin download failed');
+        progress?.onProgress?.({ loaded: expected.sizeBytes / 2, total: expected.sizeBytes, percent: 50, speedBps: 0 });
+        progress?.onVerifying?.();
+      });
+      const seen: string[] = [];
+      let lastPercent: number | null = null;
+
+      const install = h.service.install(item.id, reviewedInstallOptions(item), {
+        consent: { prompt: async () => !declined, initiator: 'user' },
+        onProgress: (progress) => {
+          if (listenerThrows) throw new Error('renderer went away');
+          expect(progress.pluginId).toBe(item.id);
+          const step = `${progress.download.phase}${progress.awaitingConsent ? '+consent' : ''}`;
+          if (seen.at(-1) !== step) seen.push(step);
+          lastPercent = progress.download.percent;
+        },
+      });
+
+      if (downloadFails) await expect(install).rejects.toThrow('Plugin download failed');
+      else if (declined) await expect(install).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+      else await expect(install).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+      expect(seen).toEqual(steps);
+      // The package size is known up front, so the amount shown is exact from the first byte.
+      if (steps.at(-1) === 'completed') expect(lastPercent).toBe(100);
+      if (steps.at(-1) === 'cancelled') expect(lastPercent).toBe(50);
+    },
+  );
+
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {
     const item = summary();
     const h = harness([item]);
@@ -7566,5 +7627,68 @@ describe('server default UI approval receipts', () => {
     await h.service.snapshot().catch(() => undefined);
     expect(h.read()!.uiCapabilityApproved).toBeUndefined();
     expect(h.read()!.packageSha256).toBe(before.packageSha256);
+  });
+});
+
+// #6357: the public install entry must preserve service-generated expiry through
+// real IPC decoding, Agent adaptation and renderer mapping. API, package IO and
+// installed state use this file's isolated fixture; this is not a live market test.
+describe('download authorization failure semantics (#6357)', () => {
+  it.each(['install', 'update'] as const)('keeps expiry distinct from metadata drift on %s', async (operation) => {
+    const item = summary();
+    const h = harness([item]);
+    if (operation === 'update') {
+      runtime.ghosts = [ghostEntry(item.ghostId)];
+      h.ledger.upsertInstallation(recordForTest(item, { installed: true, manifestDigest: ghostManifestDigest(manifest(item.ghostId)) }));
+    }
+    const options = {
+      ...reviewedInstallOptions(item),
+      ...(operation === 'update' ? { expectedInstalledApproval: APPROVED_INSTALL_TOKEN } : {}),
+    };
+    const authorization = await h.api.download(item.id, item.currentRelease.id);
+    for (const expiresAt of ['2000-01-01T00:00:00.000Z', 'invalid-date']) {
+      h.api.download.mockResolvedValue({ ...authorization, expiresAt });
+      const error = await h.service.install(item.id, options, TEST_INSTALL_CONTEXT).catch(error => error);
+      expect(extractIpcError(error)?.code).toBe('GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED');
+      // Electron drops Error.code; use the actual service's encoded message.
+      const serialized = new Error(`Error invoking remote method: Error: ${error.message}`);
+      expect(pluginMarketErrorKey(serialized)).toBe('settings.ghosts.market.errors.downloadAuthorizationExpired');
+      expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    }
+    h.api.download.mockResolvedValue({ ...authorization, sha256: 'b'.repeat(64) });
+    const changed = await h.service.install(item.id, options, TEST_INSTALL_CONTEXT).catch(error => error);
+    expect(extractIpcError(changed)?.code).toBe('PRECONDITION_FAILED');
+    expect(pluginMarketErrorKey(new Error(changed.message))).toBe('settings.ghosts.market.errors.stateChanged');
+    expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+
+    // A valid authorization must still reach package IO; deliberately stop here.
+    h.api.download.mockResolvedValue(authorization);
+    vi.mocked(downloadVerifiedPlugin).mockRejectedValueOnce(new Error('SYNTHETIC_DOWNLOAD_BOUNDARY'));
+    await expect(h.service.install(item.id, options, TEST_INSTALL_CONTEXT)).rejects.toThrow('SYNTHETIC_DOWNLOAD_BOUNDARY');
+    expect(downloadVerifiedPlugin).toHaveBeenCalledOnce();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('preserves the service-generated reason in the real Agent install response', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const authorization = await h.api.download(item.id, item.currentRelease.id);
+    h.api.download.mockResolvedValue({ ...authorization, expiresAt: '2000-01-01T00:00:00.000Z' });
+    const release = vi.fn();
+    const tools = createPluginMarketAgentTools({
+      market: h.service,
+      installedState: () => ({ exists: false, errorCode: null }),
+      captureRead: () => () => undefined,
+      captureInstall: () => ({ assertCurrent: () => undefined, release, ownerGeneration: 1, consentPrompt: () => async () => true }),
+    });
+    const result = await tools.install({ pluginId: item.id, releaseId: item.currentRelease.id });
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED' });
+    expect(result.message).toContain('download authorization expired');
+    expect(result.message).not.toContain('Installation was not confirmed');
+    expect(release).toHaveBeenCalledOnce();
+    expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 });

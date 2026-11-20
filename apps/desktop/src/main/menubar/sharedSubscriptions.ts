@@ -151,6 +151,17 @@ export class SharedQuotaReader {
     this.startRead(this.revision);
   }
 
+  /** A panel opened or closed: the poll already waiting follows the new cadence from now. */
+  repace(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    const revision = this.revision;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.startRead(revision);
+    }, this.deps.pollMs());
+  }
+
   /** Resolves when the batch now being read has been published; at once when none is. */
   settled(): Promise<void> {
     return this.pending ?? Promise.resolve();

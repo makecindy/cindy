@@ -247,6 +247,14 @@ Claude 的模型发现不新增启动、续聊、换号或切模型的准入门�
 实现与回归见 `subscription-accounts/runtime.ts`、`agent.ts`、`maker-host/subscriptionPoolCatalog.ts`
 及其现有测试。手动刷新使用供应商 ID，后台启动／前台恢复按已连接的同类供应商触发，不能只看内置来源。
 
+Codex 订阅池成功读取完整分页后，异步原子写入当前 Cindy 账号的模型发现目录，记录已确认的型号、展示资料和时间。
+发布前再次核对账号代次。快照里的未知推理档位保持缺省，可由公共目录补充；明确声明的空档位保留。
+重启后读取失败，仅在订阅账号槽位、邮箱与 ChatGPT 工作区的身份摘要一致时恢复；无身份证据时只显示任务保存的型号。
+原生磁盘目录没有账号标识，不能单独补入成员。非空实报突然缩短且与原生目录有冲突时，经现有退避再确认一次；
+没有已确认清单时，重试超时仍保留同一账号此前实报的型号，状态维持待确认。
+成功返回的空清单仍生效。选择器展示清单未更新状态、上次已知时间和重试入口。
+排查时用主进程日志的 `refreshId` 关联分页探针，再用探针 PID 对照 Codex 自身的目录日志。
+
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
 清单（不发消息、不产生模型调用）。SDK 提供 `resolvedModel` 时优先使用其中的真实 Claude ID；
@@ -272,7 +280,7 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
-未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
+未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.2 Sol（Codex）、
 Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi），最后保留 xAI 回退。
 订阅按认证身份识别独立账号，始终保留实际账号 ID。Cindy Auto 由服务端决定：在 Cindy AI 与
 企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型

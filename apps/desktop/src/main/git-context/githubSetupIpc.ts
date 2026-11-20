@@ -26,6 +26,19 @@ const cindyGithubRootInstance = () => pluginInstallStoragePart(
   pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
 );
 
+function readGithubPluginToken(): string | null {
+  return readGhostSecret(cindyGithubRootInstance(), 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat');
+}
+
+/** Host-only credential for actions the user invokes with their local GitHub sign-in. */
+export async function readLocalGithubToken(): Promise<string | null> {
+  const owner = activeOwnerScopeKey();
+  const source = getSharedGhCliTokenSource();
+  source.invalidate();
+  const token = await source.readToken();
+  return owner === activeOwnerScopeKey() ? token ?? readGithubPluginToken() : null;
+}
+
 /**
  * This computer's effective GitHub sign-in for the active owner: gh first, then the fallback token the
  * requested plugin would actually use (`fallback`: its installed instance and declared secret key; the
@@ -37,18 +50,23 @@ export async function readGithubConnection(
   const owner = activeOwnerScopeKey();
   const source = getSharedGhCliTokenSource();
   source.invalidate();
-  const rootInstance = cindyGithubRootInstance();
+  const gh = await source.readTokenDetailed();
+  if (owner !== activeOwnerScopeKey()) return { status: 'missing' };
   const result = await githubConnection({
-    readGh: () => source.readToken(),
+    readGh: async () => gh.ok ? gh.token : null,
     readFallback: () =>
       owner !== activeOwnerScopeKey()
         ? null
         : fallback
           ? readGhostSecret(fallback.instanceId, fallback.key)
-          : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
+          : readGithubPluginToken(),
     fetch: outboundFetch,
   });
-  return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
+  if (owner !== activeOwnerScopeKey()) return { status: 'missing' };
+  if (result.status === 'missing' && !gh.ok && (gh.reason === 'gh-timeout' || gh.reason === 'gh-exec-failed')) {
+    return { status: 'network', source: 'gh-cli' };
+  }
+  return result;
 }
 
 /**

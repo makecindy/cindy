@@ -1,0 +1,218 @@
+{
+  "generatedAt": "2026-11-16T05:43:31.434Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 20971520,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1721,
+      "failed": 0,
+      "taps": {
+        "count": 4,
+        "p50": 27,
+        "p90": 33,
+        "max": 33
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1433,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 27,
+        "p90": 34,
+        "max": 34
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1545,
+      "failed": 0,
+      "taps": {
+        "count": 4,
+        "p50": 26,
+        "p90": 28,
+        "max": 28
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1195,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 29,
+        "p90": 30,
+        "max": 30
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 3,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1321,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 28,
+        "p90": 30,
+        "max": 30
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 3,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 2537,
+      "failed": 0,
+      "taps": {
+        "count": 6,
+        "p50": 22,
+        "p90": 33,
+        "max": 33
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 4,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 1380,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 28,
+        "p90": 35,
+        "max": 35
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 4,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 0,
+      "dropped": 0,
+      "ms": 2109,
+      "failed": 0,
+      "taps": {
+        "count": 5,
+        "p50": 23,
+        "p90": 35,
+        "max": 35
+      },
+      "tapsFailed": 0
+    }
+  ]
+}

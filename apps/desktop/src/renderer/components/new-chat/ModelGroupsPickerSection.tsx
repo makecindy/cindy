@@ -18,8 +18,8 @@ export interface ModelGroupsPickerProps {
   /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
-  /** 打开设置里的「模型组」。 */
-  onManage(): void;
+  /** 打开设置里的「模型组」。组属于另一台电脑(远程控制它的伙伴)时不传：这台电脑的设置管不到那边的组。 */
+  onManage?(): void;
 }
 
 interface PickerRow {
@@ -87,7 +87,7 @@ export function ModelGroupsPickerSection({
   // 只有「模型组」一格显示空态与管理入口；其余位置没有可列的就不占地方。
   const searchOnly = variant !== 'rail';
   const manage = () => {
-    picker.onManage();
+    picker.onManage?.();
     onPicked();
   };
   if (searchOnly && groups.length === 0) return null;
@@ -171,7 +171,7 @@ export function ModelGroupsPickerSection({
           })}
         </div>
       ))}
-      {!searchOnly && (
+      {!searchOnly && picker.onManage && (
         <div
           role="option"
           aria-selected={false}

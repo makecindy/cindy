@@ -31,3 +31,5 @@ Webhook 服务的 `GET /api/v1/github` 可选返回 `prSubscriptions: true`、`d
 新客户端在打开浏览器前也核对返回的授权 state 与 S256；不支持客户端绑定的旧测试服务
 返回 `GITHUB_CLIENT_BINDING_UNSUPPORTED`，应升级测试服务，不能把旧流程当成连接成功。
 升级顺序为两区 migration、服务、客户端；回滚保留新列及既有连接，但不应重新开放旧绑定流程。
+
+自动化单条 PR 条件复用已有精确订阅；客户端的 `prTrigger` 可选，跨电脑写入先检查目标端 `supportsSchedulePrTrigger`，旧写入方省略字段保留已有条件。服务端消息格式沿用现状。

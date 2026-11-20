@@ -314,10 +314,14 @@ describe('PlanChangeTargetDialog product-first selection', () => {
     );
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByText('max_month_more')).toBeNull();
+    // D1/D2/U6: monthly comparison and offer selection must explain the separate,
+    // expiring rollover grant, rather than reuse the next-period balance copy (unit).
+    expect(screen.getAllByText(/^billing\.comparison\.rolloverMonthlySummary:/)).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ }));
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByText('max_month_more')).toBeNull();
+    expect(screen.getAllByText(/^billing\.comparison\.rolloverMonthly:/)).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: /\$200\.00/ }));
     expect(onSelect).toHaveBeenCalledWith(candidates[2]);
   });

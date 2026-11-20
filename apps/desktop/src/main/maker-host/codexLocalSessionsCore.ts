@@ -18,7 +18,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { createZstdDecompress } from 'node:zlib';
-import { parse as parseToml } from 'smol-toml';
+import { parseCodexConfigToml as parseToml } from './codex-config-toml.js';
 
 import {
   allUserDataDirNames,

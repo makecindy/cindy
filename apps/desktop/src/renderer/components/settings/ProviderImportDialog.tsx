@@ -293,8 +293,9 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
         );
         onDone(result.providerId);
       }
-    } catch {
-      if (alive.current) toast.error(t('settings.providers.import.confirmFailed'));
+    } catch (error) {
+      if (alive.current && extractIpcError(error)?.code !== 'MUTATION_CANCELLED')
+        toast.error(t('settings.providers.import.confirmFailed'));
     } finally {
       savingRef.current = false;
       if (alive.current) setSaving(false);
@@ -533,7 +534,13 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
             patchRow(row.id, { status: result.modelsPending ? 'modelsPending' : 'saved', selected: false });
           } else patchRow(row.id, { status: 'manual', selected: false });
         } catch (error) {
-          if (alive.current) patchRow(row.id, { status: row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? 'sourceChanged' : 'failed', ...(row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? { selected: false } : {}) });
+          if (alive.current) {
+            const code = extractIpcError(error)?.code;
+            if (code === 'MUTATION_CANCELLED') patchRow(row.id, { status: 'ready', selected: false });
+            else if (row.preview?.localSource && code === 'PRECONDITION_FAILED')
+              patchRow(row.id, { status: 'sourceChanged', selected: false });
+            else patchRow(row.id, { status: 'failed' });
+          }
         } finally {
           if (!alive.current) void window.electronAPI.maker.cancelProviderImport(row.id).catch(() => undefined);
         }

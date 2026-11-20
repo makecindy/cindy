@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   createDownloadProgressReporter,
@@ -9,46 +9,16 @@ import {
 import { createLogger } from '../logger.js';
 import { replaceFile } from '../utils/replaceFile.js';
 import type { ToolArtifact, ToolInstallProgress } from './types.js';
-import { extractToolArchive, safeArchivePath, MAX_ARCHIVE_BYTES } from './archive.js';
+import { extractToolArchive, MAX_ARCHIVE_BYTES } from './archive.js';
+
+import {
+  installedTool,
+  toolInstallKey as key,
+  toolInstallRecordPath as recordPath,
+} from './installed.js';
+export { installedTool } from './installed.js';
 
 const log = createLogger('managed-tools');
-const key = (artifact: ToolArtifact) => {
-  for (const part of [artifact.id, artifact.version, artifact.host]) {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part)) throw new Error('Invalid tool identity');
-  }
-  if (!/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error('Invalid tool digest');
-  safeArchivePath(artifact.executable);
-  return `${artifact.id}-${artifact.version}-${artifact.host}-${artifact.sha256.slice(0, 12)}`;
-};
-const recordPath = (root: string, artifact: ToolArtifact) =>
-  path.join(root, 'tools', key(artifact), 'current.json');
-
-/** A record references only a complete immutable generation, never an in-progress extraction. */
-export async function installedTool(
-  root: string,
-  artifact: ToolArtifact,
-): Promise<string | undefined> {
-  try {
-    const record = JSON.parse(await readFile(recordPath(root, artifact), 'utf8'));
-    if (
-      record.sha256 !== artifact.sha256 ||
-      typeof record.generation !== 'string' ||
-      !/^[a-f0-9-]{36}$/.test(record.generation)
-    )
-      return;
-    const executable = path.join(
-      root,
-      'tools',
-      key(artifact),
-      record.generation,
-      ...artifact.executable.split('/'),
-    );
-    if ((await stat(executable)).isFile()) return executable;
-  } catch {
-    /* Missing/corrupt records are not installed tools. */
-  }
-}
-
 /** Installs to Cindy's private directory; never invokes a system installer or writes global config.
  * Generations stay immutable so a failed repair cannot break an existing consumer. A concurrent
  * instance may promote another valid generation; either result has the same pinned contents.

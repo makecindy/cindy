@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseToml } from 'smol-toml';
+import { parseCodexConfigToml as parseToml } from './codex-config-toml.js';
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   extractBundledCodexModelCatalog,

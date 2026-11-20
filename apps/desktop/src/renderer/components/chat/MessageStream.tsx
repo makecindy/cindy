@@ -142,6 +142,7 @@ import {
   readSessionScroll,
   saveSessionScroll,
   updateRenderWindowFloor,
+  clearRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -816,7 +817,7 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
 /**
  * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
  * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
- * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
+ * 调用优先按 replyToClientId 归属,旧数据才按原始消息顺序找到 user——即"这条 user 触发的那一轮里,
  * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
  * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
  * 调用与结果都来自持久消息,结果返回即停止;合成触发和结束标记隔离旧归属,不落
@@ -829,16 +830,31 @@ export function collectGhostCallsByUserTurn(
   const out = new Map<string, { ghostIds: Set<string>; pendingGhostIds: Set<string>; running: boolean }>();
   // Match the persisted tool-use identity, even when a hidden/empty result arrives
   // after another user message. This is the same settlement criterion as work logs.
-  const results = new Set(messages.filter((m) => m.role === 'tool_result' && m.toolUseId).map((m) => m.toolUseId));
+  const results = new Set<string>();
+  const userTurnOwners = new Map<string, string>();
   let currentUserClientId: string | null = null;
+  for (const m of messages) {
+    if (m.role === 'tool_result' && m.toolUseId) results.add(m.toolUseId);
+    if (m.role === 'user') {
+      if (m.delivery !== 'steer') currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
+      // The host may attribute later output to an accepted steering message.
+      // It still annotates the same user turn, without claiming a new bubble.
+      if (currentUserClientId) userTurnOwners.set(m.clientId, currentUserClientId);
+    }
+  }
+  currentUserClientId = null;
   for (const [index, m] of messages.entries()) {
     if (m.role === 'user' && m.delivery !== 'steer') {
       // A new autonomous run must not borrow the preceding human's bubble.
       currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
       continue;
     }
+    // An explicit owner outside this window is unknown, never the nearest user.
+    const owner = m.replyToClientId
+      ? userTurnOwners.get(m.replyToClientId) ?? null
+      : currentUserClientId;
     if (
-      currentUserClientId &&
+      owner &&
       (m.role === 'tool_use' || m.role === 'assistant') &&
       isGhostCallToolName(m.toolName) &&
       m.toolInput &&
@@ -847,15 +863,15 @@ export function collectGhostCallsByUserTurn(
       const input = m.toolInput as Record<string, unknown>;
       const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
       if (!gid) continue;
-      const state = out.get(currentUserClientId) ?? { ghostIds: new Set<string>(), pendingGhostIds: new Set<string>(), running: false };
+      const state = out.get(owner) ?? { ghostIds: new Set<string>(), pendingGhostIds: new Set<string>(), running: false };
       state.ghostIds.add(gid);
       const returned = m.toolUseId
         ? results.has(m.toolUseId)
         : messages[index + 1]?.role === 'tool_result';
       if (!returned) state.pendingGhostIds.add(gid);
-      out.set(currentUserClientId, state);
+      out.set(owner, state);
     }
-    if (m.turnCompleted === true || m.role === 'error') currentUserClientId = null;
+    if ((m.turnCompleted === true || m.role === 'error') && owner === currentUserClientId) currentUserClientId = null;
   }
   const active = currentUserClientId ? out.get(currentUserClientId) : undefined;
   if (active) active.running = isStreaming && active.pendingGhostIds.size > 0;
@@ -2507,6 +2523,8 @@ const recentRenderProjections: {
   characters: number;
 }[] = [];
 let renderProjectionOwner = getDataOwnerGeneration();
+// 挂载视图地板的序号:每个 MessageStream mount 一个,只求同会话内不重复。
+let floorViewSeq = 0;
 
 /**
  * Reuse pure history projection across keyed MessageStream mounts. Retain at
@@ -3650,11 +3668,17 @@ export function MessageStream({
   // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
   // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
   // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  // viewId 按挂载视图记录:同会话双面板各自跟踪，卸载时清掉自己的。
+  const floorViewId = useMemo(() => `floor-${++floorViewSeq}`, []);
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => clearRenderWindowFloor(sessionId, floorViewId);
+  }, [sessionId, floorViewId]);
   useEffect(() => {
     if (!sessionId) return;
     const floor = renderWindowFloorClientId(visibleRenderItems);
-    if (floor) updateRenderWindowFloor(sessionId, floor);
-  }, [sessionId, visibleRenderItems]);
+    if (floor) updateRenderWindowFloor(sessionId, floor, floorViewId);
+  }, [sessionId, visibleRenderItems, floorViewId]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -5649,6 +5673,7 @@ export function MessageStream({
     };
     content.addEventListener('click', onDisclosureClick, true);
     content.addEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
+    let lastPinHeight = -1;
     const ro = new ResizeObserver(() => {
       // 还原中:内容高度因异步渲染 settle 时,持续按锚点纠偏(直到用户手动滚动接管)。
       if (restoringRef.current) {
@@ -5675,9 +5700,16 @@ export function MessageStream({
       }
       disclosureAnchorRef.current = null;
       if (isNearBottomRef.current) {
+        // 纯宽度变化的交付(窗口横拉、分享选中态的 padding 过渡)不会移动尾部:
+        // 只有内容高度真变了才 pin,避免逐帧重启 pin 循环。
+        const container = scrollRef.current;
+        if (container && container.scrollHeight === lastPinHeight) return;
+        if (container) lastPinHeight = container.scrollHeight;
         pinToBottom();
         return;
       }
+      // 离底期间内容可能收缩后再长回旧高度;失效基线,避免回底后的尾部跟随被误跳。
+      lastPinHeight = -1;
       compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
@@ -6632,11 +6664,11 @@ export function MessageStream({
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
   // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
   // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
-  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
-  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
+  // 使用原始顺序,避免历史交接把折叠工具行移到新 user 后。仍排除子代理内部行,
+  // 并复用元数据投影,纯正文 delta 不会重新扫描调用或刷新历史气泡的 context。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMetadataMessages, isSessionStreaming),
-    [visibleMetadataMessages, isSessionStreaming],
+    () => collectGhostCallsByUserTurn(selectVisibleMessages(rawMetadataMessages), isSessionStreaming),
+    [rawMetadataMessages, isSessionStreaming],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {

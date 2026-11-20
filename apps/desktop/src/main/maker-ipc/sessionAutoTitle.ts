@@ -1,10 +1,11 @@
 /**
  * 会话自动起名的**唯一权威实现**(main 侧)。
  *
- * 两条输入路径都收敛到这里:
+ * 各入口都收敛到这里:
  *   - 本机发送:renderer 经 `maker:auto-title` IPC 调进来;
  *   - device-link 远控:被控端 `maker:input:enqueue` 直接调(控制端 renderer 不
- *     参与起名,只在自己的投影层显示预览)。
+ *     参与起名,只在自己的投影层显示预览);
+ *   - 群聊、IM 和任务委托:执行端提供自己刚创建的占位和渠道格式。
  *
  * 为什么必须单一持有:同一个会话既可能被本机用户发送,也可能被另一台设备远控。
  * 占位归属若分散在 renderer 与 main 两份内存里,一端写的合成占位会被另一端当成
@@ -32,8 +33,11 @@ import {
   setOnUserSessionTitleWritten,
   type OverwritableAutoTitleTarget,
 } from '../localDb/ipc/sessions.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 
+import { installTaskTitleWriter, type CreatedTaskTitle } from './createdTaskTitles.js';
 import { generateMakerSessionTitle } from './title.js';
 
 const log = createLogger('maker-ipc/session-auto-title');
@@ -85,26 +89,34 @@ const defaultDeps: SessionAutoTitleDeps = {
   persistTitle: persistSessionTitleIfStillDraft,
 };
 
-/**
- * 纯附件消息合成的占位标题(sessionId → 写进 DB 的那个串)。
- *
- * `sessions` 表只有一个 title 字段、不记录「谁写的」,所以在内存里记住哪些标题是
- * 系统合成的:用户后来真正打字时才能安全覆盖它,而他手动改的名不会被冲掉。
- * 重启后记忆丢失 → 合成占位固化为正式标题(用户仍可手动改名)。这是刻意选择的
- * 失败模式,换来不动 schema migration。
- */
-const synthesizedPlaceholders = new Map<string, string>();
+type TitleOwner = NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>;
 
-/**
- * 每个会话的起名串行队列。
- *
- * 纯附件消息与紧随其后的文字消息会并发触发起名;若各自独立读标题再写,慢的那个
- * 会拿着过期的期望值,导致文字标题被附件描述盖掉或直接写不进去(PR #510 review)。
- * 串行化让后一个任务总能读到前一个写完的归属与标题。
- */
-const queues = new Map<string, Promise<unknown>>();
+// IM session IDs can repeat across accounts. Only a live DB generation owns its
+// queues, attachment placeholders and channel tasks waiting for their first text.
+function newTitleWork() {
+  return {
+    queues: new Map<string, Promise<unknown>>(),
+    synthesizedPlaceholders: new Map<string, string>(),
+    awaitingTopicText: new Map<string, CreatedTaskTitle>(),
+  };
+}
+let workByOwner = new WeakMap<TitleOwner, ReturnType<typeof newTitleWork>>();
 
-function enqueuePerSession<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+function titleWork(owner: TitleOwner) {
+  let work = workByOwner.get(owner);
+  if (!work) {
+    work = newTitleWork();
+    workByOwner.set(owner, work);
+  }
+  return work;
+}
+
+function isTitleOwnerCurrent(owner: TitleOwner): boolean {
+  return getCurrentDbClientSnapshot() === owner && !isAppSessionBoundaryPending();
+}
+
+function enqueuePerSession<T>(owner: TitleOwner, sessionId: string, task: () => Promise<T>): Promise<T> {
+  const { queues } = titleWork(owner);
   const previous = queues.get(sessionId) ?? Promise.resolve();
   const next = previous.then(task, task);
   // 队尾出队后清理,避免 Map 随会话数无界增长(仅当自己仍是队尾)。
@@ -128,7 +140,11 @@ function enqueuePerSession<T>(sessionId: string, task: () => Promise<T>): Promis
  * 通知,这里记下来直接收手。重启后遗忘 —— 那时标题早已不是系统占位,资格检查
  * 本身就会拦住,不需要持久化。
  */
-const manuallyRenamed = new Set<string>();
+const manualRenamesByAccount = new Map<string, Set<string>>();
+
+function wasManuallyRenamed(owner: TitleOwner, id: string): boolean {
+  return manualRenamesByAccount.get(owner.userId)?.has(id) ?? false;
+}
 
 /**
  * 是否装有启用中的 will-user-message 拦截意识。由 register 注入(避免
@@ -143,8 +159,17 @@ let isUserMessageScreeningActive: (() => boolean) | null = null;
 export function registerSessionAutoTitleHooks(hooks?: {
   isUserMessageScreeningActive?: () => boolean;
 }): void {
-  setOnUserSessionTitleWritten((sessionId) => {
-    manuallyRenamed.add(sessionId);
+  installTaskTitleWriter({ refine: refineCreatedTaskTitle, mayRefine: mayRefineTaskTitle, persistInitial: persistInitialTaskTitle });
+  setOnUserSessionTitleWritten((sessionId, owner) => {
+    if (!owner) return;
+    let renamed = manualRenamesByAccount.get(owner.userId);
+    if (!renamed) {
+      renamed = new Set();
+      manualRenamesByAccount.set(owner.userId, renamed);
+    }
+    renamed.add(sessionId);
+    const { awaitingTopicText, synthesizedPlaceholders } = titleWork(owner);
+    awaitingTopicText.delete(sessionId);
     synthesizedPlaceholders.delete(sessionId);
   });
   if (hooks?.isUserMessageScreeningActive) {
@@ -154,14 +179,17 @@ export function registerSessionAutoTitleHooks(hooks?: {
 
 /** 测试专用:清空归属表与串行队列。 */
 export function __resetSessionAutoTitleStateForTest(): void {
-  synthesizedPlaceholders.clear();
-  manuallyRenamed.clear();
-  queues.clear();
+  workByOwner = new WeakMap();
+  manualRenamesByAccount.clear();
 }
 
 /** 会话是否还需要自动起名(标题仍是系统占位、且用户没手动改过名)。 */
 export async function isSessionAutoTitleEligible(sessionId: string): Promise<boolean> {
-  if (manuallyRenamed.has(sessionId)) return false;
+  const owner = getCurrentDbClientSnapshot();
+  // Preserve the DB's retryable not-ready result for callers preparing a first send.
+  if (!owner) return isUntitledSessionAwaitingAutoTitle(sessionId);
+  if (!isTitleOwnerCurrent(owner) || wasManuallyRenamed(owner, sessionId)) return false;
+  const { synthesizedPlaceholders } = titleWork(owner);
   const eligible = await isUntitledSessionAwaitingAutoTitle(
     sessionId,
     synthesizedPlaceholders.get(sessionId),
@@ -170,20 +198,23 @@ export async function isSessionAutoTitleEligible(sessionId: string): Promise<boo
   // 这条预检会短路掉 runUnsynchronized,那边的回收走不到,归属会留到进程结束
   // (review)。抛错时刻意不删:读不出状态属于瞬时失败,不能拿它当作废依据。
   if (!eligible) synthesizedPlaceholders.delete(sessionId);
-  return eligible;
+  return eligible && isTitleOwnerCurrent(owner);
 }
 
 async function runUnsynchronized(
-  request: SessionAutoTitleRequest,
+  request: Omit<SessionAutoTitleRequest, 'agentKind'>,
   deps: SessionAutoTitleDeps,
+  owner: TitleOwner,
 ): Promise<SessionAutoTitleResult> {
   const seedText = request.text.trim();
   if (!seedText) return { applied: false, done: false };
 
   // 用户已经手动给过名字 —— 条件写挡不住"同值改名"(WHERE title = 期望值 仍命中),
   // 只能靠这条显式记号收手(review P1)。
-  if (manuallyRenamed.has(request.sessionId)) return { applied: false, done: true };
+  const stopped = () => !isTitleOwnerCurrent(owner) || wasManuallyRenamed(owner, request.sessionId);
+  if (stopped()) return { applied: false, done: true };
 
+  const { synthesizedPlaceholders } = titleWork(owner);
   const remembered = synthesizedPlaceholders.get(request.sessionId);
 
   let target: OverwritableAutoTitleTarget | null;
@@ -197,7 +228,7 @@ async function runUnsynchronized(
     });
     return { applied: false, done: false };
   }
-  if (target === null) {
+  if (target === null || stopped()) {
     // 标题已不是系统占位(用户改过名 / 已起过名)→ 回收过期归属,不再尝试。
     synthesizedPlaceholders.delete(request.sessionId);
     return { applied: false, done: true };
@@ -248,7 +279,7 @@ async function runUnsynchronized(
   // 这中间隔着一次模型调用,用户完全来得及在这段时间里改名。改成别的串时条件写
   // 自然落空;改成与占位**逐字相同**的串时条件写仍会命中,所以每次落笔前都要再
   // 看一眼这条记号(review P1)。
-  if (manuallyRenamed.has(request.sessionId)) {
+  if (stopped()) {
     return { applied: placeholderPersisted, done: true };
   }
 
@@ -290,7 +321,7 @@ async function runUnsynchronized(
   // 这里刻意**不**重新询问钩子本身:同一条消息被问两次会让 Ghost 产生它没预期的
   // 副作用(计数、日志、二次改写)。要给这类用户恢复智能标题,正解是让
   // coordinator 在筛查通过后再触发一次起名,那是独立于本 PR 的改动。
-  if (isUserMessageScreeningActive?.()) {
+  if (stopped() || isUserMessageScreeningActive?.()) {
     return { applied: placeholderLive, done: placeholderLive };
   }
 
@@ -313,7 +344,7 @@ async function runUnsynchronized(
   // 第二句话 —— 标题就不再对应会话的开头了,那才是 bug。真正的瞬时失败是"占位也
   // 没写进去",那时 placeholderLive 为 false,照旧可重试。
   if (!generated) return { applied: placeholderLive, done: placeholderLive };
-  if (manuallyRenamed.has(request.sessionId)) {
+  if (stopped()) {
     return { applied: placeholderLive, done: true };
   }
 
@@ -332,12 +363,78 @@ async function runUnsynchronized(
   return { applied, done: applied };
 }
 
+/**
+ * A host that created a named placeholder can refine it with the ordinary title pipeline.
+ * The expected title comes from creation, never from an IPC caller requesting a rename.
+ * The formatter adds channel identity locally; only the subject goes to the auxiliary model.
+ */
+export async function refineCreatedTaskTitle(
+  sessionId: string,
+  text: string,
+  creation?: CreatedTaskTitle,
+): Promise<string | null> {
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner || !isTitleOwnerCurrent(owner) || wasManuallyRenamed(owner, sessionId)) return null;
+  const current = () => isTitleOwnerCurrent(owner);
+  const { awaitingTopicText } = titleWork(owner);
+  const naming = creation ?? awaitingTopicText.get(sessionId);
+  if (!naming) return null;
+  if (!text.trim()) {
+    if (creation) awaitingTopicText.set(sessionId, creation);
+    return null;
+  }
+  awaitingTopicText.delete(sessionId);
+  const { initialTitle, format = normalizeAutoTitle, compose } = naming;
+  let applied: string | null = null;
+  try {
+    await enqueuePerSession(owner, sessionId, () => runUnsynchronized({ sessionId, text, placeholderText: format(text) }, {
+      resolveOverwritableTitle: async (id, attempted) => {
+        if (!current()) return null;
+        const expected = attempted ?? initialTitle;
+        const row = await getOverwritableAutoTitle(id, expected);
+        return row?.title === expected && current() ? row : null;
+      },
+      generateTitle: async (seed, kind, id) => {
+        if (!current()) return null;
+        const topic = await generateMakerSessionTitle(seed, kind, id);
+        if (!topic || !current()) return null;
+        return (await compose?.(topic)) || format(topic);
+      },
+      persistTitle: async (id, title, expected) => {
+        if (!current() || wasManuallyRenamed(owner, id)) return false;
+        const saved = await persistSessionTitleIfStillDraft(id, title, expected);
+        if (saved && current()) applied = normalizeAutoTitle(title);
+        return saved;
+      },
+    }, owner));
+  } catch (error) {
+    log.warn('created task title unavailable', { sessionId, errorName: error instanceof Error ? error.name : 'unknown' });
+  }
+  return current() && !wasManuallyRenamed(owner, sessionId) ? applied : null;
+}
+
+/** Even a manual save identical to the current placeholder takes precedence. */
+export function mayRefineTaskTitle(id: string): boolean {
+  const owner = getCurrentDbClientSnapshot();
+  return !!owner && isTitleOwnerCurrent(owner) && !wasManuallyRenamed(owner, id);
+}
+
+/** Native channel names need the same manual-rename protection without a model request. */
+export async function persistInitialTaskTitle(id: string, title: string, initialTitle: string): Promise<boolean> {
+  return mayRefineTaskTitle(id) && persistSessionTitleIfStillDraft(id, title, initialTitle);
+}
+
 /** 起名主入口:同一会话串行执行。 */
 export function runSessionAutoTitle(
   request: SessionAutoTitleRequest,
   deps: SessionAutoTitleDeps = defaultDeps,
 ): Promise<SessionAutoTitleResult> {
-  return enqueuePerSession(request.sessionId, () => runUnsynchronized(request, deps));
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner) return Promise.resolve({ applied: false, done: false });
+  return enqueuePerSession(owner, request.sessionId, async () => {
+    const result = await runUnsynchronized(request, deps, owner);
+    return isTitleOwnerCurrent(owner) ? result : { applied: false, done: false };
+  });
 }
 
 /** fire-and-forget 版本:调用方不关心结果(device-link 远控入队后触发)。 */

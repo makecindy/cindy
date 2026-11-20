@@ -34,7 +34,7 @@ describe('Claude subscription model-window confirmation', () => {
   it('keeps the ordinary route when Main reports no destructive pressure', async () => {
     const invoke = vi.fn().mockResolvedValue({ deferred: false, superseded: false });
     await expect(
-      setModelWithWindowConfirmation({ invoke, confirm: async () => true }),
+      setModelWithWindowConfirmation({ invoke, onWindowRebuild: vi.fn() }),
     ).resolves.toBe('applied');
     expect(invoke).toHaveBeenCalledTimes(1);
   });
@@ -45,39 +45,31 @@ describe('Claude subscription model-window confirmation', () => {
       superseded: false,
       pendingUntilSend: true,
     });
-    const confirm = vi.fn();
+    const onWindowRebuild = vi.fn();
 
-    await expect(setModelWithWindowConfirmation({ invoke, confirm })).resolves.toBe('pending');
+    await expect(setModelWithWindowConfirmation({ invoke, onWindowRebuild })).resolves.toBe('pending');
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(onWindowRebuild).not.toHaveBeenCalled();
   });
 
   it('rejects a superseded staged selection before recovery can send', async () => {
     await expect(setModelWithWindowConfirmation({
       invoke: async () => ({ deferred: true, superseded: true, pendingUntilSend: true }),
-      confirm: vi.fn(),
+      onWindowRebuild: vi.fn(),
     })).rejects.toThrow('did not return an applied result');
   });
 
-  it('does not retry or apply when the first 1M to 200K pressure is cancelled', async () => {
-    const invoke = vi.fn().mockResolvedValue(pressure);
-    const confirm = vi.fn().mockResolvedValue(false);
-
-    await expect(setModelWithWindowConfirmation({ invoke, confirm })).resolves.toBe(false);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith();
-    expect(confirm).toHaveBeenCalledWith({ contextWindow: 200_000, contextTokens: 180_000 });
-  });
-
-  it('retries only with the exact confirmed target window', async () => {
+  it('warns and retries only with the exact window reported by the host', async () => {
     const invoke = vi
       .fn()
       .mockResolvedValueOnce(pressure)
       .mockResolvedValueOnce({ deferred: false, superseded: false });
 
+    const onWindowRebuild = vi.fn();
     await expect(
-      setModelWithWindowConfirmation({ invoke, confirm: async () => true }),
+      setModelWithWindowConfirmation({ invoke, onWindowRebuild }),
     ).resolves.toBe('confirmed');
+    expect(onWindowRebuild).toHaveBeenCalledOnce();
     expect(invoke.mock.calls).toEqual([[], [200_000]]);
   });
 
@@ -90,7 +82,7 @@ describe('Claude subscription model-window confirmation', () => {
     });
 
     await expect(
-      setModelWithWindowConfirmation({ invoke, confirm: async () => true }),
+      setModelWithWindowConfirmation({ invoke, onWindowRebuild: vi.fn() }),
     ).resolves.toBe(false);
   });
 
@@ -102,20 +94,20 @@ describe('Claude subscription model-window confirmation', () => {
           superseded: false,
           contextWindowConfirmationRequired: 200_000,
         }),
-        confirm: async () => true,
+        onWindowRebuild: vi.fn(),
       }),
     ).rejects.toThrow('verified model-window confirmation is invalid');
 
     await expect(
       setModelWithWindowConfirmation({
         invoke: async () => undefined,
-        confirm: async () => true,
+        onWindowRebuild: vi.fn(),
       }),
     ).rejects.toThrow('did not return an applied result');
     await expect(
       setModelWithWindowConfirmation({
         invoke: async () => ({ deferred: true, superseded: false }),
-        confirm: async () => true,
+        onWindowRebuild: vi.fn(),
       }),
     ).rejects.toThrow('did not return an applied result');
 
@@ -125,7 +117,7 @@ describe('Claude subscription model-window confirmation', () => {
         invoke: async () => {
           throw busy;
         },
-        confirm: async () => true,
+        onWindowRebuild: vi.fn(),
       }),
     ).rejects.toBe(busy);
   });

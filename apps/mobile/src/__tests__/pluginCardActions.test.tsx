@@ -8,6 +8,10 @@ import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-for
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 import { pluginPreviewFixture, PREVIEW_FIXTURE_PLUGIN } from '../debug/pluginPreviewFixture';
 
+vi.mock('../plugins/PluginModelPicker', () => ({ PluginModelPicker: ({ request, onAnswer }: any) =>
+  createElement('button', { onClick: () => onAnswer({ ...request.initial, model: 'new-model' }) }, 'Select new model'),
+}));
+
 vi.mock('../plugins/PluginNativeIntent', () => ({ PluginNativeIntent: (props: any) => {
   h.preview = props;
   return createElement('button', { 'data-testid': 'plugin-preview', onClick: props.onClose }, props.intent.url);
@@ -177,6 +181,35 @@ describe("rich plugin card hints", () => {
     expect(control.getAttribute('aria-busy')).toBe('false');
     expect(control.disabled).toBe(false);
     expect(container.querySelector('[role=progressbar]')).toBeNull();
+  });
+
+  // Unit regression: sending the PR button alone passed existing tests while the phone
+  // ignored the picker returned by the plugin. A stale poll after acceptance must not reopen it.
+  it('answers a PR follow model request on the card that opened it', async () => {
+    vi.useFakeTimers();
+    const initial = { agentKind: 'codex', model: 'old-model', providerId: 'account', effort: 'high', fastMode: true };
+    const request = { requestId: 'pick', ghostId: 'cindy-github', ghostName: 'GitHub', initial, expiresAt: Date.now() + 90_000 };
+    h.invoke.mockImplementation(async (_device, _channel, [action]) => {
+      if (action.actionId === 'open-interaction') return { result: { pageId: 'pr-page' } };
+      if (action.actionId === 'poll') return { result: { confirms: [], modelPickers: [request] } };
+      if (action.actionId === 'answer-model-picker') return { result: { accepted: true, handled: true } };
+      return { effects: [] };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', data: { pluginId: 'cindy-github', revision: '1',
+        items: [{ id: 'prset:modelPick', label: 'Change model', disabled: false }] },
+    })));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Change model"]')!.click());
+    const picker = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Select new model');
+    expect(picker).toBeDefined();
+    await act(async () => picker!.click());
+    expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+      actionId: 'answer-model-picker', input: { pageId: 'pr-page', requestId: 'pick', route: { ...initial, model: 'new-model' } },
+    })]);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(container.textContent).not.toContain('Select new model');
   });
 
   // Unit regression: PR publish disabled clicks but gave no visible feedback during remote delivery.
@@ -788,6 +821,41 @@ describe("native plugin card deliberate actions", () => {
     expect(input.disabled).toBe(false);
     expect(button.disabled).toBe(false);
   });
+  // Unit regression: the first click starts a read-only poll. Its failure used to
+  // lock every action forever even after that click was acknowledged. Existing
+  // lost-receipt tests cover writes, not this independent read failure.
+  it.each(['transient', 'expired'])('keeps acknowledged actions usable after a %s poll failure', async (failure) => {
+    vi.useFakeTimers();
+    let opens = 0, polls = 0;
+    const dispatch = vi.fn(async () => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      const request = args[0];
+      if (request.collectionId === 'plugin-results') return dispatch();
+      if (request.actionId === 'open-interaction') return { result: { pageId: `page-${++opens}` } };
+      if (request.actionId === 'poll') {
+        if (++polls === 1) throw new Error(failure === 'expired' ? '[NOT_FOUND] Plugin page is no longer available' : 'poll timed out');
+        return { result: { confirms: [] } };
+      }
+      return { effects: [] };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 'session', callId: 'call',
+      data: { pluginId: 'practice', revision: 'unchanged', items: [{ id: 'refresh', label: 'Refresh', disabled: false }] },
+    })));
+    const button = container.querySelector('button')!;
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(dispatch).toHaveBeenCalledTimes(1); // never replay the click
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(opens).toBe(failure === 'expired' ? 2 : 1);
+    expect(button.disabled).toBe(false);
+  });
+
   it.each([false, true])(
     "releases only a known successful delivery (unknown=%s)",
     async (unknown) => {

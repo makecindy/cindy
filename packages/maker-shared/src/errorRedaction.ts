@@ -267,6 +267,8 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'PLUGIN_ENGINE_RESUME_UNAVAILABLE',
+  'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED',
   'SUBSCRIPTION_ACCOUNT_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
@@ -358,6 +360,7 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
     || code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+    || code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
     || code === 'DEVICE_LINK_CONTROL_DISABLED'
     || code === 'REMOTE_AGENT_RESUME_UNAVAILABLE';
 }

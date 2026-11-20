@@ -50,7 +50,7 @@ vi.mock('react-native', async () => {
     }, children);
   return {
     View,
-    Pressable: View,
+    ScrollView: View, Pressable: View,
     Image: () => null,
     AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
     Alert: { alert: vi.fn() },

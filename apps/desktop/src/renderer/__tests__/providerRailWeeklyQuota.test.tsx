@@ -1126,4 +1126,27 @@ describe('shared provider rail weekly quota', () => {
     expect(command).toHaveBeenCalledTimes(2);
     expect(bar()).toBeNull();
   });
+
+  it('staggers and coalesces the first quota refresh after the share host comes back online', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      sharing.received = [{ ...share, hostOnline: false }];
+      command.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] no data path'));
+      const view = render(<><Rail /><Rail /></>);
+      await act(async () => {});
+      expect(command).toHaveBeenCalledTimes(1);
+
+      sharing.received = [share];
+      view.rerender(<><Rail /><Rail /></>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_249); });
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(bar()).toBeNull();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(command).toHaveBeenCalledTimes(2);
+      expect(bar()).not.toBeNull();
+    } finally {
+      random.mockRestore();
+    }
+  });
 });

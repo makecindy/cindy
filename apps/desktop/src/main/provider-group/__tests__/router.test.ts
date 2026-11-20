@@ -148,6 +148,41 @@ function harness(
   });
 }
 
+it('routes a shared image model only to a group member that offers it', async () => {
+  const model = 'openai/gpt-image-2';
+  const remote = { ...member('remote', 'device', 'remote'), providerId: 'openai-independent' };
+  const local = { ...LOCAL, providerId: 'openai' };
+  const directory: ProviderGroupDirectory = {
+    async resolveMembers(_providerId, config) {
+      return config.members.map((member) => ({
+        member,
+        label: member.key,
+        state: 'ok',
+        view: {
+          ...view(member.providerId),
+          imageModels: [{ id: `${member.providerId}/gpt-image-2`, name: model, disabled: member.kind === 'local' }],
+        },
+      }));
+    },
+    async listCandidates() { return []; },
+    async readDeviceCatalog() { return []; },
+    async probe() { return 'ok'; },
+    memberLabel: (member) => member.key,
+    invalidate: () => undefined,
+  };
+  const router = harness({}, {}, [], undefined, {
+    directory,
+    readPoolScheduling: async (_member, modelId) => ({
+      version: 1, accounts: modelId === 'openai-independent/gpt-image-2' ? 1 : 0,
+      running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
+    }),
+    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, remote] }),
+  });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate',
+  })).toMatchObject({ kind: 'member', member: remote });
+});
+
 // 2026-11-11 用户裁决：达到并发上限就不再分；没设置过上限的电脑不限制。
 describe('provider group hard concurrency limits', () => {
   const capped = (entry: ProviderGroupMember, limit: number): ProviderGroupMember => ({ ...entry, limit, limitSet: true });
@@ -410,6 +445,18 @@ describe('provider group running count', () => {
 });
 
 describe('provider group picks for this computer’s own tasks', () => {
+  // #11114 review, unit: excluding the last remote must retain its round cursor
+  // position. Earlier exclusion coverage used order, not a prior round pick.
+  // Minimal sequence: A, B, then exclude B; the next executor must be C, not A.
+  it('continues round selection after an excluded remote without resetting to the first member', async () => {
+    const router = harness({}, {}, [], { strategy: 'round', autoSwitch: true, members: [LOCAL, SHARE_A, SHARE_B] });
+    const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL, localTask: true as const };
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
+    expect(await router.pick({ ...input, fresh: true, exclude: new Set([SHARE_A.key]) }))
+      .toMatchObject({ kind: 'member', member: { key: SHARE_B.key } });
+  });
+
   it('reserves the chosen computer until the task starts, so tasks opened together spread out', async () => {
     const bindings: Record<string, ProviderGroupBinding> = {};
     const running: string[] = [];
@@ -459,6 +506,18 @@ describe('provider group quick picks with busy usable computers', () => {
     });
     return { router, config, localRunning, readDeviceProviders };
   }
+
+  // #11114 review, unit: pick must not refresh a failed/excluded executor.
+  // Earlier quick-pick cases had no exclusions and allowed slow reads to start.
+  // One excluded stalled remote plus a ready backup must settle without the quick timer.
+  it('selects a ready backup without reading excluded remote members again', async () => {
+    const { router, localRunning, readDeviceProviders } = quickRouter(0, 0);
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+      localTask: true, fresh: true, exclude: new Set([LOCAL.key, SLOW.key]) });
+    expect(pick).toMatchObject({ kind: 'member', member: { key: FAST.key } });
+    expect(readDeviceProviders).toHaveBeenCalledExactlyOnceWith('fast', undefined);
+    expect(localRunning).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { fastLoad: null, expected: LOCAL.key },

@@ -225,11 +225,18 @@ struct WidgetStore: Decodable {
     Bundle.main.object(forInfoDictionaryKey: "CindyAppGroupId") as? String
   }
 
+  #if os(iOS)
   /// Same file name as `CindyUsageWidgetsModule` in the app.
-  static func load() -> WidgetStore? {
-    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group),
-          let data = try? Data(contentsOf: container.appendingPathComponent("usage-widget-snapshot.json"))
+  static var fileURL: URL? {
+    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
     else { return nil }
+    return container.appendingPathComponent("usage-widget-snapshot.json")
+  }
+  #endif
+
+  /// On the Mac, `fileURL` is where the desktop app writes it (`MacWidgetSupport.swift`).
+  static func load() -> WidgetStore? {
+    guard let url = fileURL, let data = try? Data(contentsOf: url) else { return nil }
     return try? JSONDecoder().decode(WidgetStore.self, from: data)
   }
 
@@ -627,7 +634,7 @@ enum WidgetText {
     ],
   ]
 
-  private static func language(_ locale: Locale) -> String {
+  static func language(_ locale: Locale) -> String {
     let id = locale.identifier
     if id.hasPrefix("zh") { return id.contains("Hant") || id.contains("TW") || id.contains("HK") ? "zh-Hant" : "zh-Hans" }
     if id.hasPrefix("ja") { return "ja" }
@@ -640,7 +647,11 @@ enum WidgetText {
   }
 
   static func text(_ key: String, locale: Locale = Locale(identifier: Locale.preferredLanguages.first ?? "en")) -> String {
-    table[language(locale)]?[key] ?? table["en"]?[key] ?? key
+    #if os(macOS)
+    // The Mac widgets read this computer, not one the phone connects to (`MacWidgetText`).
+    if let mac = MacWidgetText.text(key, language: language(locale)) { return mac }
+    #endif
+    return table[language(locale)]?[key] ?? table["en"]?[key] ?? key
   }
 
   /// Strings normally sent by the computer, for snapshots that lack them and for placeholders.

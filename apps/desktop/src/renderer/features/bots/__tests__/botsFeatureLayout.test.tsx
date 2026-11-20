@@ -4,19 +4,21 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { CCAgentFeatureLayout } from '../../cc-agent/CCAgentFeatureLayout';
 import { BotsFeatureLayout } from '../BotsFeatureLayout';
 
 const mocks = vi.hoisted(() => ({
   profiles: [{ id: 'one', status: 'active' }],
   registerTaskSidebar: vi.fn(),
 }));
+vi.mock('../../cc-agent/SplitGroup', () => ({ SplitGroup: ({ children }: { children: import('react').ReactNode }) => children }));
 vi.mock('../botStore', () => ({
   refreshBotProfiles: vi.fn(),
   useBotProfiles: () => mocks.profiles,
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBotSync: vi.fn() }));
 vi.mock('../BotSettingsDrawer', () => ({ BotSettingsDrawer: () => null }));
-// Teammate routes share the task sidebar: the layout registers it instead of swapping in its own.
+// The common outer task layout registers the sidebar for companion routes too.
 vi.mock('../../cc-agent/useRegisterCCAgentSidebar', () => ({
   useRegisterCCAgentSidebar: mocks.registerTaskSidebar,
 }));
@@ -54,12 +56,14 @@ function mount(history: { current: MainViewHistory }, initialEntry = '/bots/one/
         <Navigation />
         <Routes>
           <Route path="/cc-agent" element={null} />
-          <Route path="/bots" element={<BotsFeatureLayout />}>
-            <Route index element={null} />
-            <Route path="roster" element={null} />
-            <Route path="remote/:deviceId/:botId" element={null} />
-            <Route path=":botId" element={null} />
-            <Route path=":botId/session/:sessionId" element={null} />
+          <Route element={<CCAgentFeatureLayout />}>
+            <Route path="/bots" element={<BotsFeatureLayout />}>
+              <Route index element={null} />
+              <Route path="roster" element={null} />
+              <Route path="remote/:deviceId/:botId" element={null} />
+              <Route path=":botId" element={null} />
+              <Route path=":botId/session/:sessionId" element={null} />
+            </Route>
           </Route>
         </Routes>
       </MemoryRouter>
