@@ -157,6 +157,12 @@ const AUTOMATION_FLAGS = /--(remote-debugging-(port|pipe)|enable-automation|head
 
 const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastIndexOf('.') + 1).toLowerCase();
 
+const windowRef = (window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget['window'] => ({
+  index: window.index,
+  title: window.title,
+  ...(window.windowId !== undefined ? { windowId: window.windowId } : {}),
+});
+
 /**
  * The window a handoff works on: by pid, else by app name or bundle id, else
  * the frontmost app; never Cindy itself. Shared with the request-time check so
@@ -198,7 +204,7 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
     ?? app.windows[0];
   if (!window) return null;
   return {
-    pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title },
+    pid: app.pid, app: app.app, bundleId: app.bundleId, window: windowRef(window),
     ...(window.minimized ? { minimized: true } : {}),
   };
 }
@@ -1116,16 +1122,23 @@ export class InputHandoffSession {
       if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
       return;
     }
-    const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
-      ?? mine.windows.find((w) => w.title === target.window.title);
-    const window = known ?? this.renamedWindow(mine.windows, previous.apps.find((app) => app.pid === target.pid)?.windows);
+    const identity = target.window.windowId;
+    const matches = identity !== undefined ? mine.windows.filter((w) => w.windowId === identity) : [];
+    // A title, index or frame may be reused after a real close. Once identity is known,
+    // only that identity can continue the handoff; do not fall back when it disappears.
+    const known = identity !== undefined ? (matches.length === 1 ? matches[0] : undefined)
+      : mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
+        ?? mine.windows.find((w) => w.title === target.window.title);
+    const window = known ?? (identity === undefined
+      ? this.renamedWindow(mine.windows, previous.apps.find((app) => app.pid === target.pid)?.windows)
+      : undefined);
     if (!window) {
       if (list.frontmost === target.pid) this.noteWindowGone();
       return;
     }
     this.windowGoneReads = 0;
     if (window.minimized) return;
-    if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
+    this.target = { ...target, window: windowRef(window) };
     const read = await this.read().catch(() => null);
     if (!read || read.pageMissing || !this.watching()) return;
     const step = settledForm(read, this.step) ? askingNothing(read) : read;
@@ -1266,8 +1279,12 @@ export class InputHandoffSession {
       if (restored && !step && this.target) {
         const pid = this.target.pid;
         const list = await this.options.driver.windows().catch(() => null);
-        const window = list?.apps.find((app) => app.pid === pid)?.windows.find((w) => w.focused && !w.minimized);
-        if (window) this.target = { ...this.target, window: { index: window.index, title: window.title } };
+        const identity = this.target.window.windowId;
+        const windows = list?.apps.find((app) => app.pid === pid)?.windows ?? [];
+        const matches = identity !== undefined ? windows.filter((w) => w.windowId === identity) : [];
+        const window = identity !== undefined ? (matches.length === 1 ? matches[0] : undefined)
+          : windows.find((w) => w.focused && !w.minimized);
+        if (window) this.target = { ...this.target, window: windowRef(window) };
       }
     }
   }
@@ -1276,7 +1293,7 @@ export class InputHandoffSession {
     if (!this.target) return null;
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return null;
-    this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
+    this.target = { ...this.target, window: { ...this.target.window, index: raw.window.index, title: raw.window.title } };
     this.unreadablePage = null;
     let step: ExtractedStep;
     try {
@@ -1346,7 +1363,7 @@ export class InputHandoffSession {
           candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
         : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
-      result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
+      result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { ...request.window, index: fresh.window.index, title: fresh.window.title } });
     }
     return 'ok' in result && result.ok === true;
   }
@@ -1499,7 +1516,7 @@ export class InputHandoffSession {
     const hints = this.options.completeWhen;
     const app = (pid: number) => list.apps.find((entry) => entry.pid === pid);
     const toTarget = (entry: NativeWindowList['apps'][number], window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget => ({
-      pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: { index: window.index, title: window.title },
+      pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: windowRef(window),
     });
     // Another app came to the front (for example the browser for an authorization page). While the
     // form still asks the owner for something, only a window that just opened or changed counts:
