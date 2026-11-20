@@ -71,6 +71,8 @@ import {
 } from './authCredentialKeys';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
+  isDefinitiveRefreshFailure,
+  isForeignDeviceRefreshFailure,
   runRefreshWithReplacementRetry,
   resolveSessionExpiredReason,
   type RefreshFailureAction,
@@ -3648,15 +3650,30 @@ async function runAuthRefreshWithReplacementRetry(
         }
       }
       const result = await requestAuthRefresh(refreshToken, opts.realm);
-      if (getRefreshErrorCode(result) === 'INVALID_REFRESH_TOKEN') {
+      const code = getRefreshErrorCode(result);
+      const terminal = isDefinitiveRefreshFailure(result) || isForeignDeviceRefreshFailure(result);
+      if (code === 'INVALID_REFRESH_TOKEN') {
         invalidRefreshTokens.add(refreshToken);
         opts.rejectedRefreshTokens?.add(refreshToken);
-        const uncertain = uncertainResourceRefreshTokens.get(opts.realm);
-        if (uncertain && uncertain.accountKey === vault.activeAccountKey &&
-          uncertain.refreshToken === refreshToken &&
-          vault.resources[uncertain.accountKey]?.refreshToken === refreshToken &&
-          typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, uncertain.accountKey)) {
+      } else if (terminal) {
+        invalidRefreshTokens.delete(refreshToken);
+        opts.rejectedRefreshTokens?.delete(refreshToken);
+      }
+      const uncertain = uncertainResourceRefreshTokens.get(opts.realm);
+      if (uncertain && uncertain.accountKey === vault.activeAccountKey &&
+        uncertain.refreshToken === refreshToken &&
+        vault.resources[uncertain.accountKey]?.refreshToken === refreshToken &&
+        typeof vault.signedOutAt !== 'number' && !isLoggedOutVaultAccount(vault, uncertain.accountKey)) {
+        if (code === 'INVALID_REFRESH_TOKEN') {
           uncertain.invalidConfirmed = true;
+        } else if (terminal) {
+          // A newer terminal response supersedes the old uncertainty/INVALID
+          // fact even if this caller later discards it after a projection change.
+          uncertainResourceRefreshTokens.delete(opts.realm);
+          const pending = pendingResourcePassportRecoveries.get(opts.realm);
+          if (pending?.accountKey === uncertain.accountKey && pending.refreshToken === refreshToken) {
+            pendingResourcePassportRecoveries.delete(opts.realm);
+          }
         }
       }
       if (result.ok || result.status === 0 || (result.status >= 200 && result.status < 300)) {

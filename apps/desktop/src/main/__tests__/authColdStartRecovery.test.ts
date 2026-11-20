@@ -10,7 +10,12 @@ import {
   retryAfterDeadline,
   serializeAuthSessionRecord,
 } from '@cindy/auth-client';
-import { runRefreshWithReplacementRetry, resolveSessionExpiredReason } from '../authRefreshFailure';
+import {
+  isDefinitiveRefreshFailure,
+  isForeignDeviceRefreshFailure,
+  runRefreshWithReplacementRetry,
+  resolveSessionExpiredReason,
+} from '../authRefreshFailure';
 import {
   applyRefreshedCredentialsToVault,
   AUTH_ACCOUNT_VAULT_VERSION,
@@ -249,6 +254,8 @@ function setup(random = 0) {
     ownerChangeShellGate: { isPending: () => false },
     sealedLoginFlowCommitDepths: new Set(),
     runRefreshWithReplacementRetry,
+    isDefinitiveRefreshFailure,
+    isForeignDeviceRefreshFailure,
     resolveSessionExpiredReason,
     loginPreparingErrorState,
     requestAuthRefresh: request,
@@ -1207,6 +1214,42 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
       expect(h.saved.session?.refreshToken).toBe('test-rotated');
       expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
     }
+  });
+
+  it.each(['MEMBERSHIP_DISABLED', 'REFRESH_TOKEN_EXPIRED'] as const)('revokes old runtime rejection when projection changes during a newer %s', async code => {
+    const { h } = recoverySetup();
+    h.useProductionCandidates();
+    let activeCalls = 0, candidateCalls = 0;
+    h.request.mockImplementation(async (token: unknown) => {
+      if (token === 'test-refresh') {
+        activeCalls++;
+        if (activeCalls === 1) return { ok: false, status: 0, data: null };
+        h.saved.session.refreshToken = 'test-other-candidate';
+        return { ok: false, status: 401, data: { error: {
+          code: activeCalls === 2 ? 'INVALID_REFRESH_TOKEN' : code,
+        } } };
+      }
+      candidateCalls++;
+      if (candidateCalls === 1) {
+        h.saved.session.refreshToken = 'test-refresh';
+        return { ok: false, status: 0, data: null };
+      }
+      return { ok: false, status: 401, data: { error: { code: 'REFRESH_TOKEN_EXPIRED' } } };
+    });
+    await h.runtimeRefresh();
+    await vi.advanceTimersByTimeAsync(185_000);
+    expect(h.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-refresh', 'test-refresh', 'test-other-candidate', 'test-refresh',
+    ]);
+    expect(h.saved.session?.refreshToken).toBe('test-other-candidate');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250_000);
+    expect(h.request).toHaveBeenLastCalledWith('test-other-candidate', 'global');
+    expect(h.authClient.exchangeAccountMembership).not.toHaveBeenCalled();
+    h.saved.session = { version: 1, realm: 'global', refreshToken: 'test-refresh' };
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(h.authClient.exchangeAccountMembership).not.toHaveBeenCalled();
+    expect(h.deps.expireRuntimeAuth).toHaveBeenCalled();
   });
 
   it.each(['MEMBERSHIP_DISABLED', 'REFRESH_TOKEN_EXPIRED'] as const)('does not reinterpret the active owner\'s own %s as INVALID', async code => {
