@@ -46,10 +46,10 @@ export function useSessionSnooze(session: Session) {
       setSaving(false);
     }
   };
-  return { snooze, saving };
+  return session.pinnedAt == null ? { snooze, saving } : undefined;
 }
 
-export type SnoozeAction = ReturnType<typeof useSessionSnooze>;
+export type SnoozeAction = NonNullable<ReturnType<typeof useSessionSnooze>>;
 
 function SnoozeOptions({
   session,
