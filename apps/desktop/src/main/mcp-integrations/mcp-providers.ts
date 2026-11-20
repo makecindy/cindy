@@ -52,7 +52,7 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { t } from '../i18n.desktop.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface, resolveHelperSurfaceForTools } from './helperSurface.js';
+import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
@@ -1028,14 +1028,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
-        // 查不到会话行时给一个很短的等待窗口:远程控制新建会话时 agent 先起、
-        // 行后写，首份工具清单正好落在这个窗口里(#11671)。行始终不出现仍按
-        // 受限收口,并记一条日志说明原因(不含任何敏感细节)。
-        const surface = await resolveHelperSurfaceForTools(dbClient, sessionId, {
-          onRestricted: (reason) => createLogger('mcp/cindy_helper').warn(
-            'helper tool surface restricted', { sessionId, reason },
-          ),
-        });
+        const surface = await resolveHelperSurface(dbClient, sessionId);
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },
