@@ -21,6 +21,7 @@ import { addTab, closeTab, ensureHydrated, getBucket, setActiveTab, subscribe } 
 import { mergeSidebarWindowBack } from './mergeSidebarWindowBack';
 import { requestRightSidebarVisibility } from './sidebarCommands';
 import { setTabGroup, type TabGroupId } from '../tabGroups';
+import { hydrateSideChatState } from '../plugins/side-chat/state';
 
 export interface SideChatTabPlacement {
   groupId?: TabGroupId;
@@ -164,26 +165,37 @@ export function watchSideChatTabs(sessionId: string): () => void {
   return () => { disposed = true; off.forEach(unsubscribe => unsubscribe()); };
 }
 
+export function findLinkedSideChatTab(parentId: string, childId: string, deviceId: string | null) {
+  return getBucket(parentId).tabs.find(tab => {
+    if (tab.kind !== 'side-chat') return false;
+    const state = hydrateSideChatState(tab.state);
+    return state.sessionId === childId && state.deviceId === deviceId;
+  });
+}
+
 /** Return to the original parent's existing tab, or reopen that same task there. */
 export async function reopenLinkedSideChat(
   parentId: string, childId: string, deviceId: string | null, navigate: NavigateFunction,
 ): Promise<void> {
+  if (deviceId && isSharedTaskPeer(deviceId)) throw new Error('Side chat parent unavailable');
   const owner = getDataOwnerGeneration();
   const [parent] = await readSessionBatch([parentId], deviceId ?? undefined);
   if (!isDataOwnerGenerationCurrent(owner)) return;
-  if (!parent?.value || parent.value.status === 'deleted') throw new Error('Side chat parent unavailable');
+  if (parent?.value?.id !== parentId || parent.value.status === 'deleted' || parent.value.hiddenAt) {
+    throw new Error('Side chat parent unavailable');
+  }
   if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
     if (!isDataOwnerGenerationCurrent(owner)) return;
     await mergeSidebarWindowBack(parentId);
   }
-  await ensureHydrated(parentId);
   if (!isDataOwnerGenerationCurrent(owner)) return;
   if (deviceId) {
     remoteProjectsStore.pinSessionOrigin(deviceId, parentId);
     remoteProjectsStore.pinSessionOrigin(deviceId, childId);
   }
-  const existing = getBucket(parentId).tabs.find(tab => tab.kind === 'side-chat'
-    && (tab.state as { sessionId?: string } | null)?.sessionId === childId);
+  await ensureHydrated(parentId);
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  const existing = findLinkedSideChatTab(parentId, childId, deviceId);
   if (existing) await setActiveTab(parentId, existing.id);
   else await addTab(parentId, 'side-chat', { sessionId: childId, deviceId });
   if (!isDataOwnerGenerationCurrent(owner)) return;

@@ -23,6 +23,7 @@ const model = 'sidechat-orca-e2e-model';
 const providerId = 'sidechat-orca-e2e-fixture';
 const fakeKey = 'sidechat-orca-fixture-not-a-credential';
 const parentRequest = 'E2E parent request';
+const parentTitle = 'Side Chat Orca E2E parent — release checklist, account access recovery, onboarding and device connection acceptance criteria';
 const sideRequest = 'E2E follow-up request';
 const workerRequest = 'E2E worker request';
 const parentReply = 'E2E_FIXTURE_PARENT_REPLY';
@@ -194,7 +195,7 @@ async function captureAppearance(ui, evidenceDir, name) {
 
 async function exercise(ui, baseUrl, workdir, evidenceDir) {
   const { cli, evaluate, clickControl } = ui;
-  const setup = await evaluate(async ({ baseUrl, workdir, providerId, model, fakeKey, parentRequest }) => {
+  const setup = await evaluate(async ({ baseUrl, workdir, providerId, model, fakeKey, parentRequest, parentTitle }) => {
     const api = window.electronAPI;
     const provider = await api.maker.createCustomProvider({
       id: providerId, name: 'Side Chat Orca E2E Fixture', auth: { method: 'apiKey' },
@@ -206,7 +207,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
       codex: { model, providerId, effort: 'medium', fast: false },
     }));
     const parent = await api.localDb.sessions.create({
-      title: 'Side Chat Orca E2E parent', workingDir: workdir, workspaceKind: 'project',
+      title: parentTitle, workingDir: workdir, workspaceKind: 'project',
       agentKind: 'codex', model, providerId, permissionMode: 'ask', effort: 'medium',
     });
     location.hash = '#/cc-agent/' + parent.id;
@@ -214,7 +215,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
       agentKind: 'codex', workingDir: workdir, model, permissionMode: 'ask',
     }, { throwOnStartFailure: true });
     return { parentId: parent.id, accepted: result.accepted };
-  }, { baseUrl, workdir, providerId, model, fakeKey, parentRequest });
+  }, { baseUrl, workdir, providerId, model, fakeKey, parentRequest, parentTitle });
   assert.equal(setup.accepted, true, 'The real Codex adapter did not accept the fixture input');
   const { parentId } = setup;
   await until('completed parent response from the loopback fixture', () => evaluate(async (id, reply) => {
@@ -246,6 +247,8 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   const tabSelector = id => `[data-tab-pill="${id}"]`;
   const openCollaboration = () => clickControl('view collaboration', /button "(查看协同|View collaboration)"/);
   const returnToSideChat = () => clickControl('return to side chat', /button "(回到侧边追问|Back to side chat)"/);
+  const reopenSideChat = () => clickControl('reopen the closed side chat', /button "(重新打开侧边追问|Reopen side chat)"/);
+  const closeSidebar = () => clickControl('close the sidebar with its existing control', /button "(关闭侧栏|Close Sidebar)"/i);
   const readActiveSideChat = () => evaluate(async (id, childId) => {
     if (location.hash.split('?')[0] !== '#/cc-agent/' + id) return null;
     const tabs = await window.electronAPI.localDb.rightSidebarTabs.list({ sessionId: id });
@@ -300,6 +303,12 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
 
   await openCollaboration();
   await until('main view opens the original child ID', () => evaluate(id => location.hash.split('?')[0] === '#/cc-agent/' + id, side.id));
+  await until('origin and return are in the row below the header', () => evaluate(title => {
+    const row = document.querySelector('[data-testid="linked-side-chat-origin"]');
+    const header = document.querySelector('header');
+    return row?.querySelector('p')?.title.includes(title) && Boolean(row.querySelector('button'))
+      && !row.closest('header') && (!header || !header.textContent.includes('回到侧边追问'));
+  }, parentTitle));
   const readCollaboration = () => evaluate(async (leadId, reply) => {
     const api = window.electronAPI;
     if (location.hash.split('?')[0] !== '#/cc-agent/' + leadId) return null;
@@ -319,8 +328,19 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
     document.body.innerText.includes(reply) && [...document.querySelectorAll('.tiptap[contenteditable="true"]')]
       .some(editor => !editor.closest('aside') && editor.textContent.includes(draft)), sideReply, sidebarDraft));
   await captureAppearance(ui, evidenceDir, 'collaboration');
-  await clickControl('close the collaboration sidebar with its existing control', /button "(关闭侧栏|Close Sidebar)"/i);
+  await closeSidebar();
   await until('collaboration sidebar is collapsed', async () => !await readCollaboration());
+  const viewport = await evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await cli('set', 'viewport', '840', '760');
+  await until('narrow provenance row keeps its button visible and shortens the long source title', () => evaluate(title => {
+    const row = document.querySelector('[data-testid="linked-side-chat-origin"]');
+    const text = row?.querySelector('p');
+    const button = row?.querySelector('button');
+    return text?.title.includes(title) && text.scrollWidth > text.clientWidth
+      && button?.getBoundingClientRect().right <= innerWidth;
+  }, parentTitle));
+  await captureAppearance(ui, evidenceDir, 'narrow-origin');
+  await cli('set', 'viewport', String(viewport.width), String(viewport.height));
   await returnToSideChat();
   await until('return selects the existing side chat', async () => await readActiveSideChat() === side.tabId);
   await openCollaboration();
@@ -328,6 +348,12 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
 
   await returnToSideChat();
   await until('return before closing tab', async () => await readActiveSideChat() === side.tabId);
+  await closeSidebar();
+  await until('parent sidebar is collapsed', async () => !await readActiveSideChat());
+  await cli('click', rowSelector(side.id));
+  await until('full page opens from the left while its parent sidebar is collapsed', () => onRoute(side.id));
+  await returnToSideChat();
+  await until('return opens the collapsed parent sidebar and preserves its tab', async () => await readActiveSideChat() === side.tabId);
   await cli('click', `${tabSelector(side.tabId)} button[data-no-drag]`);
   await until('only the parent tab closes', () => evaluate(async (parentId, side, workerId) => {
     const api = window.electronAPI;
@@ -341,9 +367,18 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
 
   await cli('click', rowSelector(side.id));
   await until('independent task opens from task list', () => onRoute(side.id));
-  await returnToSideChat();
+  await until('closed side chat has a reopen action in the origin row', () => evaluate(() => {
+    const row = document.querySelector('[data-testid="linked-side-chat-origin"]');
+    return /^(重新打开侧边追问|Reopen side chat)$/.test(row?.querySelector('button')?.textContent.trim() ?? '');
+  }));
+  await captureAppearance(ui, evidenceDir, 'closed-origin');
+  await reopenSideChat();
   const reopenedTab = await until('explicit return reopens the same follow-up', readActiveSideChat);
   assert.notEqual(reopenedTab, side.tabId, 'The dismissed tab should be newly opened for the same task');
+  assert.equal(await evaluate(async (parent, child) => {
+    const { tabs } = await window.electronAPI.localDb.rightSidebarTabs.list({ sessionId: parent });
+    return tabs.filter(tab => tab.kind === 'side-chat' && tab.state.sessionId === child).length;
+  }, parentId, side.id), 1);
   await until('reopened editor still has the same draft', () => evaluate((tabId, draft) =>
     document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')
       ?.querySelector('.tiptap[contenteditable="true"]')?.textContent.includes(draft), reopenedTab, sidebarDraft));
@@ -381,7 +416,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   await returnToSideChat();
   await until('final preview remains on the re-enabled follow-up', async () => await readActiveSideChat() === reopenedTab);
   return { parentId, sideChatId: side.id, worker, restartedWorker, stayedOnParent: true, sharedDraft: true,
-    sidebarRevealedAgain: true, reopenedTab, openedAfterEnding: true };
+    sidebarRevealedAgain: true, reopenedTab, openedAfterEnding: true, narrowOrigin: true, returnedAfterParentCollapse: true };
 }
 
 const evidenceDir = await mkdtemp(path.join(tmpdir(), 'cindy-sidechat-orca-e2e-'));
