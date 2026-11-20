@@ -39,10 +39,11 @@ function HistoryHandoffSubject({ mode }: { mode: string }) {
   const rows = useMemo((): HistoryChatMessage[] => {
     const turn = (id: string): ChatMessage[] => [
       message(id, 'user', '查询 GitHub 任务。'),
+      ...(mode === 'history-steer' ? [{ ...message(`${id}-steer`, 'user', '也查看尚未完成的任务。'), delivery: 'steer' as const }] : []),
       { ...message(`${id}-call`, 'tool_use'), toolName: 'mcp__cindy__ghost_call', toolUseId: `${id}-call`,
-        toolInput: { ghost_id: 'cindy-github', namespace: null, tool: 'list_issues' }, replyToClientId: id },
+        toolInput: { ghost_id: 'cindy-github', namespace: null, tool: 'list_issues' }, replyToClientId: mode === 'history-steer' ? `${id}-steer` : id },
       { ...message(`${id}-result`, 'tool_result', '{"ok":true}'), toolUseId: `${id}-call` },
-      { ...message(`${id}-final`, 'assistant', '查询已完成。'), turnCompleted: true, replyToClientId: id },
+      { ...message(`${id}-final`, 'assistant', '查询已完成。'), turnCompleted: true, replyToClientId: mode === 'history-steer' ? `${id}-steer` : id },
     ];
     const prefix = mode === 'long-history' ? Array.from({ length: 1000 }, (_, index) => turn(`history-${index}`)).flat() : [];
     return [...prefix, ...turn('ask'), message('next', 'user', '继续讨论，不调用插件。')]
@@ -216,6 +217,6 @@ void mountPage({
       onChanged: subscription('ghostsChanged'),
     },
   }),
-  render: (ctx) => ['history-handoff', 'history-legacy', 'long-history'].includes(ctx.case)
+  render: (ctx) => ['history-handoff', 'history-legacy', 'history-steer', 'long-history'].includes(ctx.case)
     ? <HistoryHandoffSubject mode={ctx.case} /> : <Subject mode={ctx.case} />,
 });

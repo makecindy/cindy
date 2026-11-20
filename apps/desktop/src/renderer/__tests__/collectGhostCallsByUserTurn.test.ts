@@ -50,6 +50,33 @@ describe('plugin call ownership across history handoff', () => {
     expect(collectGhostCallsByUserTurn([user('new'), call('outside'), result], true).size).toBe(0);
   });
 
+  // The coordinator stamps accepted steering IDs onto later tool/terminal
+  // events. They belong to the same bubble as legacy unqualified steer calls.
+  it.each(['assistant', 'error'] as const)('maps explicit steering ownership and its %s terminal to the original turn', (role) => {
+    const oldTerminal: ChatMessage = {
+      clientId: 'old-terminal', role, content: 'done', replyToClientId: 'old-steer', turnCompleted: true,
+    };
+    const fresh = { ...call('new-steer'), clientId: 'new-call', toolUseId: 'new-call' };
+    const messages = [user('old'), user('old-steer', { delivery: 'steer' }), user('new'),
+      user('new-steer', { delivery: 'steer' }), call('old-steer'), result, fresh, oldTerminal];
+    for (const rows of [messages, JSON.parse(JSON.stringify(messages)) as ChatMessage[]]) {
+      const summary = collectGhostCallsByUserTurn(rows, true);
+      expect(summary.get('old')?.pendingGhostIds.size).toBe(0);
+      expect(summary.get('old')?.running).toBe(false);
+      expect(summary.get('new')?.running).toBe(true);
+      expect(summary.has('old-steer')).toBe(false);
+      expect(summary.has('new-steer')).toBe(false);
+      const sealed = [...rows, { ...oldTerminal, clientId: 'new-terminal', replyToClientId: 'new-steer' }];
+      expect(collectGhostCallsByUserTurn(sealed, true).get('new')?.running).toBe(false);
+    }
+  });
+
+  it('does not map an orphaned steer or one after a synthetic boundary to a previous human', () => {
+    for (const prefix of [[], [user('old'), user('trigger', { isSyntheticTrigger: true })]]) {
+      expect(collectGhostCallsByUserTurn([...prefix, user('steer', { delivery: 'steer' }), call('steer')], true).size).toBe(0);
+    }
+  });
+
   it.each(['assistant', 'error'] as const)('an old %s terminal cannot seal a newer turn', (role) => {
     const terminal: ChatMessage = {
       clientId: 'old-terminal', role, content: 'done', replyToClientId: 'old', turnCompleted: true,

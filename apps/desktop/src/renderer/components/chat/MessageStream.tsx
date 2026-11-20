@@ -831,12 +831,18 @@ export function collectGhostCallsByUserTurn(
   // Match the persisted tool-use identity, even when a hidden/empty result arrives
   // after another user message. This is the same settlement criterion as work logs.
   const results = new Set<string>();
-  const userClientIds = new Set<string>();
+  const userTurnOwners = new Map<string, string>();
+  let currentUserClientId: string | null = null;
   for (const m of messages) {
     if (m.role === 'tool_result' && m.toolUseId) results.add(m.toolUseId);
-    if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) userClientIds.add(m.clientId);
+    if (m.role === 'user') {
+      if (m.delivery !== 'steer') currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
+      // The host may attribute later output to an accepted steering message.
+      // It still annotates the same user turn, without claiming a new bubble.
+      if (currentUserClientId) userTurnOwners.set(m.clientId, currentUserClientId);
+    }
   }
-  let currentUserClientId: string | null = null;
+  currentUserClientId = null;
   for (const [index, m] of messages.entries()) {
     if (m.role === 'user' && m.delivery !== 'steer') {
       // A new autonomous run must not borrow the preceding human's bubble.
@@ -845,7 +851,7 @@ export function collectGhostCallsByUserTurn(
     }
     // An explicit owner outside this window is unknown, never the nearest user.
     const owner = m.replyToClientId
-      ? userClientIds.has(m.replyToClientId) ? m.replyToClientId : null
+      ? userTurnOwners.get(m.replyToClientId) ?? null
       : currentUserClientId;
     if (
       owner &&

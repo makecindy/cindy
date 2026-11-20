@@ -37,10 +37,11 @@ export default {
     interrupted: { about: 'Interrupted calls stop without a completion tick, including after history reload' },
     'history-handoff': { about: 'Real collapsed history projection cannot give an old plugin call to a newer user' },
     'history-legacy': { about: 'Legacy calls without explicit ownership use raw order during collapsed history handoff' },
+    'history-steer': { about: 'Explicit steering ownership retains the original user summary across history handoff and remount' },
     'long-history': { about: '4,005 history rows, virtualized scrolling, 50 text updates and history remount without inherited plugin markers' },
   },
   async check(page, ui) {
-    if (['history-handoff', 'history-legacy', 'long-history'].includes(ui.case)) {
+    if (['history-handoff', 'history-legacy', 'history-steer', 'long-history'].includes(ui.case)) {
       const next = page.locator('[data-message-client-id="next"]');
       await next.waitFor();
       assert.equal(await next.locator('.summon-seal-arc').count(), 0);
