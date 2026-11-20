@@ -12,6 +12,7 @@ import {
   parseOrcaPersistedMessage,
   readOrcaPersistedSource,
 } from '@/session/orcaCollab';
+import { projectOrcaQuestionRows } from '@/session/orcaQuestionRows';
 import { excludeOrcaWorkerSessions, selectVisibleDeviceSessions } from '@/session/mobileHome';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
@@ -261,6 +262,35 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
   });
 });
 
+it('routes a waiting Lead row to the unanswered Worker and restores its own destination after the reply', () => {
+  const lead = session({ id: 'lead', orcaRole: 'lead', deviceLinkDeviceId: 'mac' });
+  const worker = session({ id: 'w', orcaRole: 'worker', orcaLeadSessionId: lead.id, deviceLinkDeviceId: 'mac' });
+  const waiting = new Set([worker.id]);
+  const signals = {
+    getSessionLiveActivity: () => null,
+    getPendingInteractions: (id: string) => waiting.has(id) ? [{ request: { kind: 'ask_user_question' } }] : [],
+  };
+  const project = () => projectOrcaQuestionRows([worker, lead], signals);
+  expect(project().pendingCounts.get(lead.id)).toBe(1);
+  expect(project().workerTargets.get(lead.id)).toBe(worker);
+  waiting.add(lead.id);
+  expect(project().pendingCounts.get(lead.id)).toBe(2);
+  expect(project().workerTargets.has(lead.id)).toBe(false);
+  waiting.clear();
+  expect(project().pendingCounts.size).toBe(0);
+  expect(project().workerTargets.size).toBe(0);
+
+  const background = { ...worker, orcaHasPendingQuestion: true };
+  expect(projectOrcaQuestionRows([lead, background], signals).workerTargets.get(lead.id)).toBe(background);
+  const legacy = { ...worker, orcaLeadSessionId: undefined };
+  const recovered = projectOrcaQuestionRows([lead, legacy], {
+    getPendingInteractions: () => [],
+    getSessionLiveActivity: id => id === worker.id ? { sessionId: id, phase: 'needs-interaction', compactDetail: '' } : null,
+  });
+  expect(excludeOrcaWorkerSessions([lead, legacy], recovered.visibleWorkers)).toEqual([lead, legacy]);
+  expect(recovered.pendingCounts.get(worker.id)).toBe(1);
+});
+
 describe('excludeOrcaWorkerSessions', () => {
   it('hides worker sub-sessions but keeps lead and normal sessions', () => {
     const kept = excludeOrcaWorkerSessions([
@@ -347,7 +377,7 @@ describe('selectVisibleDeviceSessions', () => {
         useMemo: (compute: () => unknown) => compute(), selectVisibleDeviceSessions,
         buildRemoteSessionSections, summarizeRemoteSessionOverview,
         // The real detail sections now also consume alias metadata; worker filtering remains unchanged.
-        projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
+        visibleWorkerIds: new Set(), projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
         messagePreviewIndex: new Map(), pendingInteractionIndex: new Map(), scheduleIndex: new Map(),
         searchQuery: '', statusFilter: 'all', automationScopeKey: null,
         i18nInstance: i18n, t: i18n.t.bind(i18n),

@@ -51,7 +51,7 @@ ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消�
 Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次列表合计最多 512 KiB，超出预算的图标显示通用标志）与 `maker:refresh-plugin-engines`（请那台的
 插件重新上报模型，插件各自冷却），两者都进后台 invoke 档。变更推送 `maker:plugin-engines-changed` 仍只发本机窗口，控制端打开选择器时
 按需读取。旧被控端没有这两条准入 → `CHANNEL_NOT_ALLOWED`，控制端按「没有插件引擎」隐藏入口；旧控制端不调用。走既有 invoke 帧，
-自建中转无需改动。桌面控制端按账号和任务所属电脑共享目录，打开插件任务或模型选择器时读取，任务列表复用已有结果。
+自建中转无需改动。桌面控制端按账号和引擎所在电脑共享目录：任务列表存在该电脑的插件引擎任务或打开插件任务／模型选择器时共用一次 `maker:list-plugin-engines` 读取，断线保留已缓存图标、重连刷新、撤权或移除时驱逐（见 `usePluginEngines.ts`、`useDeviceLinkRemoteProjects.ts` 与 `pluginEngineVendorIcon.test.tsx`）。
 同引擎模型变更沿用 `maker:set-model`，按稳定设备归属发往被控端并使用该端的任务变更推送回显。引擎提供的模型标识在 256 字符
 以内原样缓存，超限项目不进入目录，展示名称另行限长。
 

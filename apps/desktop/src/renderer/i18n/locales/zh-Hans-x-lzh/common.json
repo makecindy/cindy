@@ -15123,6 +15123,7 @@
     },
     "backgroundActivity": {
       "status": "后台子差事方行，模型耗用未止…",
+      "pluginEngineStatus": "后台续作未辍…",
       "bashWorkStatus_one": "后台犹作（令 {{count}} 道）…",
       "bashServiceStatus_one": "后台常役方行（{{count}} 件）",
       "bashWorkStatus_other": "后台犹作（令 {{count}} 道）…",
@@ -15827,6 +15828,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 另立 SSH 差事。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察其连接，或另择可用之模型。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请览谬误详情，待 Harness 就绪再试。",
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
@@ -16090,9 +16092,15 @@
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所请，已自试",
+      "title": "Gemini 每分钟所入已达其限",
+      "exhausted": "已自试一次，仍受限。可稍后再试。",
+      "retryIn": "{{seconds}} 秒后自试"
+    },
     "subscriptionAccountError": {
-      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
-      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。",
+      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。",
       "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
       "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
@@ -16326,6 +16334,14 @@
       "remoteProviderUnsupported": "此供方不支持 SSH 远程会话，请易来源",
       "remoteNativeOauthUnavailable": "远程差事不可用 Claude 订阅，请择网关或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "此工作目录之 .claude 设置改易 Claude 之上游地址或验证方式，故此处不可用 Claude 订阅。请除此诸设置，或择网关或 API Key 模型",
+      "savedModel": {
+        "loading": "方连所择模型…",
+        "checkFailed": "未能察所择模型",
+        "engine": "所择引擎不可用，请为此务另择模型",
+        "source": "所择来源不可用，请为此务另择模型",
+        "model": "所择模型不可用，请为此务另择模型",
+        "thisTaskOnly": "所择模型仅用于此务"
+      },
       "deviceStillLoading": "远程设备犹方载，请稍候",
       "remoteDefaultsLoadFailed": "不能读远程设备之配置。请察连接，Cindy 方再试。",
       "branchChanged": "项目分支已为 {{branch}}，请核实后再发",
@@ -22100,7 +22116,8 @@
       "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
       "manage": "理模型组",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
-      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。"
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",

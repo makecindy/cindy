@@ -15132,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
+      "pluginEngineStatus": "백그라운드에서 계속 작업 중…",
       "bashWorkStatus_one": "백그라운드에서 작업 중(명령 {{count}}개)…",
       "bashServiceStatus_one": "백그라운드 서비스 실행 중({{count}}개)",
       "bashWorkStatus_other": "백그라운드에서 작업 중(명령 {{count}}개)…",
@@ -15836,6 +15837,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "현재 연결에서 이전 모델을 사용할 수 없어 모델을 전환하는 동안 컨텍스트를 압축하지 못했습니다.",
       "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
       "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
@@ -16090,9 +16092,15 @@
       "toggle": "“{{title}}” 회신 펼치기/접기",
       "openTask": "작업 열기"
     },
+    "geminiRateLimit": {
+      "retried": "Gemini의 권장 대기 시간 후 자동으로 재시도했습니다",
+      "title": "Gemini의 분당 입력 한도에 도달했습니다.",
+      "exhausted": "한 번 자동으로 재시도했지만 여전히 제한됩니다. 잠시 후 직접 재시도할 수 있습니다.",
+      "retryIn": "{{seconds}}초 후 자동 재시도"
+    },
     "subscriptionAccountError": {
-      "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
-      "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+      "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
+      "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
       "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
       "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
@@ -16326,6 +16334,14 @@
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
       "remoteNativeOauthUnavailable": "원격 작업에서는 Claude 구독을 사용할 수 없습니다. 게이트웨이 또는 API 키 모델을 선택하세요",
       "claudeSubscriptionWorkspaceOverride": "이 폴더의 .claude 설정이 Claude의 연결 대상이나 인증 방식을 변경하므로 여기서는 Claude 구독을 사용할 수 없습니다. 해당 설정을 제거하거나 게이트웨이 또는 API 키 모델을 선택하세요",
+      "savedModel": {
+        "loading": "선택한 모델에 연결하는 중…",
+        "checkFailed": "선택한 모델을 확인할 수 없습니다",
+        "engine": "선택한 엔진을 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "source": "선택한 소스를 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "model": "선택한 모델을 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "thisTaskOnly": "선택한 모델은 이 작업에만 적용됩니다"
+      },
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
       "branchChanged": "프로젝트의 현재 브랜치가 {{branch}}로 바뀌었어요. 확인한 후 다시 보내세요.",
@@ -22100,7 +22116,8 @@
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
-      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다."
+      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",

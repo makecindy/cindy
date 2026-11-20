@@ -623,10 +623,12 @@ describe('provider catalog realm reload', () => {
       expect(resolveAutomaticImSettings(IM_DEFAULT_SETTINGS, execution, { agentKind: 'codex' })?.agents.codex)
         .toMatchObject({ model: 'gpt-healthy', providerId: 'healthy' });
 
-      const display = await service.listProviders({ includeLastConfirmed: true });
-      expect(display.find(provider => provider.id === 'openai')).toMatchObject({
-        connected: true, models: { codex: [expect.objectContaining({ id: 'gpt-retained' })] },
-      });
+      for (const displayOptions of [{}, { picker: { scope: 'available' as const } }]) {
+        const display = await service.listProviders({ ...displayOptions, includeLastConfirmed: true });
+        expect(display.find(provider => provider.id === 'openai')).toMatchObject({
+          connected: true, models: { codex: [expect.objectContaining({ id: 'gpt-retained' })] },
+        });
+      }
     } finally {
       h.retainedOpenAiModels = null;
       h.pool = null;

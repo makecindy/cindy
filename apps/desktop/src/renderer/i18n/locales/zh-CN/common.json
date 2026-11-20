@@ -15132,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在后台继续工作…",
       "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
       "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
       "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",
@@ -15836,6 +15837,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "当前连接无法使用上一个模型，切换模型时的上下文压缩失败。",
       "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
       "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
@@ -16090,9 +16092,15 @@
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建议的时间自动重试",
+      "title": "Gemini 每分钟输入量已达上限",
+      "exhausted": "已自动重试一次，Gemini 仍受限。稍后可手动重试。",
+      "retryIn": "{{seconds}} 秒后自动重试"
+    },
     "subscriptionAccountError": {
-      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
-      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
       "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
@@ -16326,6 +16334,14 @@
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
+      "savedModel": {
+        "loading": "正在连接所选模型…",
+        "checkFailed": "未能检查所选模型",
+        "engine": "所选引擎不可用，请为本次任务选择模型",
+        "source": "所选来源不可用，请为本次任务选择模型",
+        "model": "所选模型不可用，请为本次任务选择模型",
+        "thisTaskOnly": "所选模型仅用于本次任务"
+      },
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
       "branchChanged": "项目当前分支已变成 {{branch}}，请确认后再发送",
@@ -22100,7 +22116,8 @@
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
-      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。"
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",

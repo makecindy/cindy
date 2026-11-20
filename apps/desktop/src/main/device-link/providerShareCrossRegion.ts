@@ -79,6 +79,7 @@ interface RegionState {
   /** 连续失败次数，用于退避重试(网络或对方区域暂时不可用时不让分享整段消失)。 */
   failures: number;
   loaded: boolean;
+  listConfirmed: boolean;
   /** Request start of the last successful authoritative list for this region. */
   viewAnchor: ViewAnchor | null;
   requestRevision: number;
@@ -442,7 +443,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
     noteHostOnline(rt, state, client, frame.src, true);
     const peer = parseProviderSharePeer(frame.src);
     const payload = frame.payload as { channel?: unknown };
-    if (peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
+    if (!state.listConfirmed || peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
     if (state.shares.some(share => share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId && share.status === 'active')) {
       rt.events.catalogChanged?.(`share:${peer.shareId}`);
     }
@@ -461,7 +462,8 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
 }
 
 function initialRegionState(region: Region, loaded = false): RegionState {
-  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0 };
+  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0,
+    listConfirmed: false };
 }
 
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
@@ -510,6 +512,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
+      state.listConfirmed = true;
       noteSharePermissions(previousShares, state.shares);
       state.loaded = true;
       if (shares.length === 0 || !credential) {
@@ -529,17 +532,20 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       rt.events.changed();
     } catch (error) {
       if (isCurrent()) {
+        const wasConfirmed = target.listConfirmed;
+        target.listConfirmed = false;
         log.warn('cross-region session refresh failed', { region, error: error instanceof Error ? error.message : String(error) });
         if (isAuthoritativeShareListDenial(error)) {
-          // An explicit refusal is not a pause. Retire only this region's
-          // directory and report a confirmed empty list so the next successful
-          // response can establish a new source.
+          // Retire this region's directory immediately. A refusal does not
+          // count as a successful membership response for preference cleanup.
           target.shares = [];
           target.loaded = true;
           target.client?.stop();
           target.client = null;
           target.credential = null;
           target.expiresAt = 0;
+          rt.events.changed();
+        } else if (wasConfirmed) {
           rt.events.changed();
         }
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
@@ -652,6 +658,22 @@ export function isCrossRegionReceivedComplete(): boolean {
 export function getConfirmedCrossRegionReceivedRegions(): Region[] {
   const rt = runtime;
   return rt && current(rt) ? [...rt.regions.values()].filter((state) => state.loaded).map((state) => state.region) : [];
+}
+
+/** Only a successful /session result can confirm absence for preference cleanup. */
+export function getMembershipConfirmedCrossRegionReceivedRegions(): Region[] {
+  const rt = runtime;
+  return rt && current(rt) ? [...rt.regions.values()].filter(state => state.loaded && state.listConfirmed).map(state => state.region) : [];
+}
+
+export function isCrossRegionShareListUnavailable(shareId: string): boolean {
+  return stateForShare(shareId)?.listConfirmed === false;
+}
+
+export function getUnavailableCrossRegionShareIds(): string[] {
+  const rt = runtime;
+  if (!rt || !current(rt)) return [];
+  return [...rt.regions.values()].flatMap(state => state.listConfirmed ? [] : state.shares.map(share => share.shareId));
 }
 
 /** Per-region display budgets from successful cross-region list requests.
@@ -812,7 +834,7 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
   }
 }
 
-export async function crossRegionLeave(memberId: string): Promise<boolean> {
+export async function crossRegionLeave(memberId: string, onLeft?: () => void): Promise<boolean> {
   const rt = runtime;
   if (!rt) return false;
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
@@ -833,6 +855,7 @@ export async function crossRegionLeave(memberId: string): Promise<boolean> {
       state.credential = null;
       state.expiresAt = 0;
     }
+    onLeft?.();
     rt.events.changed();
     await refreshRegion(rt, state.region);
     return true;
