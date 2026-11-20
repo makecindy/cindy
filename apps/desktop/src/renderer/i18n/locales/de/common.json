@@ -15864,6 +15864,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",

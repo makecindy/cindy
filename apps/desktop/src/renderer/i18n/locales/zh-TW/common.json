@@ -15835,6 +15835,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",

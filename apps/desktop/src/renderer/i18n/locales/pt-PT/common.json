@@ -16005,6 +16005,7 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode mudar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness de que precisa.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao mudar de modelo porque esta ligação não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
       "HARNESS_SWITCH_NOT_READY": "A mudança de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",

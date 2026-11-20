@@ -751,6 +751,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     prepareCodexExtraSpawnConfig: undefined, disableCodexPluginRuntime: undefined, onCodexLocalModelsListed: undefined,
     resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
     isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
+    getRejectedCodexDownshiftModel: undefined,
     getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
   } satisfies { [K in keyof AgentDeps]?: undefined };
   // codexModelResolvers exists exactly when there is a Codex binary (above).
