@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight } from 'lucide-react';
+import { UsersRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -186,7 +186,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
           onClick={() => navigate(sideChatTaskRoute(childId, state.deviceId), {
             state: { orcaWorkersReveal: { leadSessionId: childId } },
           })}>
-          {t('chat.sideChat.viewCollaboration')}<ArrowUpRight aria-hidden="true" size={14} />
+          <UsersRound aria-hidden="true" size={14} />{t('chat.sideChat.viewCollaboration')}
         </Button>}
       </div>
       <div className="min-h-0 flex-1">
