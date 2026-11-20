@@ -57,9 +57,14 @@ import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { findPluginEngine, usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
-import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
-import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
+} from '@/components/new-chat/PluginEnginesSection';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import {
@@ -2271,7 +2276,7 @@ function CCAgentSessionContent({
   );
   const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
-  const pluginEngine = pluginEngineTask ? findPluginEngine(pluginEngines, session?.providerId) : null;
+  // 任务自己的引擎(pluginEngine)在下面 selectableDevices 之后解析：引擎可能在自己的另一台电脑上。
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
@@ -2343,6 +2348,35 @@ function CCAgentSessionContent({
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
+  // 插件引擎在自己的另一台电脑上运行的任务(任务、文件与命令留在任务所在电脑，Agent 在那台)：引擎的名称、
+  // 图标、模型、思考深度与权限档都读那台的列表，任务所在电脑没装这个插件也不会显示成「插件已停用或卸载」。
+  // 别人分享的来源不提供插件引擎。Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
+  const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
+    && !isProviderShareAgentDeviceId(session.agentDeviceId) ? session.agentDeviceId : undefined;
+  const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
+  const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
+  const agentPluginCatalogue = useRemotePluginEngines(
+    pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
+      ? pluginEngineAgentDeviceId : undefined,
+    pluginEngineTask && viewVisible,
+  );
+  /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
+  const agentDevicePluginEngines = pluginEngineAgentDeviceId
+    ? (pluginEngineAgentIsThisComputer ? thisComputerPluginEngines : agentPluginCatalogue.engines)
+    : undefined;
+  const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
+    ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
+    : undefined;
+  const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
+    if (!pluginEngineTask) return null;
+    if (!pluginEngineAgentDeviceId) return findPluginEngine(pluginEngines, session?.providerId);
+    // 只认那台电脑的引擎：任务所在电脑装着同一个插件时，也不拿它的名称与模型顶替。
+    const engine = findPluginEngine(agentDevicePluginEngines ?? [], session?.providerId);
+    return engine
+      ? { ...engine, deviceId: pluginEngineAgentDeviceId, deviceName: deviceDisplayName(pluginEngineAgentDeviceId, pluginEngineAgentDeviceName) }
+      : null;
+  }, [pluginEngineTask, pluginEngineAgentDeviceId, pluginEngineAgentDeviceName, pluginEngines, agentDevicePluginEngines, session?.providerId]);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
   const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
   const controlledModelRoute = useModelRouteDevices({
@@ -2476,7 +2510,9 @@ function CCAgentSessionContent({
         ? (remoteDeviceId ?? null)
         : null;
   const usageCatalogue = taskAccountDeviceId
-    ? (taskAccountDeviceId === pluginEngineDeviceId ? remotePluginCatalogue.engines : null)
+    ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
+      ? agentDevicePluginEngines
+      : taskAccountDeviceId === pluginEngineDeviceId ? remotePluginCatalogue.engines : null)
     : localPluginEngines;
   const usageEngine = pluginUsageKey ? usageCatalogue?.find(engine => engine.key === pluginUsageKey) : undefined;
   const catalogDeviceId = modelCatalogKey(
@@ -3687,16 +3723,23 @@ function CCAgentSessionContent({
         ? {
             providerId: session.providerId ?? '',
             engine: pluginEngine,
-            engineName: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+            // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
+            engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
-            readCatalogue: readPluginEngineCatalogue,
-            catalogueUnknown: !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
+            // 引擎在另一台电脑上：打开模型菜单时重读那台的列表；就在这台时沿用本机的刷新。
+            readCatalogue: pluginEngineAgentDeviceId
+              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.read)
+              : readPluginEngineCatalogue,
+            catalogueUnknown: pluginEngineAgentDeviceId
+              ? agentDevicePluginEngines === null
+              : !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, readPluginEngineCatalogue,
-      pluginEngineDeviceId, remotePluginCatalogue.engines, t],
+    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+      pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+      agentPluginCatalogue.read, agentDevicePluginEngines, t],
   );
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
@@ -3710,7 +3753,8 @@ function CCAgentSessionContent({
     const switchTo = () => api.switchSessionAgent(
       sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
     try {
-      if (pluginEngineTask && selection.providerId === session.providerId) {
+      if (pluginEngineTask && selection.providerId === session.providerId
+        && (selection.deviceId ?? null) === (pluginEngineAgentDeviceId ?? null)) {
         // 选回当前引擎 = 撤销已登记的切换(主进程按同引擎处理，只清意图)，再按普通换模型处理。
         let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
@@ -3741,7 +3785,13 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngines, handlePluginEngineModelSelect, t]);
+    pluginEngineTask, pluginEngineAgentDeviceId, pluginEngines, handlePluginEngineModelSelect, t]);
+  // 任务自己的引擎在另一台电脑上：打开选择器时任务所在电脑与那台电脑的列表各读一次。引用必须稳定——
+  // 选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
+  const readTaskAndAgentPluginEngines = useCallback(() => {
+    readPluginEngineCatalogue?.();
+    agentPluginCatalogue.read();
+  }, [readPluginEngineCatalogue, agentPluginCatalogue.read]);
   // 普通任务的选择器列出任务所属电脑的引擎：当前选中的是待切到的引擎，或任务自己的引擎；
   // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
@@ -3756,18 +3806,31 @@ function CCAgentSessionContent({
       : pluginEngineTask && !agentSwitchIntent && session.providerId
         ? {
             providerId: session.providerId,
+            ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
           }
         : null;
+    // 任务自己的引擎在另一台电脑上：把它列在任务所在电脑的引擎之后，同一引擎内照常换模型。任务所在电脑
+    // 装着同一个插件时那一项先不列：主进程按引擎标识把它当成当前引擎，点它并不会把 Agent 换回这台。
+    // 别的电脑上的其他引擎不在任务里列出(任务中换到另一台电脑的插件引擎还不支持)。
+    const engines: readonly PluginEngineChoice[] = pluginEngineAgentDeviceId
+      ? [
+          ...pluginEngines.filter((engine) => engine.providerId !== session.providerId),
+          ...(pluginEngine ? [pluginEngine] : []),
+        ]
+      : pluginEngines;
     return {
-      engines: pluginEngines,
+      engines,
       active,
       onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
-      readCatalogue: readPluginEngineCatalogue,
+      readCatalogue: pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer
+        ? readTaskAndAgentPluginEngines
+        : readPluginEngineCatalogue,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, pluginEngines, session, pluginEngineSwitchIntent,
-    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue]);
+    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue,
+    pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer, pluginEngine, readTaskAndAgentPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
