@@ -10,6 +10,12 @@ import { createPlatformClientBridge } from './platform/client-bridge.ts';
 import { createHostPlatformRpc } from '@cindy/maker-shared/host-platform-rpc';
 
 import { createHostServer } from './server.mjs';
+import { publishHostEndpoint, readHostProcessStatus } from './control.mjs';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { createOwnerBoundaryStop, runOwnerBoundary } from './agent/owner-boundary.ts';
+import { markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 const TOKEN = 'test-token-value';
 
@@ -103,6 +109,31 @@ test('health is public while task data requires the profile bearer', async (t) =
   assert.equal((await request('/sessions', { headers: { authorization: 'Bearer wrong' } })).status, 401);
 });
 
+// §3.2 integration, release table §5: the CLI reads the startup census through
+// the real Host endpoint. Pairing a browser must not disclose the install IDs.
+test('Host status carries the legacy plugin census without exposing it to paired browsers', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-status-legacy-'));
+  const webAuth = createWebAuth();
+  const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
+  const report = { count: 1, installIds: ['legacy-fixture'] };
+  const instanceId = 'status-fixture';
+  const server = createHostServer({ token: TOKEN, instanceId, webAuth,
+    probe: () => ({ status: 'ok', clientProtocol: 1, pid: process.pid, instanceId }),
+    legacyPluginApprovals: () => report });
+  let removeEndpoint;
+  t.after(() => { removeEndpoint?.(); server.close(); fs.rmSync(profile, { recursive: true, force: true }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  fs.writeFileSync(path.join(profile, 'host-api-token'), TOKEN);
+  removeEndpoint = publishHostEndpoint(profile, baseUrl, instanceId);
+  assert.deepEqual((await readHostProcessStatus(profile)).legacyPluginApprovals, report);
+  for (const headers of [{}, { cookie }, { authorization: `Bearer ${TOKEN}`, origin: baseUrl }]) {
+    const response = await fetch(`${baseUrl}/health`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal(Object.hasOwn(await response.json(), 'legacyPluginApprovals'), false);
+  }
+});
+
 test('model-access retry performs synchronization and Codex route reads the actual runtime', async t => {
   let retries = 0;
   const ready = { state: 'ok', source: 'server', endpoint: 'https://fixture.invalid', accountTier: null };
@@ -130,7 +161,6 @@ test('plugin confirmation replies use the authenticated controller, never a call
     resolvePluginConfirmation: (caller, kind, requestId, confirmed) => {
       replies.push({ caller, kind, requestId, confirmed }); return caller === authenticated;
     },
-    requestPluginTaskApproval: async (id, capability) => ({ granted: id === 'demo' && capability === 'host-tools:terminal' }),
   });
   const body = JSON.stringify({ requestId: 'pending', confirmed: true, caller: 'web:forged' });
   const headers = { cookie, 'content-type': 'application/json' };
@@ -140,8 +170,9 @@ test('plugin confirmation replies use the authenticated controller, never a call
   assert.equal((await request('/api/ghosts/confirm/resolve', { method: 'POST', headers,
     body: JSON.stringify({ requestId: 'pending', confirmed: 'yes' }) })).status, 400);
   assert.equal(replies.length, 1);
-  assert.deepEqual((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
-    body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).body, { granted: true });
+  // Installed declarations do not expose a supplementary approval endpoint.
+  assert.equal((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
+    body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).status, 404);
 });
 
 test('managed stop requires the profile bearer and the current instance, never a browser cookie', async (t) => {
@@ -250,6 +281,72 @@ test('expired browser sessions release only their own authenticated controller',
 
 // Account teardown must not close storage underneath another request or accept
 // more private work while two clients are concurrently signing out.
+// 测试价值
+// - 生产入口：server.mjs 的 HTTP 退出登录（POST /logout），配 main.ts 同样的接线：beginOwnerBoundaryStop 是
+//   createOwnerBoundaryStop 的 begin，logout 经 runOwnerBoundary 拆运行时；回合结束写入用真实的 markSessionTurnEnded。
+// - 规则：放行表第五节“甲：账号边界停止提前置位”与 agent/owner-boundary.ts 的不变式：begin 在关平台客户端之前；
+//   begin 之后必须到达 dispose，压制必须释放。
+// - 现有覆盖缺口：取消挂起的登录被拒、或关平台客户端同步抛错时，不调 deps.logout（停止态的输入运行时不会被重建，
+//   之后每次发送都被拒），或连 release 都不调（之后所有回合都不写结束时间）；撤销网页会话同步抛错时，连带跳过关平台
+//   客户端与取消挂起的登录（进行中的登录可能在退出之后才完成），前置步骤的错误也没有任何日志。
+// - 规则补充：前置三步各自执行，一步失败不跳过后面的步骤（同 runOwnerBoundary）；每步失败记一条 warn，只带步骤名与
+//   错误码或 error.name，不带 message 原文。
+// - 最小失败输入：一次退出登录，前置的一步失败。
+// - tier：unit（真实 HTTP 回环与临时 SQLite，无真实等待）。
+for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws', 'webAuth.clear throws']) {
+  test(`logout, when ${failure}: the stop begins before the platform client closes, every other step still runs, the logout still reaches dispose, and the stop is released`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-logout-boundary-'));
+    const sqlite = new Database(path.join(root, 'markers.sqlite'));
+    sqlite.exec('CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER); INSERT INTO sessions(id) VALUES (\'after\')');
+    setCurrentDbClient({ drizzle: drizzle(sqlite) }, 'logout-boundary-test');
+    t.after(() => { clearCurrentDbClient(); sqlite.close(); fs.rmSync(root, { recursive: true, force: true }); });
+    const order = [];
+    let stopping = false;
+    const boundary = createOwnerBoundaryStop({ beginStop: () => { stopping = true; order.push('begin'); } });
+    const webAuth = createWebAuth();
+    const clear = webAuth.clear;
+    webAuth.clear = () => {
+      clear();
+      if (failure === 'webAuth.clear throws') throw new Error('revoke failed: secret-detail');
+    };
+    let cancels = 0;
+    const warnings = [];
+    const request = await withServer(t, {
+      webAuth,
+      serverLog: { warn: (message, fields) => warnings.push({ message, fields }) },
+      beginOwnerBoundaryStop: () => boundary.begin(),
+      platformClient: () => ({ close: () => {
+        order.push('close');
+        if (failure === 'platformClient.close throws') throw new Error('platform close failed: secret-detail');
+      } }),
+      cancelPendingAuth: async () => {
+        cancels++;
+        if (failure === 'cancelPendingAuth rejects') throw new Error('login cancel failed: secret-detail');
+      },
+      // As main.ts: the logout's own boundary; its dispose replaces the stopped input runtime with a fresh one.
+      logout: async () => {
+        const { errors } = await runOwnerBoundary(boundary, { dispose: async () => { order.push('dispose'); stopping = false; } });
+        if (errors.length) throw errors[0];
+        return { signedOut: true };
+      },
+    });
+    const response = await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.signedOut, true, 'signed out cleanly');
+    assert.deepEqual(order, ['begin', 'close', 'begin', 'dispose']);
+    assert.equal(cancels, 1, 'the pending sign-in was cancelled');
+    const step = { 'cancelPendingAuth rejects': 'cancel pending sign-in', 'platformClient.close throws': 'close platform client',
+      'webAuth.clear throws': 'revoke web sessions' }[failure];
+    assert.deepEqual(warnings.map(w => w.fields), [{ step, error: 'Error' }], 'one warning, with the step and the error name');
+    assert.ok(!JSON.stringify(warnings).includes('secret-detail'), 'no error message in the log');
+    assert.equal(stopping, false, 'the stopped input runtime was replaced');
+    // The suppression is released: the next turn's end is written.
+    markSessionTurnEnded('after');
+    await drainSessionActiveTurnWrites('after');
+    assert.equal(typeof sqlite.prepare('SELECT last_turn_ended_at AS endedAt FROM sessions WHERE id = ?').get('after').endedAt, 'number');
+  });
+}
+
 test('logout drains owner requests, revokes streams and serializes concurrent callers', async (t) => {
   let enter;
   let release;
@@ -347,6 +444,33 @@ test('unknown routes and internal failures stay JSON', async (t) => {
   assert.equal(failed.body.message, 'storage offline');
 });
 
+// Rule: a typed error from an /api entry answers with the shared table's status, as the IPC route
+// (typed-error.mjs); the message stays the whole `[CODE] message`, which the web client reads the
+// code from. Gap: every failure here answered 500, a refused model change included. Only an exactly
+// typed error in the table changes; a code mismatch, a code outside the table or a plain error stay 500.
+test('typed errors from /api entries answer with their table status; anything else stays 500', async (t) => {
+  const typed = (code, text = `[${code}] refused`) => Object.assign(new Error(text), { code });
+  let failure;
+  const request = await withServer(t, { updateSession: () => { throw failure; } });
+  const call = () => request('/api/sessions/update', { method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 's', patch: { model: 'small' } }) });
+  for (const [code, status] of [['MODEL_WINDOW_PROTECTION_UNAVAILABLE', 409], ['PRECONDITION_FAILED', 409],
+    ['INVALID_PARAMS', 400], ['UNSUPPORTED_CAPABILITY', 501]]) {
+    failure = typed(code);
+    const answer = await call();
+    assert.equal(answer.status, status, code);
+    assert.deepEqual(answer.body, { error: code, message: `[${code}] refused` });
+  }
+  for (const untyped of [typed('NOT_IN_TABLE'), typed('INVALID_PARAMS', '[NOT_FOUND] mismatch'),
+    new Error('[INVALID_PARAMS] no code property')]) {
+    failure = untyped;
+    const answer = await call();
+    assert.equal(answer.status, 500, untyped.message);
+    assert.deepEqual(answer.body, { error: 'internal_error', message: untyped.message });
+  }
+});
+
 // Only an Error's message is part of the client contract. Any other thrown value
 // may stringify to a stack or an internal path, so no error body may echo it.
 test('thrown values that are not errors are never serialised to the client', async (t) => {
@@ -364,10 +488,40 @@ test('thrown values that are not errors are never serialised to the client', asy
   assert.deepEqual(capabilities.body, { error: 'agent_not_registered', message: 'Unexpected error' });
 });
 
+// The desktop's set-effort, set-fast-mode, set-thinking-enabled, set-permission-mode and set-plan-mode
+// reach their Host entries with the IPC arguments the web client passes (shim.js), and answer what the
+// entry returns.
+test('effort, Fast mode, thinking, permission and Plan routes pass the desktop IPC arguments to their entries', async (t) => {
+  const calls = [];
+  const request = await withServer(t, {
+    setSessionEffort: (...args) => { calls.push(['effort', ...args]); return { deferred: true, superseded: false, pendingUntilSend: true }; },
+    setSessionFastMode: (...args) => { calls.push(['fast', ...args]); return undefined; },
+    setSessionThinkingEnabled: (...args) => { calls.push(['thinking', ...args]); return undefined; },
+    setSessionPermissionMode: (...args) => { calls.push(['permission', ...args]); return true; },
+    setSessionPlanMode: (...args) => { calls.push(['plan', ...args]); return undefined; },
+  });
+  const headers = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const post = (path, body) => request(path, { method: 'POST', headers, body: JSON.stringify(body) });
+  const effort = await post('/api/sessions/set-effort', { sessionId: 's1', effort: 'low' });
+  assert.equal(effort.status, 200);
+  assert.deepEqual(effort.body, { deferred: true, superseded: false, pendingUntilSend: true });
+  assert.equal((await post('/api/sessions/set-fast-mode', { sessionId: 's1', fastMode: 'ultrafast' })).status, 200);
+  assert.equal((await post('/api/sessions/set-thinking-enabled', { sessionId: 's1', enabled: false })).status, 200);
+  const permission = await post('/api/sessions/set-permission-mode', { sessionId: 's1', mode: 'auto' });
+  assert.equal(permission.status, 200);
+  assert.equal(permission.body, true);
+  assert.equal((await post('/api/sessions/set-plan-mode', { sessionId: 's1', enabled: true })).status, 200);
+  assert.deepEqual(calls, [['effort', 's1', 'low'], ['fast', 's1', 'ultrafast'], ['thinking', 's1', false],
+    ['permission', 's1', 'auto'], ['plan', 's1', true]]);
+});
+
 test('cross-engine switch returns a deferred intent and exposes it for the renderer', async (t) => {
   let intent = null;
+  let forwarded = null;
   const request = await withServer(t, {
-    switchSessionAgent: (sessionId, targetAgentKind, model, providerId) => {
+    switchSessionAgent: (...args) => {
+      forwarded = args;
+      const [, targetAgentKind, model, providerId] = args;
       intent = { targetAgentKind, model, providerId };
       return { switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true };
     },
@@ -384,9 +538,13 @@ test('cross-engine switch returns a deferred intent and exposes it for the rende
       model: 'group/deepseek',
       providerId: 'magpie-debian',
       effort: 'high',
+      options: { confirmedContextWindow: 128_000 },
+      thinking: false,
     }),
   });
   assert.equal(switched.status, 200);
+  // The desktop IPC's arguments reach the entry, including its options and the thinking choice.
+  assert.deepEqual(forwarded, ['s1', 'pi', 'group/deepseek', 'magpie-debian', 'high', undefined, { confirmedContextWindow: 128_000 }, false]);
   assert.equal(switched.body.deferred, true);
   assert.equal(switched.body.switched, false);
   assert.equal(switched.body.agentKind, 'pi');
@@ -428,6 +586,30 @@ test('browser pairing gates boot data, cookies and API access', async (t) => {
   assert.equal((await request('/sessions', { headers: { host: 'evil.example', authorization: `Bearer ${TOKEN}` } })).status, 403);
   await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
   assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 401);
+});
+
+// Integration: the task plugin settings endpoint has a trusted-renderer
+// contract. A paired browser has an owner cookie but no desktop capability.
+test('task plugin settings require the pinned desktop client and obey the profile hold', async t => {
+  const calls = [];
+  let held = false;
+  const auth = createWebAuth();
+  const cookie = `cindy_host_web=${auth.exchange(auth.pair())}`;
+  const request = await withServer(t, { webAuth: auth, instanceId: 'live',
+    runtimePluginSettings: (id, settings) => { calls.push([id, settings]); return settings ?? {}; },
+    profileHold: () => held ? 'HOST_PROFILE_IN_USE_BY_DESKTOP: fixture hold' : null,
+  });
+  const invoke = (headers, settings) => request('/api/runtime-plugins',
+    { method: 'POST', headers, body: JSON.stringify({ sessionId: 'task', value: settings }) });
+  const trusted = { authorization: `Bearer ${TOKEN}`, 'x-cindy-host-instance': 'live' };
+  assert.equal((await invoke({ cookie })).status, 403);
+  assert.equal((await invoke({ authorization: trusted.authorization })).status, 403);
+  assert.equal((await invoke(trusted)).status, 200);
+  assert.equal((await invoke(trusted, {})).status, 200);
+  held = true;
+  assert.equal((await invoke(trusted)).status, 409);
+  assert.equal((await invoke(trusted, {})).status, 409);
+  assert.deepEqual(calls, [['task', undefined], ['task', {}]]);
 });
 
 test('expired pairing codes and browser sessions cannot authorize a client', () => {
@@ -505,3 +687,26 @@ for (const boundary of ['logout', 'expired-owner', 'stop']) {
     assert.equal(bridge.status().waiting, 0);
   });
 }
+
+// 测试价值
+// - 生产入口：server.mjs 的 createHostServer（窗口与网页端的 owner 请求都经它）。
+// - 规则：并存方案 A 后续（审核方 2026-11-17 定）。Host 因桌面占用而启动被拒时，owner 请求的 409 要带原因码和一句
+//   能说清原因与做法的话，客户端据此显示人话，不再是笼统的 "not ready"；Host 说不出原因时只有 `error`，
+//   旧客户端照旧。
+// - 现有覆盖缺口：之前 409 只有 `{ error: 'owner_runtime_unavailable' }`。
+// - 最小失败输入：未就绪的 Host 收到一次 owner 请求。tier：unit（本机回环 HTTP）。
+test('a refused owner request says why when the Host knows, and stays a bare error otherwise', async t => {
+  const reason = { reason: 'HOST_PROFILE_IN_USE_BY_DESKTOP', message: 'Quit the desktop app, then restart the Host.' };
+  const ask = async ownerUnavailableReason => {
+    const server = createHostServer({ token: TOKEN, instanceId: 'fixture-host', probe: () => ({}), isOwnerReady: () => false,
+      ...(ownerUnavailableReason ? { ownerUnavailableReason } : {}) });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => server.close());
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/sessions/list`, {
+      method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: '{}' });
+    return { status: response.status, body: await response.json() };
+  };
+  assert.deepEqual(await ask(() => reason), { status: 409, body: { error: 'owner_runtime_unavailable', ...reason } });
+  assert.deepEqual(await ask(() => null), { status: 409, body: { error: 'owner_runtime_unavailable' } });
+  assert.deepEqual(await ask(undefined), { status: 409, body: { error: 'owner_runtime_unavailable' } });
+});

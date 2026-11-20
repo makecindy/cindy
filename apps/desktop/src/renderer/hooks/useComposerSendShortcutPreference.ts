@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { getVoiceInputSettings } from './useVoiceInputSettings';
+import type { ComposerFollowUpBehavior } from './useComposerFollowUpPreference';
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
 import { getComposerModifierShortcutLabel, hasComposerModifier } from '@/voice-input/composerShortcut';
 
@@ -39,11 +40,26 @@ function parsePreference(raw: string | null): ComposerSendShortcutPreference | n
  * The resolver deliberately does not perform any side effect. Callers can
  * therefore share the same preference semantics while keeping their own
  * event-target and delivery plumbing.
+ *
+ * The send shortcut only decides which key sends. While a turn runs, the
+ * sending key delivers `followUpBehavior` (queue or steer); when idle it is an
+ * ordinary send. Composers that do not expose the preference omit it and keep
+ * the legacy mapping: Enter queues, modifier+Enter in Enter mode steers.
+ *
+ * `alternateOnModifier` is for composers that offer both modes for one message
+ * (the send button's delivery tip): with Enter as the send key, modifier+Enter
+ * sends this message the other way. When modifier+Enter is itself the send key
+ * there is no second key, so the option has no effect.
  */
 export function resolveComposerEnterIntent(
   event: ComposerEnterEvent,
   preference: ComposerSendShortcutPreference,
-  options: { turnRunning: boolean; platform: string | undefined },
+  options: {
+    turnRunning: boolean;
+    platform: string | undefined;
+    followUpBehavior?: ComposerFollowUpBehavior;
+    alternateOnModifier?: boolean;
+  },
 ): ComposerEnterIntent {
   if (event.key !== 'Enter' || event.shiftKey || event.altKey) return null;
   if (event.isComposing) return 'native';
@@ -54,12 +70,19 @@ export function resolveComposerEnterIntent(
     return isSendShortcut ? 'ignore' : 'native';
   }
 
+  const { followUpBehavior } = options;
+  // Idle sends are ordinary sends; queue/steer only differ while a turn runs.
+  const deliver = (mode: ComposerFollowUpBehavior) => (options.turnRunning ? mode : 'queue');
+
   if (preference === 'modifier-enter') {
-    return hasModifier ? 'queue' : 'native';
+    return hasModifier ? deliver(followUpBehavior ?? 'queue') : 'native';
   }
 
-  if (!hasModifier) return 'queue';
-  return options.turnRunning ? 'steer' : 'queue';
+  if (followUpBehavior === undefined) return deliver(hasModifier ? 'steer' : 'queue');
+  if (hasModifier && options.alternateOnModifier) {
+    return deliver(followUpBehavior === 'steer' ? 'queue' : 'steer');
+  }
+  return deliver(followUpBehavior);
 }
 
 /** Module-level memory is the synchronous source of truth for event handlers. */

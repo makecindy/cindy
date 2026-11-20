@@ -12,21 +12,28 @@
  *  - 跳过短路: 原文件 ≤ skipUnderBytes (默认 500KB) 直接返回原 path,不进队列。
  *  - 并发上限: 默认 2 个并发 (semaphore), 给 libuv 池其他 IO 留余量。
  *  - 软超时: 单图 5s 没完直接放弃, 降级用原图 (log warn)。
- *  - 缓存键: sha256(absPath + mtime + size + 'v1')。同一张图反复 @ 引用零成本;
- *    版本号 v1 留作未来策略变更时强制刷缓存。
+ *  - 缓存键: 原图内容 sha256 + 完整编码参数 + sharp/libvips 版本；同一原图和
+ *    参数始终得到同一字节，路径或 mtime 变化不会制造重复缓存。
  *  - 缓存目录: os.tmpdir() 下, 全局共享 (跨 session 复用 — 同一张飞书 / art 图
  *    在多个 session 里被引用, 只缩一次)。
  *  - LRU: 全局 200MB 上限, 每次 write 后异步 sweep, 不阻塞 send。
- *  - GIF 等 sharp 不支持的格式 / 解码失败 / 任何异常 → 安全降级返回原 path。
+ *  - PNG/JPEG 保持原格式并去元数据；WebP/GIF 或不支持格式、解码失败、任何异常
+ *    → 安全降级返回原 path。
  *
  * 不知道 sessionId, 也不需要知道 — content-hash dedup 已经把磁盘占用绑死,
  * session-tied 清理反而会破坏跨 session 缓存命中。
  */
 
-import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  compressImageBuffer,
+  detectSupportedImageMime,
+  imageCompressionCacheKey,
+  rememberCompressedImage,
+} from './image-compressor.js';
 
 // sharp 是可选 peerDep。host 没装时 import 会失败,我们整体降级为 noop
 // (toClaudeSdkContent / toAppServerInput 仍能工作,只是不缩图)。
@@ -39,10 +46,7 @@ function loadSharp(): SharpModule | null {
   try {
     // 用 require 而非 import 是为了在 sharp 装不上的环境(如纯 type-check 跑测试)
     // 不让顶层 import 把整个模块 boom 掉。
-    const req: NodeJS.Require =
-      typeof require !== 'undefined'
-        ? require
-        : (eval('require') as NodeJS.Require);
+    const req = createRequire(import.meta.url);
     sharpInstance = req('sharp') as SharpModule;
   } catch {
     sharpInstance = null;
@@ -58,8 +62,6 @@ export interface ImageResizerLogger {
 export interface ImageResizerConfig {
   /** 长边像素上限。默认 1568 (Claude vision 推荐值)。 */
   maxEdgePx?: number;
-  /** 输出 WebP 质量 0-100。默认 85。 */
-  webpQuality?: number;
   /** 原图字节 ≤ 此阈值直接跳过, 不缩。默认 500_000 (500KB)。 */
   skipUnderBytes?: number;
   /** 缓存根目录。默认 os.tmpdir()/maker-core-image-resize。 */
@@ -75,13 +77,19 @@ export interface ImageResizerConfig {
 
 const DEFAULTS = {
   maxEdgePx: 1568,
-  webpQuality: 85,
   skipUnderBytes: 500_000,
   cacheLimitBytes: 200 * 1024 * 1024,
   concurrency: 2,
   timeoutMs: 5000,
-  cacheVersion: 'v1',
 };
+
+function mimeFromPath(absPath: string): string {
+  const lower = absPath.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  return 'image/png';
+}
 
 const VALIDATION_MAX_INPUT_PIXELS = 100_000_000;
 
@@ -100,7 +108,6 @@ export class ImageResizer {
   constructor(cfg: ImageResizerConfig = {}) {
     this.cfg = {
       maxEdgePx: cfg.maxEdgePx ?? DEFAULTS.maxEdgePx,
-      webpQuality: cfg.webpQuality ?? DEFAULTS.webpQuality,
       skipUnderBytes: cfg.skipUnderBytes ?? DEFAULTS.skipUnderBytes,
       cacheDir:
         cfg.cacheDir ?? path.join(os.tmpdir(), 'maker-core-image-resize'),
@@ -138,6 +145,7 @@ export class ImageResizer {
   async process(absPath: string): Promise<string> {
     if (!(await this.cacheDirReady)) return absPath;
     if (!absPath || typeof absPath !== 'string') return absPath;
+    if (path.dirname(absPath) === this.cfg.cacheDir) return absPath;
 
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
@@ -157,29 +165,46 @@ export class ImageResizer {
       return absPath;
     }
 
-    const key = this.computeCacheKey(absPath, stat.mtimeMs, stat.size);
-    const cachedPath = path.join(this.cfg.cacheDir, `${key}.webp`);
-
-    // 命中缓存 → 直接返回 (touch atime 让 LRU 把它判为最近用过)
-    try {
-      const cached = await fs.lstat(cachedPath);
-      if (!cached.isFile() || cached.isSymbolicLink()) throw new Error('unsafe cache entry');
-      await fs.chmod(cachedPath, 0o600);
-      this.touchAtime(cachedPath).catch(() => undefined);
-      return cachedPath;
-    } catch {
-      // miss, fall through
-    }
-
-    // 同一张图并发请求合并
-    const existing = this.inflight.get(key);
+    // Coalesce the same file version before reading it. The disk cache still
+    // uses the source content hash, computed only after acquiring a slot.
+    const inflightKey = JSON.stringify([absPath, stat.mtimeMs, stat.size]);
+    const existing = this.inflight.get(inflightKey);
     if (existing) return existing;
 
-    const task = this.runResize(absPath, cachedPath, sharp).finally(() => {
-      this.inflight.delete(key);
-    });
-    this.inflight.set(key, task);
+    const task = this.runResize(absPath, inflightKey);
+    this.inflight.set(inflightKey, task);
     return task;
+  }
+
+  private async readAndResize(absPath: string): Promise<string> {
+    let source: Buffer;
+    try {
+      source = await fs.readFile(absPath);
+    } catch {
+      return absPath;
+    }
+    const mimeType = detectSupportedImageMime(source) ?? mimeFromPath(absPath);
+    const key = imageCompressionCacheKey(source, {
+      mimeType,
+      budget: { maxEdgePx: this.cfg.maxEdgePx },
+    });
+
+    // 命中缓存 → 直接返回 (touch atime 让 LRU 把它判为最近用过)
+    for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
+      const cachedPath = path.join(this.cfg.cacheDir, `${key}${ext}`);
+      try {
+        const cached = await fs.lstat(cachedPath);
+        if (!cached.isFile() || cached.isSymbolicLink()) throw new Error('unsafe cache entry');
+        rememberCompressedImage(await fs.readFile(cachedPath));
+        await fs.chmod(cachedPath, 0o600);
+        this.touchAtime(cachedPath).catch(() => undefined);
+        return cachedPath;
+      } catch {
+        // miss, fall through
+      }
+    }
+
+    return this.doResize(absPath, source, key);
   }
 
   /**
@@ -246,53 +271,57 @@ export class ImageResizer {
   /** 内部: 跑实际的 resize, 含并发闸门 + 超时 + 错误降级。 */
   private async runResize(
     absPath: string,
-    cachedPath: string,
-    sharp: SharpModule,
+    inflightKey: string,
   ): Promise<string> {
-    return this.acquireSlot(async () => {
-      const work = this.doResize(absPath, cachedPath, sharp);
+    // Queued tasks retain paths, not source buffers. Keep the slot and inflight
+    // entry until all work finishes, even after the caller has timed out.
+    const work = this.acquireSlot(() => this.readAndResize(absPath)).finally(() => {
+      this.inflight.delete(inflightKey);
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
       const timeout = new Promise<'timeout'>((resolve) => {
-        setTimeout(() => resolve('timeout'), this.cfg.timeoutMs).unref?.();
+        timer = setTimeout(() => resolve('timeout'), this.cfg.timeoutMs);
+        timer.unref?.();
       });
       const result = await Promise.race([work, timeout]);
       if (result === 'timeout') {
-        this.cfg.logger?.warn('image-resizer: resize timeout, returning original', {
-          absPath,
-          timeoutMs: this.cfg.timeoutMs,
-        });
+        this.cfg.logger?.warn('image-resizer: resize timeout, returning original', { timeoutMs: this.cfg.timeoutMs });
         return absPath;
       }
       return result;
-    });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async doResize(
     absPath: string,
-    cachedPath: string,
-    sharp: SharpModule,
+    source: Buffer,
+    key: string,
   ): Promise<string> {
     try {
-      // failOn:'none' 容忍轻微损坏的图; rotate() 跟 EXIF 方向。
-      const buf = await sharp(absPath, { failOn: 'none' })
-        .rotate()
-        .resize({
-          width: this.cfg.maxEdgePx,
-          height: this.cfg.maxEdgePx,
-          fit: 'inside',
-          withoutEnlargement: true,
-        })
-        .webp({ quality: this.cfg.webpQuality })
-        .toBuffer();
+      const result = await compressImageBuffer({
+        bytes: source,
+        mimeType: detectSupportedImageMime(source) ?? mimeFromPath(absPath),
+        budget: { maxEdgePx: this.cfg.maxEdgePx },
+      });
+      if (!result.changed) return absPath;
+      const ext = result.mimeType === 'image/jpeg' ? '.jpg' : result.mimeType === 'image/webp' ? '.webp' : '.png';
+      const cachedPath = path.join(this.cfg.cacheDir, `${key}${ext}`);
 
       // 写到临时文件再 rename, 避免并发读到半截文件
       const tmpPath = `${cachedPath}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(tmpPath, buf, { flag: 'wx', mode: 0o600 });
-      await fs.rename(tmpPath, cachedPath);
+      await fs.writeFile(tmpPath, result.bytes, { flag: 'wx', mode: 0o600 });
+      await fs.rename(tmpPath, cachedPath).catch(async (error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await fs.unlink(tmpPath).catch(() => undefined);
+      });
       await fs.chmod(cachedPath, 0o600);
       this.cfg.logger?.debug?.('image-resizer: cached', {
         absPath,
         cachedPath,
-        outBytes: buf.length,
+        outBytes: result.bytes.length,
       });
       this.scheduleLruSweep();
       return cachedPath;
@@ -334,18 +363,6 @@ export class ImageResizer {
       // fire-and-forget; task 内部 try/catch 已收
       void next.run();
     }
-  }
-
-  private computeCacheKey(absPath: string, mtimeMs: number, size: number): string {
-    return createHash('sha256')
-      .update(absPath)
-      .update('|')
-      .update(String(Math.floor(mtimeMs)))
-      .update('|')
-      .update(String(size))
-      .update('|')
-      .update(DEFAULTS.cacheVersion)
-      .digest('hex');
   }
 
   private async preparePrivateCacheDir(): Promise<void> {
@@ -400,7 +417,7 @@ export class ImageResizer {
     type Item = { p: string; size: number; atimeMs: number };
     const items: Item[] = [];
     for (const name of entries) {
-      if (!name.endsWith('.webp')) continue;
+      if (!/\.(?:png|jpe?g|webp)$/.test(name)) continue;
       const p = path.join(this.cfg.cacheDir, name);
       try {
         const st = await fs.stat(p);

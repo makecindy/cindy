@@ -1,3 +1,4 @@
+import { canLinkFile } from './codexAuthTestFs.js';
 /**
  * Host vs desktop: the shared system Codex login (release table row 26; user decision
  * 2026-11-13: "和桌面完全一样").
@@ -185,6 +186,11 @@ function outcome(f: ReturnType<typeof fixture>, state: AuthState) {
 
 const desktopRead = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' })); };
 const hostRead = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await createHostAuth(f.codexHome, f.systemAuth).getState({ credentialMode: 'oauth-bearer' })); };
+// The no-argument entry: what BaseAgent.getAuthState() and an implicit session's startup check
+// actually call. Both sides must diagnose an unreachable shared login the same way here, not only
+// under an explicit oauth-bearer mode (codex-code-review P1 on #11115).
+const desktopReadDefault = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await new DesktopCodexAuthAdapter().getState()); };
+const hostReadDefault = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await createHostAuth(f.codexHome, f.systemAuth).getState()); };
 
 /** Build the scenario once per side, run each side's own steps, compare after every step. */
 async function both(spec: Spec, steps: Array<{
@@ -244,16 +250,18 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   // invalidation, each side invalidating its own copy; then a system re-login recovers.
   for (const link of ['hardlink', 'symlink'] as const) {
     for (const kind of ['attributed', 'unattributed'] as const) {
-      it(`an inherited ${link}ed login, ${kind} invalidation, then a system re-login`, async () => {
+      it.skipIf(!canLinkFile)(`an inherited ${link}ed login, ${kind} invalidation, then a system re-login`, async () => {
         const results = await both({ local: link, binding: 'shared' }, [invalidateBoth(kind), { name: 'restart' }, relogin, { name: 'after relogin, again' }]);
         expect(results.at(-1)!.desktop).toMatchObject({ link: 'symlink-to-system' });
       });
     }
   }
 
-  it('a fresh profile links and claims an existing system login', async () => {
+  it('a fresh profile claims a shared login only when file symlinks are available', async () => {
     const [open] = await both({ local: 'missing', binding: 'none' });
-    expect(open!.desktop).toMatchObject({ state: { authenticated: true, credentialScope: 'system-shared' }, link: 'symlink-to-system', binding: { bound: true } });
+    expect(open!.desktop).toMatchObject(canLinkFile
+      ? { state: { authenticated: true, credentialScope: 'system-shared' }, link: 'symlink-to-system', binding: { bound: true } }
+      : { state: { authenticated: false }, link: 'missing', binding: { bound: false }, systemUntouched: true });
   });
 
   it('no system login: nothing is linked', async () => {
@@ -261,9 +269,39 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(open!.desktop).toMatchObject({ state: { authenticated: false }, link: 'missing' });
   });
 
-  it('a healthy hardlink is replaced by a file symlink', async () => {
+  // The default entry, not the oauth-bearer one: an implicit session's startup check calls
+  // getState() with no arguments, and it is where the Host used to answer "no gateway key" for a
+  // user who never had one. The link failure is injected (EPERM from symlink, as
+  // codexAuthInvalidation.test.ts:3316 does) rather than provoked with a read-only home: Windows
+  // ignores a POSIX directory mode for symlink creation and a privileged runner bypasses it, so
+  // chmod would let reconciliation succeed on exactly the workers this contract must hold on.
+  it('a signed-in system login that cannot be linked reports the same reason on the default entry', async () => {
+    const spec = { local: 'missing', binding: 'none' } as const;
+    const d = fixture(spec);
+    const hst = fixture(spec);
+    const symlink = vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+      Object.assign(new Error('denied'), { code: 'EPERM' }),
+    );
+    try {
+      const desktop = await desktopReadDefault(d);
+      const host = await hostReadDefault(hst);
+      expect(symlink).toHaveBeenCalled();
+      expect(host).toEqual(desktop);
+      expect(desktop.state).toMatchObject({ authenticated: false, errorReason: 'codex_shared_auth_link_unavailable' });
+      expect(desktop.link).toBe('missing');
+      expect(desktop.binding).toMatchObject({ bound: false });
+      expect(desktop.systemUntouched).toBe(true);
+      expect(host.systemUntouched).toBe(true);
+    } finally {
+      symlink.mockRestore();
+    }
+  });
+
+  it('a healthy hardlink is migrated without copying the system login', async () => {
     const [open] = await both({ local: 'hardlink', binding: 'shared' });
-    expect(open!.desktop).toMatchObject({ link: 'symlink-to-system' });
+    expect(open!.desktop).toMatchObject(canLinkFile
+      ? { link: 'symlink-to-system' }
+      : { link: 'missing', state: { authenticated: false }, systemUntouched: true });
   });
 
   it('a login made in Cindy stays the instance\'s own', async () => {
@@ -284,7 +322,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(open!.desktop).toMatchObject({ link: process.platform === 'win32' ? 'file' : 'symlink-to-system' });
   });
 
-  it('an explicit disconnect suppresses the system login until it is replaced', async () => {
+  it.skipIf(!canLinkFile)('an explicit disconnect suppresses the system login until it is replaced', async () => {
     await both({ local: 'symlink', binding: 'shared' }, [
       { name: 'disconnect', desktop: async () => new DesktopCodexAuthAdapter().logout(),
         host: async f => hostLogout(f) },
@@ -307,7 +345,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
 
   // Every read above opens a fresh desktop adapter, i.e. a restarted desktop. The desktop also
   // keeps the suppression in memory within one process; the Host reads the marker each time.
-  it('within one process, after an invalidation and after the system re-login', async () => {
+  it.skipIf(!canLinkFile)('within one process, after an invalidation and after the system re-login', async () => {
     const results: unknown[] = [];
     for (const side of ['desktop', 'host'] as const) {
       const f = fixture({ local: 'symlink', binding: 'shared' });
@@ -340,7 +378,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
         results.push({ link: linkKind(f.authPath, f.systemAuth), bound: isNativeProviderAuthBound('openai'), systemUntouched: f.systemUntouched() });
       }
       expect(results[1], mode).toEqual(results[0]);
-      expect(results[0], mode).toMatchObject({ link: mode === 'oauth-bearer' ? 'symlink-to-system' : 'missing', systemUntouched: true });
+      expect(results[0], mode).toMatchObject({ link: mode === 'oauth-bearer' && canLinkFile ? 'symlink-to-system' : 'missing', systemUntouched: true });
     }
   });
 
@@ -368,7 +406,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   // The runtime's own single pass (the desktop's warmUp at startup, the Host runtime's) has no
   // later read to fall back on, so its own guards are what is compared here.
   for (const kind of ['attributed', 'unattributed'] as const) {
-    it(`a startup pass after an ${kind} invalidation keeps the login suppressed`, async () => {
+    it.skipIf(!canLinkFile)(`a startup pass after an ${kind} invalidation keeps the login suppressed`, async () => {
       const results: unknown[] = [];
       for (const side of ['desktop', 'host'] as const) {
         const f = fixture({ local: 'symlink', binding: 'shared' });
@@ -433,7 +471,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     await both({ local: 'hardlink', binding: 'none' });
   });
 
-  it('a renewed system login is restored only to the owner it was invalidated for', async () => {
+  it.skipIf(!canLinkFile)('a renewed system login is restored only to the owner it was invalidated for', async () => {
     const results: unknown[] = [];
     for (const side of ['desktop', 'host'] as const) {
       const f = fixture({ local: 'symlink', binding: 'shared' });
@@ -452,7 +490,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(results[1]).toEqual(results[0]);
   });
 
-  it('a healthy hardlink under a legacy explicit binding is marked shared before the relink', async () => {
+  it.skipIf(!canLinkFile)('a healthy hardlink under a legacy explicit binding is marked shared before the relink', async () => {
     const [open] = await both({ local: 'hardlink', binding: 'legacy-explicit' });
     expect(open!.desktop).toMatchObject({ link: 'symlink-to-system', binding: { sharedSystem: true } });
   });
@@ -476,7 +514,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   // Without the spawn's credential generation nothing proves which shared file failed. The
   // engine reports with a context (recorded as unknown); the subscription bridge without one.
   for (const source of ['the engine, without a credential generation', 'the subscription bridge, without a context'] as const) {
-    it(`invalidating a shared system login reported by ${source}`, async () => {
+    it.skipIf(!canLinkFile)(`invalidating a shared system login reported by ${source}`, async () => {
       const engine = source.startsWith('the engine');
       const results: unknown[] = [];
       for (const side of ['desktop', 'host'] as const) {
@@ -503,7 +541,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   // The shared file rewritten in place (same inode, new content) after the engine captured its
   // generation: there is no invalidated fingerprint, so the engine's report is recorded as unknown
   // and the marker suppresses the current file.
-  it('invalidating a shared system login rewritten in place since the spawn', async () => {
+  it.skipIf(!canLinkFile)('invalidating a shared system login rewritten in place since the spawn', async () => {
     const results: unknown[] = [];
     for (const side of ['desktop', 'host'] as const) {
       const f = fixture({ local: 'symlink', binding: 'shared' });
@@ -547,7 +585,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
       h.dataOwnerId = scenarioOwner;
       fs.mkdirSync(h.userDataDir, { recursive: true });
       const codexHome = path.join(h.userDataDir, 'codex-home');
-      fs.symlinkSync(systemDir, codexHome, 'dir');
+      fs.symlinkSync(systemDir, codexHome, process.platform === 'win32' ? 'junction' : 'dir');
       bindNativeProviderAuth('openai', { sharedSystem: true });
       const before = { bytes: fs.readFileSync(systemAuth, 'utf8'), stat: fs.statSync(systemAuth) };
       const generation = JSON.stringify(currentCodexCredentialGeneration(systemAuth));

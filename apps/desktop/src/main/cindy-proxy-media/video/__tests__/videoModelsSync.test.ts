@@ -9,7 +9,7 @@
  * (首项 = 出厂默认)。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
 import {
@@ -19,12 +19,13 @@ import {
 } from '../../../../shared/ghost.js';
 import { GATEWAY_VIDEO_MODELS } from '../../types.js';
 import { VideoProviderRegistry } from '../registry.js';
+import { submitAndAwaitVideo } from '../run.js';
 import {
   createSeedance25Provider,
   createSeedanceProvider,
 } from '../providers/seedance.js';
 import { createHappyhorseProvider } from '../providers/happyhorse.js';
-import { createXaiVideoProvider } from '../providers/xai.js';
+import { createXaiVideoProviders } from '../providers/xai.js';
 
 function buildXdRegistry(): VideoProviderRegistry {
   // 与 desktop mcp-integrations/cindyProxyMedia.ts 同一装配顺序(seedance 先注册,
@@ -38,17 +39,18 @@ function buildXdRegistry(): VideoProviderRegistry {
   return registry;
 }
 
-function buildFullRegistry(): VideoProviderRegistry {
+function buildFullRegistry(fetchImplementation?: typeof fetch): VideoProviderRegistry {
   const registry = buildXdRegistry();
-  registry.register(
-    createXaiVideoProvider({
-      hasOAuthLogin: () => true,
-      getAccessToken: async () => 'test-token',
-      getCredentialGeneration: () => 1,
-      getOwnerScopeKey: () => 'owner-a',
-      isOwnerBoundaryPending: () => false,
-    }),
-  );
+  const providers = createXaiVideoProviders({
+    modelAliases: BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')?.videoModels?.map((model) => model.id),
+    hasOAuthLogin: () => true,
+    getAccessToken: async () => 'test-token',
+    getCredentialGeneration: () => 1,
+    getOwnerScopeKey: () => 'owner-a',
+    isOwnerBoundaryPending: () => false,
+    fetchImplementation,
+  });
+  for (const provider of providers) registry.register(provider, 'xai');
   return registry;
 }
 
@@ -75,6 +77,44 @@ describe('GATEWAY_VIDEO_MODELS ↔ provider alias 同源', () => {
 });
 
 describe('providers.json 视频清单 ↔ 完整 provider registry 同源', () => {
+  // #11260 review / unit: mixed catalog registration must keep each alias's
+  // advertised limits and runner rejection in sync; submit-only tests miss this.
+  it('keeps classic xAI single-image capabilities when 1.5 is in the same catalog', () => {
+    const registry = buildFullRegistry();
+    expect(registry.resolveByAlias('xai/grok-imagine-video').provider.capabilities.maxImagesByRefMode)
+      .toEqual({ first_and_last_frame: 1 });
+    expect(registry.resolveByAlias('xai/grok-imagine-video-1.5').provider.capabilities.maxImagesByRefMode)
+      .toEqual({ first_and_last_frame: 2, reference_image: 9 });
+  });
+
+  it.each([
+    ['first_and_last_frame', 2, 'supports at most 1'],
+    ['reference_image', 1, 'does not support refMode'],
+  ] as const)('rejects classic %s with %i images at the runner entry', async (refMode, count, error) => {
+    const doFetch = vi.fn<typeof fetch>();
+    const registry = buildFullRegistry(doFetch);
+    await expect(submitAndAwaitVideo(registry, { alias: 'xai/grok-imagine-video', prompt: 'move', refMode,
+      imageDataUris: Array.from({ length: count }, () => 'data:image/png;base64,AAAA') })).rejects.toThrow(error);
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['xai/grok-imagine-video', 'first_and_last_frame', 1],
+    ['xai/grok-imagine-video-1.5', 'first_and_last_frame', 2],
+    ['xai/grok-imagine-video-1.5', 'reference_image', 9],
+  ] as const)('generates through the registered %s runner with %s and %i images', async (alias, refMode, count) => {
+    const bytes = Buffer.from('00000010667479706d70343200000000', 'hex');
+    const doFetch = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ request_id: 'task' }))
+      .mockResolvedValueOnce(Response.json({ status: 'done', video: { url: 'https://vidgen.x.ai/task.mp4' } }))
+      .mockResolvedValueOnce(new Response(bytes, { headers: { 'content-type': 'video/mp4' } }));
+    const registry = buildFullRegistry(doFetch);
+    const result = await submitAndAwaitVideo(registry, { alias, prompt: 'move', refMode,
+      imageDataUris: Array.from({ length: count }, () => 'data:image/png;base64,AAAA') });
+    expect(result).toMatchObject({ buffer: bytes, mimeType: 'video/mp4', modelUsed: alias.slice('xai/'.length) });
+    expect(doFetch).toHaveBeenCalledTimes(3);
+  });
+
   it('xAI 目录中的每个视频型号都有客户端执行通道', () => {
     const registry = buildFullRegistry();
     const xai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');

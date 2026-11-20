@@ -68,6 +68,7 @@ import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
   composerSuggestionEntryKey,
+  isComposerDirectoryAction,
   isComposerSuggestionEntryDisabled,
   nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
@@ -91,9 +92,8 @@ function isPluginEntry(entry: ComposerSuggestionEntry): boolean {
   return entry.kind === 'resource' && isPluginItem(entry.item);
 }
 
-function isAddDirEntry(entry: ComposerSuggestionEntry): boolean {
-  return entry.kind === 'action'
-    && entry.action.id === 'add-extra-dir';
+function isDirectoryActionEntry(entry: ComposerSuggestionEntry): boolean {
+  return entry.kind === 'action' && isComposerDirectoryAction(entry.action.id);
 }
 
 export type AtPanelState =
@@ -142,6 +142,7 @@ const ACTION_ICONS: Partial<Record<ComposerSuggestionAction['id'], typeof Paperc
   'plan-mode': ClipboardList,
   collaboration: UsersRound,
   'add-extra-dir': FolderPlus,
+  'project-settings': FolderPlus,
 };
 
 export function AtMentionPanel({
@@ -189,12 +190,11 @@ export function AtMentionPanel({
   // 内嵌形态的高度由外壳按内容重测。只在挂载时请求一次不够：搜索词、结果行、已引用目录
   // 变化后内容变矮，外壳若仍停在打开时的高度会留下大块空白；变高时又会被高度钳住，
   // ResizeObserver 看不到增长。首次打开时弹层尚未完成开场形变，会忽略这次请求。
-  const resourceEntryCount = entries.reduce((count, entry) => (entry.kind === 'resource' ? count + 1 : count), 0);
   const referencedDirCount = (referenceDirs?.dirs.length ?? 0) + (writableDirs?.dirs.length ?? 0);
   useLayoutEffect(() => {
     if (!embedded) return;
     rootRef.current?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
-  }, [embedded, searchValue, resourceEntryCount, referencedDirCount, state.kind]);
+  }, [embedded, searchValue, entries.length, referencedDirCount, state.kind]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,
@@ -204,22 +204,20 @@ export function AtMentionPanel({
 
   const isEmptyRootQuery = !query.trim();
   // Empty-query buckets (assembly order in composerSuggestion.ts guarantees
-  // add → plugins → add-extra-dir, so bucketing preserves entry indices).
+  // add → plugins → directory actions, so bucketing preserves entry indices).
   const indexed = entries.map((entry, index) => ({ entry, index }));
   const addEntries = isEmptyRootQuery
-    ? indexed.filter(({ entry }) => !isPluginEntry(entry) && !isAddDirEntry(entry))
+    ? indexed.filter(({ entry }) => !isPluginEntry(entry) && !isDirectoryActionEntry(entry))
     : [];
   const pluginEntries = isEmptyRootQuery ? indexed.filter(({ entry }) => isPluginEntry(entry)) : [];
-  const addDirEntry = isEmptyRootQuery
-    ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-extra-dir')
-    : undefined;
+  const directoryActions = isEmptyRootQuery ? indexed.filter(({ entry }) => isDirectoryActionEntry(entry)) : [];
   // Merge presentation only: removal keeps each persisted grant's original path.
   const directoryRows = [referenceDirs, writableDirs].flatMap((section) =>
     section ? section.dirs.map((path) => ({ path, onRemove: section.onRemove })) : [],
   );
   const addSectionVisible = isEmptyRootQuery && addEntries.length > 0;
   const pluginSectionVisible = isEmptyRootQuery && pluginEntries.length > 0;
-  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || !!addDirEntry);
+  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || directoryActions.length > 0);
 
   useEffect(() => {
     if (entries.length === 0) return;
@@ -717,7 +715,7 @@ export function AtMentionPanel({
                         ))}
                       </div>
                     )}
-                    {addDirEntry && renderEntryRow(addDirEntry)}
+                    {directoryActions.map(renderEntryRow)}
                   </>
                 )}
               </>

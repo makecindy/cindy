@@ -56,6 +56,28 @@ describe('request-owned Responses compatibility', () => {
 });
 
 describe('provider policy boundaries across harnesses', () => {
+  // #10434, unit: production normalization must emit the documented Chat toggle,
+  // never reasoning_effort, and must not copy Chat fields to native Responses.
+  it.each(['api', 'token-plan-cn', 'token-plan-ams', 'token-plan-sgp'])('normalizes MiMo V2.6 Chat switches on %s', host => {
+    for (const model of ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro-ultraspeed']) {
+      const route = { harness: 'pi' as const, protocol: 'openai-chat' as const,
+        upstreamBase: `https://${host}.xiaomimimo.com/v1`, model };
+      for (const effort of ['none', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+        expect(normalizeProviderRequest({ model, reasoning_effort: effort }, route)).toEqual({
+          model, thinking: { type: effort === 'none' || effort === 'off' ? 'disabled' : 'enabled' },
+        });
+      }
+      const native = { model, reasoning: { effort: 'high' } };
+      expect(normalizeProviderRequest(native, { ...route, protocol: 'openai-responses' })).toEqual(native);
+      const explicit = { model, thinking: { type: 'disabled' } };
+      expect(normalizeProviderRequest(explicit, route)).toEqual(explicit);
+      const absent = { model, messages: [] };
+      expect(normalizeProviderRequest(absent, route)).toEqual(absent);
+      const unknown = { model, reasoning_effort: 'medium' };
+      expect(normalizeProviderRequest(unknown, { ...route, upstreamBase: 'https://api.xiaomimimo.com.evil.test/v1' })).toEqual(unknown);
+      expect(normalizeProviderRequest(unknown, { ...route, model: 'mimo-v2.7-pro' })).not.toHaveProperty('thinking');
+    }
+  });
   it.each(['codex', 'claude-code', 'pi'] as const)('only normalizes an actual xAI Responses endpoint for %s', harness => {
     const body = { tools: [{ type: 'web_search', external_web_access: true, user_location: { country: 'CN' } }] };
     const route = { harness, protocol: 'openai-responses' as const, upstreamBase: 'https://api.x.ai/v1', model: 'grok-4.6' };

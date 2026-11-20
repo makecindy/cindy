@@ -36,7 +36,7 @@ import {
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import { cn } from '@/lib/utils';
 import {
   QUOTA_WINDOW_COLUMNS,
@@ -154,13 +154,14 @@ function AccountTag({ children }: { children: ReactNode }) {
 }
 
 /**
- * `defaultUsage` is the provider's existing usage card; it belongs to the CLI default account.
+ * `defaultUsage` is a compatibility fallback only when the account endpoint is unavailable.
  * `dashboard` is the provider's usage page, shared by every account in the pool.
  */
 export function SubscriptionAccountsSection({
   providerId,
   kind = providerId as SubscriptionProvider,
   providerName,
+  locationLabel,
   defaultUsage,
   dashboard,
   expectAccounts = true,
@@ -170,6 +171,8 @@ export function SubscriptionAccountsSection({
   /** The account pool it uses (2026-11-13); defaults to the built-in provider id. */
   kind?: SubscriptionProvider;
   providerName?: string;
+  /** Clarify which computer owns these accounts when models run elsewhere. */
+  locationLabel?: string;
   defaultUsage?: ReactNode;
   dashboard?: { label: string; onOpen: () => void };
   /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
@@ -182,12 +185,14 @@ export function SubscriptionAccountsSection({
   const cache = useContext(SubscriptionPoolViewCache);
   const [view, setView] = useState<SubscriptionPoolView | null>(() => cache?.get(providerId) ?? null);
   const [failed, setFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
   const inFlight = useRef(false);
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
     const current = ++epoch.current;
+    setRefreshing(true);
     try {
       const next = await window.electronAPI.subscriptionAccounts.command({
         action: 'read',
@@ -200,6 +205,8 @@ export function SubscriptionAccountsSection({
       }
     } catch {
       if (current === epoch.current) setFailed(true);
+    } finally {
+      if (current === epoch.current) setRefreshing(false);
     }
   }, [providerId, cache]);
   useEffect(() => {
@@ -236,17 +243,8 @@ export function SubscriptionAccountsSection({
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
-        toast.error(t(
-          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
-            ? 'subscriptionAccounts.providerManagedAuth'
-            : code === 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
-              ? 'subscriptionAccounts.loginIdentityMismatch'
-              : code === 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
-                ? 'subscriptionAccounts.loginIdentityUnknown'
-                : 'subscriptionAccounts.failed',
-        ));
+      const key = subscriptionAccountErrorKey(error);
+      if (key) toast.error(t(key));
       await refresh();
     } finally {
       inFlight.current = false;
@@ -268,13 +266,14 @@ export function SubscriptionAccountsSection({
       data-testid="subscription-accounts"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
             {t('subscriptionAccounts.title')}
           </h3>
           {accounts.length > 0 && (
             <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
           )}
+          {locationLabel && <span className="text-12 text-[var(--text-secondary)]">{locationLabel}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
@@ -318,15 +317,20 @@ export function SubscriptionAccountsSection({
         </div>
       </div>
       {failed && (
-        <p role="alert" className="mt-3 text-12 text-[var(--text-danger)]">
-          {t('subscriptionAccounts.failed')}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-12 text-[var(--text-danger)]">
+            {t('subscriptionAccounts.failed')}
+          </p>
+          <Button data-settings-search-action="Retry reading local subscription accounts" variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => void refresh()}>
+            {t('commonUi.retry')}
+          </Button>
+        </div>
       )}
       {!view && !failed && (
         <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
-      {defaultUsage && (view ? accounts.every((account) => account.id !== 'default') : failed) && (
+      {defaultUsage && !view && failed && (
         <div data-testid="provider-usage-module" className="-mx-4 mt-3">
           {defaultUsage}
         </div>
@@ -375,8 +379,8 @@ export function SubscriptionAccountsSection({
                   t('providerGroup.member.accountFallback', { index: index + 1 });
                 const plan =
                   kind === 'openai'
-                    ? formatCodexPlanLabel(account.plan)
-                    : formatClaudeSubscriptionPlanLabel(account.plan);
+                    ? formatCodexPlanLabel(account.planType ?? account.plan)
+                    : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
                 const usage = buildSubscriptionAccountUsageCard(
                   account.usage,
                   t,
@@ -427,9 +431,7 @@ export function SubscriptionAccountsSection({
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
-                  account.id === 'default' && defaultUsage ? (
-                    defaultUsage
-                  ) : usage ? (
+                  usage ? (
                     <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
                       {resetNode}
                     </QuotaHoverCard>
@@ -466,9 +468,6 @@ export function SubscriptionAccountsSection({
                               {name}
                             </span>
                             {plan && <AccountTag>{plan}</AccountTag>}
-                            {account.id === 'default' && !account.legacy && (
-                              <AccountTag>{t('subscriptionAccounts.defaultTag')}</AccountTag>
-                            )}
                           </div>
                           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
                             <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -490,9 +489,9 @@ export function SubscriptionAccountsSection({
                                 </span>
                               </Tip>
                             )}
-                            {kind === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                            {(account.status === 'signed-out' || (kind === 'anthropic' && connected && expiring)) && (
                               <Button
-                                data-settings-search-action="Sign in again to this Claude account"
+                                data-settings-search-action="Sign in again to this subscription account"
                                 variant="secondary"
                                 tone="quiet"
                                 size="sm"
@@ -501,6 +500,12 @@ export function SubscriptionAccountsSection({
                                 onClick={signIn}
                               >
                                 {t('subscriptionAccounts.loginAgain')}
+                              </Button>
+                            )}
+                            {account.status === 'unavailable' && (
+                              <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
+                                disabled={refreshing || busy} onClick={() => void refresh()}>
+                                {t('commonUi.retry')}
                               </Button>
                             )}
                           </div>
@@ -606,42 +611,35 @@ export function SubscriptionAccountsSection({
                               <FolderOpen size={18} className="mr-2.5" />
                               {t('subscriptionAccounts.openDirectory')}
                             </DropdownMenuItem>
-                            {/* The CLI default login always stays with the built-in provider. */}
-                            {account.id !== 'default' && (
-                              <MoveAccountMenu
-                                targets={placementTargets}
-                                canTakeOut={providerId === kind || accounts.length > 1}
-                                disabled={busy}
-                                onMove={(target) => void moveAccount({ id: account.id, name }, target)}
-                              />
-                            )}
-                            {account.id !== 'default' && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  variant="danger"
-                                  disabled={busy || account.running > 0}
-                                  onSelect={() => {
-                                    void confirm({
-                                      title: t('subscriptionAccounts.removeTitle', { name }),
-                                      description: t('subscriptionAccounts.removeDescription'),
-                                      confirmText: t('subscriptionAccounts.remove'),
-                                      confirmVariant: 'destructive',
-                                    }).then((ok) => {
-                                      if (ok)
-                                        void run({
-                                          action: 'remove',
-                                          providerId,
-                                          accountId: account.id,
-                                        });
+                            <MoveAccountMenu
+                              targets={placementTargets}
+                              canTakeOut={providerId === kind || accounts.length > 1}
+                              disabled={busy}
+                              onMove={(target) => void moveAccount({ id: account.id, name }, target)}
+                            />
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="danger"
+                              disabled={busy || account.running > 0}
+                              onSelect={() => {
+                                void confirm({
+                                  title: t('subscriptionAccounts.removeTitle', { name }),
+                                  description: t('subscriptionAccounts.removeDescription'),
+                                  confirmText: t('subscriptionAccounts.remove'),
+                                  confirmVariant: 'destructive',
+                                }).then((ok) => {
+                                  if (ok)
+                                    void run({
+                                      action: 'remove',
+                                      providerId,
+                                      accountId: account.id,
                                     });
-                                  }}
-                                >
-                                  <CircleMinus size={18} className="mr-2.5" />
-                                  {t('subscriptionAccounts.remove')}
-                                </DropdownMenuItem>
-                              </>
-                            )}
+                                });
+                              }}
+                            >
+                              <CircleMinus size={18} className="mr-2.5" />
+                              {t('subscriptionAccounts.remove')}
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -650,11 +648,7 @@ export function SubscriptionAccountsSection({
                         labels keep their column); the right edge meets the row controls. */}
                     {usageNode && (
                       <div
-                        data-testid={
-                          account.id === 'default' && defaultUsage
-                            ? 'provider-usage-module'
-                            : undefined
-                        }
+                        data-testid="subscription-account-usage"
                         className={cn(
                           '-mx-4 mt-1 grid grid-cols-subgrid [@container(min-width:440px)]:ml-7 [&>*]:col-span-full',
                           account.paused && 'opacity-60',

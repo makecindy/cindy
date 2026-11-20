@@ -172,7 +172,8 @@ export function shouldListPiPackageCommands(
   requestedAgentKind: 'claude-code' | 'codex' | 'pi',
   sessionIdProvided: boolean,
   session: {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    /** 'acp' is a plugin-engine task; it never lists Pi package commands. */
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
     reviewMode?: true;
     remoteHostId?: string;
   } | null,

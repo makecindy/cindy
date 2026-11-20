@@ -31,13 +31,15 @@ describe('botGroupWorkDir', () => {
     });
   }
 
-  it("uses the group's resolved folder when no explicit project is set", async () => {
-    const folder = path.join(root, 'workspace', 'Group-g1');
+  it('uses an ordinary dialogue directory without preparing a repository for a projectless plan', async () => {
+    const folder = path.join(root, 'dialogues', 'session-a');
     await mkdir(folder, { recursive: true });
-    const workDir = create({ defaultFolder: async () => folder });
+    const detectRepo = vi.fn();
+    const workDir = create({ defaultFolder: async () => folder, detectRepo });
     const prepared = await workDir.prepare({ groupId: 'g1', projectDir: null });
     expect(prepared).toEqual({ ok: true, workDir: folder, branch: null, ownerSessionId: null });
     expect((await stat(folder)).isDirectory()).toBe(true);
+    expect(detectRepo).not.toHaveBeenCalled();
   });
 
   it('uses a plain project folder directly and a git project through a new worktree', async () => {

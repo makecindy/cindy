@@ -104,10 +104,10 @@ describe('asset preparation boundaries', () => {
   });
 
   it('does not reuse a completion across owner generations or an in-progress boundary', async () => {
-    const prepare = vi.fn(async () => true);
-    const adapter = Object.assign(Object.create(DesktopClaudeAuthAdapter.prototype), {
-      sharedSkillsPreparation: new PreparationCache(30_000), runEnsureSharedGlobalSkills: prepare,
-    }) as DesktopClaudeAuthAdapter;
+    // The preparation moved into sharedGlobalSkillsPreparationCore.ts (shared with the Host); count
+    // its runs through the shared-link step it always reaches, on the real adapter entry.
+    const prepare = state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
     await adapter.ensureSharedGlobalSkills();
     await adapter.ensureSharedGlobalSkills();
     expect(prepare).toHaveBeenCalledTimes(1);

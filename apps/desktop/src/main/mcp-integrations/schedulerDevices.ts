@@ -115,17 +115,21 @@ export function createSchedulerRemoteDeps(deps: {
         const needsModelSelection = patch?.modelAgentKind != null;
         const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
           || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
-        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook) {
+        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || input?.prTrigger !== undefined) {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
           const supported = capabilities.ok ? capabilities.result as {
             supportsScheduleModelSelection?: boolean;
             supportsScheduleAgentDeviceSelection?: boolean;
             supportsRemoteScheduleDirectoryCheck?: boolean;
+            supportsSchedulePrTrigger?: boolean;
             supportsScheduleWebhookTrigger?: boolean;
           } | null : null;
           if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+          if (input?.prTrigger !== undefined && !supported?.supportsSchedulePrTrigger) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑需要更新才能设置 PR 触发条件' };
           }
           if (needsWebhook && supported?.supportsScheduleWebhookTrigger !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持 Webhook 触发，请先更新目标电脑' };

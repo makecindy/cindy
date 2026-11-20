@@ -49,6 +49,7 @@ export interface FsListDirResult {
   drivesPending?: boolean;
 }
 export interface FsListDirDeps {
+  canonicalDirectory?: boolean;
   platform?: NodeJS.Platform;
   listDriveRoots?: () => Promise<string[]>;
 }
@@ -105,7 +106,8 @@ async function waitForDriveRoots(
 
 /** 列出目录下的**子目录**(含 hidden,对齐 SSH `ls -A`;文件不列)。每项带 host-native 绝对路径。 */
 export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promise<FsListDirResult> {
-  const resolvedPath = expandHome(rawPath);
+  const input = expandHome(rawPath);
+  let resolvedPath = input;
   // 与 readdir 并行;该 promise 永不 reject,readdir 失败提前抛出也不会留下未处理的拒绝。
   const driveRoots = (deps.platform ?? process.platform) === 'win32'
     ? waitForDriveRoots(deps.listDriveRoots ?? listWindowsDriveRoots)
@@ -113,6 +115,7 @@ export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promis
   let dirents: Dirent[];
   try {
     // encoding:'utf8' 固定到 name:string 的重载(否则 readdir 返回 string|Buffer 名联合)。
+    if (deps.canonicalDirectory) resolvedPath = await fs.realpath(input);
     dirents = await fs.readdir(resolvedPath, { withFileTypes: true, encoding: 'utf8' });
   } catch (err) {
     throwIpcError('FS_BROWSE_FAILED', `list dir failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -142,12 +145,12 @@ export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promis
 }
 
 /** 判断路径状态:dir / file / missing(missing 用于「输入了不存在的新项目目录」分支)。 */
-export async function statPath(rawPath: string): Promise<FsStatResult> {
+export async function statPath(rawPath: string, canonicalDirectory = false): Promise<FsStatResult> {
   const resolvedPath = expandHome(rawPath);
   try {
     const st = await fs.stat(resolvedPath);
     return st.isDirectory()
-      ? { kind: 'dir', resolvedPath }
+      ? { kind: 'dir', resolvedPath: canonicalDirectory ? await fs.realpath(resolvedPath) : resolvedPath }
       : { kind: 'file', resolvedPath, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
@@ -172,11 +175,11 @@ export async function mkdirP(rawPath: string): Promise<FsMkdirResult> {
 export function registerFsBrowseIpc(): void {
   ipcMain.handle('fs:list-dir', async (_e, arg: unknown) => {
     const obj = requireObject(arg);
-    return listDir(requireString(obj.path, 'path'));
+    return listDir(requireString(obj.path, 'path'), { canonicalDirectory: obj.canonicalDirectory === true });
   });
   ipcMain.handle('fs:stat-path', async (_e, arg: unknown) => {
     const obj = requireObject(arg);
-    return statPath(requireString(obj.path, 'path'));
+    return statPath(requireString(obj.path, 'path'), obj.canonicalDirectory === true);
   });
   ipcMain.handle('fs:mkdir-p', async (_e, arg: unknown) => {
     const obj = requireObject(arg);

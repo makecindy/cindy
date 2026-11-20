@@ -1,11 +1,12 @@
 /**
  * 供应商组里一台电脑这个账号的剩余额度(docs/product-rules/provider-groups.md §10，2026-10-10 用户要求：
  * 组里展开看每台的用量)。与任务底部的用量条、供应商详情页底部的用量卡同一份数据：本机读本机账号，
- * 我的其他电脑经 device-link 查询那台的额度，OpenAI 优先原生查询。别人分享来的电脑不读：分享者的余量不对受邀者开放
- * (与任务底部用量条同一口径，见 lib/usageAccountLocation.ts)。只在展开时挂载，收起的行不读任何电脑。
+ * 我的其他电脑经 device-link 查询那台的额度，OpenAI 优先原生查询。别人分享来的电脑只显示分享者开放的额度
+ * (2026-11-19 用户裁决)，与分享详情同一读取与权限；开放了用量明细时给入口去分享详情。只在展开时挂载，收起的行不读任何电脑。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 import { useDeviceProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
@@ -15,6 +16,10 @@ import { useProviders } from '@/hooks/useProviders';
 import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
+import { ProviderShareInsightsSection } from '@/features/provider-share/ProviderShareInsightsSection';
+import { providersSettingsPath } from '@/features/provider-share/providerShareNavigation';
+import { useProviderShareReceived } from '@/features/provider-share/providerShareStore';
+import { providerShareIdOfAgentDeviceId } from '../../../shared/providerShare';
 
 import { GroupMemberAccountList, useGroupMemberAccounts } from './GroupMemberAccounts';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
@@ -26,7 +31,7 @@ import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
 export type GroupMemberQuotaTarget =
   | { kind: 'local'; providerId: string }
   | { kind: 'device'; deviceId: string; providerId: string }
-  | { kind: 'share' };
+  | { kind: 'share'; shareId: string | null };
 
 /** 读了这么久还没有额度就不再写「正在读取」：那台可能较旧或这个账号暂时没有额度数据。 */
 const LOADING_GRACE_MS = 8_000;
@@ -34,19 +39,49 @@ const LOADING_GRACE_MS = 8_000;
 const LOADING_REVEAL_MS = 200;
 type QuotaRelayStatus = 'stopped' | 'connecting' | 'online';
 
-export function GroupMemberQuota({
-  id,
-  target,
-  offline,
-  inset = 'pl-11',
-}: {
+interface GroupMemberQuotaProps {
   id: string;
   target: GroupMemberQuotaTarget;
   /** 组里缓存的离线状态；远端须核验设备证据，本机直接使用当前本地账号。 */
   offline: boolean;
   /** 左侧缩进，让卡片内容与行里的电脑名对齐(卡片自带 16px 内边距)。 */
   inset?: string;
-}) {
+}
+
+export function GroupMemberQuota(props: GroupMemberQuotaProps) {
+  return props.target.kind === 'share'
+    ? <GroupMemberShareQuota id={props.id} shareId={props.target.shareId} inset={props.inset ?? 'pl-11'} />
+    : <GroupMemberDeviceQuota {...props} />;
+}
+
+/** 分享来的电脑：额度经该分享自己的授权读取，分享者没开放、离线或旧版本时说明原因。 */
+function GroupMemberShareQuota({ id, shareId, inset }: { id: string; shareId: string | null; inset: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { received } = useProviderShareReceived();
+  const share = shareId ? received.find((entry) => entry.shareId === shareId) : undefined;
+  return (
+    // 读到之前没有内容：负边距放在有内容的那一层，空的时候不把点击的格子拉矮。
+    <div id={id} data-testid="provider-group-member-quota" className={inset}>
+      {share ? (
+        <ProviderShareInsightsSection
+          share={share}
+          variant="groupMember"
+          onOpenUsage={() => navigate(providersSettingsPath({ shareId: share.shareId }))}
+        />
+      ) : (
+        <p className="-mt-1 px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('providerShare.insights.denied')}</p>
+      )}
+    </div>
+  );
+}
+
+function GroupMemberDeviceQuota({
+  id,
+  target,
+  offline,
+  inset = 'pl-11',
+}: GroupMemberQuotaProps) {
   const { t } = useTranslation();
   // Keep observing presence while offline, independently of quota/provider hooks.
   // The group's cached status can lag a reconnect; the shared device list lets
@@ -260,7 +295,7 @@ export function GroupMemberQuota({
     pausedStructuredQuota?.deviceId ?? remoteDeviceId,
     { live: true, active: !quotaOffline && !!provider },
   );
-  // 这台电脑上的账号：两个及以上分别列出；只有一个时不加账号名，默认账号继续用原来的卡。
+  // 每个账号使用自身额度；只有一个时省略重复的账号名。
   const { accounts, loading: accountsLoading } = useGroupMemberAccounts(
     target.kind === 'share' ? null : target.providerId,
     remoteDeviceId,
@@ -268,8 +303,7 @@ export function GroupMemberQuota({
     !quotaOffline && !!provider && !provider.removed && provider.auth?.method === 'oauth' &&
       (!provider.access || provider.access.kind === 'subscription'),
   );
-  const listedAccounts = accounts && (accounts.length > 1 ||
-    (accounts.length === 1 && accounts[0].account.id !== 'default')) ? accounts : null;
+  const listedAccounts = accounts?.length ? accounts : null;
   const [waitedOut, setWaitedOut] = useState(false);
   const [loadingVisible, setLoadingVisible] = useState(false);
   const waitKey = target.kind === 'share' ? '' : `${remoteDeviceId ?? ''}\n${target.providerId}`;
@@ -288,8 +322,7 @@ export function GroupMemberQuota({
   const visibleCard = (accountsLoading && !waitedOut) || accounts?.length === 0 ? null : card;
 
   let note: string | null = null;
-  if (target.kind === 'share') note = t('providerGroup.member.quota.share');
-  else if (quotaOffline) note = t('providerGroup.member.quota.offline');
+  if (quotaOffline) note = t('providerGroup.member.quota.offline');
   else if (accounts?.length === 0) note = t('providerGroup.member.quota.unavailable');
   else if (!visibleCard && !listedAccounts) {
     if (!accountsLoading && provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
@@ -306,7 +339,7 @@ export function GroupMemberQuota({
     // 空内容不能带负边距，否则它会折叠到外层，把点击的格子先拉矮 4px。
     <div id={id} data-testid="provider-group-member-quota" className={cn((listedAccounts || visibleCard || note) && '-mt-1', inset)}>
       {listedAccounts ? (
-        <GroupMemberAccountList accounts={listedAccounts} defaultCard={card} hideAccountNames={listedAccounts.length === 1} />
+        <GroupMemberAccountList accounts={listedAccounts} hideAccountNames={listedAccounts.length === 1} />
       ) : visibleCard ? (
         <QuotaHoverCard variant="embedded" hideIdentity account={visibleCard} />
       ) : note ? (
@@ -325,7 +358,7 @@ export function groupMemberQuotaTarget(
   ownerDeviceId: string | null,
   selfDeviceId: string | null,
 ): GroupMemberQuotaTarget {
-  if (member.kind === 'share') return { kind: 'share' };
+  if (member.kind === 'share') return { kind: 'share', shareId: providerShareIdOfAgentDeviceId(member.agentDeviceId) };
   const deviceId = member.kind === 'local' ? ownerDeviceId : member.agentDeviceId;
   if (!deviceId || deviceId === selfDeviceId) return { kind: 'local', providerId: member.providerId };
   return { kind: 'device', deviceId, providerId: member.providerId };

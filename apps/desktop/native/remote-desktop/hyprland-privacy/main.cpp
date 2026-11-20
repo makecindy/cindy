@@ -4,6 +4,9 @@
 #include <dlfcn.h>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/SessionLockManager.hpp>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorManager.hpp>
@@ -28,6 +31,22 @@ static std::string stringValue(json_object *value) {
 static HANDLE owner;
 static PrivacyGate gate;
 static bool retired = false;
+static bool awayLocked = false;
+static pid_t lockChild = -1;
+static std::chrono::steady_clock::time_point lockAttempt;
+extern char **environ;
+// Fixed executable/arguments only; never execute a command received over hyprctl.
+static void requestLock() {
+  if (lockChild > 0 && waitpid(lockChild, nullptr, WNOHANG) == 0) return;
+  lockChild = -1;
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lockAttempt < std::chrono::seconds(2)) return;
+  lockAttempt = now;
+  const bool omarchy = access("/usr/bin/omarchy-shell", X_OK) == 0;
+  const char *program = omarchy ? "/usr/bin/omarchy-shell" : "/usr/bin/loginctl";
+  const char *args[] = {program, omarchy ? "lock" : "lock-session", omarchy ? "lock" : nullptr, nullptr};
+  posix_spawn(&lockChild, program, nullptr, nullptr, const_cast<char **>(args), environ);
+}
 static bool loading = true;
 static std::string token;
 static std::chrono::steady_clock::time_point heartbeat;
@@ -163,14 +182,26 @@ static bool readCursor(void *fb, CHLBufferReference buffer, uint32_t x,
       cursorReadHook->m_original)(fb, buffer, x, y, width, height);
 }
 static std::set<MONITORID> covered;
-// Isolated native surface: Cindy surface/text/selection semantic palette,
-// matching privacyScreenHtml. No desktop content is used to style the mask.
+// Isolated native surface matching privacyScreenHtml: the privacy screen is black in
+// every scene and theme so the display reads as off, with light text and the light
+// wordmark. No desktop content is used to style the mask.
 static bool dark = true;
-static CHyprColor surface() {
-  return CHyprColor(dark ? 0xFF1F1F1E : 0xFFF8F8F6);
-}
-static CHyprColor foreground() {
-  return CHyprColor(dark ? 0xFFD4D4D4 : 0xFF262626);
+static CHyprColor surface() { return CHyprColor(0xFF000000); }
+static CHyprColor foreground() { return CHyprColor(0xFFE5E5E5); }
+// Burn-in care (docs/product-rules/privacy-screen.md): full brightness for ten seconds
+// after the cover appears or the pointer moves, then about a third; the group moves to
+// another spot every 90 s. Spots jump instead of sliding so an idle cover does not
+// become a render loop. Offsets are percentages of the output width / height.
+using Clock = std::chrono::steady_clock;
+static Clock::time_point brightSince = Clock::now(), coverSince = Clock::now();
+static Clock::time_point physicalInputAt = Clock::now();
+static bool renderedDim = false;
+static int renderedSpot = -1;
+static const double driftSpots[8][2] = {{0, 0},  {6, -4}, {-5, 5}, {4, 6},
+                                        {-6, -3}, {3, -6}, {-3, 3}, {6, 2}};
+static bool dimmed() { return Clock::now() - brightSince >= std::chrono::seconds(10); }
+static int driftSpot() {
+  return static_cast<int>(((Clock::now() - coverSince) / std::chrono::seconds(90)) % 8);
 }
 static bool selectedDisconnect = false;
 static std::vector<std::string> labels;
@@ -212,7 +243,19 @@ static void damage() {
     monitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
   }
 }
+/** Someone moved the pointer: the dimmed notice returns to full brightness. */
+static void wake() {
+  brightSince = Clock::now();
+  if (renderedDim)
+    damage();
+}
+/** Physical input for the away time Main asks for with `idle`. Never its contents. */
+static void noteInput(bool physical) {
+  if (physical)
+    physicalInputAt = Clock::now();
+}
 static void stop() {
+  awayLocked = false;
   gate.stop();
   token.clear();
   covered.clear();
@@ -222,6 +265,8 @@ static void stop() {
 static bool consume(bool physical, unsigned key, bool down, bool trigger) {
   auto old = gate.phase;
   bool result = gate.consume(physical, key, down, trigger);
+  if (gate.away && physical && trigger && gate.phase == PrivacyGate::Pending)
+    requestLock();
   if (old != gate.phase)
     damage();
   return result;
@@ -252,6 +297,7 @@ static void clickDialog(PHLMONITOR monitor, Vector2D point) {
 static void keyboard(CInputManager *self, const IKeyboard::SKeyEvent &event,
                      SP<IKeyboard> keyboard) {
   bool physical = !keyboard->isVirtual();
+  noteInput(physical);
   bool down = event.state == WL_KEYBOARD_KEY_STATE_PRESSED;
   bool dialog = gate.phase == PrivacyGate::Confirming && physical &&
                 !gate.held.contains(event.keycode);
@@ -315,6 +361,7 @@ static bool sharedKeys(CInputManager *self, uint32_t key, bool pressed) {
 static void button(CInputManager *self, IPointer::SButtonEvent event,
                    SP<IPointer> pointer) {
   bool physical = !pointer || !pointer->isVirtual();
+  noteInput(physical);
   bool down = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
   bool dialog = gate.phase == PrivacyGate::Confirming && physical &&
                 !gate.held.contains(event.button + 1024);
@@ -349,6 +396,7 @@ static void button(CInputManager *self, IPointer::SButtonEvent event,
 }
 static void axis(CInputManager *self, IPointer::SAxisEvent event,
                  SP<IPointer> pointer) {
+  noteInput(!pointer || !pointer->isVirtual());
   if (consume(!pointer || !pointer->isVirtual(), 2048, false, true))
     return;
   reinterpret_cast<void (*)(CInputManager *, IPointer::SAxisEvent,
@@ -356,6 +404,10 @@ static void axis(CInputManager *self, IPointer::SAxisEvent event,
                                                                  pointer);
 }
 static void motion(CInputManager *self, IPointer::SMotionEvent event) {
+  const bool physical = !event.device || !event.device->isVirtual();
+  noteInput(physical);
+  if (physical && active())
+    wake();
   if (active() && ((!event.device || !event.device->isVirtual())
                        ? gate.phase != PrivacyGate::Confirming
                        : gate.phase != PrivacyGate::Active))
@@ -365,6 +417,9 @@ static void motion(CInputManager *self, IPointer::SMotionEvent event) {
 }
 static void warp(CInputManager *self, IPointer::SMotionAbsoluteEvent event) {
   auto pointer = dynamicPointerCast<IPointer>(event.device);
+  noteInput(!pointer || !pointer->isVirtual());
+  if ((!pointer || !pointer->isVirtual()) && active())
+    wake();
   if (active() && ((!pointer || !pointer->isVirtual())
                        ? gate.phase != PrivacyGate::Confirming
                        : gate.phase != PrivacyGate::Active))
@@ -416,6 +471,9 @@ static bool copy(CHyprOpenGLImpl *self, const CBox &box) {
   bool dialog = gate.phase == PrivacyGate::Confirming;
   const auto scale = dialogScale(monitor);
   double left = (full.w / scale - 560) / 2, top = (full.h / scale - 220) / 2;
+  // The notice dims and drifts; the confirmation dialog stays put at full brightness.
+  const float alpha = dialog || !dimmed() ? 1.F : .3F;
+  const int spot = driftSpot();
   auto text = [&](size_t index, double x, double y, bool centered = false) {
     if (index >= texts.size() || !texts[index])
       return;
@@ -424,15 +482,19 @@ static bool copy(CHyprOpenGLImpl *self, const CBox &box) {
       x -= size.x / 2;
     self->renderTexture(
         texts[index],
-        CBox{x * scale, y * scale, size.x * scale, size.y * scale}, {});
+        CBox{x * scale, y * scale, size.x * scale, size.y * scale}, {.a = alpha});
   };
   if (!dialog) {
     if (!heroTexture)
       heroTexture = artwork(heroPng, sizeof(heroPng));
     if (!wordmarkTexture)
-      wordmarkTexture = dark ? artwork(wordmarkDarkPng, sizeof(wordmarkDarkPng))
-                             : artwork(wordmarkLightPng, sizeof(wordmarkLightPng));
+      wordmarkTexture = artwork(wordmarkDarkPng, sizeof(wordmarkDarkPng));
     const double w = full.w / scale, h = full.h / scale;
+    const double dx = w * driftSpots[spot][0] / 100, dy = h * driftSpots[spot][1] / 100;
+    renderedDim = alpha < 1.F;
+    renderedSpot = spot;
+    // Away covers say what is going on too (labels 6 and 7 when Main sends them).
+    const size_t status = gate.away && texts.size() >= 8 ? 6 : 0;
     const bool portrait = w <= h;
     const double heroWidth = portrait ? std::min(w * .68, h * .46)
                                      : std::min({w * .48, h * .62, 600.});
@@ -442,16 +504,17 @@ static bool copy(CHyprOpenGLImpl *self, const CBox &box) {
     const double markWidth = std::clamp(w * .18, 160., 230.);
     const double markHeight = wordmarkTexture ? markWidth * wordmarkTexture->m_size.y / wordmarkTexture->m_size.x : 60.;
     const double copyHeight = markHeight + 32 + 48 + 20 + 32;
-    const double heroX = portrait ? (w - heroWidth) / 2 : (w - heroWidth - gap - copyWidth) / 2;
-    const double heroY = portrait ? (h - heroHeight - gap - copyHeight) / 2 : (h - heroHeight) / 2;
-    const double copyX = portrait ? (w - copyWidth) / 2 : heroX + heroWidth + gap;
-    const double copyY = portrait ? heroY + heroHeight + gap : (h - copyHeight) / 2;
+    const double heroX = dx + (portrait ? (w - heroWidth) / 2 : (w - heroWidth - gap - copyWidth) / 2);
+    const double heroY = dy + (portrait ? (h - heroHeight - gap - copyHeight) / 2 : (h - heroHeight) / 2);
+    const double copyX = portrait ? dx + (w - copyWidth) / 2 : heroX + heroWidth + gap;
+    const double copyY = portrait ? heroY + heroHeight + gap : dy + (h - copyHeight) / 2;
+    const double centerX = dx + w / 2;
     if (heroTexture)
-      self->renderTexture(heroTexture, CBox{heroX * scale, heroY * scale, heroWidth * scale, heroHeight * scale}, {});
+      self->renderTexture(heroTexture, CBox{heroX * scale, heroY * scale, heroWidth * scale, heroHeight * scale}, {.a = alpha});
     if (wordmarkTexture)
-      self->renderTexture(wordmarkTexture, CBox{(portrait ? (w - markWidth) / 2 : copyX) * scale, copyY * scale, markWidth * scale, markHeight * scale}, {});
-    text(0, portrait ? w / 2 : copyX, copyY + markHeight + 32, portrait);
-    text(1, portrait ? w / 2 : copyX, copyY + markHeight + 100, portrait);
+      self->renderTexture(wordmarkTexture, CBox{(portrait ? centerX - markWidth / 2 : copyX) * scale, copyY * scale, markWidth * scale, markHeight * scale}, {.a = alpha});
+    text(status, portrait ? centerX : copyX, copyY + markHeight + 32, portrait);
+    text(status + 1, portrait ? centerX : copyX, copyY + markHeight + 100, portrait);
   } else {
     text(2, left + 24, top + 30);
     text(3, left + 24, top + 78);
@@ -490,6 +553,8 @@ static CFunctionHook *hook(const std::string &name, void *replacement) {
   return h;
 }
 static std::string state() {
+  if (awayLocked) return "locked";
+  if (gate.away && gate.phase == PrivacyGate::Pending) return "locking";
   if (gate.phase == PrivacyGate::Active)
     for (const auto &monitor : State::monitorState()->allMonitors())
       if (monitor->enabled() && physicalOutput(monitor) &&
@@ -500,9 +565,25 @@ static std::string state() {
   return names[gate.phase];
 }
 static int tick(void *) {
-  if (active() &&
-      std::chrono::steady_clock::now() - heartbeat > std::chrono::seconds(6))
-    stop();
+  if (gate.away && g_pSessionLockManager->isSessionLocked()) {
+    // The compositor now owns the lock: let it draw and receive authentication
+    // input. Retain the token/status until Main acknowledges the transition.
+    gate.stop();
+    awayLocked = true;
+    damage();
+  } else if (active() &&
+      std::chrono::steady_clock::now() - heartbeat > std::chrono::seconds(6)) {
+    if (gate.away) {
+      if (gate.phase != PrivacyGate::Pending) {
+        gate.phase = PrivacyGate::Pending;
+        requestLock(); // Main died: never drop an unprotected curtain.
+      }
+    } else stop();
+  }
+  if (active() && gate.phase != PrivacyGate::Confirming &&
+      (dimmed() != renderedDim || driftSpot() != renderedSpot))
+    damage();
+  if (lockChild > 0 && waitpid(lockChild, nullptr, WNOHANG) != 0) lockChild = -1;
   wl_event_source_timer_update(watchdog, 500);
   return 0;
 }
@@ -634,6 +715,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
              retired = true;
              return std::string(library.dli_fname);
            }
+           if (op == "idle")
+             // Milliseconds since the last physical input, for the away time. No contents.
+             return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       Clock::now() - physicalInputAt)
+                                       .count());
            if (retired || loading)
              throw std::runtime_error("retired");
            auto key = stringValue(json_object_object_get(raw, "token"));
@@ -642,11 +728,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
              throw std::runtime_error("token");
            if (op == "start" && !active()) {
              auto items = json_object_object_get(raw, "labels");
-             if (!items || !json_object_is_type(items, json_type_array) ||
-                 json_object_array_length(items) != 6)
+             const size_t count = items && json_object_is_type(items, json_type_array)
+                                      ? json_object_array_length(items)
+                                      : 0;
+             if (count != 6 && count != 8)
                throw std::runtime_error("labels");
              std::vector<std::string> next;
-             for (size_t i = 0; i < 6; i++)
+             for (size_t i = 0; i < count; i++)
                next.push_back(stringValue(json_object_array_get_idx(items, i)));
              for (auto &label : next)
                if (label.size() > 1024)
@@ -654,9 +742,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
              auto theme = json_object_object_get(raw, "dark");
              if (!theme || !json_object_is_type(theme, json_type_boolean))
                throw std::runtime_error("theme");
-             dark = json_object_get_boolean(theme);
+             // Validated for older Mains; the privacy screen is black in every theme.
+             dark = true;
              wordmarkTexture.reset();
+             brightSince = coverSince = Clock::now();
+             renderedSpot = -1;
              token = key;
+             awayLocked = false;
+             gate.away = false;
              labels = next;
              texts.clear();
              covered.clear();
@@ -666,13 +759,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
            if (key != token)
              throw std::runtime_error("owner");
            heartbeat = std::chrono::steady_clock::now();
-           if (op == "stop")
+           if (op == "stop") {
+             if (gate.away && !g_pSessionLockManager->isSessionLocked())
+               throw std::runtime_error("lock required");
              stop();
-           else if (op == "confirm" && gate.phase == PrivacyGate::Pending) {
+           } else if (op == "away" && gate.phase == PrivacyGate::Active) {
+             gate.away = true;
+             brightSince = Clock::now();
+             damage();
+           } else if (op == "lock" && gate.away) {
+             gate.phase = PrivacyGate::Pending;
+             requestLock();
+           } else if (op == "confirm" && !gate.away && gate.phase == PrivacyGate::Pending) {
              gate.phase = PrivacyGate::Confirming;
              selectedDisconnect = false;
              damage();
-           } else if (op == "resume" && gate.phase == PrivacyGate::Resume) {
+           } else if (op == "resume" && !gate.away && gate.phase == PrivacyGate::Resume) {
              gate.phase = PrivacyGate::Active;
              damage();
            } else if (op != "start" && op != "ping")
@@ -686,6 +788,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
           "Cindy", "1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
+  if (gate.away) requestLock();
   stop();
   listeners.clear();
   texts.clear();

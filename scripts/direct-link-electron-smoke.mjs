@@ -42,11 +42,15 @@ try {
     import WebSocket from 'ws';
     import { DeviceLinkClient } from './packages/device-link/src/client.ts';
     import { desktopDirectRuntime } from './apps/desktop/src/main/device-link/directLink.ts';
+    import { currentLinkTraffic, flushLinkTraffic } from './apps/desktop/src/main/device-link/linkTraffic.desktop.ts';
+    import { configureUserDataDir } from './apps/desktop/src/main/userDataPath.ts';
     const name=app.commandLine.getSwitchValue('smoke-role'), url=app.commandLine.getSwitchValue('smoke-ws'), data=app.commandLine.getSwitchValue('smoke-data');
     app.setPath('userData',data);
+    configureUserDataDir(data);
     protocol.registerSchemesAsPrivileged([{scheme:'cindy-desktop-capture',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
+    app.on('window-all-closed', () => {});
     let client, count=0;
-    process.stdin.on('data',()=>{client?.stop();app.quit();});
+
     app.whenReady().then(async()=>{
       client=new DeviceLinkClient({directRuntime:desktopDirectRuntime,getWsUrl:()=>url,getToken:async()=> 'fixture',
         getHello:()=>({deviceName:name,platform:process.platform,appVersion:'1',remoteControlEnabled:true,busy:false}),
@@ -57,7 +61,12 @@ try {
         if(e.kind==='link-open')client.sendLinkAccept(e.src,e.id,{appVersion:'1',allowlistHash:'fixture'});
         if(e.kind==='invoke'){
           count++;const action=e.payload.args?.[0];
-          if(action==='break')desktopDirectRuntime.suspend();
+          if(action==='break') {
+            desktopDirectRuntime.suspend();
+            void flushLinkTraffic()
+              .then(()=>console.log('FINAL_HOST_TRAFFIC '+JSON.stringify(currentLinkTraffic().snapshot().last5m)))
+              .catch(e=>{console.error(e);app.exit(1);});
+          }
           client.sendInvokeResult(e.src,e.id,{ok:true,result:action==='large'?'局域网😀'.repeat(80000):count});
         }
       });
@@ -74,6 +83,9 @@ try {
       console.log('DIRECT_RESULT');
       const second=await client.invoke('desktop',{channel:'maker:remote-agent:v1',args:['break']});
       if(second.result!==3)throw Error('duplicated execution');
+      desktopDirectRuntime.suspend();
+      await flushLinkTraffic();
+      console.log('DIRECT_TRAFFIC '+JSON.stringify(currentLinkTraffic().snapshot().last5m));
       console.log('ELECTRON_SMOKE_OK');client.stop();app.quit();
     }).catch(e=>{console.error(e);client?.stop();app.exit(1);});
   ` } });
@@ -95,7 +107,8 @@ try {
     });
     // Attach a rejection handler immediately even while waiting for HOST_READY.
     void done.catch(() => {});
-    return { child, done, output: () => stdout, errors: () => stderr };
+    const stopped = new Promise(resolve => child.once('exit', resolve));
+    return { child, done, stopped, output: () => stdout, errors: () => stderr };
   }
   const host = launch('desktop');
   const until = Date.now() + 30_000;
@@ -108,12 +121,27 @@ try {
   try { await viewer.done; } finally { clearTimeout(timer); }
   assert.match(viewer.output(), /DIRECT_READY/); assert.match(viewer.output(), /ELECTRON_SMOKE_OK/);
   const relayReplays = physical.filter(e => e.kind === 'invoke').length;
+  const traffic = JSON.parse(viewer.output().match(/^DIRECT_TRAFFIC (.+)$/m)[1]);
+  assert.ok(traffic['device-link'].sent > 0);
+  assert.ok(traffic['device-link'].received >= 1_040_000);
+  assert.deepEqual(traffic['agent-net'], { sent: 0, received: 0 });
   // Closing before its ACK can replay the second request with its original sequence.
   // The fixture's result=3 proves that this copy did not execute the command twice.
   assert.ok(relayReplays <= 1, 'only the interrupted request may replay through relay');
   assert.equal(physical.filter(e => e.kind === 'invoke-result').length, 1, 'only the interrupted result should fall back to relay');
-  host.child.stdin.write('stop\n'); await host.done;
-  console.log(JSON.stringify({ nativeProcesses: 2, directUtf8Bytes: 1_040_000, relayReplays,
+  const finalDeadline = Date.now() + 5000;
+  while (!host.output().includes('FINAL_HOST_TRAFFIC')) {
+    if (host.child.exitCode !== null || Date.now() >= finalDeadline) throw new Error('Missing final sender traffic: ' + host.errors());
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  const hostTraffic = JSON.parse(host.output().match(/^FINAL_HOST_TRAFFIC (.+)$/m)[1]);
+  assert.ok(hostTraffic['device-link'].sent >= 1_040_000);
+  // All assertions and the host's quit-time checkpoint finished. Stop the isolated fixture before
+  // its DeviceLinkClient attempts to reconnect to the viewer which just exited.
+  assert.equal(host.child.exitCode, null);
+  host.child.kill();
+  await host.stopped;
+  console.log(JSON.stringify({ nativeProcesses: 2, directUtf8Bytes: 1_040_000, traffic, hostTraffic, relayReplays,
     relayFallbackResults: 1, executions: 3, result: 'passed' }, null, 2));
 } finally {
   for (const child of children) if (child.exitCode === null) child.kill();

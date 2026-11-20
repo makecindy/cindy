@@ -1,8 +1,22 @@
 import { delegationEndpointCertificate, type Delegation } from '@cindy/agent-net-protocol';
 import { parseProviderShareScope, parseSharedTaskScope, type Envelope } from '@cindy/device-link-protocol';
-import { parseProviderSharePeer, parseSharedTaskPeer } from '@cindy/device-link';
+import { parseProviderSharePeer, parseSharedTaskPeer, providerShareGuestPeer, providerShareHostPeer, sharedTaskGuestPeer,
+  sharedTaskHostPeer } from '@cindy/device-link';
 
 export interface ScopedPeerTarget { relayId: string; transportKey: string; delegation: Delegation; }
+/**
+ * The local logical peer for the other end of a delegated connection: the key a scoped Device Link frame from it decodes
+ * to, built only from the verified delegation. On the resource's side (`remote = 'guest'`) it names the delegation's guest
+ * device and member; on the guest's side, the resource's computer it is connected to (`deviceId`: the owner or an executor).
+ */
+export function delegatedPeerKey(d: Delegation, remote: 'host' | 'guest', deviceId: string): string | null {
+  try {
+    if (remote === 'host') return d.kind === 'shared-task' ? sharedTaskHostPeer(d.resourceId, deviceId) : providerShareHostPeer(d.resourceId, deviceId);
+    if (!d.scope) return null;
+    return d.kind === 'shared-task' ? sharedTaskGuestPeer(d.resourceId, d.scope.memberId, d.guestDeviceId)
+      : providerShareGuestPeer(d.resourceId, d.scope.memberId, d.guestDeviceId);
+  } catch { return null; }
+}
 /** Resolve a local logical peer only within its verified resource/member. */
 export function delegatedPeerTarget(d: Delegation, peer: string, localRole: 'host' | 'guest'): ScopedPeerTarget | null {
   const p = d.kind === 'shared-task' ? parseSharedTaskPeer(peer) : parseProviderSharePeer(peer);

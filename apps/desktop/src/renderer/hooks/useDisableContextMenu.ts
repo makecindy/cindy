@@ -48,7 +48,7 @@ export function useDisableContextMenu(): void {
       if (editableAncestor) return;
 
       // Read-only text selections use the main-process platform menu (macOS
-      // Copy + Look Up, or Windows Copy + web search). Keep suppressing the
+      // Copy + Look Up, or Windows/Linux Copy + web search). Keep suppressing the
       // generic browser context menu everywhere else.
       if (hasTextSelectionAtPoint(e.clientX, e.clientY, window.getSelection())) return;
 

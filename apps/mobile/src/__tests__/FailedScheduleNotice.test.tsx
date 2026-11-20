@@ -81,7 +81,7 @@ it('discloses the recorded error and keeps it out of dismissal preferences', asy
   expect(host.textContent).toContain('provider mismatch');
   expect(host.textContent).not.toContain('private-test-value');
   await click('session.tail.diagnose');
-  expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+  expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: expect.stringContaining(`runId: ${run.runId}\nfiredAt: ${new Date(run.firedAt).toISOString()}\nprovider mismatch`) }));
   await act(async () => host.querySelector('button')!.click());
   expect(storage.get('scheduleFailureDismissal:owner/device/task')).toBe(JSON.stringify(run));
 });

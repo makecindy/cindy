@@ -11,11 +11,14 @@ const mocks = vi.hoisted(() => {
   };
 });
 vi.mock('../localDb/client/current', () => ({ getCurrentDbClientSnapshot: () => mocks, getDbClient: () => ({ drizzle: { insert: mocks.insert } }) }));
+vi.mock('../mcp-integrations/projectManagementCore.js', () => ({
+  projectForNewTask: async (dir?: string) => ({ projectDir: dir ?? null, workspaceKind: dir ? 'project' : 'dialogue' }),
+}));
 vi.mock('../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: mocks.workspace }));
 vi.mock('../git-snapshot/projectGitBootstrap', () => ({ ensureProjectGitInitialized: mocks.bootstrap }));
 vi.mock('../maker-host/git-safety-settings-store', () => ({ readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }) }));
-vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: mocks.recent }));
+vi.mock('../localDb/ipc/recentWorkdirs', () => ({ touchRecentWorkdir: mocks.recent }));
 vi.mock('../localDb/pluginWorkspaceDedupe', () => ({ pickSessionForWorkdir: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 

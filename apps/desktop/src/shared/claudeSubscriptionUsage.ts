@@ -354,6 +354,8 @@ export function mergeClaudeSubscriptionUsageSnapshot(
         : incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,
       accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
+      // Quota-only events omit the label; an attached status may explicitly clear it.
+      planDisplayName: incoming.planDisplayName === undefined ? prev.planDisplayName : incoming.planDisplayName,
       // 展示来源标为最近一次更新者;scoped / extraUsage 仍是 endpoint 的旧值。
       source: 'unified-headers',
     };
@@ -368,6 +370,8 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   return {
     ...incoming,
     subscriptionType: incoming.subscriptionType ?? prev.subscriptionType,
+    planTier: incoming.planTier ?? prev.planTier,
+    planDisplayName: incoming.planDisplayName === undefined ? prev.planDisplayName : incoming.planDisplayName,
     accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
   };
 }

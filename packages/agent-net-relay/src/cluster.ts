@@ -75,6 +75,8 @@ const HOP_HEADER = 'x-agent-net-cluster-hop';
 const CLIENT_HEADER = 'x-agent-net-cluster-client';
 const FORWARD_TIMEOUT_MS = 10_000;
 const STREAM_IDLE_TIMEOUT_MS = 30_000;
+// This Node-only router is also typechecked with React Native's numeric timer globals.
+type ClusterDeadline = ReturnType<typeof setTimeout> & { unref(): void };
 
 export function checkClusterOptions(options: RelayClusterOptions): RelayClusterOptions {
   if (typeof options.replicaId !== 'string' || !ID_PATTERN.test(options.replicaId)) throw new Error('INVALID_CLUSTER_REPLICA_ID');
@@ -147,7 +149,7 @@ export function createClusterRouter(options: { secret: string; source?: (req: In
     const timeout = () => outgoing.destroy(new Error('CLUSTER_TIMEOUT'));
     // A WebSocket has one bounded handshake. HTTP uploads instead have a bounded connect,
     // progress-based stream timeout, then a response-header deadline after the body is sent.
-    let deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS);
+    let deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS) as ClusterDeadline;
     deadline.unref();
     let received = false;
     const answered = () => { received = true; clearTimeout(deadline); };
@@ -158,7 +160,7 @@ export function createClusterRouter(options: { secret: string; source?: (req: In
       });
       outgoing.once('finish', () => {
         if (received) return;
-        clearTimeout(deadline); deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS); deadline.unref();
+        clearTimeout(deadline); deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS) as ClusterDeadline; deadline.unref();
       });
     }
     outgoing.once('response', answered);

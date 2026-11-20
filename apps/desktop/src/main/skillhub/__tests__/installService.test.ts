@@ -1251,6 +1251,56 @@ describe('skillhub/installService', () => {
     });
   });
 
+  // Retry decision 2026-11-17: one failed request used to fail the install outright.
+  it('retries a busy download server and reports the retry as download progress', async () => {
+    const zipBuf = await makeZip({ 'SKILL.md': 'retried content' });
+    await setupInstallDownload('retry-skill', zipBuf);
+    const { net } = await import('electron');
+    vi.mocked(net.fetch)
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(mockDownload(zipBuf));
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
+    const { install } = await import('../installService');
+    const events: Array<{
+      phase: string;
+      download?: { phase: string; attempt?: number; retryReason?: string };
+    }> = [];
+
+    // Only setTimeout is faked, so the ~1s backoff passes instantly while file I/O stays real.
+    const realSetTimeout = globalThis.setTimeout;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = install(
+        {
+          name: 'retry-skill',
+          installPath: path.join(TEST_ROOT, 'global', 'retry-skill'),
+          version: '1.0.0',
+        },
+        (event) => events.push(event),
+      );
+      let done = false;
+      void pending.then(
+        () => (done = true),
+        () => (done = true),
+      );
+      for (let step = 0; step < 40 && !done; step++) {
+        await vi.advanceTimersByTimeAsync(250);
+        await new Promise((resolve) => realSetTimeout(resolve, 1));
+      }
+      expect(await pending).toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(net.fetch).toHaveBeenCalledTimes(2);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        phase: 'downloading',
+        download: expect.objectContaining({ phase: 'retrying', attempt: 2, retryReason: 'server' }),
+      }),
+    );
+  });
+
   it('creates the Claude discovery link for a global install only when projection is allowed (#9282)', async () => {
     const fakeHome = path.join(TEST_ROOT, 'claude-gate-home');
     const sharedSkills = await import('../../maker-host/shared-global-skills.js');

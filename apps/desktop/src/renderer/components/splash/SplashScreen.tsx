@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type {
   DbSlimmingStartupPhase,
   DbSlimmingStartupProgress,
@@ -31,6 +32,9 @@ import {
   SPLASH_PANEL,
   STAGE,
 } from '@/components/login/loginDesignTokens';
+import { formatDownloadEta } from '@/components/ui/download-meter';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
+import { modernLocaleOf, type SupportedLocale } from '../../../shared/locale';
 
 /**
  * SplashScreen — wave4 白底统一面板版(implementation-plan Step 3b WHAT1)。
@@ -120,7 +124,7 @@ function dbCleanupPhaseTranslationKey(phase: DbSlimmingStartupPhase): string {
 }
 
 export function SplashScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const splash = useSplash();
   const { step, totalSteps } = useEnvCheck();
   const { coverHeld } = useAppShellCover();
@@ -302,6 +306,22 @@ export function SplashScreen() {
     fixture && !realIsDownloading
       ? { speed: '11.5 MB/s', downloaded: '29.7 MB', total: '97.1 MB' }
       : downloadInfo;
+  // The splash keeps its registered brand-canvas bar (§16 / loginDesignTokens) instead of the
+  // standard DownloadMeter; only its stats line follows the shared progress: a non-transfer
+  // phase (retrying and why, verifying, installing) replaces speed and bytes, and an active
+  // transfer adds time left.
+  const statsDownload: DownloadProgress | undefined =
+    fixture && !realIsDownloading ? undefined : downloadInfo.download;
+  const statsStatus = splashDownloadStatus(statsDownload, t);
+  const statsEta =
+    !statsStatus && statsDownload?.etaSeconds != null && statsDownload.speedBps > 0
+      ? t('downloadProgress.eta', {
+          time: formatDownloadEta(
+            statsDownload.etaSeconds,
+            modernLocaleOf((i18n?.language ?? 'en') as SupportedLocale),
+          ),
+        })
+      : null;
   // 三失败弹窗 → 统一面板形态(fixture 模式按显示 phase 遍历)。
   const dialogKind = fixture
     ? displayPhase === 'splash_manifest_failed'
@@ -488,18 +508,35 @@ export function SplashScreen() {
                   }}
                 >
                   <span>{statsPercent}%</span>
-                  {statsInfo.speed && (
-                    <>
-                      <span>·</span>
-                      <span>{statsInfo.speed}</span>
-                    </>
-                  )}
-                  {statsInfo.downloaded && statsInfo.total && (
-                    <>
-                      <span>·</span>
-                      <span>
-                        {statsInfo.downloaded} / {statsInfo.total}
+                  {statsStatus ? (
+                    statsStatus.map((part) => (
+                      <span key={part} className="contents">
+                        <span>·</span>
+                        <span>{part}</span>
                       </span>
+                    ))
+                  ) : (
+                    <>
+                      {statsInfo.speed && (
+                        <>
+                          <span>·</span>
+                          <span>{statsInfo.speed}</span>
+                        </>
+                      )}
+                      {statsInfo.downloaded && statsInfo.total && (
+                        <>
+                          <span>·</span>
+                          <span>
+                            {statsInfo.downloaded} / {statsInfo.total}
+                          </span>
+                        </>
+                      )}
+                      {statsEta && (
+                        <>
+                          <span>·</span>
+                          <span>{statsEta}</span>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -621,4 +658,20 @@ export function SplashScreen() {
       </div>
     </div>
   );
+}
+
+/** Status words for a phase in which bytes are not moving; null while transferring. */
+function splashDownloadStatus(
+  download: DownloadProgress | undefined,
+  t: TFunction,
+): string[] | null {
+  if (!download || download.phase === 'downloading') return null;
+  if (download.phase === 'retrying') {
+    const parts = [t(`downloadProgress.retry.${download.retryReason ?? 'network'}`)];
+    if (download.attempt) parts.push(t('downloadProgress.attempt', { attempt: download.attempt }));
+    return parts;
+  }
+  if (download.phase === 'verifying' || download.phase === 'installing')
+    return [t(`downloadProgress.phase.${download.phase}`)];
+  return null;
 }

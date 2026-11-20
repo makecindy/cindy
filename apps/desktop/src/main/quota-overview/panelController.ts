@@ -9,6 +9,7 @@
  */
 
 import { app, Notification } from 'electron';
+import { QUOTA_PANEL_DESIGN } from '../../shared/quotaPanelDesign.js';
 
 import type {
   MenubarGate,
@@ -28,8 +29,6 @@ import {
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { getActiveControllers } from '../device-link/dispatch.desktop.js';
-import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
-import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -38,14 +37,21 @@ import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import { emptyMenubarInputs } from '../menubar/collect.js';
 import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { buildMenubarActivities } from '../menubar/activity.js';
-import { buildMenubarView, isLowOnEverything, type MenubarBuildInput, type MenubarSubscriptionInput } from '../menubar/snapshot.js';
+import { buildMenubarView, isLowOnEverything, type MenubarBuildInput } from '../menubar/snapshot.js';
 import { buildMenubarUiStrings, createMenubarTranslate } from '../menubar/strings.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getQuotaOverviewService, type QuotaOverviewBuild, type QuotaOverviewService } from './service.js';
 
-import { SharedQuotaReader } from '../menubar/sharedSubscriptions.js';
-
 const log = createLogger('quota-panel');
+
+/**
+ * A hover card keeps the overview this long after it starts or closes, so that sweeping the
+ * pointer back over the icon reuses every reading instead of collecting from scratch. Nothing is
+ * polled meanwhile: all sources were read within their closed cadences, which are longer.
+ */
+const HOVER_CARD_KEEP_WARM_MS = 3 * 60_000;
+/** Opening by hover refreshes at most this often, the cadence of a card left open. */
+const HOVER_CARD_REFRESH_MIN_MS = 60_000;
 
 /** What the user does in a panel; the macOS helper sends these as messages. */
 export type QuotaPanelCommand = Exclude<MenubarHelperMessage, { type: 'ready' } | { type: 'error' }>;
@@ -59,6 +65,15 @@ export interface QuotaPanelPresenter {
 }
 
 export interface QuotaPanelDeps {
+  /**
+   * The Windows tray card: it opens when the pointer merely rests on the icon and shows no quota
+   * while closed, unlike the macOS status item. A hidden card is not a reader of the overview
+   * (engineering-conventions §8.3), so it holds it only while it is on screen, briefly afterwards,
+   * or while the low-quota alert needs the readings; and since pointer movement alone opens it,
+   * opening refreshes at a bounded rate. The last view stays as the next opening's first frame
+   * (§8.7): one view in memory, replaced on opening and dropped at an owner change.
+   */
+  hoverCard?: boolean;
   /** Opens a new task in the main window (the app menu's "New Task" command). */
   openNewTask(): void;
   /** Settings written from the panel; a presentation stops when it is switched off. */
@@ -77,15 +92,18 @@ export function refreshQuotaPanelsControlState(): void {
 export class QuotaPanelController {
   private readonly overview: QuotaOverviewService;
   private started = false;
-  private panelOpen = false;
-  private sharedSources: MenubarSubscriptionInput[] = [];
-  private sharedScope: string | null = null;
-  private sharedReader: SharedQuotaReader | null = null;
   private lastView: MenubarView | null = null;
   /** Null until the first build, so launching while low does not notify. */
   private wasLow: boolean | null = null;
   private lowNotification: Notification | null = null;
   private disposers: (() => void)[] = [];
+  private panelOpen = false;
+  private warmUntilMs = 0;
+  private warmTimer: ReturnType<typeof setTimeout> | null = null;
+  private openRefreshedAtMs = -Infinity;
+  private releaseOverview: (() => void) | null = null;
+  /** Owner of the last view; without a hold there is no build to tell an owner change by. */
+  private viewOwnerId: string | null = null;
 
   constructor(private readonly presenter: QuotaPanelPresenter, private readonly deps: QuotaPanelDeps) {
     this.overview = deps.overview ?? getQuotaOverviewService();
@@ -97,6 +115,7 @@ export class QuotaPanelController {
 
   updateSettings(patch: MenubarSettingsPatch): MenubarSettings {
     const settings = this.overview.updateSettings(patch);
+    this.syncHold();
     this.deps.onSettingsChanged?.(settings);
     return settings;
   }
@@ -114,15 +133,60 @@ export class QuotaPanelController {
     this.disposers.push(this.overview.subscribe((build) => this.publish(build)));
     const island = getAgentIslandService();
     if (island) this.disposers.push(island.subscribeTaskOverview(() => this.publishTaskOverview()));
+    // The last view belongs to the old owner (received shares included): clear it at the account
+    // boundary or sign-out instead of waiting for the next owner's first build.
+    this.disposers.push(
+      onAppSessionInvalidated(() => this.publishUnavailableOverview()),
+      onAuthStateChange(() => {
+        // A panel that released the overview has no build by design; a token refresh must not
+        // blank its first frame, only a different owner does.
+        if (this.overview.latest()) return;
+        if (this.releaseOverview || getActiveAppSession().dataOwnerId !== this.viewOwnerId) this.publishUnavailableOverview();
+      }),
+    );
     // Subscribed first, so the first build after acquiring reaches the presentation.
-    this.disposers.push(this.overview.acquire());
+    // A hover card reads once now for its first frame.
+    if (this.deps.hoverCard) this.keepWarm();
+    else this.syncHold();
     const current = this.overview.latest();
     if (current) this.publish(current);
+  }
+
+  private keepWarm(): void {
+    this.warmUntilMs = Date.now() + HOVER_CARD_KEEP_WARM_MS;
+    if (this.warmTimer) clearTimeout(this.warmTimer);
+    this.warmTimer = setTimeout(() => {
+      this.warmTimer = null;
+      this.syncHold();
+    }, HOVER_CARD_KEEP_WARM_MS);
+    this.syncHold();
+  }
+
+  /** Holds the overview exactly while this panel needs its readings. */
+  private syncHold(): void {
+    const wanted = this.started && (
+      !this.deps.hoverCard || this.panelOpen || Date.now() < this.warmUntilMs
+      // The alert is raised from builds made while the panel is closed, so it is a reader too.
+      || this.overview.settings.lowAlert
+    );
+    if (wanted === (this.releaseOverview !== null)) return;
+    if (wanted) {
+      // The first build after a gap is a first build again: it must not notify.
+      this.wasLow = null;
+      this.releaseOverview = this.overview.acquire();
+    } else {
+      this.releaseOverview?.();
+      this.releaseOverview = null;
+    }
   }
 
   stop(): void {
     if (!this.started) return;
     this.started = false;
+    this.panelOpen = false;
+    this.warmUntilMs = 0;
+    if (this.warmTimer) clearTimeout(this.warmTimer);
+    this.warmTimer = null;
     running.delete(this);
     for (const dispose of this.disposers.splice(0)) {
       try {
@@ -131,10 +195,10 @@ export class QuotaPanelController {
         // Listener already gone.
       }
     }
-    this.panelOpen = false;
-    this.sharedReader?.setOpen(false);
+    this.syncHold();
     this.overview.setInteractive(false);
     this.lastView = null;
+    this.viewOwnerId = null;
     this.lowNotification?.close();
     this.lowNotification = null;
   }
@@ -153,15 +217,22 @@ export class QuotaPanelController {
   handle(command: QuotaPanelCommand): void {
     switch (command.type) {
       case 'panel':
-        if (this.started) {
-          this.panelOpen = command.open;
-          this.overview.setInteractive(command.open);
-          this.setSharedOpen();
+        if (!this.started) return;
+        this.panelOpen = command.open;
+        if (command.open) {
+          // Held before going interactive, so that opening can refresh.
+          this.syncHold();
+          const now = Date.now();
+          const refresh = !this.deps.hoverCard || now - this.openRefreshedAtMs >= HOVER_CARD_REFRESH_MIN_MS;
+          if (refresh) this.openRefreshedAtMs = now;
+          this.overview.setInteractive(true, refresh);
+        } else {
+          this.overview.setInteractive(false);
+          if (this.deps.hoverCard) this.keepWarm();
         }
         return;
       case 'refresh':
         this.overview.refresh(true);
-        this.sharedReader?.refresh();
         return;
       case 'open-app':
         showMainWindow();
@@ -189,22 +260,14 @@ export class QuotaPanelController {
   }
 
   private show(view: MenubarView): void {
-    this.lastView = view;
-    this.presenter.publish(view);
+    this.lastView = { ...view, presentation: QUOTA_PANEL_DESIGN };
+    this.presenter.publish(this.lastView);
   }
 
   private publish(build: QuotaOverviewBuild): void {
     const gate = build.view.gate ?? undefined;
-    // Received quotas belong only to this visible panel, never the overview/widget cache.
-    const owner = getActiveAppSession();
-    const sources = this.panelOpen && !gate && !isAppSessionBoundaryPending()
-      && this.sharedScope === `${owner.dataOwnerId}:${owner.generation}` ? this.sharedSources.map(source => ({
-      ...source, plan: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeekly' : 'shared.label'),
-      shared: { ...source.shared, label: source.shared?.label ?? source.brand,
-        note: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeeklyNote' : 'shared.note') },
-    })) : [];
-    const view = sources.length ? buildMenubarView({ ...build.input, nowMs: Date.now(), sources: [...build.input.sources, ...sources] }) : build.view;
-    this.show({ ...view, ...this.taskOverview(gate), ...controlState(gate) });
+    this.viewOwnerId = build.ownerId;
+    this.show({ ...build.view, ...this.taskOverview(gate), ...controlState(gate) });
     if (gate) {
       // The first real build after signing in counts as a first build again.
       this.wasLow = null;
@@ -213,38 +276,9 @@ export class QuotaPanelController {
     this.updateLowAlert(isLowOnEverything(build.input), build.input);
   }
 
-  private setSharedOpen(): void {
-    if (!this.panelOpen) { this.sharedReader?.setOpen(false); return; }
-    this.sharedReader ??= new SharedQuotaReader({
-      scope: () => {
-        const scope = getActiveAppSession();
-        return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
-      },
-      shares: getReceivedShares,
-      accessEpoch: providerShareAccessEpoch,
-      read: readReceivedProviderShareQuota,
-      subscribe: changed => {
-        const offShares = onProviderShareReceivedChanged(changed);
-        const offAuth = onAuthStateChange(changed);
-        const offSession = onAppSessionInvalidated(changed);
-        return () => { offShares(); offAuth(); offSession(); };
-      },
-      publish: sources => {
-        this.sharedSources = sources;
-        const owner = getActiveAppSession();
-        this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
-        const build = this.overview.latest();
-        if (this.started) {
-          if (build) this.publish(build);
-          else this.publishUnavailableOverview();
-        }
-      },
-    });
-    this.sharedReader.setOpen(this.started && this.panelOpen);
-  }
-
   /** Identity invalidation cannot wait for an overview still collecting the old owner's data. */
   private publishUnavailableOverview(): void {
+    if (!this.started) return;
     const nowMs = Date.now();
     const locale = getResolvedMainLocale();
     const raw = (key: string) => rawMainString(key, locale);
@@ -257,6 +291,7 @@ export class QuotaPanelController {
       ...(!getActiveAppSession().dataOwnerId ? { gate: 'sign-in' as const } : {}),
     });
     this.wasLow = null;
+    this.viewOwnerId = getActiveAppSession().dataOwnerId;
     this.show({ ...view, ...this.taskOverview('sign-in'), ...controlState('sign-in') });
   }
 

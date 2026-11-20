@@ -2,6 +2,46 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
+`REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的
+`resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
+只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
+
+桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
+`expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
+任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
+原点选对应的重试不会派发到改选目标。
+远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
+
+插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
+控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
+
+## 托管请求的附件预算与保存（2026-11-17）
+
+`open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
+模型运行端只在此字段与 `virtualWorkspace` 同时存在、且不是 `hostToolsOnly` 时绑定保存通道。
+托管任务无本机数据库行时，仍按原 HTTP / 完整 WebSocket 重发预算缩减；原生历史不改写。
+本机任务继续使用现有媒体入库、引用补偿和任务删除生命周期；纯文本不启动保存通道。
+
+保存复用 `maker:remote-agent:v1` 的反向 HTTP，内部路径 `/cindy/attachment-preservation`：
+`begin` → `find`（SHA-256 与按字节识别的 MIME）→ 必要时 `chunk` / `prepare` → `commit`，最后 `abort` 清理批次。
+查找与保存共用类型判据：声明为二进制的 PDF／媒体，以及错误声明为媒体的普通文件，也能复用原路径。
+`prepare` 仍传原声明，接收端独立校验完整字节；查找仍检查任务引用、普通文件与内容摘要，不以 MIME 提示授予访问。
+块最多 512 KiB，严格按偏移顺序接收；每个运行最多四个在途批次，空闲 60 秒清理。
+请求不接受目标任务 ID 或文件路径，接收方固定使用打开时的任务与账号。
+只传需要移出的附件，已有同任务引用且文件摘要一致时不再传字节；尚未提交的引用不会交给上游。
+批次沿用既有恢复锁、磁盘额度和引用补偿；取消、账号切换、任务删除或缩减失败不发布新引用。
+返回路径经原 ExecutorWorkspace 投影，工具仍在任务电脑读取。投影不增加文件访问授权。
+
+- 旧控制端不声明：新运行端保持原压缩路径。新控制端对旧运行端：未知可选字段被忽略。
+  任务端与执行端均需支持；供应商组经旧业务中转端解码转发时也可能丢弃能力声明，安全降级。
+  能力缺失或保存失败不会丢弃附件，仍可能显式超限。
+- 官方及自建中转仅透传已有加密业务载荷，无新 relay kind、接口、签名或帧语义，无需服务端更新。
+- 故障半径：证据限于本次预算超限／批次失败；只取消本任务批次，不重建 peer 或共享连接，不重放写入。
+  提交已成功但回执丢失时可能保留可复用文件与引用，下一次按摘要查找，仍由任务生命周期清理。
+- 回归入口：`oversized-attachment-recovery.test.ts` 验证无运行端 DB 的三种请求格式、去重及回滚；
+  `roundtrip.test.ts` 经真实打开、宿主反向 HTTP 与文件工具验证分块保存、路径可读和关闭释放。
+
 Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任务所在电脑为准，用远程供应商与本机体验一致。
 `open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
 用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。伙伴授权只对隔离运行的伙伴（`isolatedBotProfile`）生效，与本机引擎一致：V2 伙伴在自己项目里的对话按普通任务带全部启用的托管 Skill，个人 Skill 同样按停用过滤。文件随
@@ -170,6 +210,12 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   旧控制端的大块仍正常接收，新控制端的小块也符合旧接收端的原协议；不新增字段、能力位或重试。
   官方与自建中转继续转发原有 invoke，无需服务端或中转升级。单次 `poll`
   每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
+  2026-11-19 两处只在 A 端生效、旧 B 照常工作的改动：`upload` 块同时在途（每台 B 最多 4 块，B 本来就按
+  `(uploadId, index)` 存块、引用时才检查齐全），链路类错误按同一块号重发最多 2 次；`poll` 可选 `maxBytes`，
+  B 在 64KB–1.5MB 之间取（超出范围按范围取，不拒绝），A 超时就减半、按实测回程速度定下一次，旧 B 忽略该字段。
+  都不新增 op、能力位或中转字段，官方与自建中转照常转发。Agent-Net 会话上 A 把 `upload` 块放后台通道，
+  这是发送端的通道选择，旧 B 的会话层本来就收三个通道。恢复规则见
+  [远程与手机适配](../remote-and-mobile-adaptation.md)「远程 Agent 的拉取与恢复」。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。
 - **凭证**：模型请求只由 B 上的 Agent 用 B 自己的登录与供应商发出，任何凭证不进事件流；B 本机
@@ -203,12 +249,15 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 - **Codex 启动清单批量探测（2026-10-29）**：B 在单条 exec-server 连接启动时，把首个插件清单所在
   目录及其祖先的三种清单检查提前发送（最多 64 层／192 条）。全部仍是旧协议支持的普通
   `fs/getMetadata`，使用独立字符串 ID，保留原 params/sandbox，经 A 的原路径映射和原生执行器；
-  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可在本次启动复用，已有文件、
-  权限错误、未知目标和不同 sandbox 回落原查询。启动结束或写入／进程启动即停止复用，连接关闭清理；
+  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可缓存并供本次启动的后续查询复用；
+  已在等待同 URI、同 params/sandbox 查询的原请求直接消费该次原生成功或错误回包，避免重复 RPC。
+  成功元数据与非 NotFound 错误不缓存，后续已有文件／权限错误查询、未知目标和不同 sandbox 仍走原查询。
+  启动结束或写入／进程启动即停止复用，连接关闭清理；
   迟到内部回复仅在本连接消费，不重放写操作、不重置 peer/relay、不影响其它任务。
   新 B 配旧 A 可直接使用；旧 B 保持串行。供应商组与自建中转只转发既有不透明 ws 数据及有界
   poll/push 批次，不解析内部 JSON-RPC ID，因此无需中转、服务端或 Mobile 同步修改，
-  帧大小、鉴权、签名、ACK 和恢复策略不变。回归为 `execServerStartupBatch.test.ts`、
+  帧大小、鉴权、签名、ACK 和恢复策略不变。见[批处理实现](../../../apps/desktop/src/main/remote-agent/host/execServerStartupBatch.ts)，
+  回归为 [execServerStartupBatch.test.ts](../../../apps/desktop/src/main/remote-agent/__tests__/execServerStartupBatch.test.ts)、
   `startupProbe.e2e.test.ts`、`mirror.test.ts`、`groupRelay.test.ts` 与 `hostLifecycle.test.ts`；
   真实跨系统及线上分享运行端尚未验收，性能数据与复跑命令见远程适配文档。
 - **影子目录与配置同步**：`open` 载荷除项目说明文件(含 `.claude/CLAUDE.md`、`.claude/rules`、
@@ -315,8 +364,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   发送时才在那台失败、且之后每次发送都重试的意图；本机窗口拿到 `REMOTE_AGENT_DEVICE_UNREACHABLE` /
   `REMOTE_AGENT_MODEL_UNAVAILABLE`，device-link 控制端降级为 `PRECONDITION_FAILED`。Mobile 与桌面同一套
   模型列表：A 自己的供应商之外，另列其他同账号电脑已开放远程调用的供应商(Mobile 直接经 device-link 读那台的
-  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置，换到另一台电脑先二次确认、再带
-  `agentDeviceId`(null = A)。共享任务访客不能换电脑。
+  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置。按 2026-11-18 用户裁决，
+  桌面与手机点选另一台电脑的模型即带 `agentDeviceId`(null = A)登记切换意图，下一条消息发送时生效。
+  共享任务访客不能换电脑。
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端经任务所在的 A 读取第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。
@@ -418,6 +468,11 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   分享者电脑、受邀者电脑与手机各过一遍。手机经同账号新 channel `maker:provider-share:received-catalogs`(进同账号 allowlist)
   读取被控电脑收到的分享及其目录；旧版电脑回 `CHANNEL_NOT_ALLOWED`，手机按没有分享处理。跨区域(P3)经服务端开关开放，
   受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
+  共享推理代理的范围拒绝仍回 HTTP 403 与原 JSON 结构，既有 code 保持原样（`shared_provider_only`，
+  或 Pi 令牌不匹配的 `pi_provider_mismatch`）；只在确认会话／供应商范围不匹配的
+  `error.message` 前追加 `[SHARED_PROVIDER_SCOPE_DENIED] `，不含模型或账号信息。新版接收方据此停止组内换机；
+  旧的无标记文案也可能表示某成员失去模型，新版接收方不能据此停止恢复。旧接收方继续按原 403 处理；
+  不新增 wire 字段、能力位或白名单，自建中转无需适配。
 - **分叉**：通过 `nativeFork` 能力协商在原运行端执行，见本节开头的分叉协议；旧运行端提示升级。
 - **暂不支持**：审查、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
@@ -530,3 +585,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
 共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
 本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。
+
+共享文生图沿用 `caps.sharedImageGeneration`。支持内置 OpenAI 订阅的执行端另报
+`sharedBuiltinOpenAiImage: true`。0.1.143 只报前者，接收端对这类分享端保留原有
+Codex 原生账号选项，隐藏内置订阅。供应商组选择内置 OpenAI 执行端时也复核新能力，
+缺少该声明则继续选择其他成员。两个字段都是可选能力，中转按原通道透传。

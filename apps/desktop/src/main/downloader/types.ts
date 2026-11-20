@@ -111,17 +111,29 @@ export type DownloadErrorCode =
   | 'ABORTED'
   | 'INVALID_ARG';
 
+/** Which deadline produced a `TIMEOUT`, so callers can explain a retry (e.g. a slow network). */
+export type DownloadTimeoutReason = 'connect' | 'idle' | 'slow' | 'total';
+
 export class DownloadError extends Error {
   public readonly code: DownloadErrorCode;
   public readonly cause?: Error;
   public readonly httpStatus?: number;
+  /** Set only for `TIMEOUT`. */
+  public readonly timeoutReason?: DownloadTimeoutReason;
 
-  constructor(code: DownloadErrorCode, message: string, cause?: Error, httpStatus?: number) {
+  constructor(
+    code: DownloadErrorCode,
+    message: string,
+    cause?: Error,
+    httpStatus?: number,
+    timeoutReason?: DownloadTimeoutReason,
+  ) {
     super(message);
     this.name = 'DownloadError';
     this.code = code;
     this.cause = cause;
     this.httpStatus = httpStatus;
+    this.timeoutReason = timeoutReason;
   }
 }
 
@@ -141,6 +153,15 @@ export interface TimeoutConfig {
   connectMs: number;
   /** Default 30000 — max gap between data chunks before treating as dead. */
   idleMs: number;
+  /**
+   * Default 30000. A transfer averaging below `lowSpeedBytesPerSecond` over this window
+   * reconnects and resumes: a trickle never trips `idleMs`, and a fresh connection often
+   * gets a better route. Applies only when a retry keeps the written bytes (`resume` is not
+   * false and more than one attempt is allowed); otherwise a slow transfer simply continues.
+   */
+  lowSpeedWindowMs: number;
+  /** Default 4096. See `lowSpeedWindowMs`. */
+  lowSpeedBytesPerSecond: number;
   /** Optional active budget, including retry waits but excluding queue time. */
   totalMs?: number;
 }

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { SseTranslator } from '@cindy/anthropic-responses-bridge';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels, providerPresetModelRecord } from '@cindy/model-providers';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText, sanitizePiAssistantContent } from '../pi-provider-transport.js';
+import { withCopilotForwardHeaders } from '../copilot-account-url.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -14,6 +15,13 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  it('drops empty thinking signatures while retaining substantive assistant output', () => {
+    expect(sanitizePiAssistantContent([
+      { type: 'thinking', thinking: 'stale', thinkingSignature: '' },
+      { type: 'text', text: 'keep this' },
+    ] as never)).toEqual([{ type: 'text', text: 'keep this' }]);
+  });
+
   // #10269, unit: the ID-only model on a Messages connection must carry its
   // Chat identity through the installed serializer, including a tool result.
   // Descriptor-only tests cannot catch SDK compatibility/header regressions.
@@ -637,6 +645,52 @@ it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses edito
   const result = await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'ping', max_output_tokens: 16 }) })).text();
   expect(result).toContain('response.completed');
   expect(captured).toBe(true);
+});
+
+// #11326, unit: the bundled-model tests cannot catch missing defaults for a newly
+// discovered Responses model. Observe the transparent route and the SDK's fetch input.
+it.each([
+  ['official account', 'https://api.business.githubcopilot.com', true],
+  ['edited endpoint', 'https://api.business.githubcopilot.com.example.org', false],
+] as const)('scopes discovered Copilot Responses headers to the %s', async (_label, upstream, applies) => {
+  const discoveryBase = 'https://api.individual.githubcopilot.com';
+  const id = 'gpt-6.2-sol';
+  const discovered = parseModelsListResponse(
+    { data: [{ id, supported_endpoints: ['/responses'] }] }, discoveryBase + '/models',
+  );
+  const models = mergeDiscoveredRuntimeModels([], discovered!);
+  const config = {
+    id: 'discovered-copilot',
+    name: 'Copilot',
+    runtimes: { pi: { baseUrl: discoveryBase, wireProtocol: 'anthropic-messages' as const, catalogPresetId: 'github-copilot', models } },
+  };
+  const provider = buildUserProvider(config, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const defaults = providerPresetModelRecord('github-copilot', 'gpt-6.1-sol', 'openai-responses')!.execution.pi.headers!;
+  const route = { upstreamOverride: upstream, pathOverride: '/v1/responses' };
+  const forward = withCopilotForwardHeaders(route, true, {
+    reqId: 1, method: 'POST', url: '/responses', headers: { 'editor-version': 'custom-editor' },
+  });
+  expect(forward?.pathOverride).toBe(route.pathOverride);
+  const forwardHeaders = new Headers(forward?.headerOverride);
+  for (const [name, value] of Object.entries(defaults)) {
+    expect(forwardHeaders.get(name)).toBe(applies && name.toLowerCase() !== 'editor-version' ? value : null);
+  }
+
+  const row = invocationModelRecord(provider.models.pi![0], discoveryBase)!;
+  const outbound = vi.fn<typeof fetch>(async (_url, _init) =>
+    new Response('data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[]}}\n\n',
+      { headers: { 'content-type': 'text/event-stream' } }));
+  const send = createPiProviderFetch({
+    row, providerId: config.id, upstream, copilotOAuth: true, apiKey: 'fixture-token',
+    headers: { 'editor-version': 'custom-editor' }, fetchImpl: outbound,
+  });
+  await (await send('https://unused.invalid', { body: JSON.stringify({ model: id, input: 'ping', max_output_tokens: 16 }) })).text();
+  const [url, init] = outbound.mock.calls[0];
+  expect(String(url)).toBe(upstream + '/responses');
+  const requestHeaders = new Headers(init?.headers);
+  expect(requestHeaders.get('editor-version')).toBe('custom-editor');
+  expect(requestHeaders.get('editor-plugin-version')).toBe(applies ? defaults['Editor-Plugin-Version'] : null);
+  expect(requestHeaders.get('copilot-integration-id')).toBe(applies ? defaults['Copilot-Integration-Id'] : null);
 });
 
 it('reads only a prefix of native adapter error bodies', async () => {

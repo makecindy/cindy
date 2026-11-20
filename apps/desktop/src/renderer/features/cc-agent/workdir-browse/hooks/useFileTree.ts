@@ -41,7 +41,7 @@
  * 不进 React state,避免 setState 触发不必要的订阅者重渲。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
@@ -54,6 +54,7 @@ import {
   stopWatchFor,
 } from '@/lib/fileBrowserTransport';
 import { loadExpandedSet, saveExpandedSet } from '../lib/expandedStore';
+import { fileContentScope, invalidateWorkdirCache } from '../lib/fileContentCache';
 import {
   BUILTIN_IGNORE_ALWAYS,
   BUILTIN_IGNORE_REVEALABLE,
@@ -67,10 +68,16 @@ export interface DirEntry {
   type: 'file' | 'directory';
   size: number;
   mtimeMs: number;
+  /** Optional on older hosts; always relative to the workdir, never an absolute path. */
+  symlinkTarget?: string;
 }
 
 interface UseFileTreeOptions {
   workdir: string;
+  /** Hidden consumers release their share of the directory reader and its watcher. */
+  enabled?: boolean;
+  /** Directory displayed by this subscriber independently of the tree's expanded rows. */
+  displayedDirectory?: string;
   /**
    * 非空 = SSH remote 会话:listDir 经 main 路由到远端 file-service;
    * 本地 watcher 不启动(远端暂无 watch,P4 计划事件推回),树的时效性靠
@@ -101,6 +108,8 @@ interface UseFileTreeOptions {
    */
   showIgnoredDirs?: boolean;
 }
+
+type FileTreeStoreOptions = Required<Omit<UseFileTreeOptions, 'displayedDirectory' | 'enabled'>>;
 
 export interface UseFileTreeReturn {
   /** Entries per folder, keyed by relPath ('' = root). */
@@ -149,7 +158,7 @@ export interface UseFileTreeReturn {
    *
    * Root 文件(relPath 不含 '/')直接 no-op return —— 它已经在根级,无需展开。
    */
-  expandToPath: (relPath: string) => Promise<void>;
+  expandToPath: (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) => Promise<void>;
 }
 
 const ROOT_KEY = '';
@@ -157,19 +166,7 @@ const EVENT_COALESCE_MS = 50;
 // Bound restore bursts before they reach local filesystem IPC or a remote host.
 const RESTORE_CONCURRENCY = 8;
 
-/**
- * 结构等价判定 —— name/type/relPath 完全相同(顺序也相同, listDir 是稳定排序),
- * 只有 mtime/size 变化时返回 true。
- *
- * 用途:setEntries 前的去重。chokidar/parcel 对我们自己 writeFile 的原子 rename
- * 也会推 change 事件 → 触发 fetchDir 拿到一组对象引用全新但内容结构没变的
- * DirEntry[]。如果直接 setEntries(new Map)会让 flattenTree useMemo 重算 +
- * 所有 FileTreeRow 重渲, 视觉上"刷一下"。
- *
- * 当前所有 entries 消费者(FileTreeView, WorkdirBrowseSidebar.findEntryByRelPath)
- * 都不读 mtime/size, 所以跳过更新无功能影响。如果未来加了"按 mtime 排序"
- * / "显示文件大小"之类的 UI, 这里要相应放宽比较。
- */
+/** Directory rows consume both identity and display metadata. */
 function entriesStructurallyEqual(
   a: readonly DirEntry[],
   b: readonly DirEntry[],
@@ -181,6 +178,8 @@ function entriesStructurallyEqual(
     if (x.relPath !== y.relPath) return false;
     if (x.name !== y.name) return false;
     if (x.type !== y.type) return false;
+    if (x.type === 'file' && (x.size !== y.size || x.mtimeMs !== y.mtimeMs)) return false;
+    if (x.symlinkTarget !== y.symlinkTarget) return false;
   }
   return true;
 }
@@ -231,8 +230,8 @@ interface FileTreeStore {
   tokens: Map<string, number>;
   /** Single-flight directory requests plus one dirty bit for a trailing scan. */
   inFlight: Map<string, DirectoryRefresh>;
-  /** Parent directories observed by the IPC listener in the current turn. */
-  pendingEventParents: Set<string>;
+  /** Changed logical paths observed during the current coalescing window. */
+  pendingEventPaths: Set<string>;
   eventFlushTimer: ReturnType<typeof setTimeout> | null;
   /** chokidar listener 取消函数。首个挂载时挂、refCount 归 0 时调。 */
   watcherOff: (() => void) | null;
@@ -242,8 +241,16 @@ interface FileTreeStore {
   restoreGeneration: number;
   /** Full refreshes during restoration share its workers and pending paths. */
   restoreQueue: DirectoryRestoreQueue | null;
-  listeners: Set<() => void>;
+  listeners: Map<() => void, string>;
 }
+
+const EMPTY_TREE: FileTreeStore['snapshot'] = {
+  entries: new Map(),
+  expanded: new Set([ROOT_KEY]),
+  loadingPaths: new Set(),
+  initialLoading: true,
+  loadError: null,
+};
 
 interface DirectoryRestoreQueue {
   /** Refresh retries precede untouched restoration paths without adding workers. */
@@ -262,7 +269,54 @@ interface DirectoryRefresh {
 /** 全局 stores 表。key 由 storeKey() 算,同 (workdir, options) 共享同一份。 */
 const stores = new Map<string, FileTreeStore>();
 
-function storeKey(opts: Required<UseFileTreeOptions>): string {
+export function hasFileTreeWatcher(workdir: string, remoteHostId: string | null, deviceId: string | null): boolean {
+  for (const tree of stores.values()) {
+    if (tree.refCount > 0 && tree.workdir === workdir && tree.remoteHostId === remoteHostId && tree.deviceId === deviceId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type AliasChange = { workdir: string; remoteHostId: string | null; deviceId: string | null; relPath: string };
+const aliasChangeListeners = new Set<(change: AliasChange) => void>();
+/** Directory refresh can discover a retarget even when the watcher missed it. */
+export function onDirectoryAliasChange(listener: (change: AliasChange) => void): () => void {
+  aliasChangeListeners.add(listener);
+  return () => { aliasChangeListeners.delete(listener); };
+}
+
+
+/** Share the currently browsed aliases with content-cache invalidation. The
+ * existing stores own their lifetime and endpoint scope; no disk scan or
+ * separate long-lived alias registry is needed. */
+export function fileTreeEventPaths(
+  workdir: string,
+  relPath: string,
+  remoteHostId: string | null,
+  deviceId: string | null,
+): Set<string> {
+  const paths = new Set([relPath]);
+  for (const store of stores.values()) {
+    if (store.workdir !== workdir || store.remoteHostId !== remoteHostId || store.deviceId !== deviceId) continue;
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        const alias = directoryAliasEventPath(entry, relPath);
+        if (alias !== null) paths.add(alias);
+      }
+    }
+  }
+  return paths;
+}
+
+function directoryAliasEventPath(entry: DirEntry, eventRelPath: string): string | null {
+  if (entry.type !== 'directory' || entry.symlinkTarget === undefined) return null;
+  if (eventRelPath === entry.symlinkTarget || entry.symlinkTarget.startsWith(`${eventRelPath}/`)) return entry.relPath;
+  const prefix = entry.symlinkTarget === '' ? '' : `${entry.symlinkTarget}/`;
+  return eventRelPath.startsWith(prefix) ? `${entry.relPath}/${eventRelPath.slice(prefix.length)}` : null;
+}
+
+function storeKey(opts: FileTreeStoreOptions): string {
   const remote = opts.remoteHostId ? `::remote=${opts.remoteHostId}` : '';
   const device = opts.deviceId ? `::device=${opts.deviceId}` : '';
   const reveal = opts.showIgnoredDirs ? '::reveal' : '';
@@ -280,7 +334,7 @@ function treeIdentityKey(
 }
 
 function emit(store: FileTreeStore): void {
-  for (const l of store.listeners) l();
+  for (const notify of store.listeners.keys()) notify();
 }
 
 /**
@@ -371,7 +425,7 @@ function filterSeedTreeForHiddenView(
  * 「刷新」按钮没有这个问题:它在同一份 store 上原地 refetch,从不经过空态。
  */
 function findRevealSiblingSnapshot(
-  opts: Required<UseFileTreeOptions>,
+  opts: FileTreeStoreOptions,
 ): FileTreeStore['snapshot'] | null {
   const siblingKey = storeKey({ ...opts, showIgnoredDirs: !opts.showIgnoredDirs });
   return stores.get(siblingKey)?.snapshot ?? null;
@@ -432,7 +486,7 @@ function pruneExpandedForCurrentTree(
   saveExpandedSet(store.workdir, next, { showIgnoredDirs: store.showIgnoredDirs });
 }
 
-function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
+function getOrCreateStore(opts: FileTreeStoreOptions): FileTreeStore {
   const key = storeKey(opts);
   const existing = stores.get(key);
   if (existing) return existing;
@@ -481,24 +535,18 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
             // 错误态一并继承:首帧直接是错误占位,而不是先闪一帧空树再变错误。
             loadError: seed.loadError,
           }
-        : {
-            entries: new Map(),
-            expanded: new Set([ROOT_KEY]),
-            loadingPaths: new Set(),
-            initialLoading: true,
-            loadError: null,
-          },
+        : EMPTY_TREE,
     seeded: seedDisplayable && !!seed,
     persistedExpanded,
     tokens: new Map(),
     inFlight: new Map(),
-    pendingEventParents: new Set(),
+    pendingEventPaths: new Set(),
     eventFlushTimer: null,
     watcherOff: null,
     refCount: 0,
     restoreGeneration: 0,
     restoreQueue: null,
-    listeners: new Set(),
+    listeners: new Map(),
   };
   // 继承来的展开集合要按**（可能已过滤的）**树剪一次：剪枝那条路径挂在 fetch
   // 成功分支上，根请求失败时根本不会执行 —— 而 reveal-only 路径一旦被写进本
@@ -509,6 +557,20 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   pruneExpandedForCurrentTree(store, { keep: persistedExpanded });
   stores.set(key, store);
   return store;
+}
+
+/** Invalidate cached descendants and outstanding reads of a directory that disappeared. */
+function dropMissingDirectories(store: FileTreeStore, entries: Map<string, readonly DirEntry[]>, missing: ReadonlySet<string>): void {
+  if (!missing.size) return;
+  for (const path of new Set([...entries.keys(), ...store.inFlight.keys()])) {
+    let ancestor = path;
+    while (ancestor && !missing.has(ancestor)) ancestor = parentPath(ancestor);
+    if (!ancestor) continue;
+    entries.delete(path);
+    store.tokens.set(path, (store.tokens.get(path) ?? 0) + 1);
+    const request = store.inFlight.get(path);
+    if (request) request.trailing = false;
+  }
 }
 
 /** 把 fetchDir 抽成 store 方法 —— 所有订阅者(无论挂在哪个 hook 实例)共享同
@@ -531,7 +593,7 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
     // 这份列表已是本 store 自己请求的真实数据：从「借来的」证据集合里摘除，
     // 之后 prune 恢复用它做精确可达性判断（见 borrowedDirs 注释）。
     store.borrowedDirs.delete(relPath);
-    if (store.snapshot.loadError) {
+    if (relPath === ROOT_KEY && store.snapshot.loadError) {
       store.snapshot = { ...store.snapshot, loadError: null };
     }
     // 根请求**成功**（无论后面是否结构等价而跳过替换）都代表「借来的树」窗口
@@ -553,14 +615,36 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       return;
     }
     const nextEntries = new Map(store.snapshot.entries);
+    const directoriesAndLinks = new Map(list.filter(entry => entry.type === 'directory' || entry.symlinkTarget !== undefined)
+      .map(entry => [entry.relPath, entry]));
+    const missing = new Set((prevList ?? [])
+      .filter(old => old.type === 'directory' && directoriesAndLinks.get(old.relPath)?.type !== 'directory')
+      .map(old => old.relPath));
+    dropMissingDirectories(store, nextEntries, missing);
+    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !== directoriesAndLinks.get(old.relPath)?.symlinkTarget);
+    const displayed = retargeted.length ? displayedDirectoryPaths(store) : undefined;
+    const reload: string[] = [];
+    for (const key of nextEntries.keys()) {
+      if (retargeted.some(entry => key === entry.relPath || key.startsWith(`${entry.relPath}/`))) {
+        nextEntries.delete(key);
+        store.tokens.set(key, (store.tokens.get(key) ?? 0) + 1);
+        if (store.snapshot.expanded.has(key) || displayed?.has(key)) reload.push(key);
+      }
+    }
     nextEntries.set(relPath, list);
     store.snapshot = { ...store.snapshot, entries: nextEntries };
     emit(store);
+    for (const entry of retargeted) {
+      for (const listener of aliasChangeListeners) listener({ workdir: store.workdir,
+        remoteHostId: store.remoteHostId, deviceId: store.deviceId, relPath: entry.relPath });
+    }
+    for (const key of reload) void fetchDir(store, key);
     // 过渡期(seed)借来的展开态在新树里可能已不可达,root 数据落地即剪。
     if (relPath === ROOT_KEY) {
       pruneExpandedForCurrentTree(store, wasSeeded ? { keep: store.persistedExpanded } : undefined);
     }
   } catch (err) {
+    if (store.tokens.get(relPath) !== myToken) return;
     log.warn(`listDir failed for ${relPath}`, err);
     // root 失败要可见:空树 + 无提示会被读成"项目是空的"。device-link 的
     // 版本偏差(老被控端无 remote-op channel)单独标记,渲染升级提示。
@@ -580,8 +664,12 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       // pruneExpandedForCurrentTree（getOrCreateStore）完成；root 首次失败时
       // snapshot.entries 已被清空，再调 prune 会因缺 ROOT_KEY 直接早退，不重复。
       emit(store);
+    } else if (/\b(?:ENOENT|ENOTDIR|NOT_FOUND)\b/.test(String((err as { code?: unknown })?.code) + ' ' + String(err))) {
+      const entries = new Map(store.snapshot.entries);
+      dropMissingDirectories(store, entries, new Set([relPath]));
+      store.snapshot = { ...store.snapshot, entries };
+      emit(store);
     }
-    // Keep prior state; user can refresh manually.
   }
 }
 
@@ -663,14 +751,34 @@ function addDocModeAncestors(
  * directory can disappear when its last visible descendant is removed.
  */
 function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
-  store.pendingEventParents.add(parentPath(eventRelPath));
+  store.pendingEventPaths.add(eventRelPath);
   if (store.eventFlushTimer) return;
   store.eventFlushTimer = setTimeout(() => {
     store.eventFlushTimer = null;
-    const parents = [...store.pendingEventParents];
-    store.pendingEventParents.clear();
+    const events = [...store.pendingEventPaths];
+    store.pendingEventPaths.clear();
     if (store.refCount === 0) return;
-
+    const parents = new Set(events.map(parentPath));
+    // Watchers report real target paths rather than every directory alias. Map
+    // only aliases already present in this lazy tree; never scan/follow the disk
+    // to discover aliases or refresh unrelated cached directories.
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        if (entry.type !== 'directory' || entry.symlinkTarget === undefined) continue;
+        const target = entry.symlinkTarget;
+        for (const eventRelPath of events) {
+          const alias = directoryAliasEventPath(entry, eventRelPath);
+          if (alias !== null) parents.add(parentPath(alias));
+          // A removed target/ancestor hides the link; a retargeted link also needs
+          // its cached children refreshed even when its logical name stays put.
+          if (eventRelPath === target || target.startsWith(`${eventRelPath}/`)
+              || eventRelPath === entry.relPath) {
+            parents.add(parentPath(entry.relPath));
+            parents.add(entry.relPath);
+          }
+        }
+      }
+    }
     const targets = new Set<string>();
     for (const parent of parents) {
       if (store.docMode) {
@@ -683,8 +791,7 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
   }, EVENT_COALESCE_MS);
 }
 
-/** 首次挂载触发:initial fetch + 恢复 localStorage expanded + 启动 watcher。
- *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
+/** The first subscription starts the watcher and restores the shared directory tree. */
 async function initStore(store: FileTreeStore): Promise<void> {
   const generation = ++store.restoreGeneration;
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
@@ -789,8 +896,10 @@ function disposeStore(store: FileTreeStore): void {
   store.restoreQueue = null;
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
-  store.pendingEventParents.clear();
+  store.pendingEventPaths.clear();
+  for (const request of store.inFlight.values()) request.trailing = false;
   store.inFlight.clear();
+  store.tokens.clear(); // Results from the released endpoint must not repopulate the snapshot.
   if (store.watcherOff) {
     store.watcherOff();
     store.watcherOff = null;
@@ -800,6 +909,11 @@ function disposeStore(store: FileTreeStore): void {
     remoteHostId: store.remoteHostId,
   }).catch(() => {});
   stores.delete(store.key);
+  // Missed events after the last watcher stops also invalidate other cached
+  // files in this workdir that the user might open after switching back.
+  if (!hasFileTreeWatcher(store.workdir, store.remoteHostId, store.deviceId)) {
+    invalidateWorkdirCache(fileContentScope(store.workdir, store.remoteHostId, store.deviceId));
+  }
 }
 
 // ── Public actions (store-level,跟 UseFileTreeReturn 的同名方法对应) ────────
@@ -821,28 +935,38 @@ function toggleFolder(store: FileTreeStore, relPath: string): void {
   emit(store);
 }
 
+/** Keep each open pane's directory and its ancestors (including any directory aliases). */
+function displayedDirectoryPaths(store: FileTreeStore): Set<string> {
+  const paths = new Set([ROOT_KEY]);
+  for (let dir of store.listeners.values()) {
+    while (!paths.has(dir)) {
+      paths.add(dir);
+      dir = parentPath(dir);
+    }
+  }
+  return paths;
+}
+
 function collapseAll(store: FileTreeStore): void {
-  const nextExpanded = new Set([ROOT_KEY]);
-  const prevEntries = store.snapshot.entries;
   const nextEntries = new Map<string, readonly DirEntry[]>();
-  const rootEntries = prevEntries.get(ROOT_KEY);
-  if (rootEntries) nextEntries.set(ROOT_KEY, rootEntries);
+  for (const dir of displayedDirectoryPaths(store)) {
+    const entries = store.snapshot.entries.get(dir);
+    if (entries) nextEntries.set(dir, entries);
+  }
   saveExpandedSet(store.workdir, new Set(), { showIgnoredDirs: store.showIgnoredDirs });
   store.snapshot = {
     ...store.snapshot,
-    expanded: nextExpanded,
+    expanded: new Set([ROOT_KEY]),
     entries: nextEntries,
   };
   emit(store);
 }
 
-async function refresh(store: FileTreeStore): Promise<void> {
-  // 根目录必须恒在请求列表里：根请求失败会清空 entries（含 ROOT_KEY），
-  // 而只遍历现有键时根就永远不会被重试，连接恢复后点「重试 / 刷新」也没用。
-  // 展开目录同样恒在：根失败清 entries 会把刚取得的子目录一并清掉，只遍历
-  // 现有键会让它们永远不再被请求 —— 重试后目录「已展开但空」（评审 P1）。
-  const targets = new Set<string>([
-    ROOT_KEY,
+async function refresh(store: FileTreeStore, requested?: ReadonlySet<string>): Promise<void> {
+  // 手动刷新要重读根目录、正文和已展开的目录，即使上次读取失败、还没有缓存。
+  // 标签页恢复则只传缺失的目录，避免重新扫描其它页签。
+  const targets = requested ?? new Set<string>([
+    ...displayedDirectoryPaths(store),
     ...store.snapshot.entries.keys(),
     ...store.snapshot.expanded,
   ]);
@@ -877,12 +1001,16 @@ async function refresh(store: FileTreeStore): Promise<void> {
   await Promise.all([...targets].map((p) => fetchDir(store, p)));
 }
 
-async function expandToPath(store: FileTreeStore, relPath: string): Promise<void> {
-  if (!relPath) return;
+async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' | 'directory' = 'file', refreshTarget = false): Promise<void> {
+  if (!relPath) {
+    if (refreshTarget && kind === 'directory') await fetchDir(store, ROOT_KEY);
+    return;
+  }
   const parts = relPath.split('/');
-  if (parts.length < 2) return; // root 级文件
+  const depth = kind === 'directory' ? parts.length : parts.length - 1;
+  if (!depth) return;
   const ancestors: string[] = [];
-  for (let i = 1; i < parts.length; i++) {
+  for (let i = 1; i <= depth; i++) {
     ancestors.push(parts.slice(0, i).join('/'));
   }
   // 一次性写 expanded set
@@ -892,7 +1020,7 @@ async function expandToPath(store: FileTreeStore, relPath: string): Promise<void
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
   // 未 cache 的祖先并行 fetch
-  const toFetch = ancestors.filter((a) => !store.snapshot.entries.has(a));
+  const toFetch = ancestors.filter((a) => !store.snapshot.entries.has(a) || (refreshTarget && a === relPath));
   await Promise.all(toFetch.map((a) => fetchDir(store, a)));
 }
 
@@ -900,6 +1028,8 @@ async function expandToPath(store: FileTreeStore, relPath: string): Promise<void
 
 export function useFileTree({
   workdir,
+  displayedDirectory = ROOT_KEY,
+  enabled = true,
   remoteHostId = null,
   deviceId = null,
   hideMetaFiles = true,
@@ -915,11 +1045,12 @@ export function useFileTree({
   // 瞬态失败(隧道不可达 / 重连中)保持「未知」而不是落定成 false:把一次网络抖动
   // 显示成「对方版本过旧」并把开关禁掉,连接恢复后也不会自愈。重探由
   // reconnectEpoch 驱动 —— relay 或目标设备恢复 online 时它自增。
-  const revealReconnectEpoch = useDeviceLinkReconnectEpoch(deviceId ?? undefined);
+  const revealReconnectEpoch = useDeviceLinkReconnectEpoch(enabled ? deviceId ?? undefined : undefined);
   const [deviceRevealSupported, setDeviceRevealSupported] = useState<boolean | null>(null);
   /** 上次探测结论归属的设备;换设备不留用旧结论(重连不清,避免开关闪一下)。 */
   const revealProbedDeviceRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     if (!deviceId) {
       revealProbedDeviceRef.current = null;
       setDeviceRevealSupported(null);
@@ -942,7 +1073,7 @@ export function useFileTree({
     return () => {
       cancelled = true;
     };
-  }, [deviceId, workdir, revealReconnectEpoch]);
+  }, [enabled, deviceId, workdir, revealReconnectEpoch]);
 
   // 探测未返回时(device 首帧)沿用用户偏好:猜错只多一次重建,不会发出无法
   // 兑现的用户可见承诺。
@@ -950,54 +1081,71 @@ export function useFileTree({
 
   // store 实例按 (workdir + options) 共享 —— 多个 hook 实例订阅同一份。
   // memo 用 dep 化 options,确保 workdir 切换会换 store。
-  const store = useMemo(
-    () => getOrCreateStore({
-      workdir,
-      remoteHostId,
-      deviceId,
-      hideMetaFiles,
-      docMode,
-      showIgnoredDirs: effectiveShowIgnoredDirs,
-    }),
-    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs],
-  );
+  const options = useMemo(() => ({
+    workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs: effectiveShowIgnoredDirs,
+  }), [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs]);
+  const reader = useMemo(() => ({
+    store: null as FileTreeStore | null,
+    getSnapshot: () => enabled ? getOrCreateStore(options).snapshot : EMPTY_TREE,
+  }), [enabled, options]);
 
-  // ref-count 生命周期:首挂触发 init(initial fetch + start watch),最后离开
-  // 触发 dispose(stop watch + 从 stores 表移除)。
-  useEffect(() => {
-    store.refCount += 1;
-    if (store.refCount === 1) {
-      void initStore(store);
-    }
+  // Claim the current store at commit. All incoming tabs have claimed theirs
+  // before React cleans up the outgoing tabs' passive subscriptions.
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const store = getOrCreateStore(options);
+    reader.store = store;
+    store.refCount++;
     return () => {
-      store.refCount -= 1;
-      if (store.refCount === 0) {
-        disposeStore(store);
-      }
+      reader.store = null;
+      store.refCount--;
     };
-  }, [store]);
+  }, [enabled, options, reader]);
 
   // 订阅 store snapshot 变化。useSyncExternalStore 保证多个订阅者 + concurrent
   // mode 下 tearing-free。
   const snapshot = useSyncExternalStore(
     useCallback(
       (cb) => {
-        store.listeners.add(cb);
-        return () => store.listeners.delete(cb);
+        const store = reader.store;
+        if (!store) return () => {};
+        store.listeners.set(cb, displayedDirectory);
+        if (!store.watcherOff) void initStore(store);
+        return () => {
+          store.listeners.delete(cb);
+          if (!store.refCount && !store.listeners.size) disposeStore(store);
+        };
       },
-      [store],
+      [reader, displayedDirectory],
     ),
-    () => store.snapshot,
-    () => store.snapshot,
+    reader.getSnapshot,
+    reader.getSnapshot,
   );
 
+  // Restoring a tab's directory must also work with a collapsed tree. Share
+  // the bounded restore workers, and leave the user's expanded rows untouched.
+  useEffect(() => {
+    const store = reader.store;
+    if (!store || !displayedDirectory) return;
+    const missing = displayedDirectoryPaths(store);
+    for (const path of missing) {
+      if (store.snapshot.entries.has(path) || store.snapshot.loadingPaths.has(path)) missing.delete(path);
+    }
+    if (missing.size) void refresh(store, missing);
+  }, [reader, displayedDirectory]);
+
   // 把 store-level actions wrap 成跟 store 绑死的稳定引用。
-  const toggleFolderCb = useCallback((relPath: string) => toggleFolder(store, relPath), [store]);
-  const collapseAllCb = useCallback(() => collapseAll(store), [store]);
-  const refreshCb = useCallback(() => refresh(store), [store]);
+  const toggleFolderCb = useCallback((relPath: string) => {
+    if (reader.store) toggleFolder(reader.store, relPath);
+  }, [reader]);
+  const collapseAllCb = useCallback(() => {
+    if (reader.store) collapseAll(reader.store);
+  }, [reader]);
+  const refreshCb = useCallback(() => reader.store ? refresh(reader.store) : Promise.resolve(), [reader]);
   const expandToPathCb = useCallback(
-    (relPath: string) => expandToPath(store, relPath),
-    [store],
+    (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) =>
+      reader.store ? expandToPath(reader.store, relPath, kind, refreshTarget) : Promise.resolve(),
+    [reader],
   );
 
   return useMemo(
@@ -1009,13 +1157,13 @@ export function useFileTree({
       loadError: snapshot.loadError,
       // 非 device 会话恒 true;device 会话见上面探测注释。
       showIgnoredDirsSupported: deviceId ? deviceRevealSupported : true,
-      storeKey: store.key,
+      storeKey: storeKey(options),
       treeIdentityKey: treeIdentityKey(workdir, remoteHostId, deviceId),
       toggleFolder: toggleFolderCb,
       collapseAll: collapseAllCb,
       refresh: refreshCb,
       expandToPath: expandToPathCb,
     }),
-    [snapshot, deviceId, deviceRevealSupported, store, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb, workdir, remoteHostId],
+    [snapshot, deviceId, deviceRevealSupported, options, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb, workdir, remoteHostId],
   );
 }

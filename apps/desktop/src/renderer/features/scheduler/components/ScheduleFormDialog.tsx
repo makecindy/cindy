@@ -1,8 +1,8 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { CalendarClock, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -21,6 +21,9 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { Select } from '@/components/ui/select';
+import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -66,6 +69,8 @@ import {
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -140,6 +145,9 @@ interface Props {
   requestedByGhostName?: string | null;
 }
 
+/** Inline field labels share one column so every control in the form lines up. */
+const FIELD_LABEL = 'w-[4.5rem] shrink-0 text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]';
+
 export function ScheduleFormDialog({
   open,
   onOpenChange,
@@ -163,7 +171,7 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  const { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -194,7 +202,15 @@ export function ScheduleFormDialog({
   // Do not calibrate saved choices against a provisional local or loading snapshot.
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
-  const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  // 长提示词在弹窗里只显示三行,展开后在面板内铺满编辑;收起后回到原来的卡片布局。
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const promptExpandButtonRef = useRef<HTMLButtonElement>(null);
+  const promptWasExpanded = useRef(false);
+  useEffect(() => {
+    // 展开时被遮住的内容是 inert 的,撤掉之后才聚得进去:收起后把焦点还给入口按钮。
+    if (promptWasExpanded.current && !promptExpanded) promptExpandButtonRef.current?.focus();
+    promptWasExpanded.current = promptExpanded;
+  }, [promptExpanded]);
   const formScrollRef = useRef<HTMLDivElement>(null);
   const formContentRef = useRef<HTMLDivElement>(null);
 
@@ -213,14 +229,15 @@ export function ScheduleFormDialog({
     const content = formContentRef.current;
     if (!viewport || !content?.style.minHeight) return;
     // Returning upwards releases the space without moving the visible content.
-    // The keyed viewport also discards it on tab changes or closing the dialog.
     content.style.minHeight = viewport.scrollTop > 0
       ? `${Math.min(parseFloat(content.style.minHeight), viewport.scrollTop + viewport.clientHeight)}px`
       : '';
   };
-  const tabsId = useId();
   useEffect(() => {
-    if (open) setActiveTab('content');
+    // 关闭时也清掉展开态:否则下次打开会直接停在展开层,焦点也会落到入口按钮上。
+    // promptWasExpanded 一起清:此路径不经用户收起,焦点不应再被还给入口按钮。
+    promptWasExpanded.current = false;
+    setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -291,6 +308,25 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)只给每次新建任务、在本机运行的 Agent 自动任务：绑定 / 持续会话、
+  // 脚本、伙伴例行任务与项目自动化(随代码提交给所有成员，插件只装在这台电脑上)都不提供。
+  const pluginEnginesAllowed = runMode === 'fresh' && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
+  const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
+  const pluginEngineUnavailable = !!pluginEngineChoice && !resolveActivePluginEngine(pluginEngineList, pluginEngineChoice);
+  const schedulePluginEngines = useMemo(
+    () => pluginEnginesAllowed && pluginEngineList.length
+      ? {
+          engines: pluginEngineList,
+          active: pluginEngineChoice,
+          onSelect: (selection: PluginEngineSelection) => {
+            const effort = selection.effort ?? pluginEngineChoice?.effort;
+            selectPluginEngine({ providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) });
+          },
+        }
+      : undefined,
+    [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
+  );
   // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
   const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
@@ -298,7 +334,7 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
   const initialId = initial?.id;
@@ -609,7 +645,8 @@ export function ScheduleFormDialog({
     caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
-  const modelUnavailable = !isScriptMode && modelCatalogReady && (
+  // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
@@ -661,12 +698,10 @@ export function ScheduleFormDialog({
     setSubmitError(null);
     const err = validate();
     if (err) {
-      setActiveTab(err.key.includes('preRun') || err.key.endsWith('selectThread') ? 'options' : 'content');
       toast.warning(t(err.key, err.values));
       return;
     }
     if (!canSubmitSessionBinding(form.executionMode ?? 'agent', runMode, boundSessionReference)) {
-      setActiveTab('options');
       toast.warning(t(
         boundSessionReference?.state === 'available' && boundSessionReference.status === 'archived'
           ? 'scheduler.editor.thread.archivedBinding'
@@ -677,8 +712,12 @@ export function ScheduleFormDialog({
       return;
     }
     if (modelUnavailable) {
-      setActiveTab('content');
       toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      return;
+    }
+    // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
+    if (pluginEngineUnavailable) {
+      toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
@@ -704,7 +743,6 @@ export function ScheduleFormDialog({
     if (selectedTemplate && !promptDirty) {
       const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
       if (missingLabel) {
-        setActiveTab('content');
         toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
         return;
       }
@@ -714,7 +752,6 @@ export function ScheduleFormDialog({
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
       } catch {
-        setActiveTab('content');
         toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
@@ -731,6 +768,26 @@ export function ScheduleFormDialog({
     }
   };
 
+  // 紧凑卡片与展开层共用同一个输入框定义:值、占位符、字号与主题都只有一处。
+  const promptField = (className: string, autoFocus?: boolean) => (
+    <textarea
+      value={form.prompt}
+      onChange={(e) => {
+        if (selectedTemplate) setPromptDirty(true);
+        setField('prompt', e.target.value);
+      }}
+      placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
+      aria-label={t('scheduler.editor.fields.prompt')}
+      autoFocus={autoFocus}
+      className={cn(
+        'h-full w-full resize-none bg-transparent text-sm leading-[1.43] outline-none',
+        'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
+        'select-text',
+        className,
+      )}
+    />
+  );
+
   return (
     <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
       <Dialog.Portal>
@@ -742,14 +799,25 @@ export function ScheduleFormDialog({
           aria-describedby={undefined}
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => submitting && e.preventDefault()}
+          onEscapeKeyDown={(e) => {
+            if (promptExpanded) {
+              e.preventDefault();
+              setPromptExpanded(false);
+            } else if (submitting) {
+              e.preventDefault();
+            }
+          }}
           className={cn(
             'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <header className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6">
+          {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
+          <header
+            inert={promptExpanded || undefined}
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6"
+          >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                 {isProjectAutomationMode
@@ -784,7 +852,6 @@ export function ScheduleFormDialog({
                     setPromptDirty(false);
                     reset(null);
                   }
-                  setActiveTab('content');
                   setMode(next);
                 }}
               />
@@ -803,30 +870,18 @@ export function ScheduleFormDialog({
               <X size={16} />
             </button>
           </header>
-          {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && !isScriptMode && (
-            <div className="shrink-0 px-6 pb-3">
-              <SegmentedControl
-                role="tablist"
-                aria-label={t('scheduler.editor.layout.sections')}
-                value={activeTab}
-                onValueChange={setActiveTab}
-                height={38}
-                options={(['content', 'options'] as const).map((value) => ({
-                  value,
-                  label: t('scheduler.editor.layout.' + value + 'Tab'),
-                  id: tabsId + '-' + value,
-                  'aria-controls': tabsId + '-' + value + '-panel',
-                }))}
-              />
-            </div>
-          )}
+
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
+            <div
+              inert={promptExpanded || undefined}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]"
+            >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-            <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+            <div ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              inert={promptExpanded || undefined}
               className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
               <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
@@ -842,13 +897,7 @@ export function ScheduleFormDialog({
                     details={submitError}
                   />
                 )}
-                {(activeTab === 'content' || isScriptMode) && (
-                  <div
-                    role={isScriptMode ? undefined : 'tabpanel'}
-                    id={tabsId + '-content-panel'}
-                    aria-labelledby={isScriptMode ? undefined : tabsId + '-content'}
-                    className="flex flex-col gap-4"
-                  >
+                  <div data-schedule-form-fields className="flex flex-col gap-4">
                     <div className="flex flex-col gap-2">
                       <label className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                         {t('scheduler.editor.fields.title')}
@@ -883,7 +932,7 @@ export function ScheduleFormDialog({
                       {/* Project configuration currently supports Agent execution only. */}
                       {!isProjectAutomationMode && (
                         <div className="flex items-center gap-2.5">
-                          <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                          <span className={FIELD_LABEL}>
                             {t('scheduler.editor.executionMode.label')}
                           </span>
                           <SegmentedControl
@@ -901,26 +950,28 @@ export function ScheduleFormDialog({
 
                       {!isScriptMode && (
                         <div className="flex shrink-0 flex-col gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-between gap-2">
                             <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                               {t('scheduler.editor.fields.prompt')}
                             </span>
+                            <Button
+                              ref={promptExpandButtonRef}
+                              variant="secondary"
+                              tone="quiet"
+                              size="xxs"
+                              compact
+                              type="button"
+                              onClick={() => setPromptExpanded(true)}
+                            >
+                              <Maximize2 size={12} aria-hidden />
+                              {t('scheduler.editor.promptDialog.expandPrompt')}
+                            </Button>
                           </div>
                           <div className="flex h-[144px] flex-col overflow-hidden rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
                             <div className="min-h-0 flex-1 p-4">
-                              <textarea
-                                value={form.prompt}
-                                onChange={(e) => {
-                                  if (selectedTemplate) setPromptDirty(true);
-                                  setField('prompt', e.target.value);
-                                }}
-                                placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
-                                className={cn(
-                                  'h-full w-full resize-none overflow-y-auto bg-transparent text-sm leading-[1.43] outline-none',
-                                  'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
-                                  'select-text',
-                                )}
-                              />
+                              {/* 展开时只保留展开层里那一个输入框:两个同名 textarea 会让 Tab
+                                  闯进被遮住的那个,读屏也会重复播报。 */}
+                              {!promptExpanded && promptField('overflow-y-auto')}
                             </div>
                             <div className="flex min-h-[44px] shrink-0 items-center gap-0 border-t border-[var(--settings-input-border)] px-2.5 py-2">
                               <div className="flex min-w-0 flex-1 items-center gap-0">
@@ -941,7 +992,8 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
+                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton
@@ -953,6 +1005,7 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  hostOnly={!!form.primaryHostKey}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -988,6 +1041,7 @@ export function ScheduleFormDialog({
                                   providerId={form.providerId}
                                   onChangeProviderId={(v) => setField('providerId', v)}
                                   onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                                  {...(schedulePluginEngines ? { pluginEngines: schedulePluginEngines } : {})}
                                   fastMode={form.fastMode}
                                   onChangeFast={(v) => {
                                     setField('fastMode', v);
@@ -1072,13 +1126,73 @@ export function ScheduleFormDialog({
                           />
                         </div>
                       )}
+                      {!isScriptMode && (
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.runSession.label')}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                      {!isScriptMode && (
+                        <div className="flex flex-col gap-2.5">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            {/* "运行会话"三态:合并了旧 persistentSession 开关与手绑会话两个概念。
+                  fresh = 每次新建;persistent = 持续会话(首次 fire 创建后续绑,归档后恢复原任务);
+                  bound = 绑定已有会话(picker 选,归档后恢复，删除/丢失时自动 pause)。
+                  project 自动化模式只显 fresh/persistent —— schedules.json 没有
+                  targetSessionId 通道,bound 在该模式无法落库。 */}
+                            <SegmentedControl
+                              aria-label={t('scheduler.editor.runSession.label')}
+                              value={runMode}
+                              onValueChange={setRunMode}
+                              height={34}
+                              options={(
+                                [
+                                  'fresh',
+                                  'persistent',
+                                  ...(isProjectAutomationMode ? [] : ['bound' as const]),
+                                ] as RunMode[]
+                              ).map((mode) => ({
+                                value: mode,
+                                label: t(`scheduler.editor.runSession.${mode}`),
+                              }))}
+                            />
+                          </div>
+                          {/* bound 态:单行会话选择器(换选即换绑,选择器旁带"打开会话")。
+                不再叠加绑定卡片 —— 标题在 select 里已可见,单独的"解除绑定"
+                也多余(换选 / 切三态即可,且切换非破坏性)。 */}
+                          {runMode === 'bound' && (
+                            <ThreadPickerInline
+                              value={form.targetSessionId}
+                              onSelect={selectBoundSession}
+                              onOpen={(id) => void openReferencedSession(id)}
+                              reference={boundSessionReference}
+                            />
+                          )}
+                          {/* persistent 已绑(runner 回写):无选择器,用卡片展示绑定信息。
+                project 模式不传 onUnbind —— schedules.json 无 targetSessionId
+                通道,解绑保存无法落库,按钮只会制造静默失败。 */}
+                          {runMode === 'persistent' && isBound && (
+                            <BoundSessionCard
+                              sessionId={form.targetSessionId}
+                              onUnbind={
+                                isProjectAutomationMode ? undefined : () => setRunMode('fresh')
+                              }
+                              onOpen={() => void openReferencedSession(form.targetSessionId)}
+                              reference={boundSessionReference}
+                            />
+                          )}
+                        </div>
+                      )}
+                          </div>
+                        </div>
+                      )}
                     </section>
                     <section
                       aria-label={t('scheduler.editor.trigger.label')}
                       className="flex shrink-0 flex-col gap-3 border-t border-[var(--border-default)] pt-4"
                     >
                       <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                        <span className={FIELD_LABEL}>
                           {t('scheduler.editor.trigger.label')}
                         </span>
                         <SegmentedControl
@@ -1088,12 +1202,14 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
+                            if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
                             setField('webhookEnabled', mode === 'webhook');
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
                             ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
                               ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
@@ -1184,6 +1300,30 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {form.prEnabled && (
+                        <div className="flex flex-col gap-3">
+                          <FormField label={t('scheduler.prTrigger.url')}>
+                            {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
+                              placeholder="https://github.com/owner/repo/pull/123" />}
+                          </FormField>
+                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                          <FormField label={t('scheduler.prTrigger.condition')}>
+                            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
+                              options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
+                              onValueChange={value => setField('prChange', value as PrChange)} />}
+                          </FormField>
+                          <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
+                      )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (
@@ -1212,165 +1352,12 @@ export function ScheduleFormDialog({
                             onFormatChange={(value) => setField('webhookFormat', value)}
                           />
                       )}
-                    </section>
-                  </div>
-                )}
-                {!isScriptMode && activeTab === 'options' && (
-                  <div
-                    role="tabpanel"
-                    id={tabsId + '-options-panel'}
-                    aria-labelledby={tabsId + '-options'}
-                    className="flex flex-col gap-6 divide-y divide-[var(--border-default)]"
-                  >
-                    <ScheduleFormSection inline title={t('scheduler.editor.runSession.label')}>
                       {!isScriptMode && (
-                        <div className="flex flex-col gap-2.5">
-                          <div className="flex flex-wrap items-center gap-2.5">
-                            {/* "运行会话"三态:合并了旧 persistentSession 开关与手绑会话两个概念。
-                  fresh = 每次新建;persistent = 持续会话(首次 fire 创建后续绑,归档后恢复原任务);
-                  bound = 绑定已有会话(picker 选,归档后恢复，删除/丢失时自动 pause)。
-                  project 自动化模式只显 fresh/persistent —— schedules.json 没有
-                  targetSessionId 通道,bound 在该模式无法落库。 */}
-                            <SegmentedControl
-                              aria-label={t('scheduler.editor.runSession.label')}
-                              value={runMode}
-                              onValueChange={setRunMode}
-                              height={34}
-                              options={(
-                                [
-                                  'fresh',
-                                  'persistent',
-                                  ...(isProjectAutomationMode ? [] : ['bound' as const]),
-                                ] as RunMode[]
-                              ).map((mode) => ({
-                                value: mode,
-                                label: t(`scheduler.editor.runSession.${mode}`),
-                              }))}
-                            />
-                          </div>
-                          {/* bound 态:单行会话选择器(换选即换绑,选择器旁带"打开会话")。
-                不再叠加绑定卡片 —— 标题在 select 里已可见,单独的"解除绑定"
-                也多余(换选 / 切三态即可,且切换非破坏性)。 */}
-                          {runMode === 'bound' && (
-                            <ThreadPickerInline
-                              value={form.targetSessionId}
-                              onSelect={selectBoundSession}
-                              onOpen={(id) => void openReferencedSession(id)}
-                              reference={boundSessionReference}
-                            />
-                          )}
-                          {/* persistent 已绑(runner 回写):无选择器,用卡片展示绑定信息。
-                project 模式不传 onUnbind —— schedules.json 无 targetSessionId
-                通道,解绑保存无法落库,按钮只会制造静默失败。 */}
-                          {runMode === 'persistent' && isBound && (
-                            <BoundSessionCard
-                              sessionId={form.targetSessionId}
-                              onUnbind={
-                                isProjectAutomationMode ? undefined : () => setRunMode('fresh')
-                              }
-                              onOpen={() => void openReferencedSession(form.targetSessionId)}
-                              reference={boundSessionReference}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </ScheduleFormSection>
-                    <ScheduleFormSection title={t('scheduler.editor.layout.notifications')}>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        <div className="inline-flex h-[34px] items-center gap-1.5">
-                          <label
-                            className={cn(
-                              'inline-flex h-full cursor-pointer items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                            )}
-                          >
-                            <Checkbox
-                              checked={form.silentWhenIdle}
-                              onChange={() => setField('silentWhenIdle', !form.silentWhenIdle)}
-                            />
-                            {t('scheduler.editor.fields.silentRun')}
-                          </label>
-                          <Tip
-                            text={t('scheduler.editor.fields.silentRunTooltip')}
-                            side="top"
-                            contentClassName="z-[10020]"
-                          >
-                            <span
-                              tabIndex={0}
-                              className={cn(
-                                'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
-                                'text-[var(--cmd-palette-item-meta)] outline-none transition-colors',
-                                'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
-                                'focus:bg-[var(--surface-hover)] focus:text-[var(--msg-assistant-text)]',
-                              )}
-                              aria-label={t('scheduler.editor.fields.silentRunInfoAria')}
-                            >
-                              <Info size={13} />
-                            </span>
-                          </Tip>
-                        </div>
-                        {feishuBotReady ? (
-                          <label
-                            className={cn(
-                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                            )}
-                          >
-                            <Checkbox
-                              checked={form.notifyFeishu}
-                              onChange={() => setField('notifyFeishu', !form.notifyFeishu)}
-                            />
-                            {t('scheduler.editor.fields.finishSendToFeishu')}
-                          </label>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={goConfigFeishuBot}
-                            className={cn(
-                              'inline-flex h-[34px] items-center rounded-full px-2',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none underline-offset-2 hover:underline',
-                            )}
-                          >
-                            {t('scheduler.editor.fields.configFeishu')}
-                          </button>
-                        )}
-                        {wecomGroupReady ? (
-                          <label
-                            className={cn(
-                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                            )}
-                          >
-                            <Checkbox
-                              checked={form.notifyWecomGroup === true}
-                              onChange={() =>
-                                setField('notifyWecomGroup', form.notifyWecomGroup !== true)
-                              }
-                            />
-                            {t('scheduler.editor.fields.finishSendToWecomGroup')}
-                          </label>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={goConfigWecomGroup}
-                            className={cn(
-                              'inline-flex h-[34px] items-center rounded-full px-2',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none underline-offset-2 hover:underline',
-                            )}
-                          >
-                            {t('scheduler.editor.fields.configWecomGroup')}
-                          </button>
-                        )}
-                      </div>
-                    </ScheduleFormSection>
-                    <ScheduleFormSection title={t('scheduler.editor.preRunHook.label')}>
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.preRunHook.label')}
+                          </span>
+                          <div className="min-w-0 flex-1">
                       {/* 前置检查(Pre-run Hook):触发时先执行脚本,exit 0 放行 / exit 2 跳过本轮
                 (不启动 agent、零 token);报错 / 超时会阻止本轮并记录失败。
                 仅 agent 模式展示——script 模式任务本体就是脚本,再叠一层脚本闸门是套娃。 */}
@@ -1669,14 +1656,111 @@ export function ScheduleFormDialog({
                           )}
                         </div>
                       )}
-                    </ScheduleFormSection>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                    {!isScriptMode && (
+                      <section
+                        aria-label={t('scheduler.editor.layout.notifications')}
+                        className="flex shrink-0 flex-col gap-1.5 border-t border-[var(--border-default)] pt-4"
+                      >
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.layout.notifications')}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <div className="inline-flex h-[34px] items-center gap-1.5">
+                          <label
+                            className={cn(
+                              'inline-flex h-full cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.silentWhenIdle}
+                              onChange={() => setField('silentWhenIdle', !form.silentWhenIdle)}
+                            />
+                            {t('scheduler.editor.fields.silentRun')}
+                          </label>
+                        </div>
+                        {feishuBotReady ? (
+                          <label
+                            className={cn(
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.notifyFeishu}
+                              onChange={() => setField('notifyFeishu', !form.notifyFeishu)}
+                            />
+                            {t('scheduler.editor.fields.finishSendToFeishu')}
+                          </label>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={goConfigFeishuBot}
+                            className={cn(
+                              'inline-flex h-[34px] items-center rounded-full px-2',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                              'focus:outline-none underline-offset-2 hover:underline',
+                            )}
+                          >
+                            {t('scheduler.editor.fields.configFeishu')}
+                          </button>
+                        )}
+                        {wecomGroupReady ? (
+                          <label
+                            className={cn(
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.notifyWecomGroup === true}
+                              onChange={() =>
+                                setField('notifyWecomGroup', form.notifyWecomGroup !== true)
+                              }
+                            />
+                            {t('scheduler.editor.fields.finishSendToWecomGroup')}
+                          </label>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={goConfigWecomGroup}
+                            className={cn(
+                              'inline-flex h-[34px] items-center rounded-full px-2',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                              'focus:outline-none underline-offset-2 hover:underline',
+                            )}
+                          >
+                            {t('scheduler.editor.fields.configWecomGroup')}
+                          </button>
+                        )}
+                      </div>
+                          </div>
+                        </div>
+                        <p className="pl-[calc(4.5rem+0.625rem)] text-xs leading-[1.45] text-[var(--text-secondary)]">
+                          {t('scheduler.editor.fields.silentRunTooltip')}
+                        </p>
+                      </section>
+                    )}
                   </div>
-                )}
               </div>
             </div>
           )}
           {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && (
-            <footer className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3">
+            <footer
+              inert={promptExpanded || undefined}
+              className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3"
+            >
               <Button
                 variant="primary"
                 size="lg"
@@ -1695,38 +1779,33 @@ export function ScheduleFormDialog({
               </Button>
             </footer>
           )}
+          {promptExpanded && (
+            <div
+              role="group"
+              aria-label={t('scheduler.editor.fields.prompt')}
+              className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
+            >
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-[14px]">
+                <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
+                  {t('scheduler.editor.fields.prompt')}
+                </p>
+                <Button variant="secondary" size="lg" type="button" onClick={() => setPromptExpanded(false)}>
+                  <Minimize2 size={12} aria-hidden />
+                  {t('scheduler.editor.promptDialog.collapsePrompt')}
+                </Button>
+              </header>
+              <div className="min-h-0 flex-1 px-6 pb-6">
+                {/* 这一层的边框就是输入框自己的框:多行输入一律 8px(DESIGN §5),
+                    不随铺满面板升成 12px 容器档。紧凑卡片的 12px 属于装着输入框与工具条的外框。 */}
+                {promptField(
+                  'rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
+                  true,
+                )}
+              </div>
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
-  );
-}
-
-/** Field groups share the same spacing without adding extra interaction. */
-function ScheduleFormSection({
-  title,
-  children,
-  inline = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  inline?: boolean;
-}) {
-  return (
-    <section
-      className={cn(
-        'gap-3 [&:not(:first-child)]:pt-5',
-        inline ? 'grid grid-cols-[100px_minmax(0,1fr)] items-start' : 'flex flex-col',
-      )}
-    >
-      <h3
-        className={cn(
-          'text-sm font-medium text-[var(--text-primary)]',
-          inline && 'flex min-h-[34px] items-center',
-        )}
-      >
-        {title}
-      </h3>
-      {children}
-    </section>
   );
 }

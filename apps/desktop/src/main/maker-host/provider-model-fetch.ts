@@ -1,6 +1,6 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
-import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { collectModelDiscoveryPagesWithStatus } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -23,7 +23,7 @@ import {
   type Provider,
 } from '@cindy/model-providers';
 
-import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { classifyProviderError, providerNetworkErrorCode, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
   readGenericOAuthAccessToken,
@@ -35,6 +35,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
+const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
 
 // Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
@@ -101,6 +102,13 @@ export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
+  /**
+   * true only when every advertised page was read (no failed, refused or capped page).
+   * Absent means unknown: callers must not infer that a missing model was withdrawn.
+   */
+  complete?: boolean;
+  /** Saved-provider fetches only: opaque receipt binding this listing to the credential generation. */
+  listingReceipt?: string;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -203,7 +211,16 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
-      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(
+        spec.baseUrl,
+        !explicit && spec.agent === 'codex'
+          && (spec.wireProtocol ?? 'openai-responses') === 'openai-responses'
+          && !isLoopbackProviderUrl(spec.baseUrl)
+          && baseUrl.origin !== 'https://api.elevenlabs.io'
+          && !isOpenRouterModelsUrl(deriveModelsDiscoveryUrl(spec.baseUrl))
+          ? { clientVersion: CODEX_MODELS_CLIENT_VERSION }
+          : undefined,
+      );
   const copilot = copilotModelsRequest(configuredDiscoveryUrl);
   const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
@@ -262,16 +279,6 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   };
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码（同 provider-diagnostics）。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
 async function readLimitedBody(res: Response, limit: number): Promise<string> {
@@ -325,7 +332,7 @@ export async function fetchProviderModels(
   try {
     res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
@@ -362,7 +369,7 @@ export async function fetchProviderModels(
     };
   }
   const pageDeadline = Date.now() + 30_000;
-  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+  const { models, complete } = await collectModelDiscoveryPagesWithStatus(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
@@ -407,5 +414,9 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  return {
+    ok: true,
+    models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)),
+    complete,
+  };
 }

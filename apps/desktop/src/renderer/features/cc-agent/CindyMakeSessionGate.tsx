@@ -12,9 +12,13 @@ export function CindyMakeSessionGate({ sessionId, children }: {
   sessionId?: string;
   children: ReactNode;
 }) {
-  const remoteSource = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
-    remoteProjectsStore.getMergedRemoteSessions().find(session => session.id === sessionId)?.source,
-  );
+  const remoteSource = useSyncExternalStore(remoteProjectsStore.subscribe, () => {
+    const source = remoteProjectsStore.getMergedRemoteSessions().find(session => session.id === sessionId)?.source;
+    // New-task submissions always create ordinary tasks. Asking the host for
+    // this row before create finishes would replace the composer with a 404.
+    if (source === undefined && remoteProjectsStore.getCreationPreview(sessionId)) return null;
+    return source;
+  });
   const localSource = useSyncExternalStore(sessionsStore.subscribe, () =>
     sessionId ? sessionsStore.findById(sessionId)?.source : undefined,
   );

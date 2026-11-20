@@ -1,3 +1,5 @@
+import { Maximize2 } from 'lucide-react';
+import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -13,6 +15,8 @@ import {
 } from '@cindy/maker-shared/mcp-app-controller';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { CONTENT_HEADER_HEIGHT_PX } from '@/components/layout/ContentHeader';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
@@ -34,9 +38,46 @@ const appFailureCodes = new Set([
   'CHANNEL_NOT_ALLOWED', 'CHANNEL_NOT_FOUND', 'UNKNOWN_CHANNEL', 'NOT_FOUND',
 ]);
 const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
+const MCP_APP_DEFAULT_HEIGHT = 320;
+const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
+const MCP_APP_OFFSCREEN_KEEP_MS = 5_000;
+const MCP_APP_OFFSCREEN_KEEP_LIMIT = 2;
 const mcpAppHeightCache = new Map<string, number>();
+// §8.7: one renderer-wide expiry timer, at most two five-second local leases.
+const retainedLocalViews = new Map<object, { expiresAt: number; release(): void }>();
+let retainedLocalViewsTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRetainedLocalViews(): void {
+  clearTimeout(retainedLocalViewsTimer);
+  retainedLocalViewsTimer = undefined;
+  const next = retainedLocalViews.values().next().value;
+  if (!next) return;
+  retainedLocalViewsTimer = setTimeout(() => {
+    const now = Date.now();
+    for (const [key, item] of retainedLocalViews) if (item.expiresAt <= now) {
+      retainedLocalViews.delete(key); item.release();
+    }
+    scheduleRetainedLocalViews();
+  }, Math.max(0, next.expiresAt - Date.now()));
+}
+function forgetRetainedLocalView(key: object): void {
+  if (retainedLocalViews.delete(key)) scheduleRetainedLocalViews();
+}
+function retainLocalView(key: object, release: () => void): void {
+  if (retainedLocalViews.has(key)) return; // Repeated observer events never renew the lease.
+  retainedLocalViews.set(key, { expiresAt: Date.now() + MCP_APP_OFFSCREEN_KEEP_MS, release });
+  while (retainedLocalViews.size > MCP_APP_OFFSCREEN_KEEP_LIMIT) {
+    const [oldest, item] = retainedLocalViews.entries().next().value!;
+    retainedLocalViews.delete(oldest); item.release();
+  }
+  scheduleRetainedLocalViews();
+}
+function releaseAllRetainedLocalViews(): void {
+  const items = [...retainedLocalViews.values()];
+  retainedLocalViews.clear(); scheduleRetainedLocalViews();
+  items.forEach(item => item.release());
+}
 function cachedMcpAppHeight(key: string): number | undefined { return mcpAppHeightCache.get(key); }
 function rememberMcpAppHeight(key: string, height: number): void {
   mcpAppHeightCache.delete(key);
@@ -44,11 +85,12 @@ function rememberMcpAppHeight(key: string, height: number): void {
   while (mcpAppHeightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT)
     mcpAppHeightCache.delete(mcpAppHeightCache.keys().next().value!);
 }
-function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active', sessionId: string | null, clientId: string): void {
+function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active' | 'exit-fullscreen', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
   const stage = code.endsWith('_TIMEOUT') ? 'timeout' : code === 'MCP_APP_SANDBOX_FAILED' ? 'sandbox' : phase;
-  const write = (card: string) => createLogger('mcp-apps').warn('App View failed', { code, stage, card });
+  const event = phase === 'exit-fullscreen' ? 'App fullscreen exit not delivered' : 'App View failed';
+  const write = (card: string) => createLogger('mcp-apps').warn(event, { code, stage, card });
   // A stable digest supports correlation without writing task/card identifiers.
   void (async () => {
     try {
@@ -58,7 +100,7 @@ function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' 
   })();
 }
 
-function hostContext(locale: string, element: HTMLElement): Record<string, unknown> {
+function hostContext(locale: string, element: HTMLElement, fixed = false): Record<string, unknown> {
   const style = getComputedStyle(document.documentElement);
   const variable = (name: string) => style.getPropertyValue(name).trim();
   return {
@@ -71,7 +113,7 @@ function hostContext(locale: string, element: HTMLElement): Record<string, unkno
       touch: navigator.maxTouchPoints > 0,
       hover: matchMedia('(hover: hover)').matches,
     },
-    containerDimensions: { width: Math.round(element.clientWidth), maxHeight: MCP_APP_MAX_HEIGHT },
+    ...(!fixed || element.clientWidth > 0 && element.clientHeight > 0 ? { containerDimensions: { width: Math.round(element.clientWidth), ...(fixed ? { height: Math.round(element.clientHeight) } : { maxHeight: MCP_APP_MAX_HEIGHT }) } } : {}),
     styles: {
       variables: {
         '--color-background-primary': variable('--surface'),
@@ -98,9 +140,22 @@ interface McpAppCardProps {
   title: string;
   fallbackText?: string;
   plugin?: unknown;
+  customMcp?: unknown;
+  chrome?: 'card' | 'panel';
+  sizing?: 'content' | 'fill' | 'sidebar-section';
   source?: { instanceId: string; viewId: string };
   contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
   onUnavailable?(): void;
+}
+
+function McpAppIdentity({ title, plugin, customMcp }: Pick<McpAppCardProps, 'title' | 'plugin' | 'customMcp'>) {
+  const { t } = useTranslation();
+  const identity = plugin && typeof plugin === 'object' ? plugin as { name?: string; source?: unknown } : undefined;
+  const origin = identity?.source === undefined ? undefined : parseMcpAppSource(identity.source);
+  const custom = parseMcpAppCustomMcp(customMcp);
+  const label = origin && isExceptionalPluginSource(origin) ? t(`mcpApps.source.${origin.kind}`) : custom ? t('mcpApps.customMcp') : undefined;
+  return <><span className="min-w-0 truncate">{identity?.name || (custom && custom !== true ? custom.name : title) || t('mcpApps.appName')}</span>
+    {label && <span className={`shrink-0 ${custom ? 'text-[var(--text-secondary)]' : 'text-[var(--warning-fg)]'}`}>{label}</span>}</>;
 }
 
 export function McpAppCard(props: McpAppCardProps) {
@@ -114,14 +169,14 @@ export function McpAppCard(props: McpAppCardProps) {
   if (isSharedTaskPeer(deviceId)) {
     const title = props.title ? t('mcpApps.cardTitle', { title: props.title }) : t('mcpApps.appName');
     return (
-      <section className="my-3 rounded-xl border border-border p-3" aria-label={title}>
-        <div className="text-13 text-[var(--text-secondary)]">{title}</div>
+      <section className="my-3 overflow-hidden rounded-xl border border-border" aria-label={title}>
+        <div className="flex h-7 items-center gap-2 px-2 text-12 text-[var(--text-secondary)]"><McpAppIdentity {...props} /></div>
         {props.fallbackText && (
-          <p className="mt-3 whitespace-pre-wrap break-words text-14 text-[var(--text-primary)]">
+          <p className="px-3 pb-3 whitespace-pre-wrap break-words text-14 text-[var(--text-primary)]">
             {props.fallbackText}
           </p>
         )}
-        <p className="mt-3 text-13 text-[var(--text-secondary)]">{t('mcpApps.sharedTaskReadOnly')}</p>
+        <p className="px-3 pb-3 text-13 text-[var(--text-secondary)]">{t('mcpApps.sharedTaskReadOnly')}</p>
       </section>
     );
   }
@@ -129,9 +184,9 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
-  const pluginTrust = plugin && typeof plugin === 'object' && 'trust' in plugin ? String(plugin.trust) : undefined;
+  const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
   const card = useRef<HTMLDialogElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -140,8 +195,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [error, setError] = useState<ReturnType<typeof mcpAppFailureKey> | 'mcpApps.pluginRevoked' | 'mcpApps.pluginCspRejected' | 'mcpApps.filesOnExecutionComputer'>();
   const [loading, setLoading] = useState(true);
   const heightKey = `${deviceId ?? 'local'}:${sessionId ?? 'none'}:${clientId}`;
-  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey) ?? 320);
+  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey));
   const [mode, setMode] = useState('inline');
+  const sidebarSection = sizing === 'sidebar-section';
+  const fixed = sizing === 'fill' || mode === 'fullscreen';
+  const fixedRef = useRef(fixed); fixedRef.current = fixed;
   const [border, setBorder] = useState(true);
   const [visible, setVisible] = useState(false);
   const locale = i18n.resolvedLanguage ?? i18n.language;
@@ -151,9 +209,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   contextSourceRef.current = contextSource;
   const unavailableRef = useRef(onUnavailable); unavailableRef.current = onUnavailable;
   const [revealed, setRevealed] = useState(false);
+  const visibleRef = useRef(visible);
+  const retentionKey = useRef({}).current;
+  const [retained, setRetained] = useState(false);
+  const enabled = visible || retained;
+  const updateContextRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
-    setHeight(cachedMcpAppHeight(heightKey) ?? 320);
+    setHeight(cachedMcpAppHeight(heightKey));
   }, [heightKey]);
 
   useEffect(() => {
@@ -162,7 +225,21 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     if (!element) return;
     let intersecting = false;
     let windowHidden = isWindowHidden();
-    const update = () => setVisible(intersecting && !windowHidden && document.visibilityState !== 'hidden' && isPluginUiElementVisible(element));
+    const update = () => {
+      const windowVisible = !windowHidden && document.visibilityState !== 'hidden';
+      const regionVisible = isPluginUiElementVisible(element);
+      const next = intersecting && windowVisible && regionVisible;
+      visibleRef.current = next;
+      if (!windowVisible) releaseAllRetainedLocalViews();
+      if (!next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
+        retainLocalView(retentionKey, () => setRetained(false));
+        setRetained(true);
+      } else {
+        forgetRetainedLocalView(retentionKey);
+        setRetained(false);
+      }
+      setVisible(next);
+    };
     const observer = new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting;
       update();
@@ -176,13 +253,17 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       document.removeEventListener('visibilitychange', update);
       stopWindowHidden?.();
       stopRegions();
+      forgetRetainedLocalView(retentionKey);
+      visibleRef.current = false;
     };
-  }, []);
+  }, [deviceId, retentionKey]);
 
   useLayoutEffect(() => {
     const element = root.current;
-    if (!element || !visible) return;
+    if (!element || !enabled) return;
+    if (!visibleRef.current) { setRetained(false); return; }
     setRevealed(false);
+    setCanFullscreen(false);
     let disposed = false;
     let revealedFrame = false;
     let initialized = false;
@@ -228,7 +309,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           // the page; the automatic pre-result size can still show the old frame.
           if (initialized && resultDelivered) sizeDelivered = true;
           const value = message.params?.height;
-          if (typeof value === 'number' && Number.isFinite(value)) {
+          if (!fixedRef.current && typeof value === 'number' && Number.isFinite(value)) {
             const nextHeight = heightGuard.accept(value);
             latestHeight = nextHeight;
             if (initialized && resultDelivered) {
@@ -244,7 +325,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         if (initialized && resultDelivered && sizeDelivered && !revealedFrame) reveal();
         if (initialized && resultDelivered && !revealedFrame && revealTimer === undefined)
           revealTimer = setTimeout(reveal, 150);
+        if (message.method === 'ui/notifications/sandbox-escape') setMode('inline');
         if (message.method === 'ui/notifications/host-context-changed') {
+          const controls = message.params?.['cindy/host-controls'];
+          if (controls && typeof controls === 'object') setCanFullscreen((controls as { fullscreenButton?: unknown }).fullscreenButton === true);
           const mode = message.params?.displayMode;
           if (mode === 'inline' || mode === 'fullscreen') setMode(mode);
         }
@@ -275,30 +359,35 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       // immediately. For SDK pages, keep the remembered height until a
       // post-result size arrives, with a bounded fallback for pages that never
       // emit another size notification.
-      if (!initialized && latestHeight !== undefined) setHeight(latestHeight);
-      if (initialized && !sizeDelivered && latestHeight !== undefined) {
+      if (!fixedRef.current && !initialized && latestHeight !== undefined) setHeight(latestHeight);
+      if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
         heightFallbackTimer = setTimeout(() => {
           heightFallbackTimer = undefined;
-          if (disposed || sizeDelivered || latestHeight === undefined) return;
+          if (disposed || fixedRef.current || sizeDelivered || latestHeight === undefined) return;
           rememberMcpAppHeight(heightKey, latestHeight);
           setHeight(latestHeight);
         }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
+      }
+      // A sidebar already waiting on a reported size keeps its compact footprint.
+      // Give pages with no size notification the standard viewport once visible.
+      if (sidebarSection && latestHeight === undefined) {
+        setHeight(current => current ?? MCP_APP_DEFAULT_HEIGHT);
       }
       setRevealed(true);
       setLoading(false);
     };
     window.addEventListener('message', receive);
-    const readContext = () => ({ ...hostContext(localeRef.current, element),
+    const readContext = () => ({ ...hostContext(localeRef.current, element, fixedRef.current),
       ...(contextSourceRef.current ? { cindy: contextSourceRef.current.read() } : {}) });
     let lastContext = '';
     let queued = false;
     let sending = false;
     let pendingContext: Record<string, unknown> | undefined;
     const flush = async () => {
-      if (sending || disposed || !opened) return;
+      if (sending || disposed || !opened || !visibleRef.current) return;
       sending = true;
       try {
-        while (!disposed && pendingContext) {
+        while (!disposed && visibleRef.current && pendingContext) {
           const latest = pendingContext;
           pendingContext = undefined;
           await controller.context(latest);
@@ -308,19 +397,21 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     };
     const update = () => {
       if (queued || disposed) return;
+      if (!visibleRef.current) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (disposed) return;
+        if (disposed || !visibleRef.current || (fixedRef.current && (element.clientWidth <= 0 || element.clientHeight <= 0))) return;
         const context = readContext();
         const serialized = JSON.stringify(context);
         if (serialized === lastContext) return;
         lastContext = serialized;
-        heightGuard.resize(element.clientWidth);
+        if (!fixedRef.current) heightGuard.resize(element.clientWidth);
         pendingContext = context;
         void flush();
       });
     };
+    updateContextRef.current = update;
     const unsubscribeContext = contextSourceRef.current?.subscribe(update);
     const initialContext = readContext();
     lastContext = JSON.stringify(initialContext);
@@ -364,6 +455,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     function dispose() {
       if (disposed) return;
       disposed = true;
+      forgetRetainedLocalView(retentionKey);
+      updateContextRef.current = undefined;
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
       clearTimeout(loadingTimer);
       controllerRef.current = undefined;
@@ -401,11 +494,23 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, visible, deviceId, source?.instanceId, source?.viewId]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection]);
+
+  useLayoutEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller || deviceId !== undefined || !enabled) return;
+    if (retained && !visible) {
+      void controller.suspend().catch(() => { forgetRetainedLocalView(retentionKey); setRetained(false); });
+    } else {
+      void controller.resume().then(() => updateContextRef.current?.()).catch(() => {
+        forgetRetainedLocalView(retentionKey); setRetained(false); setVisible(false);
+      });
+    }
+  }, [enabled, retained, visible, deviceId, retentionKey]);
 
   useEffect(() => {
-    if (root.current)
-      void controllerRef.current?.context(hostContext(locale, root.current)).catch(() => {});
+    if (root.current && visibleRef.current)
+      void controllerRef.current?.context(hostContext(locale, root.current, fixedRef.current)).catch(() => {});
   }, [locale]);
   useLayoutEffect(() => {
     if (mode !== 'fullscreen') return;
@@ -421,49 +526,64 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     return () => {
       dialog.close();
       dialog.setAttribute('open', '');
-      if (root.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current)).catch(() => {});
+      if (root.current && visibleRef.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current, fixedRef.current)).catch(() => {});
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  useLayoutEffect(() => { updateContextRef.current?.(); }, [fixed, mode]);
+  // Exit locally; the modal blocks the window.
+  const exitFullscreen = () => {
+    setMode('inline');
+    void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
+  };
+  const showSpinner = loading && visible && !revealed;
+  const frameHeight = height ?? MCP_APP_DEFAULT_HEIGHT;
+  const sidebarHeight = height ?? MCP_APP_SIDEBAR_LOADING_HEIGHT;
+  const frameMount = (
+    <div
+      ref={root}
+      aria-busy={visible && !revealed ? true : undefined}
+      style={{ height: error ? 0 : fixed ? undefined : frameHeight, flex: fixed ? 1 : undefined, minHeight: 0 }}
+    />
+  );
   return (
     <dialog
       ref={card}
       open
       className={
         mode === 'fullscreen'
-          ? 'fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-3 text-inherit backdrop:bg-transparent'
-          : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
+          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
+          : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
+      // The modal's top layer still shares the macOS window controls and drag geometry.
+      style={mode === 'fullscreen' && window.electronAPI?.platform === 'darwin'
+        ? { marginTop: CONTENT_HEADER_HEIGHT_PX }
+        : undefined}
       role={mode === 'fullscreen' ? 'dialog' : 'region'}
       aria-modal={mode === 'fullscreen' ? true : undefined}
       aria-label={appTitle}
       onCancel={(event) => {
         event.preventDefault();
-        void controllerRef.current?.displayMode('inline').catch(() => {});
+        exitFullscreen();
       }}
     >
-      <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
-        <span className="min-w-0 break-words">{title ? t('mcpApps.cardTitle', { title }) : appTitle}</span>
-        {pluginTrust && <span className="shrink-0 text-12 font-medium">{t(`mcpApps.pluginTrust.${['cindy-official', 'reviewed', 'verified-publisher'].includes(pluginTrust) ? pluginTrust : 'unverified'}`)}</span>}
-        {loading && visible && !revealed && <Spinner size={16} />}
-        {mode === 'fullscreen' && (
-          <Button
-            data-exit-fullscreen
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              void controllerRef.current?.displayMode('inline').catch(() => {});
-            }}
-          >
-            {t('mcpApps.exitFullscreen')}
-          </Button>
-        )}
-        {error && error !== 'mcpApps.filesOnExecutionComputer' && (
-          <Button variant="secondary" size="sm" onClick={() => setAttempt((value) => value + 1)}>
-            {t('mcpApps.retry')}
-          </Button>
-        )}
-      </div>
+      {(chrome === 'card' || mode === 'fullscreen') && <div className="flex h-7 shrink-0 items-center gap-2 px-2 text-12 text-[var(--text-secondary)]">
+        <McpAppIdentity title={title} plugin={plugin} customMcp={customMcp} />
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {showSpinner && <Spinner size={14} />}
+          {error && error !== 'mcpApps.filesOnExecutionComputer' && <Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button>}
+          {!error && (mode === 'fullscreen' || revealed && canFullscreen) && <Button variant="secondary" tone="quiet" size="sm" className={mode === 'fullscreen' ? undefined : 'h-7 w-7 p-0'}
+            data-exit-fullscreen={mode === 'fullscreen' ? true : undefined}
+            style={mode === 'fullscreen' ? WINDOW_NO_DRAG_STYLE : undefined}
+            aria-label={t(mode === 'fullscreen' ? 'mcpApps.exitFullscreen' : 'mcpApps.fullscreen')}
+            title={t(mode === 'fullscreen' ? 'mcpApps.exitFullscreen' : 'mcpApps.fullscreen')}
+            onClick={() => mode === 'fullscreen' ? exitFullscreen() : void controllerRef.current?.displayMode('fullscreen').catch(() => {})}>
+            {mode === 'fullscreen' ? t('mcpApps.exitFullscreen') : <Maximize2 size={14} />}
+          </Button>}
+        </div>
+      </div>}
+      {chrome === 'panel' && mode !== 'fullscreen' && !sidebarSection && showSpinner && <div className="flex justify-center p-3"><Spinner size={16} /></div>}
+      {chrome === 'panel' && mode !== 'fullscreen' && error && <div className="p-3"><Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button></div>}
       {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
         <p role="alert" className="px-3 pb-3 text-13 text-[var(--text-secondary)]">
@@ -475,14 +595,16 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           {fallbackText}
         </p>
       )}
-      <div
-        ref={root}
-        aria-busy={visible && !revealed ? true : undefined}
-        style={{
-          height: error ? 0 : mode === 'fullscreen' ? undefined : height,
-          flex: mode === 'fullscreen' ? 1 : undefined,
-        }}
-      />
+      {sidebarSection ? (
+        // Clip the frame during the transition so the guest receives only the final viewport size.
+        <div
+          className={fixed ? 'flex min-h-0 flex-1' : 'relative shrink-0 overflow-hidden transition-[height] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none'}
+          style={{ height: error ? 0 : fixed ? undefined : sidebarHeight }}
+        >
+          {frameMount}
+          {!fixed && showSpinner && <div className="pointer-events-none absolute inset-0 grid place-items-center"><Spinner size={16} /></div>}
+        </div>
+      ) : frameMount}
     </dialog>
   );
 }
