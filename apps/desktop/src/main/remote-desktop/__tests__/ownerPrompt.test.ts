@@ -124,3 +124,25 @@ it('cancels a still-starting prompt through the helper, not by killing it', asyn
   expect(f.answers).toEqual([]);
   f.child.emit('close');
 });
+
+it('never spawns the helper when the cover is released while the binary is still resolving', async () => {
+  // A cold build of the native helper takes seconds; the task can end inside that wait.
+  let releaseBinary: (binary: string) => void = () => {};
+  const spawn = vi.fn();
+  const runtime = {
+    resolveBinary: () => new Promise<string>((resolve) => { releaseBinary = resolve; }),
+    spawn,
+  };
+  const cancel = new AbortController();
+  const starting = watchOwnerPrompt(
+    () => {},
+    'remove the privacy screen',
+    runtime as unknown as Parameters<typeof watchOwnerPrompt>[2],
+    cancel.signal,
+  );
+  cancel.abort();
+  releaseBinary('/helper');
+  await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  // Nothing was started, so there is no system sheet to take down afterwards either.
+  expect(spawn).not.toHaveBeenCalled();
+});

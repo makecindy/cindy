@@ -28,7 +28,13 @@ export async function watchOwnerPrompt(
   signal?: AbortSignal,
 ): Promise<OwnerPrompt> {
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
-  const child = runtime.spawn(await runtime.resolveBinary(), ['--owner-prompt', reason]);
+  // Resolving the helper can take a while (a cold build of the native source, a slow
+  // probe). A cover that let go during that wait has already marked the signal aborted,
+  // and listening for the event afterwards never replays it: re-check before spawning so
+  // the system sheet cannot flash onto a screen nobody is holding awake.
+  const binary = await runtime.resolveBinary();
+  if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  const child = runtime.spawn(binary, ['--owner-prompt', reason]);
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let buffer = '';
   let started = false;
