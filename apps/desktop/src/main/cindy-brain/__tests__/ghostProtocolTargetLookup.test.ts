@@ -240,9 +240,12 @@ describe('protocol fixture lifecycle regression (#8991)', () => {
     let next: ReturnType<typeof createProtocolFixture> | undefined;
     let cleanup: Promise<void> | undefined;
     try {
-      await pending;
+      // Packaging or the first install can reject before the held completion
+      // signal. Propagate that setup error instead of waiting until timeout.
+      await Promise.race([pending, abandoned.ready]);
       const abandonedDirectory = abandoned.workDir;
       cleanup = abandoned.cleanup();
+      void cleanup.catch(() => {});
       next = createProtocolFixture();
       await next.ready;
       const nextManager = next.manager;
@@ -261,8 +264,14 @@ describe('protocol fixture lifecycle regression (#8991)', () => {
       release();
       try {
         await abandonedResult;
-        await (cleanup ?? abandoned.cleanup());
-        await next?.cleanup();
+        // Observe an already-started cleanup without awaiting its rejection
+        // before attempting the next fixture. Retain every deletion error.
+        const results = await Promise.allSettled([
+          cleanup ?? abandoned.cleanup(),
+          next?.cleanup(),
+        ]);
+        const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+        if (errors.length) throw new AggregateError(errors, 'Protocol fixture cleanup failed');
       } finally {
         spy.mockRestore();
       }
@@ -277,14 +286,19 @@ describe('protocol fixture lifecycle regression (#8991)', () => {
       throw failure;
     });
     const fixture = createProtocolFixture();
+    let cleanup: Promise<void> | undefined;
     try {
       await expect(fixture.ready).rejects.toBe(failure);
       expect(fixture.manager.list()).toHaveLength(1);
-      await fixture.cleanup();
+      cleanup = fixture.cleanup();
+      await cleanup;
       expect(fs.existsSync(fixture.workDir)).toBe(false);
     } finally {
-      await fixture.cleanup();
-      spy.mockRestore();
+      try {
+        await (cleanup ?? fixture.cleanup());
+      } finally {
+        spy.mockRestore();
+      }
     }
   });
 });
