@@ -152,10 +152,21 @@ export function getModelVisibilityOverride(
  * 整表快照(浅拷贝)。PROVIDER_LIST 用它把被控端的可见性 override 一并回给 device-link
  * 控制端(手机),让手机模型列表按**被控端**用户的显示开关过滤(与本机 / IM /model 同口径)。
  */
-export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = [], allowPending = false): Record<string, boolean> {
+export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderView[] = [], allowPending = false, pickerScope?: readonly string[] | 'retained'): Record<string, boolean> {
   if (!ready && allowPending) return {};
   if (!ready) throw notReady();
-  const snapshot = { ...mirror };
+  // The bulk picker still needs stored preferences for missing models of enabled sources.
+  // The one-model supplement must not carry preferences for unrelated providers or siblings.
+  const snapshot: VisibilityMap = pickerScope === 'retained' ? {} : { ...mirror };
+  if (Array.isArray(pickerScope) && pickerScope.length) {
+    const deferred = new Set<string>(pickerScope);
+    for (const key of Object.keys(snapshot)) {
+      const start = key.indexOf(':') + 1;
+      for (let end = key.indexOf(':', start); end !== -1; end = key.indexOf(':', end + 1)) {
+        if (deferred.has(key.slice(start, end))) { delete snapshot[key]; break; }
+      }
+    }
+  }
   // Expand the fallback into ordinary per-model booleans for legacy remote clients. The
   // provider list and visibility map come from the same catalog; no wire-schema change.
   for (const provider of providers) {
@@ -166,7 +177,8 @@ export function getModelVisibilityMirrorSnapshot(providers: readonly ProviderVie
       }
     }
     const mediaAgent = provider.agents[0] ?? 'claude-code';
-    for (const model of [...(provider.imageModels ?? []), ...(provider.videoModels ?? [])]) {
+    for (const model of [...(provider.imageModels ?? []), ...(provider.videoModels ?? []),
+      ...(pickerScope ? [...(provider.audioModels ?? []), ...(provider.embeddingModels ?? [])] : [])]) {
       const value = getModelVisibilityOverride(mediaAgent, provider.id, model.id);
       if (value !== undefined) snapshot[keyOf(mediaAgent, provider.id, model.id)] = value;
     }

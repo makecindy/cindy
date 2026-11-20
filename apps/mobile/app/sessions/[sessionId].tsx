@@ -2327,9 +2327,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
     workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
   });
+  const currentModelRoute = currentSession?.model ? {
+    agent: resolveSessionAgentKind(currentSession),
+    modelId: currentSession.model,
+    providerId: currentSession.providerId ?? null,
+  } : undefined;
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
     modelSheetOpen,
+    !sessionAgentRunsOnOtherComputer(currentSession) ? currentModelRoute : undefined,
   );
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
@@ -2876,6 +2882,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ),
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
+    retainedModel: currentAgentDeviceId && currentModelRoute ? { deviceId: currentAgentDeviceId, route: currentModelRoute } : undefined,
     keepOnly: !(agentLocationMovable && modelSheetOpen),
   });
   const modelSheetRemoteCatalogs = useMemo(

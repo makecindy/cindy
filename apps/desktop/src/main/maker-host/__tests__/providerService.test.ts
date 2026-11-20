@@ -242,6 +242,55 @@ describe('createProviderService', () => {
     expect(result[0].availableMediaModelIds).toEqual([]);
   });
 
+  // Unit: the mobile picker paid one credential read per suspended connection before filtering.
+  // The full management view and a task explicitly bound to an old model have distinct contracts.
+  it('checks only included credentials and retains only the requested model of a suspended source', async () => {
+    const providers = ['on', 'off', 'other'].map(id => buildUserProvider({
+      id, name: id, runtimes: { codex: { baseUrl: 'https://provider.invalid/v1', models: [
+        { id: 'current', name: 'Current' }, { id: 'sibling', name: 'Sibling' },
+      ] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+    const reads: string[] = [];
+    const builtin = vi.fn(() => false);
+    const media = vi.fn(() => []);
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers }),
+      getModelAccess: () => ({ disabledProviders: { off: true, other: true } }),
+      connection: { xd: builtin, anthropic: builtin, openai: builtin, xai: builtin },
+      customApiKeyConnected: p => { reads.push(p.id); return true; }, getAvailableMediaModels: media,
+    });
+    const describe = vi.fn();
+    const active = await svc.listProviders({ picker: { scope: 'available', describe } });
+    expect(active.map(p => p.id)).toEqual(['on']);
+    expect(reads.splice(0)).toEqual(['on']);
+    expect(describe).toHaveBeenCalledWith(['on', 'off', 'other'], ['off', 'other']);
+    const bound = await svc.listProviders({ picker: { scope: { agent: 'codex', providerId: 'off', modelId: 'current' } } });
+    expect(bound).toHaveLength(1);
+    expect(bound[0]).toMatchObject({ id: 'off', connected: true, suspended: true });
+    expect(bound[0].models.codex?.map(m => m.id)).toEqual(['current']);
+    expect(reads.splice(0)).toEqual(['off']);
+    expect(builtin).not.toHaveBeenCalled();
+    expect(media).not.toHaveBeenCalled();
+    expect((await svc.listProviders()).map(p => p.id)).toEqual(['on', 'off', 'other']);
+    expect(reads).toEqual(['on', 'off', 'other']);
+  });
+
+  it('preserves Auto membership for a suspended Cindy source without checking its login', async () => {
+    const xd = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
+    const sample = xd.models.codex![0];
+    const providers = [{ ...xd, models: { codex: [{ ...sample, id: 'auto/team' }, { ...sample, id: 'chat' }] } }];
+    const read = vi.fn(() => true);
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers }),
+      getModelAccess: () => ({ disabledProviders: { xd: true } }),
+      connection: { xd: read, anthropic: read, openai: read, xai: read },
+    });
+    const [identity] = await svc.listProviders({ picker: { scope: 'available' } });
+    expect(identity).toMatchObject({ id: 'xd', suspended: true, routing: {} });
+    expect(identity.models.codex?.map(m => m.id)).toEqual(['auto/team']);
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('lists providers with injected connection state', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,

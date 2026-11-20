@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { DeviceLinkClient, PROTOCOL_VERSION, DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
-  type Envelope, type WsLike } from '@cindy/device-link';
+  type Envelope, type WsLike, type ProviderPickerModel } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
@@ -33,8 +33,8 @@ let root: Root;
 let values: Record<string, UseDeviceProvidersResult>;
 const catalog = (id: string) => ({ providers: [{ id } as ProviderView] });
 const timeout = () => new Error('[DEVICE_LINK_TIMEOUT] no invoke-result');
-function Probe({ deviceId, open }: { deviceId: string; open: boolean }) {
-  values[deviceId] = useDeviceProviders(deviceId, open);
+function Probe({ deviceId, open, retained }: { deviceId: string; open: boolean; retained?: ProviderPickerModel }) {
+  values[deviceId] = useDeviceProviders(deviceId, open, retained);
   return null;
 }
 async function render(deviceId = 'a', open = false, other = false) {
@@ -70,6 +70,32 @@ afterEach(async () => {
 });
 
 describe('model catalog failure recovery', () => {
+  // A task-specific response arriving after navigation must never enter the common picker cache.
+  it('shows only the bound suspended model and discards it when switching tasks', async () => {
+    const route = { agent: 'codex' as const, modelId: 'current', providerId: 'off' };
+    const active = { ...catalog('on'), deferredProviderIds: ['off'], providerOrder: ['off', 'on'] };
+    const read = state.makers.get('a')!.listProviders;
+    let finish!: (reply: object) => void;
+    read.mockResolvedValueOnce(active).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const show = (retained?: ProviderPickerModel) => act(async () => {
+      root.render(createElement(Probe, { deviceId: 'a', open: true, retained }));
+    });
+    await show(route);
+    expect(read.mock.calls).toEqual([[], [route]]);
+    expect(values.a.ready).toBe(false);
+    const reply = { providers: [{ id: 'off', suspended: true, models: { codex: [{ id: 'current' }, { id: 'sibling' }] } }] };
+    await show();
+    await act(async () => finish(reply));
+    expect(values.a.providers.map(p => p.id)).toEqual(['on']);
+    read.mockResolvedValue(reply);
+    await show(route);
+    expect(values.a.ready).toBe(true);
+    expect(values.a.providers.map(p => p.id)).toEqual(['off', 'on']);
+    expect(values.a.providers[0].models.codex?.map(m => m.id)).toEqual(['current']);
+    await show();
+    expect(values.a.providers.map(p => p.id)).toEqual(['on']);
+  });
+
   it('mounted picker and fresh submit share the replacement after a burst invalidates a failed read', async () => {
     let fail!: (error: Error) => void;
     const read = state.makers.get('a')!.listProviders;

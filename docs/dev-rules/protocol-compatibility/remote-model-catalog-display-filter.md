@@ -14,3 +14,11 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 这是执行主机的投影修复，旧 Mobile 和远控 Desktop 无需新增能力协商即可接收。
 不增加分页、客户端重组或重试，不提高传输大小上限；本机 Desktop 设置仍读取完整目录。
 “关闭后必须重选”的提示与发送前检查随 Mobile 更新；旧版控制端仍沿用各自既有选择处理。
+
+同账号手机在每次 `maker:provider:list` 的 `capabilities` 中声明 `provider-picker-v1`。
+桌面端在构建视图、检查凭证之前排除整家停用的供应商，并以 `deferredProviderIds` 返回其标识。
+Cindy AI 和组织来源保留用于识别 Auto 迁移的来源身份与 Auto 归属，不读其连接状态。
+若已有任务绑定其中一家，手机可用同一通道附带 `retainedModel: {agent, providerId, modelId}`，
+只读取该任务的停用来源及匹配的聊天模型；历史记录的 `providerId: null` 按原有默认来源规则解析。
+补读沿用主机可见性和授权投影，结果仅用于该任务。旧主机忽略能力并返回完整目录，
+旧手机、本机设置与访客沿用原有读取。自建中转透传既有 invoke 帧。

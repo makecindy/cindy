@@ -1,3 +1,5 @@
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import type { ProviderListOptions } from '../maker-host/provider-service.js';
 import { isGeminiChatEndpoint } from '../../shared/geminiApiConnection.js';
 import { bindGeminiImageConnection, geminiImageConnectionId } from '../maker-host/gemini-image-connection.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -323,7 +325,7 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]>;
   /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
   isOrganizationManagedProviderId(providerId: string): boolean;
   /**
@@ -331,7 +333,7 @@ export interface ProviderHandlerDeps {
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
    * key = `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
    */
-  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean): Record<string, boolean> | Promise<Record<string, boolean>>;
+  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean, pickerScope?: readonly string[] | 'retained'): Record<string, boolean> | Promise<Record<string, boolean>>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
   /**
@@ -1289,18 +1291,28 @@ export function registerProviderHandlers(
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
       disabledProviders?: Record<string, boolean>;
+      deferredProviderIds?: string[];
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const ownerAtIngress = captureProviderOwnerSession();
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
+      const scope = getDeviceLinkInvokeContext()?.providerPicker;
+      let deferredProviderIds: string[] = [];
+      let catalogOrder: string[] = [];
       const providers = await deps.listProviders({
+        ...(scope ? { picker: { scope, describe: (order, deferred) => {
+          catalogOrder = order;
+          deferredProviderIds = deferred;
+        } } } : {}),
         allowSideEffects: trusted,
       });
       assertProviderMutationOwner(ownerAtIngress);
       let modelVisibilityOverrides: Record<string, boolean>;
       try {
-        modelVisibilityOverrides = await deps.getModelVisibilityOverrides(providers, trusted);
+        modelVisibilityOverrides = scope
+          ? await deps.getModelVisibilityOverrides(providers, trusted, scope === 'available' ? deferredProviderIds : 'retained')
+          : await deps.getModelVisibilityOverrides(providers, trusted);
       } catch (error) {
         if (isIpcError(error) && error.code === 'MODEL_VISIBILITY_NOT_READY') {
           throwIpcError('MODEL_VISIBILITY_NOT_READY', 'Model preferences are still synchronizing. Retry shortly.');
@@ -1321,6 +1333,7 @@ export function registerProviderHandlers(
       return {
         dataOwnerId,
         ownerGeneration: ownerAtIngress?.generation ?? 0,
+        ...(scope === 'available' ? { deferredProviderIds } : {}),
         providers: providers.map((provider) => {
           const safe = withoutProviderHeaderCredentials(provider);
           const view = {
@@ -1342,7 +1355,7 @@ export function registerProviderHandlers(
             ? { ...located, remoteInvocationEnabled: remoteAccess(provider.id) }
             : located;
         }),
-        providerOrder,
+        providerOrder: scope === 'available' ? [...new Set([...providerOrder, ...catalogOrder])] : providerOrder,
         modelVisibilityOverrides,
         ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
       };

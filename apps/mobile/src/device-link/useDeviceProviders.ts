@@ -11,12 +11,15 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 
+import type { ProviderPickerModel } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import { connectionRecoverySyncRetryDelayMs, formatRemoteError, isAutoRecoveringRemoteError } from './remoteStatus';
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
+  orderDeviceProviders,
+  readRetainedProviderModel,
   fetchDeviceProvidersFresh,
   getCachedDeviceProviders,
   getDeviceFetchEpoch,
@@ -29,6 +32,7 @@ import {
   subscribeDeviceProvidersError,
   type DeviceProvidersPayload,
 } from './deviceProvidersCache';
+import type { MobileMakerTransport } from './mobileMakerTransport';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
 
 export { evictDeviceProviders } from './deviceProvidersCache';
@@ -59,7 +63,7 @@ function canRecoverProviderRead(error: unknown): boolean {
 }
 
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
-export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDeviceProvidersResult {
+export function useDeviceProviders(deviceId?: string, pickerOpen = false, retainedModel?: ProviderPickerModel): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
   // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
@@ -274,16 +278,61 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     };
   }, [catalogGeneration, connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
+  const ready = deviceId !== undefined && readyFor === deviceId && readyGen === getDeviceProvidersGen(deviceId);
+  const retained = useRetainedProviderModel(maker, ready ? payload : undefined, retainedModel, pickerOpen);
   return {
-    providers: payload.providers,
-    ...(payload.modelVisibilityOverrides !== undefined
-      ? { modelVisibilityOverrides: payload.modelVisibilityOverrides }
-      : {}),
-    loading,
-    error: errorDeviceId === deviceId ? error : null,
+    providers: retained.payload?.providers ?? payload.providers,
+    modelVisibilityOverrides: retained.payload?.modelVisibilityOverrides ?? payload.modelVisibilityOverrides,
+    loading: loading || retained.loading,
+    error: (errorDeviceId === deviceId ? error : null) ?? retained.error,
     unsupported: errorDeviceId === deviceId && isDeviceProvidersUnsupportedError(error),
-    ready: deviceId !== undefined
-      && readyFor === deviceId
-      && readyGen === getDeviceProvidersGen(deviceId),
+    ready: ready && !retained.loading && !retained.error,
   };
+}
+
+/** Keep the running task's exception private to its view. A replacement catalog (including a
+ * revocation or owner change) immediately retires the old result, even during render. */
+export function useRetainedProviderModel(
+  maker: MobileMakerTransport, base: DeviceProvidersPayload | undefined,
+  route: ProviderPickerModel | undefined, pickerOpen = false,
+) {
+  const agent = route?.agent;
+  const modelId = route?.modelId;
+  const providerId = route?.providerId;
+  const needed = !!modelId && !!base?.deferredProviderIds?.some(id => providerId === null || id === providerId);
+  const [result, setResult] = useState<{
+    base: DeviceProvidersPayload; key: string; payload?: DeviceProvidersPayload; error?: string;
+  }>();
+  const key = JSON.stringify([agent, providerId, modelId]);
+  const current = needed && result?.base === base && result?.key === key ? result : undefined;
+  const loaded = !!current?.payload;
+  useEffect(() => {
+    if (!needed || !base || !agent || !modelId || providerId === undefined || loaded) return;
+    let cancelled = false;
+    void readRetainedProviderModel(base, key, () => maker.listProviders({ agent, modelId, providerId })).then(reply => {
+      if (cancelled) return;
+      // A downgraded host can reply with a full directory. Only the exact suspended route
+      // may supplement this snapshot; no other source or model becomes selectable.
+      const kept = reply.providers.filter(p => p.suspended && base.deferredProviderIds?.includes(p.id)
+        && (providerId === null || p.id === providerId)).flatMap(p => {
+          const model = p.models[agent]?.find(m => m.id === modelId);
+          return model ? [{ ...p, models: { [agent]: [model] } }] : [];
+        });
+      const visibility = { ...base.modelVisibilityOverrides };
+      for (const id of base.deferredProviderIds ?? []) {
+        if (providerId !== null && id !== providerId) continue;
+        const key = `${agent}:${id}:${modelId}`;
+        const visible = reply.modelVisibilityOverrides?.[key];
+        if (visible !== undefined) visibility[key] = visible;
+      }
+      const received = new Set(kept.map(p => p.id));
+      const payload = orderDeviceProviders({ ...base, providers: [...base.providers.filter(p => !received.has(p.id)), ...kept],
+        modelVisibilityOverrides: visibility });
+      setResult({ base, key, payload });
+    }).catch(reason => {
+      if (!cancelled) setResult({ base, key, error: formatRemoteError(reason) });
+    });
+    return () => { cancelled = true; };
+  }, [agent, base, key, loaded, maker, modelId, needed, pickerOpen, providerId]);
+  return { payload: current?.payload, loading: needed && !current, error: current?.error ?? null };
 }

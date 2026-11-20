@@ -14,6 +14,8 @@ import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetad
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
 export interface DeviceProvidersPayload {
   providers: ProviderView[];
+  /** Same-account hosts omit these suspended sources until an existing task needs its model. */
+  deferredProviderIds?: string[];
   providerContinuity?: ProviderMetadataContinuity;
   /** Host-owned display order; absent on older hosts. */
   providerOrder?: string[];
@@ -79,6 +81,19 @@ async function requestDeviceProviders(
       if (!isCurrent()) throw error;
     }
   }
+}
+
+// Current-task lookups share only an in-flight read for the same immutable base snapshot
+// and route. They never replace the device-wide selectable directory.
+const retainedReads = new WeakMap<DeviceProvidersPayload, Map<string, Promise<DeviceProvidersPayload>>>();
+export function readRetainedProviderModel(base: DeviceProvidersPayload, key: string, fetcher: DeviceProvidersFetcher) {
+  const reads = retainedReads.get(base) ?? new Map<string, Promise<DeviceProvidersPayload>>();
+  const existing = reads.get(key);
+  if (existing) return existing;
+  retainedReads.set(base, reads);
+  const pending = fetcher().finally(() => reads.delete(key));
+  reads.set(key, pending);
+  return pending;
 }
 
 // 缓存按被控设备隔离;代际同桌面(evict 时自增,作废在途 fetch 的回写)。
@@ -175,6 +190,8 @@ export async function fetchDeviceProviders(
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
+        ...(res?.deferredProviderIds ? { deferredProviderIds: res.deferredProviderIds } : {}),
+        ...(res?.providerOrder ? { providerOrder: res.providerOrder } : {}),
         ...(res?.providerContinuity !== undefined ? { providerContinuity: res.providerContinuity } : {}),
         ...(res?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: res.modelVisibilityOverrides }
@@ -279,6 +296,8 @@ export async function fetchDeviceProvidersFresh(
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
+        ...(res?.deferredProviderIds ? { deferredProviderIds: res.deferredProviderIds } : {}),
+        ...(res?.providerOrder ? { providerOrder: res.providerOrder } : {}),
         ...(res?.providerContinuity !== undefined ? { providerContinuity: res.providerContinuity } : {}),
         ...(res?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: res.modelVisibilityOverrides }

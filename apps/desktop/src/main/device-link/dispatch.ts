@@ -90,6 +90,8 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
+  type ProviderPickerModel,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
@@ -716,6 +718,18 @@ function invokeControllerCapabilities(payload: InvokePayload): string[] {
   );
 }
 
+function providerPickerRequest(payload: InvokePayload): 'available' | ProviderPickerModel {
+  const { retainedModel } = payload.args![0] as { retainedModel?: Partial<ProviderPickerModel> };
+  if (retainedModel === undefined) return 'available';
+  const { agent, modelId, providerId } = retainedModel ?? {};
+  if ((agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') ||
+    typeof modelId !== 'string' || !modelId ||
+    (providerId !== null && (typeof providerId !== 'string' || !providerId))) {
+    throw new Error('[INVALID_PARAMS] Invalid retained model');
+  }
+  return { agent, modelId, providerId };
+}
+
 function optionalControllerCapabilities(
   value: { capabilities?: unknown },
 ): string[] | undefined {
@@ -1135,7 +1149,7 @@ function projectInvokeResultForTunnel(
     return result;
   }
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown;
-    providerContinuity?: unknown };
+    providerContinuity?: unknown; deferredProviderIds?: string[] };
   if (!Array.isArray(r.providers)) return result;
   const modelVisibilityOverrides = r.modelVisibilityOverrides
     && typeof r.modelVisibilityOverrides === 'object'
@@ -1210,6 +1224,7 @@ function projectInvokeResultForTunnel(
   const continuity = readProviderMetadataContinuity(r);
   return {
     providers,
+    ...(sameAccountController && Array.isArray(r.deferredProviderIds) ? { deferredProviderIds: r.deferredProviderIds } : {}),
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
@@ -5406,6 +5421,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
+        ...(listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1) && isSameAccountController(src)
+          ? { providerPicker: providerPickerRequest(payload) } : {}),
         sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
         sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何

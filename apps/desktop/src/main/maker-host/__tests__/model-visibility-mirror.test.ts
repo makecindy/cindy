@@ -23,6 +23,16 @@ afterEach(() => {
 });
 
 describe('model-visibility-mirror', () => {
+  // A bulk mobile reply must omit a suspended source's model IDs even when every model
+  // has an explicit preference. Missing enabled models still need their saved hidden flag.
+  it('scopes picker preferences while preserving the complete settings snapshot', () => {
+    const prefs = { 'codex:off:many:models': true, 'codex:on:old:model': false };
+    setModelVisibilityMirror(prefs);
+    expect(getModelVisibilityMirrorSnapshot([], false, ['off'])).toEqual({ 'codex:on:old:model': false });
+    expect(getModelVisibilityMirrorSnapshot([], false, 'retained')).toEqual({});
+    expect(getModelVisibilityMirrorSnapshot()).toEqual(prefs);
+  });
+
   it('尚未收到账号配置时不自动显示默认模型', () => {
     expect(() => getModelVisibilityOverride('claude-code', 'xd', 'gpt-5.5')).toThrow('MODEL_VISIBILITY_NOT_READY');
   });
