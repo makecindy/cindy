@@ -161,7 +161,7 @@ describe('Pi MCP request lifecycle', () => {
     await h.approveInput(input);
     h.gateway.add('cindy', h.client, [{ name: 'ghost_call', inputSchema: { type: 'object' } }]);
     await h.list({ server: 'cindy', tool: 'ghost_call' });
-    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    await expect(h.invoke(input)).rejects.toThrow('"inputSchema":{"type":"object"}');
     expect(h.approvals).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
     await h.approveInput(input, 'fresh');
@@ -231,7 +231,7 @@ describe('Pi MCP request lifecycle', () => {
       expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
     ]);
     const input = { server: displayName, tool: 'probe', args: { value: 'example' } };
-    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    await expect(h.invoke(input)).rejects.toThrow(JSON.stringify(inputSchema));
     expect((await h.list({ server: displayName, tool: 'probe' })).details.tools[0].inputSchema).toEqual(inputSchema);
     await h.approveInput(input, 'alias');
     await expect(h.invoke(input, 'alias')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
@@ -250,6 +250,24 @@ describe('Pi MCP request lifecycle', () => {
       expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
     ]);
     expect(calls).toHaveLength(2); // Reconnecting must not replay a tool call.
+  });
+
+  // A first-call receipt must not insert a large third-party definition into context.
+  // Unit: use the registered Pi gateway. An exact lookup must still return that same definition in full.
+  it('leaves oversized first-use definitions behind a named lookup', async () => {
+    const fetchImpl = vi.fn();
+    const h = gatewayWithFetch(fetchImpl);
+    const description = 'long description '.repeat(150);
+    h.gateway.add('catalog', h.client, [{ name: 'lookup', description, inputSchema: { type: 'object' } }]);
+    const input = { server: 'catalog', tool: 'lookup', args: {} };
+    await h.approveInput(input, 'large');
+    const attempt = h.invoke(input, 'large');
+    await expect(attempt).rejects.toThrow('cindy_mcp_list_tools with {"server":"catalog","tool":"lookup"}');
+    await expect(attempt).rejects.not.toThrow(description);
+    expect(h.approvals).toHaveLength(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const exact = await h.list({ server: 'catalog', tool: 'lookup' });
+    expect(exact.details.tools[0].description).toBe(description);
   });
 
   it.each([

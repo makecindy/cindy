@@ -3625,12 +3625,18 @@ class CindyMcpGateway {
   }
 
   /**
-   * 未披露时的回执（路标）：指名该查哪个 server/tool，并说明重发即可放行。
-   * tool_call hook 与 executeCall 共用同一段文本，避免两处漂移。
+   * 首次直调仍不执行。小工具在这次回执里给出完整定义，大工具继续按名称定向查阅。
    */
   private disclosureSignpost(call: ResolvedMcpGatewayCall): string {
+    const target = JSON.stringify({ server: call.tool.serverName, tool: call.tool.name });
+    const definition = JSON.stringify({ description: call.tool.description, inputSchema: call.tool.inputSchema });
+    // Bound the unsolicited tool result; an explicit lookup can return a definition of any size.
+    if (definition.length <= 2048) {
+      return 'Tool call did not run. Check the arguments against the definition for ' + target
+        + ' below, then retry the call with matching arguments.\n' + definition;
+    }
     return 'Inspect this tool before execution by calling cindy_mcp_list_tools with '
-      + JSON.stringify({ server: call.tool.serverName, tool: call.tool.name })
+      + target
       + '. The current schema has already been recorded; re-send the same call to proceed.';
   }
 
@@ -4047,7 +4053,7 @@ class CindyMcpGateway {
       // 拦这一次的理由是零拦截实测出来的代价（2026-10-15）：模型没有任何信号知道
       // 该去查 schema，参数名和信封层级只能靠服务端报错反推——实测把 target_session_id
       // 猜成 worker_id、把 args 里的字段平铺到调用根，连续撞 -32602 后才放弃。回执里
-      // 指名 server/tool，模型才会去 list_tools。
+      // 把真实参数形状交给模型，或指名能查到完整形状的 server/tool，避免靠试错反推。
       //
       // 拦时即记账，模型照路标重发即放行。放行的语义是「这个工具的 schema 我见过了」，
       // 不是「这组参数是对的」：参数仍由工具自身 inputSchema 校验。

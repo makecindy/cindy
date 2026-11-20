@@ -36,10 +36,12 @@ describe('persisted Orca session start options', () => {
   it('reconstructs persisted Lead vendor options and instructions', async () => {
     const opts = baseOpts('lead-session');
     const getWorkerLink = vi.fn();
+    const reviewer = { id: 'worker-1', sessionId: 'review-session', role: 'reviewer', teamId: 'team-1' };
 
     await expect(preparePersistedOrcaSessionStart('lead-session', opts, {
       getSessionRole: vi.fn().mockResolvedValue('lead'),
       getWorkerLink,
+      listWorkersByLead: async () => [reviewer],
       warn: vi.fn(),
     })).resolves.toBe(true);
 
@@ -48,9 +50,37 @@ describe('persisted Orca session start options', () => {
       orcaRole: 'lead',
       orcaLeadSessionId: 'lead-session',
     });
-    expect(opts.userPrompt).toEqual(expect.any(String));
-    expect(opts.userPrompt).not.toHaveLength(0);
+    expect(opts.userPrompt).toContain('role=reviewer');
+    expect(opts.userPrompt).toContain('target_session_id=review-session');
     expect(getWorkerLink).not.toHaveBeenCalled();
+  });
+
+  // A cold Lead used to discover even its sole visible Worker through model calls. Give it a route
+  // only when the active team justifies it, including when a saved initial Worker has gone away.
+  it('falls back to discovery for ambiguous or stale routes and keeps custom role text out of instructions', async () => {
+    const reviewer = { id: 'worker-1', sessionId: 'review-session', role: 'reviewer', teamId: 'team-1' };
+    const other = { ...reviewer, id: 'worker-2', sessionId: 'other-session' };
+    const initialWorker = { workerId: reviewer.id, sessionId: reviewer.sessionId };
+    const start = async (workers: typeof reviewer[], vendor: Record<string, unknown> = {}) => {
+      const opts: MakerSessionCreateOpts = {
+        ...baseOpts('lead-session'), agentKind: 'pi',
+        vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: 'lead-session', ...vendor },
+      };
+      await preparePersistedOrcaSessionStart('lead-session', opts, {
+        getSessionRole: vi.fn(), getWorkerLink: vi.fn(), listWorkersByLead: async () => workers, warn: vi.fn(),
+      });
+      return opts.userPrompt;
+    };
+    expect(await start([reviewer, other])).not.toContain('target_session_id=');
+    const selected = await start([reviewer, other], { initialWorker });
+    expect(selected).toContain('target_session_id=review-session');
+    expect(selected).not.toContain('role=reviewer');
+    expect(await start([other], { initialWorker })).not.toContain('target_session_id=');
+    expect(await start([reviewer], { orcaWorkflowId: 'different-team' })).not.toContain('target_session_id=');
+    const custom = await start([{ ...reviewer, role: 'custom role text' }]);
+    expect(custom).toContain('target_session_id=review-session');
+    expect(custom).toContain('using both server and tool');
+    expect(custom).not.toContain('custom role text');
   });
 
   it('reconstructs persisted Worker link, vendor options, and instructions', async () => {
@@ -101,6 +131,7 @@ describe('persisted Orca session start options', () => {
     const deps = {
       getSessionRole: vi.fn().mockResolvedValue('lead' as const),
       getWorkerLink: vi.fn(),
+      listWorkersByLead: vi.fn().mockResolvedValue([{ id: 'w', sessionId: 's', role: 'tester', teamId: 'team' }]),
       warn: vi.fn(),
     };
 
@@ -111,5 +142,6 @@ describe('persisted Orca session start options', () => {
 
     expect(opts.userPrompt).toBe(promptWithProjectContext);
     expect(deps.getSessionRole).toHaveBeenCalledTimes(1);
+    expect(deps.listWorkersByLead).toHaveBeenCalledTimes(1);
   });
 });

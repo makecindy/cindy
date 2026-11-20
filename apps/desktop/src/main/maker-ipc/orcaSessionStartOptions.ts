@@ -4,7 +4,9 @@ import {
   renderOrcaWorkerSystemPrompt,
 } from '@cindy/orca-workflow';
 
-import { getSessionOrcaRole, getWorkerLink, getRemoteOrcaSession } from '../localDb/orcaTeamStore.js';
+import {
+  getSessionOrcaRole, getWorkerLink, getRemoteOrcaSession, listWorkersByLead, type OrcaWorkerRecord,
+} from '../localDb/orcaTeamStore.js';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { createLogger } from '../logger.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
@@ -25,6 +27,7 @@ export interface OrcaSessionStartOptionsDeps {
   getSessionRole(sessionId: string): Promise<OrcaRole | null>;
   getWorkerLink(workerSessionId: string): Promise<OrcaWorkerLink | null>;
   getRemoteLead?(sessionId: string): Promise<OrcaRemoteLead | null>;
+  listWorkersByLead?(sessionId: string): Promise<ReadonlyArray<Pick<OrcaWorkerRecord, 'id' | 'sessionId' | 'teamId' | 'role'>>>;
   warn(message: string, meta: Record<string, unknown>): void;
 }
 
@@ -34,6 +37,7 @@ const defaultDeps: OrcaSessionStartOptionsDeps = {
   getSessionRole: getSessionOrcaRole,
   getWorkerLink: (workerSessionId) => getWorkerLink({ workerSessionId }),
   getRemoteLead: async sessionId => (await getRemoteOrcaSession(sessionId))?.orcaRemoteLead ?? null,
+  listWorkersByLead,
   warn: (message, meta) => log.warn(message, meta),
 };
 
@@ -138,14 +142,39 @@ export function renderOrcaRoleInstructions(o: MakerSessionCreateOpts): string | 
       });
     }
   }
+  if (prompt && o.agentKind === 'pi') {
+    prompt += '\nFor a named Orca tool, inspect its schema once with cindy_mcp_list_tools using both server and tool, then invoke it with cindy_mcp_call_tool.';
+  }
   return prompt;
 }
 
 /** Inject the role-specific Orca instructions into the stable session startup prompt. */
-export function applyOrcaInstructions(o: MakerSessionCreateOpts): boolean {
-  const prompt = renderOrcaRoleInstructions(o);
+export async function applyOrcaInstructions(
+  o: MakerSessionCreateOpts,
+  deps: OrcaSessionStartOptionsDeps = defaultDeps,
+): Promise<boolean> {
+  let prompt = renderOrcaRoleInstructions(o);
   if (!prompt) return false;
   if (o.userPrompt && `\n\n${o.userPrompt}\n\n`.includes(`\n\n${prompt}\n\n`)) return true;
+  const vendor = o.vendorOptions;
+  if (vendor?.orcaRole === 'lead' && o.id && vendor.orcaLeadSessionId === o.id && deps.listWorkersByLead) {
+    let route = null;
+    try {
+      const active = await deps.listWorkersByLead(o.id);
+      const team = vendor.orcaWorkflowId ? active.filter(w => w.teamId === vendor.orcaWorkflowId) : active;
+      const initial = parseOrcaInitialWorkerRef(vendor.initialWorker);
+      const soleWorker = team.length === 1 ? team[0] : undefined;
+      const target = initial ? team.find(w => w.id === initial.workerId && w.sessionId === initial.sessionId) : soleWorker;
+      if (target) {
+        // Only an unambiguous built-in role may enter the system prompt. Custom labels stay tool-result data.
+        route = parseOrcaInitialWorkerRef({ workerId: target.id, sessionId: target.sessionId, role: soleWorker?.role });
+      }
+    } catch {
+      deps.warn('orca lead startup: could not read the active Worker route', { sessionId: o.id });
+    }
+    o.vendorOptions = { ...vendor, initialWorker: route };
+    prompt = renderOrcaRoleInstructions(o) ?? prompt;
+  }
   o.userPrompt = o.userPrompt ? `${o.userPrompt}\n\n${prompt}` : prompt;
   return true;
 }
@@ -156,5 +185,5 @@ export async function preparePersistedOrcaSessionStart(
   deps: OrcaSessionStartOptionsDeps = defaultDeps,
 ): Promise<boolean> {
   await synthesizeOrcaVendorOptionsFromDb(sessionId, o, deps);
-  return applyOrcaInstructions(o);
+  return applyOrcaInstructions(o, deps);
 }
