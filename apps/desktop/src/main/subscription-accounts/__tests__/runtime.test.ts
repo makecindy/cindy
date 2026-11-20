@@ -6215,7 +6215,10 @@ describe('unreachable account service', () => {
     expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('unavailable');
     await refreshSubscriptionPoolCodexModels();
     expect(h.rpc).toHaveBeenCalledTimes(rpcCalls);
-    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+    // PR #11754 review: the default gate also drives oneshot model selection.
+    // An unreadable account with a saved list must leave room for a healthy fallback.
+    expect(hasConnectedSubscriptionPool('openai')).toBe(false);
+    expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-kept']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
@@ -6246,7 +6249,7 @@ describe('unreachable account service', () => {
     h.read.mockRejectedValue(unreachable());
     await refreshSubscriptionPool('openai', true);
     await refreshSubscriptionPoolCodexModels();
-    expect(hasConnectedSubscriptionPool('openai')).toBe(true);
+    expect(hasConnectedSubscriptionPool('openai', { includeLastConfirmed: true })).toBe(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-saved']);
     expect(lastConfirmedSubscriptionModelsAt('openai')).toEqual(expect.any(Number));
 

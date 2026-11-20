@@ -78,9 +78,20 @@ function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): 
   if (reason !== 'preferences-corrupt') scheduleRecovery(owner, reason === 'catalog-unavailable');
 }
 
+function isUnavailableSubscription(provider: ProvidersSnapshot['providers'][number]): boolean {
+  return !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true;
+}
+
 function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean {
-  return snapshot?.providers.some(provider =>
-    !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true) ?? false;
+  return snapshot?.providers.some(isUnavailableSubscription) ?? false;
+}
+
+function hasRecoveredSubscription(previous: ProvidersSnapshot | null, next: ProvidersSnapshot): boolean {
+  if (!previous || previous.dataOwnerId !== next.dataOwnerId
+    || previous.ownerGeneration !== next.ownerGeneration) return false;
+  const unavailableIds = new Set(previous.providers.filter(isUnavailableSubscription).map(provider => provider.id));
+  return next.providers.some(provider => unavailableIds.has(provider.id)
+    && provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionReadUnavailable);
 }
 
 /**
@@ -190,11 +201,8 @@ async function refreshSnapshot(): Promise<boolean> {
         return false;
       }
 
-      // An account that was unreadable reads again: the network is back even when the OS
-      // never reported it offline. Same owner only; an owner switch is not a recovery.
-      const previous = getCachedProvidersSnapshot();
-      const recovered = previous?.dataOwnerId === providers.dataOwnerId
-        && hasUnavailableSubscription(previous) && !hasUnavailableSubscription(providers);
+      // One source recovering is enough to retry failed refreshes, even without an OS event.
+      const recovered = hasRecoveredSubscription(getCachedProvidersSnapshot(), providers);
       // 两次提交均为同步通知；React 会把同一事件循环内的 hook 更新批处理到同一帧。
       commitLocalCapabilitiesSnapshot(capabilitiesGeneration, capabilities);
       commitProvidersSnapshot(providersGeneration, providers);

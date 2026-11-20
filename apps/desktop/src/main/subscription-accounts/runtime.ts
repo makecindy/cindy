@@ -1065,7 +1065,10 @@ function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
     : providerAccounts(kind, pool.accounts, ref.providerId);
 }
 /** Read-only cached aggregate for provider catalog/auth gates; no account identity leaves it. */
-export function hasConnectedSubscriptionPool(providerId: string, options: { includeBoundAccounts?: boolean } = {}): boolean {
+export function hasConnectedSubscriptionPool(
+  providerId: string,
+  options: { includeBoundAccounts?: boolean; includeLastConfirmed?: boolean } = {},
+): boolean {
   const found = poolFor(providerId);
   if (!found || (found.off && !options.includeBoundAccounts)) return false;
   const state = currentRuntime();
@@ -1073,8 +1076,12 @@ export function hasConnectedSubscriptionPool(providerId: string, options: { incl
   const serving = new Set(servingAccounts(found).map(account => account.id));
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
-    // An unreadable account last confirmed as signed in keeps the provider connected; its row says why.
-    .some((a) => displayedSignIn(state.cache.get(keyOf(found.kind, a.id)), options)?.auth.authenticated === true);
+    .some(account => {
+      const info = state.cache.get(keyOf(found.kind, account.id));
+      // Execution readiness uses the current read. Selectable catalogs can opt into history.
+      const signIn = options.includeLastConfirmed ? displayedSignIn(info, options) : info;
+      return signIn?.auth.authenticated === true;
+    });
 }
 
 /**

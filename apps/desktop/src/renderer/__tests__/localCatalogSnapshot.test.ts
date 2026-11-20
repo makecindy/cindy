@@ -264,11 +264,13 @@ describe('local catalog recovery lifecycle', () => {
 
   // 2026-11-20: after an outage Main kept failed model sources on a 5-minute failure cooldown.
   // Recovery evidence (OS online event, or an unreadable account reading again) must reach Main.
-  it('asks Main to retry failed model sources when the network comes back', async () => {
+  it('asks Main to retry failed model sources even when only one subscription source recovers', async () => {
     const requestRefresh = vi.fn(async () => ({ ok: true }));
     Object.assign(events, { electronAPI: { maker: { requestProviderModelsAutoRefresh: requestRefresh } } });
-    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected: true, subscriptionReadUnavailable: true } as ProviderView] };
-    const readable = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
+    // PR #11754 review: a second source stays unreadable after the first recovers.
+    const claude = { id: 'anthropic', connected: true, subscriptionReadUnavailable: true } as ProviderView;
+    const unreadable = { ...snapshot, providers: [claude, { id: 'openai', connected: true, subscriptionReadUnavailable: true } as ProviderView] };
+    const readable = { ...snapshot, providers: [claude, { id: 'openai', connected: true } as ProviderView] };
     mocks.initializeVisibility.mockResolvedValue(true);
     mocks.commitProviders.mockImplementation((_generation: number, next: ProvidersSnapshot) => mocks.cachedProviders.mockReturnValue(next));
     mocks.loadProviders.mockResolvedValueOnce(unreadable).mockResolvedValue(readable);

@@ -937,6 +937,16 @@ setMergedProviderPoolResolver((providerId) => {
   return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
 });
 
+function subscriptionPoolCatalogConnected(
+  providerId: string,
+  options?: { includeBoundAccounts?: boolean },
+): boolean {
+  return hasConnectedSubscriptionPool(providerId, {
+    includeBoundAccounts: options?.includeBoundAccounts,
+    includeLastConfirmed: !options?.includeBoundAccounts,
+  });
+}
+
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
   setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
@@ -1010,7 +1020,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
             if (waitForDiscovery) await discovery;
             else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
           }
-          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
+          return subscriptionPoolCatalogConnected('anthropic', { includeBoundAccounts });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
@@ -1050,7 +1060,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
           }
-          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts });
+          return subscriptionPoolCatalogConnected('openai', { includeBoundAccounts });
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
       },
@@ -1062,8 +1072,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
-      ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
-    subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
+      ? subscriptionPoolCatalogConnected(providerId, options) : codexAccountState(providerId).authenticated,
+    subscriptionPoolConnected: subscriptionPoolCatalogConnected,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
     subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
