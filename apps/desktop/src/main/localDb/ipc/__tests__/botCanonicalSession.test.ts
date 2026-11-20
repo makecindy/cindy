@@ -202,6 +202,7 @@ vi.mock('../../../maker-host/git-safety-settings-store.js', () => ({
 vi.mock('../../../maker-host/custom-mcp-store.desktop.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.desktop.js')>(),
   listCustomMcpServers: async () => h.customMcpConfigs,
+  readCustomMcpServers: async () => ({ servers: h.customMcpConfigs, unreadableServers: [] }),
 }));
 vi.mock('../../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: h.listProviders }),

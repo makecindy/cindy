@@ -39,6 +39,7 @@ import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/libra
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
@@ -7440,11 +7441,18 @@ assertRouteCurrent();
     const expectedRuntimeMcpConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
       if (!config || reviewMode) return null;
+      const live = localSessionMcpConfig
+        ? host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo })
+        : undefined;
+      const gatewaySettings = (settings: Record<string, unknown>, name: string) =>
+        Object.fromEntries(Object.entries(settings).filter(([key]) => key.startsWith(`mcp_servers.${name}.`)));
+      // Cold resumes retain launch routes. Check each gateway independently so a
+      // changed helper cannot suppress recovery of the unchanged plugin gateway.
       const expected = expectedGatewayNames.filter(name => config[`mcp_servers.${name}.enabled`] !== false
         && ['url', 'command'].some(key => {
           const value = config[`mcp_servers.${name}.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
-        }));
+        }) && (!live || isDeepStrictEqual(gatewaySettings(localSessionMcpConfig!, name), gatewaySettings(live, name))));
       if (!expected.length) return null;
       return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
     };
