@@ -185,6 +185,8 @@ describeMigrationReplay('existing side-chat teams', () => {
 
   // Migration tier: ordinary archives and confirmed tab closures write the same
   // archived session status. Restart after the host commit but before cleanup.
+  // A failure clearing the intent must roll back the stop and allow the next
+  // startup to retry. The unit logger fixture cannot assert durable state.
   it('stops only the confirmed follow-up team after restarting against the archived rows', () => {
     const { db, cleanup } = createTempDb();
     try {
@@ -206,25 +208,54 @@ describeMigrationReplay('existing side-chat teams', () => {
           args: { sessionId: id, status: 'archived', ...(id === 'confirmed' && { sideChatCloseParentId: 'parent' }) },
         });
       }
+      db.exec(`
+        INSERT INTO sessions (id, status, orca_role, created_at, updated_at)
+          VALUES ('deleted-worker', 'deleted', 'worker', 1, 1);
+        INSERT INTO orca_workers (id, team_id, session_id, status, created_at, updated_at)
+          VALUES ('deleted', 'confirmed', 'deleted-worker', 'done', 1, 1);
+      `);
       db.close();
       const reopened = createBetterSqliteDatabase(db.name);
       try {
+        const readRecoveryState = () => ({
+          teams: reopened.prepare('SELECT id, status FROM orca_teams ORDER BY id').all(),
+          workers: reopened.prepare('SELECT id, status FROM orca_workers ORDER BY id').all(),
+          sessions: reopened.prepare(
+            "SELECT id, status, orca_role, side_chat_close_pending FROM sessions WHERE id <> 'parent' ORDER BY id",
+          ).all(),
+        });
+        const beforeRecovery = readRecoveryState();
+        expect(beforeRecovery.sessions).toContainEqual({
+          id: 'confirmed', status: 'archived', orca_role: 'lead', side_chat_close_pending: 1,
+        });
+        reopened.exec(`
+          CREATE TEMP TRIGGER fail_close_intent_clear BEFORE UPDATE OF side_chat_close_pending ON sessions
+          WHEN OLD.id = 'confirmed' AND OLD.side_chat_close_pending = 1 AND NEW.side_chat_close_pending = 0
+          BEGIN SELECT RAISE(ABORT, 'close intent clear interrupted'); END;
+        `);
         reconcileStrandedOrcaLeads(reopened);
+        expect(readRecoveryState()).toEqual(beforeRecovery);
+        reopened.exec('DROP TRIGGER fail_close_intent_clear');
+
         reconcileStrandedOrcaLeads(reopened);
-        expect(reopened.prepare('SELECT id, status FROM orca_teams ORDER BY id').all()).toEqual([
-          { id: 'confirmed', status: 'completed' }, { id: 'ordinary', status: 'active' },
-        ]);
-        expect(reopened.prepare('SELECT id, status FROM orca_workers ORDER BY id').all()).toEqual([
-          { id: 'confirmed', status: 'done' }, { id: 'ordinary', status: 'running' },
-        ]);
-        expect(reopened.prepare(
-          "SELECT id, status, orca_role, side_chat_close_pending FROM sessions WHERE id <> 'parent' ORDER BY id",
-        ).all()).toEqual([
-          { id: 'confirmed', status: 'archived', orca_role: null, side_chat_close_pending: 0 },
-          { id: 'confirmed-worker', status: 'archived', orca_role: 'worker', side_chat_close_pending: 0 },
-          { id: 'ordinary', status: 'archived', orca_role: 'lead', side_chat_close_pending: 0 },
-          { id: 'ordinary-worker', status: 'active', orca_role: 'worker', side_chat_close_pending: 0 },
-        ]);
+        const completed = readRecoveryState();
+        expect(completed).toEqual({
+          teams: [
+            { id: 'confirmed', status: 'completed' }, { id: 'ordinary', status: 'active' },
+          ],
+          workers: [
+            { id: 'confirmed', status: 'done' }, { id: 'deleted', status: 'done' }, { id: 'ordinary', status: 'running' },
+          ],
+          sessions: [
+            { id: 'confirmed', status: 'archived', orca_role: null, side_chat_close_pending: 0 },
+            { id: 'confirmed-worker', status: 'archived', orca_role: 'worker', side_chat_close_pending: 0 },
+            { id: 'deleted-worker', status: 'deleted', orca_role: 'worker', side_chat_close_pending: 0 },
+            { id: 'ordinary', status: 'archived', orca_role: 'lead', side_chat_close_pending: 0 },
+            { id: 'ordinary-worker', status: 'active', orca_role: 'worker', side_chat_close_pending: 0 },
+          ],
+        });
+        reconcileStrandedOrcaLeads(reopened);
+        expect(readRecoveryState()).toEqual(completed);
       } finally {
         reopened.close();
       }
