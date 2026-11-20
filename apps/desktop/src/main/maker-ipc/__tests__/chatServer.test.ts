@@ -2871,7 +2871,7 @@ describe('Chat Server result delivery and refresh', () => {
 
   // #11712, unit: real settlement, reply preparation and upload with a playable repository MP4.
   // Isolate storage and transport. Both supported reply forms must seal the original bytes as video.
-  it.each(['component', 'file'] as const)('delivers a playable MP4 from a %s reply', async form => {
+  it.each(['component', 'file', 'revoked'] as const)('checks delivery of a playable MP4 (%s)', async form => {
     const file = fileURLToPath(new URL('../../../renderer/assets/wallpapers/cindy-studio.mp4', import.meta.url));
     const bytes = await realReplyFs.readFile(file);
     const { createHash } = await import('node:crypto');
@@ -2898,7 +2898,18 @@ describe('Chat Server result delivery and refresh', () => {
       videoPut.mockResolvedValueOnce(new Response(null, { status: 200 }));
       fixture.upload.mockImplementation(createChatMedia(api, () => true, 'https://chat.example.test').upload);
       await startFileReply();
+      if (form === 'revoked') {
+        const previous = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => route.endsWith('/members')
+          ? { body: [] } : previous(route, method, body));
+      }
       await service.settleLaneTurn({ ...terminal, resultText });
+      if (form === 'revoked') {
+        expect(deliveries()).toHaveLength(0);
+        expect(read).not.toHaveBeenCalled();
+        expect(api).not.toHaveBeenCalled();
+        return;
+      }
       expect(api.mock.calls[0]?.[2]).toMatchObject({ type: 'video/mp4', size: bytes.length });
       const uploaded = new Uint8Array(videoPut.mock.lastCall?.[1].body);
       expect(Buffer.from(uploaded).equals(bytes)).toBe(true);
