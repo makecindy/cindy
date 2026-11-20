@@ -841,6 +841,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    primaryHostKey: row.primaryHostKey ?? undefined,
     preRunPlugin: row.preRunPluginId
       ? {
           pluginId: row.preRunPluginId,
@@ -899,6 +900,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    primaryHostKey: s.primaryHostKey ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,

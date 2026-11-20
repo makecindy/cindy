@@ -11,7 +11,13 @@ import { listAllPrRefs, listPrRefs, managePrRefs } from '../../git-context/prRef
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
-import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import {
+  listMigrations,
+  migrationRuntimeManifestPath,
+  prepareMigrationRuntimeManifest,
+  readSchemaVersion,
+  runMigrationReplay,
+} from '../migrationRunner';
 import { reconcileStrandedOrcaLeads } from '../orcaStrandedLeadReconcile';
 import { initializeTaskTagPresets } from '../taskTagPresets';
 
@@ -83,12 +89,48 @@ function maxMigrationSeq(): number {
 // Migration tier: a follow-up that already has an Orca worker becomes visible after upgrading.
 // A team with no worker stays attached, and replay after reopening must not touch native IDs.
 describeMigrationReplay('existing side-chat teams', () => {
+  it('rejects a development database that already ran the unpublished migration at 0156', () => {
+    const { db, cleanup } = createTempDb();
+    const oldMigrations = mkdtempSync(path.join(tmpdir(), 'cindy-previous-side-chat-migration-'));
+    try {
+      const oldName = '0156_promote_orca_side_chat';
+      const newName = '0157_promote_orca_side_chat';
+      mkdirSync(path.join(oldMigrations, 'scripts'));
+      copyFileSync(path.join(drizzleDir(), newName + '.sql'), path.join(oldMigrations, oldName + '.sql'));
+      copyFileSync(
+        path.join(drizzleDir(), 'scripts', newName + '.ts'),
+        path.join(oldMigrations, 'scripts', oldName + '.ts'),
+      );
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY);
+        CREATE TABLE schedules (id TEXT PRIMARY KEY);
+      `);
+      prepareMigrationRuntimeManifest(db.name, oldMigrations, readSchemaVersion(db));
+      runMigrationReplay(db, { drizzleDir: oldMigrations });
+      const oldManifest = readFileSync(migrationRuntimeManifestPath(db.name), 'utf-8');
+
+      expect(readSchemaVersion(db)).toBe(156);
+      expect(() => prepareMigrationRuntimeManifest(db.name, drizzleDir(), readSchemaVersion(db)))
+        .toThrow('applied migration runtime identity changed at seq 156 (0156_promote_orca_side_chat.sql)');
+      expect(readSchemaVersion(db)).toBe(156);
+      expect(readFileSync(migrationRuntimeManifestPath(db.name), 'utf-8')).toBe(oldManifest);
+      expect(columnNames(db, 'sessions')).toContain('side_chat_promoted');
+      expect(columnNames(db, 'schedules')).not.toContain('primary_host_key');
+    } finally {
+      rmSync(oldMigrations, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it.each([false, true])('replays follow-up promotion and retains native identity (column already present: %s)', (columnPresent) => {
     const { db, cleanup } = createTempDb();
     try {
       db.exec(`
         CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE schedules (id TEXT PRIMARY KEY);
         CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, status TEXT, sdk_session_id TEXT);
         CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
         CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
@@ -99,7 +141,12 @@ describeMigrationReplay('existing side-chat teams', () => {
         INSERT INTO orca_workers VALUES ('worker', 'team-live'), ('failed-worker', 'team-failed');
       `);
       if (columnPresent) db.exec('ALTER TABLE sessions ADD side_chat_promoted integer DEFAULT false NOT NULL');
-      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 155 });
+      const replay = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 155 });
+      expect(replay.applied.map(migration => migration.fileName)).toEqual([
+        '0156_schedule_primary_host.sql',
+        '0157_promote_orca_side_chat.sql',
+      ]);
+      expect(columnNames(db, 'schedules')).toContain('primary_host_key');
       const reopened = createBetterSqliteDatabase(db.name);
       try {
         expect(reopened.prepare("SELECT side_chat_promoted FROM sessions WHERE id = 'live'").pluck().get()).toBe(1);
@@ -258,7 +305,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -438,7 +485,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

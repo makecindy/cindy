@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a8adee70-fb1b-4070-bc5b-4084862e3281",
+  "id": "d917d993-dd4d-4547-84ba-a4636a221f7d",
   "prevId": "ab9fabbf-f67a-45ae-827f-ce3325d7a349",
   "tables": {
     "account_usage_snapshots": {
@@ -5336,6 +5336,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "primary_host_key": {
+          "name": "primary_host_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "pre_run_plugin_on_failure": {
           "name": "pre_run_plugin_on_failure",
           "type": "text",
@@ -6233,14 +6240,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'desktop'"
-        },
-        "side_chat_promoted": {
-          "name": "side_chat_promoted",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
         },
         "feishu_open_id": {
           "name": "feishu_open_id",
