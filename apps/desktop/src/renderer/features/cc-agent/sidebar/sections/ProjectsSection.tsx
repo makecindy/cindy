@@ -748,8 +748,10 @@ export function ProjectsSection({
     return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {
       onlineDeviceIds: onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId),
       sortBy: filter.sortBy,
-      projectOrder: filter.projectOrder,
-      manualProjectOrder: filter.manualProjectOrder,
+      // 主列表已按单机宿主账本排序;切段必须沿用同一份顺序,
+      // 不能再用查看端的活动序把已落定的宿主自定义序冲掉。
+      projectOrder: displayedProjectOrder.projectOrder,
+      manualProjectOrder: displayedProjectOrder.manualProjectOrder,
       priorityContext,
     });
   }, [
@@ -759,8 +761,8 @@ export function ProjectsSection({
     remoteDeviceIndex,
     selectedMachineId,
     filter.sortBy,
-    filter.projectOrder,
-    filter.manualProjectOrder,
+    displayedProjectOrder.projectOrder,
+    displayedProjectOrder.manualProjectOrder,
     priorityContext,
   ]);
   const deviceNameSources = useMemo(() => deviceSections.flatMap((section) => section.deviceId ? [{

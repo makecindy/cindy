@@ -24,13 +24,28 @@ vi.mock('react-i18next', () => ({
 // The teammate data adapter owns auth/presence. This fixture exercises task mode switching.
 vi.mock('@/features/bots/useTeammateInboxEntries', () => ({ useTeammateInboxEntries: () => [] }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
-vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => 'all' }));
+const projectOrderFixture = vi.hoisted(() => ({
+  selection: 'all' as 'all' | 'local',
+  hostManualProjectOrder: [] as string[],
+}));
+vi.mock('@/features/device-link/useMachineSwitcher', () => ({
+  useEffectiveSelectedMachineId: () => projectOrderFixture.selection,
+}));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({ useSidebarMainViewMode: () => ({ mode: 'text' }) }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({ CINDY_MAKE_ENABLED: true }));
 vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
-  projectOrderWriteScopeForSelection: () => ({ kind: 'viewer' }),
-  useLocalHostProjectOrder: () => ({ snapshot: { manualProjectOrder: [] } }),
+  projectOrderWriteScopeForSelection: (selection: string) => selection === 'local'
+    ? { kind: 'host', deviceId: null }
+    : { kind: 'viewer' },
+  useLocalHostProjectOrder: () => ({
+    snapshot: {
+      authoritative: true,
+      available: true,
+      projectOrder: 'custom',
+      manualProjectOrder: projectOrderFixture.hostManualProjectOrder,
+    },
+  }),
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
@@ -92,6 +107,8 @@ function groupProps(groupDevice: boolean): ProjectsSectionProps {
 }
 
 beforeEach(() => {
+  projectOrderFixture.selection = 'all';
+  projectOrderFixture.hostManualProjectOrder = [];
   localStorage.clear();
   localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
@@ -380,6 +397,35 @@ describe('Sidebar group context menus', () => {
 // unit harness with two projects in custom order; selectors come from the actual
 // SortableJS instance, and its real onEnd must persist the reordered projects.
 describe('Manual project sorting', () => {
+  it('keeps the local host custom order when device sections re-sort the visible entries', () => {
+    projectOrderFixture.selection = 'local';
+    projectOrderFixture.hostManualProjectOrder = ['local:/Second', 'local:/First'];
+    const p = props(true);
+    p.projects = ['First', 'Second'].map((name, index) => ({
+      projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
+      scope: 'local',
+      sessions: [{
+        id: name, title: name, status: 'active', workingDir: '/' + name,
+        workspaceKind: 'project', userSendAt: `2026-09-0${3 - index}T00:00:00Z`,
+        _count: { messages: 1 },
+      } as Session],
+      segments: 1,
+      latestActivityAt: `2026-09-0${3 - index}T00:00:00Z`,
+      remoteHostId: null, deviceLinkDeviceId: null,
+      deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+    }));
+    p.allKnownProjects = p.projects;
+    p.allProjectKeysForOrder = p.projects.map((project) => project.projectKey);
+    // #11522: the viewer activity ledger must not undo the host's custom order
+    // when the same real ProjectsSection splits the list into device sections.
+    render(<ProjectsSection {...p} />);
+
+    const headers = Array.from(document.querySelectorAll<HTMLElement>('[data-project-header]')).map(
+      (header) => within(header).getByText(/^(First|Second)$/).textContent,
+    );
+    expect(headers).toEqual(['Second', 'First']);
+  });
+
   it('leaves the real project header draggable and persists a completed reorder', () => {
     const p = props(false);
     p.projects = ['First', 'Second'].map((name) => ({
