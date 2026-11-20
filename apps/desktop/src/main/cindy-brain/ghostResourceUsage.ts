@@ -26,14 +26,28 @@ const measured = (value: unknown): number | null =>
 
 /** Shared sampling is bounded to one snapshot; plugin totals are never cached across callers. */
 export function createGhostResourceUsageReader(ports: Ports) {
-  async function sample() {
-    const machine = await readLocalMachineStatus().catch(() => null);
-    let metrics: ReturnType<typeof app.getAppMetrics> | null = null;
+  function readMetrics(): ReturnType<typeof app.getAppMetrics> | null {
     try {
-      metrics = app.getAppMetrics();
+      return app.getAppMetrics();
     } catch {
-      /* Missing process metrics remain null. */
+      return null;
     }
+  }
+  async function sample() {
+    // Electron's first CPU read is always zero. Prime it before localStatus's existing
+    // 200ms CPU interval, so the final read is recent without adding another timer.
+    const primedProcesses = new Map<number, number>();
+    for (const metric of readMetrics() ?? []) {
+      if (
+        Number.isFinite(metric.creationTime) &&
+        metric.creationTime > 0 &&
+        measured(metric.cpu?.percentCPUUsage) !== null
+      ) {
+        primedProcesses.set(metric.pid, metric.creationTime);
+      }
+    }
+    const machine = await readLocalMachineStatus().catch(() => null);
+    const metrics = readMetrics();
     const pages: PageProcess[] = [];
     let pagesComplete = true;
     try {
@@ -58,6 +72,7 @@ export function createGhostResourceUsageReader(ports: Ports) {
       sampledAt: Date.now(),
       machine,
       metrics,
+      primedProcesses,
       pages,
       pagesComplete,
     };
@@ -131,6 +146,16 @@ export function createGhostResourceUsageReader(ports: Ports) {
       const kb = measured(metric?.memory?.workingSetSize);
       return kb === null ? null : measured(kb * 1024);
     };
+    const cpuPercent = (metric: NonNullable<typeof data.metrics>[number] | undefined) => {
+      // A new/reused PID was not primed; its sentinel zero is not a measured idle value.
+      if (
+        !metric ||
+        !data.primedProcesses.has(metric.pid) ||
+        data.primedProcesses.get(metric.pid) !== metric.creationTime
+      )
+        return null;
+      return measured(metric.cpu?.percentCPUUsage);
+    };
     return {
       ok: true,
       capturedAt: data.capturedAt,
@@ -143,9 +168,7 @@ export function createGhostResourceUsageReader(ports: Ports) {
       },
       plugin: {
         memoryBytes: attributable ? total(pluginMetrics.map(memoryBytes)) : null,
-        cpuPercent: attributable
-          ? total(pluginMetrics.map((metric) => measured(metric?.cpu?.percentCPUUsage)))
-          : null,
+        cpuPercent: attributable ? total(pluginMetrics.map(cpuPercent)) : null,
       },
       gpu: {
         memoryBytes: total(

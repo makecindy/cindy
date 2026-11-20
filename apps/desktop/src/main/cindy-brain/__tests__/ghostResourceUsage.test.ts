@@ -54,6 +54,7 @@ describe('plugin resource-usage host requests', () => {
   ): ProcessMetric =>
     ({
       pid,
+      creationTime: pid * 10,
       type,
       memory: { workingSetSize: memoryKb },
       cpu: { percentCPUUsage: cpu },
@@ -120,6 +121,43 @@ describe('plugin resource-usage host requests', () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  // #11755 prereview: Electron's first CPU sample is a sentinel zero, not measured idle.
+  it('primes cold CPU metrics before the existing machine sampling interval', async () => {
+    const cold = metrics.map((value) => ({
+      ...value,
+      cpu: { ...value.cpu, percentCPUUsage: 0 },
+    }));
+    mocks.metrics.mockReturnValueOnce(cold).mockReturnValueOnce(metrics);
+    const result = await read('plugin-a', 'resource-usage', current);
+    expect(result.plugin).toEqual({ memoryBytes: 30 * 1024, cpuPercent: 7 });
+  });
+
+  it.each(['new process', 'reused pid', 'priming failed'])(
+    'keeps CPU unavailable without a valid baseline: %s',
+    async (reason) => {
+      const after = metrics.map((value) => ({ ...value }));
+      let before = metrics.map((value) => ({ ...value }));
+      if (reason === 'new process') before = before.filter((value) => value.pid !== 101);
+      if (reason === 'reused pid') before.find((value) => value.pid === 101)!.creationTime--;
+      after.find((value) => value.pid === 101)!.cpu = {
+        percentCPUUsage: 0,
+        idleWakeupsPerSecond: 0,
+      };
+      if (reason === 'priming failed') {
+        mocks.metrics.mockImplementationOnce(() => {
+          throw new Error('unavailable');
+        });
+      } else {
+        mocks.metrics.mockReturnValueOnce(before);
+      }
+      mocks.metrics.mockReturnValueOnce(after);
+      expect((await read('plugin-a', 'resource-usage', current)).plugin).toEqual({
+        memoryBytes: 30 * 1024,
+        cpuPercent: null,
+      });
+    },
+  );
+
   it('shares in-flight and 1-second samples while keeping interleaved caller totals isolated', async () => {
     let complete!: (status: MachineStatus) => void;
     mocks.machine.mockImplementationOnce(
@@ -151,7 +189,7 @@ describe('plugin resource-usage host requests', () => {
     vi.advanceTimersByTime(999);
     expect((await read('plugin-a', 'resource-usage', current)).plugin).toEqual(a.plugin);
     expect(mocks.machine).toHaveBeenCalledTimes(1);
-    expect(mocks.metrics).toHaveBeenCalledTimes(1);
+    expect(mocks.metrics).toHaveBeenCalledTimes(2);
     expect(mocks.pages).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
     metrics = [
@@ -165,6 +203,7 @@ describe('plugin resource-usage host requests', () => {
       cpuPercent: 3,
     });
     expect(mocks.machine).toHaveBeenCalledTimes(2);
+    expect(mocks.metrics).toHaveBeenCalledTimes(4);
   });
 
   it('preserves measured zero and makes only incomplete metrics null', async () => {
