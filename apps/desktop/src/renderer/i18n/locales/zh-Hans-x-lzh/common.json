@@ -15123,6 +15123,7 @@
     },
     "backgroundActivity": {
       "status": "后台子差事方行，模型耗用未止…",
+      "pluginEngineStatus": "后台续作未辍…",
       "bashWorkStatus_one": "后台犹作（令 {{count}} 道）…",
       "bashServiceStatus_one": "后台常役方行（{{count}} 件）",
       "bashWorkStatus_other": "后台犹作（令 {{count}} 道）…",

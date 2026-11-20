@@ -15132,6 +15132,7 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
+      "pluginEngineStatus": "バックグラウンドで作業を続けています…",
       "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
       "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
       "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",

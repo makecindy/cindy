@@ -52,6 +52,24 @@ import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './
 
 const DEFAULT_CANCEL_GRACE_MS = 15_000;
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+/**
+ * Work an agent does after answering a prompt (between turns) counts as live for
+ * this long after its last update, so the runtime is not reclaimed mid-task.
+ */
+export const ACP_BACKGROUND_QUIET_MS = 30_000;
+/**
+ * Tool calls still open between turns are settled after the agent has sent
+ * nothing for this long. Agents that wait on purpose (for example a scheduled
+ * check minutes later) keep a call open meanwhile; this bound only stops a lost
+ * final status from leaving a call running forever.
+ */
+export const ACP_OPEN_TOOL_QUIET_CAP_MS = 30 * 60_000;
+/**
+ * A reply the agent writes between turns has no end-of-turn to close it. It is
+ * closed once the agent pauses this long, so it is saved and shown like any reply
+ * instead of streaming forever and being lost on reload.
+ */
+export const ACP_BACKGROUND_SEGMENT_IDLE_MS = 2_000;
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
@@ -107,6 +125,9 @@ export interface OpenAcpSessionOptions {
   briefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
+  openToolQuietCapMs?: number;
+  now?: () => number;
 }
 
 export type AcpResumeOutcome = 'new' | 'resumed' | 'loaded';
@@ -336,6 +357,12 @@ export class AcpSession {
   private closing: Promise<void> | null = null;
   private ended = false;
   private detachTransportClose?: () => void;
+  private readonly now: () => number;
+  private readonly openToolQuietCapMs: number;
+  /** Last time the agent produced conversation output while no turn was running. */
+  private lastBackgroundAt = 0;
+  private openToolCapTimer: ReturnType<typeof setTimeout> | null = null;
+  private backgroundSegmentTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
@@ -349,6 +376,8 @@ export class AcpSession {
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.now = init.options.now ?? Date.now;
+    this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
     this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
@@ -401,6 +430,21 @@ export class AcpSession {
     return this.turn !== null;
   }
 
+  /**
+   * AgentSessionHandle: the agent is still working after answering its last
+   * prompt — a tool call it has not finished, or output within the last
+   * ACP_BACKGROUND_QUIET_MS. Runtime reclamation keeps the process meanwhile.
+   */
+  async hasLiveBackgroundWork(): Promise<boolean> {
+    return this.hasBackgroundWork();
+  }
+
+  private hasBackgroundWork(): boolean {
+    if (this.ended || this.turn) return false;
+    if (this.translator.openToolCount() > 0) return true;
+    return this.lastBackgroundAt > 0 && this.now() - this.lastBackgroundAt <= ACP_BACKGROUND_QUIET_MS;
+  }
+
   setInteractionResolver(resolver: InteractionResolver): void {
     this.resolver = resolver;
   }
@@ -436,7 +480,13 @@ export class AcpSession {
     this.stopGeneration += 1;
     this.pendingPrompts.length = 0;
     const turn = this.turn;
-    if (!turn || turn.settled || turn.cancelTimer) return;
+    if (!turn) {
+      // Agents that keep working after a prompt (DSH documents it) stop that work on cancel;
+      // others ignore a cancel with no prompt in flight.
+      if (this.hasBackgroundWork() && !this.connection.closed) this.connection.notify('session/cancel', { sessionId: this.id });
+      return;
+    }
+    if (turn.settled || turn.cancelTimer) return;
     turn.cancelTimer = setTimeout(() => {
       this.logger?.warn('acp: agent did not settle a cancelled prompt in time', { graceMs: this.cancelGraceMs });
       // Mark the handle as closing before emitting done so no queued or later prompt
@@ -532,7 +582,24 @@ export class AcpSession {
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
+        if (!this.turn) this.armBackgroundSegmentClose();
     }
+  }
+
+  /** Closes the agent's text / thinking between turns once it pauses (see ACP_BACKGROUND_SEGMENT_IDLE_MS). */
+  private armBackgroundSegmentClose(): void {
+    this.clearBackgroundSegmentClose();
+    this.backgroundSegmentTimer = setTimeout(() => {
+      this.backgroundSegmentTimer = null;
+      if (!this.ended && !this.turn) this.emit(this.translator.flushPending());
+    }, ACP_BACKGROUND_SEGMENT_IDLE_MS);
+    this.backgroundSegmentTimer.unref?.();
+  }
+
+  private clearBackgroundSegmentClose(): void {
+    if (!this.backgroundSegmentTimer) return;
+    clearTimeout(this.backgroundSegmentTimer);
+    this.backgroundSegmentTimer = null;
   }
 
   /** @internal Called by the connection router. */
@@ -550,6 +617,8 @@ export class AcpSession {
     if (!prompt) return;
     // Output produced between turns (autonomous agent work) is closed off as background.
     this.emit(this.translator.flushPending());
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     const turn: ActiveTurn = { token: ++this.turnSeq, settled: false, cancelTimer: null };
     this.turn = turn;
     this.usage = { ...this.usage, tokenUsage: 0 };
@@ -570,6 +639,30 @@ export class AcpSession {
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
     for (const event of this.translator.finish(outcome)) this.queue.push(event);
     this.pump();
+    // Calls the agent left running continue as background work.
+    if (!this.turn) this.armOpenToolCap();
+  }
+
+  /** (Re)starts the quiet bound for tool calls left open between turns. */
+  private armOpenToolCap(): void {
+    this.clearOpenToolCap();
+    if (this.ended || this.turn || this.translator.openToolCount() === 0) return;
+    this.openToolCapTimer = setTimeout(() => {
+      this.openToolCapTimer = null;
+      if (this.ended || this.turn || this.translator.openToolCount() === 0) return;
+      this.logger?.warn('acp: agent sent nothing for open tool calls between turns; settling them', {
+        open: this.translator.openToolCount(),
+        quietMs: this.openToolQuietCapMs,
+      });
+      this.emit(this.translator.settleOpenTools('done'));
+    }, this.openToolQuietCapMs);
+    this.openToolCapTimer.unref?.();
+  }
+
+  private clearOpenToolCap(): void {
+    if (!this.openToolCapTimer) return;
+    clearTimeout(this.openToolCapTimer);
+    this.openToolCapTimer = null;
   }
 
   private errorOutcome(error: unknown): AcpTurnOutcome {
@@ -583,8 +676,12 @@ export class AcpSession {
   }
 
   private emit(events: readonly AgentEvent[]): void {
+    if (events.length === 0) return;
     const background = this.turn === null;
     for (const event of events) this.queue.push(background ? { ...event, turnScope: 'background' } : event);
+    if (!background) return;
+    this.lastBackgroundAt = this.now();
+    this.armOpenToolCap();
   }
 
   private applyUsage(update: AcpRecord): void {
@@ -730,7 +827,14 @@ export class AcpSession {
       this.finishTurn(turn.token, info.reason === 'closed-by-client'
         ? { stopReason: 'cancelled' }
         : { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' });
+    } else {
+      // Work between turns ends with the connection: keep what the agent already wrote,
+      // and mark calls it left running as interrupted.
+      this.emit(this.translator.flushPending());
+      this.emit(this.translator.settleOpenTools('interrupted'));
     }
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     if (info.reason === 'protocol-error') this.retireEndpoint();
   }
 
@@ -769,6 +873,8 @@ export class AcpSession {
   private endEvents(): void {
     if (this.ended) return;
     this.ended = true;
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     this.detachTransportClose?.();
     this.queue.end();
     try {

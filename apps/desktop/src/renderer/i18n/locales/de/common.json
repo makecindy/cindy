@@ -15160,6 +15160,7 @@
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen, Modellnutzung fällt weiterhin an…",
+      "pluginEngineStatus": "Arbeitet im Hintergrund weiter…",
       "bashWorkStatus_one": "Arbeitet im Hintergrund ({{count}} Befehl)…",
       "bashServiceStatus_one": "{{count}} Hintergrunddienst läuft",
       "bashWorkStatus_other": "Arbeitet im Hintergrund ({{count}} Befehle)…",
