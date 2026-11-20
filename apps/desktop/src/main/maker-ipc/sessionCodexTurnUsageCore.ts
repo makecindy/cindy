@@ -184,7 +184,9 @@ export function recordSessionCodexTurnUsage(
               : codexApiUsageModelKey(normalizeModelIdForPricing(row.model)),
           recordedAt, attribution: isRemoteCodexSession ? undefined : {
             ...tokenAttribution(row, turnContext),
-            ...(!execution?.model && !(execution && codexSegmentsReliable && codexUsageSegments.every(s => s.model))
+            ...(!(execution && codexSegmentsReliable && codexUsageSegments
+              .filter(segment => (segment.model ?? turnModel) === row.model)
+              .every(segment => segment.model && segment.modelConfirmed === true))
               ? { modelUnconfirmed: true } : {}),
           },
           money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
