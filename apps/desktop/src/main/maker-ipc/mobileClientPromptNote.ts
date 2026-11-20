@@ -83,7 +83,7 @@ export function buildClientEnvironmentNote(params: {
   return params.legacyMobile ? buildMobileClientPromptNote() : null;
 }
 
-function singleTextContent(message: unknown): string | null {
+export function singleTextContent(message: unknown): string | null {
   if (typeof message === 'string') return message;
   if (!message || typeof message !== 'object' || Array.isArray(message)) return null;
   const content = (message as { content?: unknown }).content;

@@ -44,7 +44,7 @@ import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
@@ -3684,6 +3684,50 @@ describe('mobile client prompt note', () => {
     await transaction.sendToAgentAccepted('session-1', '/compact focus on decisions');
 
     expect(session.send).toHaveBeenCalledWith('/compact focus on decisions', expect.anything());
+  });
+
+  it('sends an installed Claude Code Skill without a prepended note', async () => {
+    const projectDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-session-'));
+    const skillDir = path.join(projectDir, '.claude', 'skills', 'subtask-fork');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: subtask-fork\ndescription: 测试用命令\ndisable-model-invocation: true\n---\n\n正文\n',
+      'utf8',
+    );
+    try {
+      const session = createSession({ agentKind: 'claude-code', workDir: projectDir });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => session),
+        isMobileClientInvoke: vi.fn(() => true),
+      });
+      const transaction = createMakerSendTransaction(deps);
+
+      await transaction.sendToAgentAccepted('session-1', '/subtask-fork ping');
+
+      expect(session.send).toHaveBeenCalledWith('/subtask-fork ping', expect.anything());
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the mobile note for a slash command that is not installed', async () => {
+    const projectDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-session-'));
+    try {
+      const session = createSession({ agentKind: 'claude-code', workDir: projectDir });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => session),
+        isMobileClientInvoke: vi.fn(() => true),
+      });
+      const transaction = createMakerSendTransaction(deps);
+
+      await transaction.sendToAgentAccepted('session-1', '/subtask-fork ping');
+
+      const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+      expect(sent).toBe(`${buildMobileClientPromptNote()}\n\n/subtask-fork ping`);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps the mobile note for /compact text sent to Codex', async () => {

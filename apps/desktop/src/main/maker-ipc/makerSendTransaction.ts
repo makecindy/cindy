@@ -52,6 +52,7 @@ import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
+import { isUserInvocableClaudeCommand } from './claudeSlashCommandGuard.js';
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
@@ -1507,9 +1508,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         await cleanupRejectedMaterialization();
         throw err;
       }
+      // 原生命令必须留在消息最前面:环境说明一插到前面,用户自己敲的 /<command>
+      // 就不再被引擎当命令解析,装好的 Skill 会整段变成普通文本(#11637)。
+      // 判定按"当前工作目录里实际装着的命令"来,不做「所有 / 开头都放行」的宽匹配。
+      const allowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        && !(await isUserInvocableClaudeCommand(normalized, sess));
       // session-agent-switch:切换后首条可附带上下文的消息注入交接。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
-      const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const workdirRecoveryNote = allowsEnvironmentNotes
         ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
         : null;
       const withRecoveryNote = workdirRecoveryNote
@@ -1517,7 +1523,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : normalized;
       // Native commands must lead the provider input. Defer the handoff rather
       // than discarding it or consuming it when only the command is accepted.
-      const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const pendingHandoff = allowsEnvironmentNotes
         ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
         : null;
       const withHandoff = pendingHandoff
@@ -1599,7 +1605,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 吐裁决块、承诺自动续跑。原生命令必须留在消息开头,同手机说明的占位规则。
       const goalInactiveNote =
         (isOrdinaryUserTurn || soForReconcile.origin?.kind === 'scheduler') &&
-        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        allowsEnvironmentNotes
           ? ((await deps.peekGoalInactiveNote?.(sessionId).catch(() => null)) ?? null)
           : null;
       const withGoalInactiveNote = goalInactiveNote
@@ -1608,7 +1614,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 消息来源说明(任务 / 伙伴 / 插件 / 共享任务成员):读落库 agentMeta 同一份主机
       // 盖章数据,只进 wire payload。排队 → 事务这条路只在这里加一次(coordinator 不加)。
-      const messageSourceNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const messageSourceNote = allowsEnvironmentNotes
         ? buildWireMessageSourceNote(
             {
               origin: soForReconcile.persistUserMessage?.origin,
@@ -1639,7 +1645,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // context 盖章);没有设备信息时沿用旧的手机判据(直连走 deps 注入的 async context,
       // 排队走 so.fromMobileClient)。
       const sourceDevice = readWireSourceDevice(so.sourceDevice);
-      const allowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind);
       const mobileClientNote = allowsEnvironmentNotes
         ? buildClientEnvironmentNote({
             device: sourceDevice,
@@ -1703,7 +1708,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (inputHandoffOwnerNote) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }
-      const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const appContext = allowsEnvironmentNotes
         ? await deps.readMcpAppModelContext(sessionId)
         : undefined;
       if (appContext?.text) {

@@ -11,6 +11,7 @@ import { prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHa
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { isMobileControllerInvoke } from '../device-link/invoke-context.js';
 import { buildClientEnvironmentNote, shouldPrependMobileClientPromptNote } from './mobileClientPromptNote.js';
+import { isUserInvocableClaudeCommand } from './claudeSlashCommandGuard.js';
 import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { buildUiLanguageErrorNote, turnClassicalStyleFromSendOpts, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
@@ -144,8 +145,12 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     if (!sess.isTurnRunning()) {
       throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
     }
+    // 原生命令必须留在消息最前面:用户自己敲的 /<command> 不能被环境说明挤走(#11637)。
+    // 判定按当前会话实际装着的命令来,不做「所有 / 开头都放行」的宽匹配。
+    const steerAllowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      && !(await isUserInvocableClaudeCommand(normalized, sess));
     // Same `[引用说明]` as an ordinary send (steer does not go through the send transaction).
-    const steerReplyQuoteNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+    const steerReplyQuoteNote = steerAllowsEnvironmentNotes
       ? ((await readReplyQuoteNote(sessionId, so[REPLY_QUOTE_SOURCE_CONTENT]).catch(() => null)) ?? null)
       : null;
     const meta = await maker.getSessionMeta(sessionId).catch(() => null);
@@ -163,7 +168,7 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     }
     // 来源说明与客户端说明同样只进 wire payload(steer 路径的落库由 coordinator 写原话,
     // 天然不污染原话)。steer 不经 send 事务,两段说明只在这里加一次。
-    const steerSourceNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+    const steerSourceNote = steerAllowsEnvironmentNotes
       ? buildWireMessageSourceNote({
           origin: so.sourceOrigin,
           autoReviewUserText: so[FORWARDED_REQUEST_RECEIPT],
@@ -181,7 +186,6 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     // 设备来源只认盖章值(coordinator 透传 / 直连 IPC 边界按 async context 盖);没有设备
     // 信息时沿用旧手机判据:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
     const steerDevice = readWireSourceDevice(so.sourceDevice);
-    const steerAllowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind);
     const steerNote = steerAllowsEnvironmentNotes
       ? buildClientEnvironmentNote({
           device: steerDevice,
@@ -220,7 +224,7 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       ? inputHandoffSteerNote(sessionId, message)
       : null;
     // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
-    const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
+    const steerHandoffNote = pendingHandoffNote && steerAllowsEnvironmentNotes ? pendingHandoffNote : null;
     if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
     if (steerHandoffNote) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
@@ -228,7 +232,7 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     if (steerPlannedNotes['side-chat']) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerPlannedNotes['side-chat']);
     }
-    const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+    const appContext = steerAllowsEnvironmentNotes
       ? await mcpAppModelContext(sessionId)
       : undefined;
     if (appContext?.text) {
