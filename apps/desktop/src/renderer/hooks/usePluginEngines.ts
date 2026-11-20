@@ -126,8 +126,8 @@ interface DeviceCatalogue {
   prefetch(): Promise<void>;
   markStale(): void;
   evict(): void;
-  hasSubscribers(): boolean;
-  subscribe(listener: () => void): () => void;
+  hasPrefetchSubscribers(): boolean;
+  subscribe(listener: () => void, prefetchOnReconnect?: boolean): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
 
@@ -166,7 +166,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let lastReadAt = 0;
   let lastFailedAt = 0;
   let unsupported = false;
-  const subscribers = new Set<() => void>();
+  const subscribers = new Map<() => void, boolean>();
   const catalogue: DeviceCatalogue = {
     read() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
@@ -187,7 +187,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
           retainReportingPluginEngines(owner, deviceId, next);
           if (sameEngineViews(current, next)) return;
           current = next;
-          for (const subscriber of subscribers) subscriber();
+          for (const subscriber of subscribers.keys()) subscriber();
         })
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch((error: unknown) => {
@@ -233,14 +233,14 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       retainReportingPluginEngines(owner, deviceId, []);
       if (current !== null) {
         current = null;
-        for (const subscriber of subscribers) subscriber();
+        for (const subscriber of subscribers.keys()) subscriber();
       }
     },
-    hasSubscribers() {
-      return subscribers.size > 0;
+    hasPrefetchSubscribers() {
+      return Array.from(subscribers.values()).includes(true);
     },
-    subscribe(listener) {
-      subscribers.add(listener);
+    subscribe(listener, prefetchOnReconnect = true) {
+      subscribers.set(listener, prefetchOnReconnect);
       return () => { subscribers.delete(listener); };
     },
     snapshot() {
@@ -251,9 +251,9 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   return catalogue;
 }
 
-/** Whether any mounted UI currently subscribes to a remote computer's plugin engine catalogue. */
+/** Whether mounted task UI needs this catalogue during device bootstrap/reconnect. */
 export function hasRemotePluginEngineSubscribers(deviceId: string): boolean {
-  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasSubscribers() ?? false;
+  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasPrefetchSubscribers() ?? false;
 }
 
 /** One coalesced background catalogue read for a remote computer (used on bootstrap/reconnect). */
@@ -330,7 +330,8 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    const offs = sources.map((source) => source.catalogue.subscribe(listener));
+    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
     return () => {
       for (const off of offs) off();
     };

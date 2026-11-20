@@ -50,6 +50,13 @@ const names = new Set([
   'apiFetch',
   'clearAuth',
   'recoverActiveResourceSession',
+  'refreshPassportSessionSingleFlight',
+  'replacePassportSessionIfCurrent',
+  'assertPassportReplacementStored',
+  'removePassportSessionIfCurrent',
+  'writePassportSessionToVault',
+  'isStoredAccountMetadata',
+  'metadataFromMembership',
   'commitDesktopRefreshCredentials',
   'initialize',
   'receiveHostAuthState',
@@ -89,6 +96,8 @@ let refreshPromise = null, sessionInvalidationPromise = null;
 let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const uncertainResourceRefreshTokens = new Map();
+const passportAccountRefreshFlights = new Map();
+const pendingPassportAccountRotations = new Map();
 let passiveLocalSignOut = false;
 const settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
@@ -118,12 +127,14 @@ const recoverAccountFreeOwnerAtStartup = async (mode, reason, unavailable, optio
 const reconcileDesktopActiveAuthSession = async () => saved.session;
 ${source.statements
   .filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? ''))
-  .map((node) => node.getText(source).replace(/^export /, ''))
+  .map((node) => node.getText(source).replace(/^export /, '')
+    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight('))
   .join('\n')}
 return {
   fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  renewPassport: (client) => productionRefreshPassportSessionSingleFlight(client, 'global', 'passport-original'),
   hostAuth: (reader) => { authRefreshOverride = reader; },
   receiveHostAuthState,
   invalidateSession,
@@ -181,6 +192,8 @@ function setup(random = 0) {
     transactAuthAccountVault: transaction,
     accountVaultKey,
     passportVaultKey,
+    loggedOutAccountKeySet,
+    reconcileSavedAccountMetadata,
     isLoggedOutVaultAccount: (value: any, key: string) => loggedOutAccountKeySet(value).has(key),
     refreshPassportSessionSingleFlight: vi.fn(async () => ({ accountToken: "test-passport-access" })),
     expireRuntimeAuth: vi.fn(async () => { saved.session = null; vault.activeAccountKey = null; }),
@@ -901,7 +914,8 @@ describe('the saved-account vault after a Host renewal', () => {
     .filter((node) => (ts.isFunctionDeclaration(node) && vaultNames.has(node.name?.text ?? ''))
       || (ts.isVariableStatement(node) && node.declarationList.declarations
         .some((d) => d.name.getText(source) === 'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION')))
-    .map((node) => node.getText(source).replace(/^export /, ''));
+    .map((node) => node.getText(source).replace(/^export /, '')
+    .replace('function refreshPassportSessionSingleFlight(', 'function productionRefreshPassportSessionSingleFlight('));
   const vaultCompiled = ts.transpileModule(`
 let currentUser = { id: 'member-a' };
 const activeAuthRealm = 'global';
@@ -1085,6 +1099,69 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
       expect(h.saved.session?.refreshToken).toBe('test-refresh');
     },
   );
+
+  it.each(['passport', 'exchange'] as const)(
+    'reports a disabled account when %s rejects recovery',
+    async stage => {
+      const { h, exchange } = recoverySetup();
+      const error = new AuthApiError('MEMBERSHIP_DISABLED', 403, 'disabled');
+      if (stage === 'passport') {
+        h.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(error);
+      } else {
+        exchange.mockRejectedValueOnce(error);
+      }
+      await rejectAfterLoss(h);
+      expect(h.deps.expireRuntimeAuth).toHaveBeenCalledWith('original', 'account-unavailable');
+      expect(h.saved.session).toBeNull();
+    },
+  );
+
+  // The real Passport single-flight and CAS run here too; only disk I/O is an
+  // in-memory transaction port. No server replay grace exists for this token.
+  it('persists a pending Passport rotation before refreshing it again, without reusing its stale access token', async () => {
+    const { h } = recoverySetup();
+    const passportKey = passportVaultKey('global', 'passport-original');
+    h.vault.passports[passportKey].accountRefreshToken = 'test-passport-old';
+    h.vault.passports[passportKey].memberships = ['original', 'sibling'].map(id => ({
+      id, kind: 'personal', displayName: id, email: null, avatarUrl: null,
+      role: 'member', orgId: null, orgName: null, orgLogoUrl: null,
+    }));
+    const client = { refreshAccount: vi.fn(async (token: string) => {
+      if (token === 'test-passport-old' && client.refreshAccount.mock.calls.length > 1) {
+        throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'consumed');
+      }
+      return { accountToken: token === 'test-passport-old' ? 'test-stale-access' : 'test-fresh-access',
+        accountRefreshToken: token === 'test-passport-old' ? 'test-passport-pending' : 'test-passport-latest' };
+    }) };
+    h.transaction.mockRejectedValueOnce(new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE', 503, 'disk'));
+    await expect(h.renewPassport(client)).rejects.toMatchObject({ code: 'CREDENTIAL_STORE_UNAVAILABLE' });
+    const results = await Promise.all([h.renewPassport(client), h.renewPassport(client)]);
+    expect(client.refreshAccount.mock.calls.map(([token]) => token)).toEqual(['test-passport-old', 'test-passport-pending']);
+    expect(results.every(pair => pair.accountToken === 'test-fresh-access')).toBe(true);
+    expect(h.vault.passports[passportKey].accountRefreshToken).toBe('test-passport-latest');
+    expect(h.vault.passports[passportKey].memberships.map((member: { membershipId: string }) => member.membershipId)).toEqual(['original', 'sibling']);
+  });
+
+  it.each(['removed', 'newer'] as const)('cannot restore an unpersisted Passport over a %s saved generation', async state => {
+    const { h } = recoverySetup();
+    const passportKey = passportVaultKey('global', 'passport-original');
+    h.vault.passports[passportKey].accountRefreshToken = 'test-passport-old';
+    const client = { refreshAccount: vi.fn(async () => ({
+      accountToken: 'test-new-access', accountRefreshToken: 'test-new-refresh',
+    })) };
+    h.transaction.mockRejectedValueOnce(new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE', 503, 'disk'));
+    await expect(h.renewPassport(client)).rejects.toMatchObject({ code: 'CREDENTIAL_STORE_UNAVAILABLE' });
+    if (state === 'removed') {
+      delete h.vault.passports[passportKey];
+      await expect(h.renewPassport(client)).rejects.toMatchObject({ code: 'ACCOUNT_REAUTH_REQUIRED' });
+      expect(h.vault.passports[passportKey]).toBeUndefined();
+      expect(client.refreshAccount).toHaveBeenCalledTimes(1);
+    } else {
+      h.vault.passports[passportKey].accountRefreshToken = 'test-concurrent-newer';
+      await h.renewPassport(client);
+      expect(client.refreshAccount).toHaveBeenLastCalledWith('test-concurrent-newer');
+    }
+  });
 
   it('recovers an already-rejected Resource after real 20s timeout cleanup and a transport failure', async () => {
     const { h } = recoverySetup();

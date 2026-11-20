@@ -1348,6 +1348,7 @@ async function clearAuthAccountVault(
       vault.signedOutAt = Date.now();
       customize(vault);
       writeAuthAccountVaultOrThrow(vault, { replaceUnreadableLogoutTombstones: true });
+      pendingPassportAccountRotations.clear();
       await afterPersist();
     },
   );
@@ -1630,6 +1631,12 @@ async function removePassportSessionIfCurrent(
 type PassportAccountRefreshPair = Awaited<ReturnType<CindyAuthClient['refreshAccount']>>;
 
 const passportAccountRefreshFlights = new Map<string, Promise<PassportAccountRefreshPair>>();
+// Keep only an unpersisted refresh-token rotation, never a cached account JWT.
+// The next flight first retries its CAS write, then obtains a fresh account JWT.
+const pendingPassportAccountRotations = new Map<string, {
+  expectedAccountRefreshToken: string;
+  accountRefreshToken: string;
+}>();
 
 function assertPassportReplacementStored(result: PassportSessionReplacementResult): void {
   if (result === 'stored') return;
@@ -1704,21 +1711,45 @@ async function refreshPassportSessionSingleFlight(
   if (existing) return existing;
 
   const flight = (async () => {
-    const current = readAuthAccountVault().passports[key];
+    const vault = readAuthAccountVault();
+    // A removed or superseded Passport cannot be restored from memory. Prune
+    // against a successful vault read; temporary unreadability must retain it.
+    for (const [pendingKey, pending] of pendingPassportAccountRotations) {
+      if (vault.passports[pendingKey]?.accountRefreshToken !== pending.expectedAccountRefreshToken) {
+        pendingPassportAccountRotations.delete(pendingKey);
+      }
+    }
+    let current = vault.passports[key];
+    const pending = pendingPassportAccountRotations.get(key);
+    if (pending && current) {
+      const result = await replacePassportSessionIfCurrent({
+        realm,
+        passportId,
+        ...pending,
+        memberships: current.memberships,
+      });
+      if (result !== 'write-failed') pendingPassportAccountRotations.delete(key);
+      assertPassportReplacementStored(result);
+      current = readAuthAccountVault().passports[key];
+    }
     if (!current) {
       throw new AuthApiError('ACCOUNT_REAUTH_REQUIRED', 401, 'Saved account requires login');
     }
     try {
       const pair = await client.refreshAccount(current.accountRefreshToken);
-      assertPassportReplacementStored(
-        await replacePassportSessionIfCurrent({
-          realm,
-          passportId,
-          expectedAccountRefreshToken: current.accountRefreshToken,
-          accountRefreshToken: pair.accountRefreshToken,
-          memberships: current.memberships,
-        }),
-      );
+      const pending = {
+        expectedAccountRefreshToken: current.accountRefreshToken,
+        accountRefreshToken: pair.accountRefreshToken,
+      };
+      pendingPassportAccountRotations.set(key, pending);
+      const result = await replacePassportSessionIfCurrent({
+        realm,
+        passportId,
+        ...pending,
+        memberships: current.memberships,
+      });
+      if (result !== 'write-failed') pendingPassportAccountRotations.delete(key);
+      assertPassportReplacementStored(result);
       return pair;
     } catch (error) {
       // A device mismatch only proves that this process is using a different
@@ -3599,20 +3630,20 @@ async function runAuthRefreshWithReplacementRetry(
         };
     } catch (error) {
       if (!(error instanceof AuthApiError)) throw error;
-      if (!isDefinitiveRefreshError(error) || error.code === 'DEVICE_MISMATCH')
-        return {
-          ...run,
-          result: {
-            ok: false,
-            status: error.statusCode,
-            retryAt: error.retryAt,
-            data: { error: { code: error.code, message: 'Saved session recovery failed' } },
-          },
-          failureAction: {
-            kind: error.code === 'DEVICE_MISMATCH' ? 'foreign-device' : 'transient-failure',
-          },
-        };
-      // An explicitly rejected Passport cannot restore the rejected Resource.
+      return {
+        ...run,
+        result: {
+          ok: false,
+          status: error.statusCode,
+          retryAt: error.retryAt,
+          data: { error: { code: error.code, message: 'Saved session recovery failed' } },
+        },
+        failureAction: {
+          kind: error.code === 'DEVICE_MISMATCH'
+            ? 'foreign-device'
+            : isDefinitiveRefreshError(error) ? 'definitive-failure' : 'transient-failure',
+        },
+      };
     }
   }
   return { ...run, expectedVaultRefreshToken };
@@ -6521,6 +6552,9 @@ function revokeLoggedOutAccountBestEffort(input: {
   authBaseUrl: string;
   passport: StoredPassportSession | null;
 }): void {
+  if (input.passport) {
+    pendingPassportAccountRotations.delete(passportVaultKey(input.passport.realm, input.passport.passportId));
+  }
   void (async () => {
     if (input.accessToken) {
       apiFetch('/api/auth/logout', {

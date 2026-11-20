@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "輸入無效，請檢查後重試。",
@@ -15060,6 +15061,9 @@
       "usageLimitAutoContinueTitle": "用量上限重置後，如果你還沒處理，這個任務會自動繼續",
       "usageLimitAutoContinueCancel": "取消",
       "usageLimitAutoContinueCancelTitle": "取消自動繼續，錯誤與重試仍保留",
+      "usageLimitReached": "模型帳號已達到用量上限",
+      "usageLimitReachedWithReset": "模型帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "usageLimitReachedNoReset": "模型帳號已達到用量上限。請等待用量上限重置，或切換其他模型後再重試。",
       "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
@@ -15131,6 +15135,7 @@
     },
     "backgroundActivity": {
       "status": "背景子任務執行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在背景繼續工作…",
       "bashWorkStatus_one": "正在背景工作（{{count}} 個命令）…",
       "bashServiceStatus_one": "背景服務執行中（{{count}} 個）",
       "bashWorkStatus_other": "正在背景工作（{{count}} 個命令）…",
@@ -15165,6 +15170,7 @@
       "continueFailed_other": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
@@ -15835,7 +15841,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",

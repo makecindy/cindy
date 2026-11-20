@@ -77,6 +77,7 @@
     "back": "Go Back"
   },
   "failedScheduleNotice": {
+    "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
     "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
     "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
     "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
@@ -635,6 +636,7 @@
     "readableHistoryRecoveryDescription": "Keep your chat history and original session. Resend your last message in the new session.",
     "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
     "replyFailed": "Could not complete the reply",
+    "usageLimitReached": "This model account has reached its usage limit",
     "showErrorDetails": "Error Details",
     "hideErrorDetails": "Hide Details",
     "diagnose": "Diagnose",
@@ -687,7 +689,9 @@
     "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
     "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
+    "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Context compaction failed during the switch because this connection cannot use the previous model.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
+    "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",

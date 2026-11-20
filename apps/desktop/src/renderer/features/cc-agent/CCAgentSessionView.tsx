@@ -58,8 +58,20 @@ import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleS
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
-import { findPluginEngine, usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
-import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import {
+  findPluginEngine,
+  requestPluginEnginesRefresh,
+  useDevicesPluginEngines,
+  usePluginEngines,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isSamePluginEngineChoice,
+  remotePluginEngineChoices,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import {
   usePluginEngineChoiceLabel,
   type PluginEngineSessionPickerProps,
@@ -114,7 +126,11 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
-import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
+import {
+  beginAgentSwitchOperation,
+  hasPendingAgentSendDispatch,
+  hasPendingAgentSwitchOperation,
+} from '@/lib/agentSwitchCoordinator';
 import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
@@ -2379,6 +2395,66 @@ function CCAgentSessionContent({
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
   const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
+  // 本机普通任务也能切到自己另一台电脑开放的引擎。已选的远程引擎保留回显。
+  const pendingPluginEngineDeviceId = pluginEngineSwitchIntent
+    ? (pluginEngineSwitchIntent.agentDeviceId === undefined
+        ? (session?.agentDeviceId ?? undefined)
+        : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
+    : undefined;
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId
+    && (localPluginEngines.length > 0 || !!pendingPluginEngineDeviceId);
+  const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
+    ? JSON.stringify(selectableDevices
+      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+        && ((localPluginEngines.length > 0 && device.online) || device.deviceId === pendingPluginEngineDeviceId))
+      .map(({ deviceId: id, name }) => [id, name ?? null]))
+    : '[]';
+  const switchPluginEngineDevices = useMemo(
+    () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null]>)
+      .map(([id, name]) => ({ deviceId: id, name })),
+    [switchPluginEngineDevicesKey],
+  );
+  const switchPluginEngineDeviceIds = useMemo(
+    () => switchPluginEngineDevices.map((device) => device.deviceId),
+    [switchPluginEngineDevices],
+  );
+  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(switchPluginEngineDeviceIds);
+  const activePluginEngineInDeviceList = !!pluginEngineAgentDeviceId
+    && switchPluginEngineDeviceIds.includes(pluginEngineAgentDeviceId);
+  const readPendingRemotePluginEngine = viewVisible && !!pendingPluginEngineDeviceId
+    && devicePluginEngines.get(pendingPluginEngineDeviceId) === null;
+  useEffect(() => {
+    if (readPendingRemotePluginEngine) readDevicePluginEngines(pendingPluginEngineDeviceId);
+  }, [readPendingRemotePluginEngine, pendingPluginEngineDeviceId, readDevicePluginEngines]);
+  const switchablePluginEngines = useMemo<readonly PluginEngineChoice[]>(() => {
+    if (pluginEngineDeviceId) {
+      return pluginEngineAgentDeviceId
+        ? [
+            ...pluginEngines.filter((engine) => engine.providerId !== session?.providerId),
+            ...(pluginEngine ? [pluginEngine] : []),
+          ]
+        : pluginEngines;
+    }
+    const remote = remotePluginEngineChoices(switchPluginEngineDevices, devicePluginEngines, deviceDisplayName, localPluginEngines);
+    const combined: PluginEngineChoice[] = [...localPluginEngines, ...remote];
+    if (pluginEngine && !combined.some((item) => isSamePluginEngineChoice(item, pluginEngine))) {
+      combined.push(pluginEngine);
+    }
+    if (pendingPluginEngineDeviceId && pluginEngineSwitchIntent?.providerId
+      && !combined.some((item) => isSamePluginEngineChoice(item, { providerId: pluginEngineSwitchIntent.providerId!, deviceId: pendingPluginEngineDeviceId }))) {
+      const pendingRemote = findPluginEngine(devicePluginEngines.get(pendingPluginEngineDeviceId) ?? [], pluginEngineSwitchIntent.providerId);
+      if (pendingRemote) {
+        const matchedDevice = switchPluginEngineDevices.find((item) => item.deviceId === pendingPluginEngineDeviceId);
+        combined.push({
+          ...pendingRemote,
+          deviceId: pendingPluginEngineDeviceId,
+          deviceName: deviceDisplayName(pendingPluginEngineDeviceId, matchedDevice?.name),
+        });
+      }
+    }
+    return combined;
+  }, [pluginEngineDeviceId, pluginEngineAgentDeviceId, pluginEngines, session?.providerId, pluginEngine,
+    switchPluginEngineDevices, devicePluginEngines, localPluginEngines, pendingPluginEngineDeviceId, pluginEngineSwitchIntent?.providerId]);
   const controlledModelRoute = useModelRouteDevices({
     controlledDeviceId: remoteDeviceId,
     leadAgentDeviceId: session?.agentDeviceId,
@@ -2626,6 +2702,10 @@ function CCAgentSessionContent({
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
+  // 插件引擎回答完仍在自己干活:状态栏用插件引擎文案,消息流按进行中显示
+  // (Agent 还没报完成的工具调用带转圈)。内置引擎的后台子任务 / 命令不走这里。
+  const pluginEngineBackgroundWork =
+    backgroundTasksActive && backgroundModelActive && isPluginEngineKind(session?.agentKind);
   // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
   const runningWorkflow = useMemo(
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
@@ -3745,13 +3825,15 @@ function CCAgentSessionContent({
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
-  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection) => {
-    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return;
-    if (hasPendingAgentSendDispatch(sessionId)) return;
+  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection): Promise<boolean> => {
+    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
+    if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
-      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
+      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
+      pluginEngineDeviceId ? undefined : { agentDeviceId: selection.deviceId ?? null },
+    );
     try {
       if (pluginEngineTask && selection.providerId === session.providerId
         && (selection.deviceId ?? null) === (pluginEngineAgentDeviceId ?? null)) {
@@ -3759,47 +3841,66 @@ function CCAgentSessionContent({
         let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
           const result = await switchTo();
-          if (result.sameEngineSuperseded) return;
+          if (result.sameEngineSuperseded) return false;
           revision = result.sameEngineRevision;
           if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
-        return;
+        return await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
       await switchTo();
       if (makerChatStore.getSnapshot(sessionId).agentStatus.isRunning) {
-        const engine = pluginEngines.find((item) => item.providerId === selection.providerId);
+        const engine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
         toast.success(t('newChat.chatInput.agentSwitch.deferred', {
-          agent: engine?.name ?? t('newChat.pluginEngines.genericName'),
+          agent: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
           model: engine?.models.find((item) => item.id === selection.modelId)?.displayName
             ?? t('newChat.pluginEngines.defaultModel'),
         }), { duration: 4000 });
       }
+      return true;
     } catch (err) {
       // 插件停用、卸载或不可用时主进程给出的说明直接展示；带错误码的按既有文案。
       toast.error(extractIpcError(err)
         ? t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' }))
         : err instanceof Error && err.message ? err.message : t('newChat.chatInput.agentSwitch.failed'));
+      return false;
     } finally {
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngineAgentDeviceId, pluginEngines, handlePluginEngineModelSelect, t]);
-  // 任务自己的引擎在另一台电脑上：打开选择器时任务所在电脑与那台电脑的列表各读一次。引用必须稳定——
-  // 选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
-  const readTaskAndAgentPluginEngines = useCallback(() => {
-    readPluginEngineCatalogue?.();
-    agentPluginCatalogue.read();
-  }, [readPluginEngineCatalogue, agentPluginCatalogue.read]);
-  // 普通任务的选择器列出任务所属电脑的引擎：当前选中的是待切到的引擎，或任务自己的引擎；
-  // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
+    pluginEngineTask, pluginEngineAgentDeviceId, switchablePluginEngines, pluginEngineChoiceLabel,
+    handlePluginEngineModelSelect, t]);
+  // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
+  // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
+  const hasLocalSessionPluginEnginesRef = useRef(false);
+  hasLocalSessionPluginEnginesRef.current = localPluginEngines.length > 0;
+  const readSessionPluginEngines = useCallback(() => {
+    if (pluginEngineDeviceId) {
+      readPluginEngineCatalogue?.();
+      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.read();
+      return;
+    }
+    if (hasLocalSessionPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readDevicePluginEngines();
+    if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !activePluginEngineInDeviceList) {
+      agentPluginCatalogue.read();
+    }
+  }, [pluginEngineDeviceId, readPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+    agentPluginCatalogue.read, readDevicePluginEngines, activePluginEngineInDeviceList]);
+  // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
+  // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
     if (!pluginEngineSwitchEligible || !session
-      || (!pluginEngineTask && !pluginEngineDeviceId && pluginEngines.length === 0)) return undefined;
+      || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
+      return undefined;
+    }
+    const intentDeviceId = pluginEngineSwitchIntent
+      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
+      : null;
     const active = pluginEngineSwitchIntent?.providerId
       ? {
           providerId: pluginEngineSwitchIntent.providerId,
+          ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
           modelId: pluginEngineSwitchIntent.model,
           ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
         }
@@ -3811,26 +3912,15 @@ function CCAgentSessionContent({
             ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
           }
         : null;
-    // 任务自己的引擎在另一台电脑上：把它列在任务所在电脑的引擎之后，同一引擎内照常换模型。任务所在电脑
-    // 装着同一个插件时那一项先不列：主进程按引擎标识把它当成当前引擎，点它并不会把 Agent 换回这台。
-    // 别的电脑上的其他引擎不在任务里列出(任务中换到另一台电脑的插件引擎还不支持)。
-    const engines: readonly PluginEngineChoice[] = pluginEngineAgentDeviceId
-      ? [
-          ...pluginEngines.filter((engine) => engine.providerId !== session.providerId),
-          ...(pluginEngine ? [pluginEngine] : []),
-        ]
-      : pluginEngines;
     return {
-      engines,
+      engines: switchablePluginEngines,
       active,
-      onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
-      readCatalogue: pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer
-        ? readTaskAndAgentPluginEngines
-        : readPluginEngineCatalogue,
+      onSelect: handlePluginEngineSwitchSelect,
+      readCatalogue: readSessionPluginEngines,
     };
-  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, pluginEngines, session, pluginEngineSwitchIntent,
-    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue,
-    pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer, pluginEngine, readTaskAndAgentPluginEngines]);
+  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
+    session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect,
+    pluginEngineAgentDeviceId, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
@@ -6054,7 +6144,7 @@ function CCAgentSessionContent({
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       subagentRunStatuses={subagentRunStatuses}
-      isSessionStreaming={isStreaming}
+      isSessionStreaming={isStreaming || pluginEngineBackgroundWork}
       continuationTurnClientId={continuationTurnClientId}
       continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}
       onLoadMore={loadOlderMessages}
@@ -6379,6 +6469,7 @@ function CCAgentSessionContent({
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
+                  backgroundPluginEngine={pluginEngineBackgroundWork}
                   workflowStatus={runningWorkflow ? composerStatus : undefined}
                   // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
@@ -7047,9 +7138,6 @@ function CCAgentSessionContent({
         <TopRightChipStack>
           {!isMac &&
             (ownsRoute || showRsbToggle) &&
-            (rightSidebarCollapsed ||
-              (rightSidebarDeviceLinkDeviceId &&
-                !isSharedTaskPeer(rightSidebarDeviceLinkDeviceId))) &&
             rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
@@ -7225,6 +7313,7 @@ export function RunningStatusBar({
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  backgroundPluginEngine = false,
   workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundBashWorkCount = backgroundBashOnlyCount,
@@ -7267,6 +7356,11 @@ export function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /**
+   * 后台模式来自插件引擎:Agent 回答完自己接着干活(不是子任务)。左段换成「正在后台继续工作」
+   * 文案,停止语义不变(关闭插件进程,任务可继续)。
+   */
+  backgroundPluginEngine?: boolean;
   /** 本机 Workflow 在运行时的专属状态文案；保留后台停止语义，但优先解释等待进度。 */
   workflowStatus?: string;
   /**
@@ -7351,7 +7445,9 @@ export function RunningStatusBar({
         ? backgroundBashWorkCount > 0
           ? t('chat.backgroundActivity.bashWorkStatus', { count: backgroundBashWorkCount })
           : t('chat.backgroundActivity.bashServiceStatus', { count: backgroundBashOnlyCount })
-        : t('chat.backgroundActivity.status')
+        : backgroundPluginEngine
+          ? t('chat.backgroundActivity.pluginEngineStatus')
+          : t('chat.backgroundActivity.status')
       : localizeAgentStatus(status, t));
   // 只剩长驻服务:任务已经做完,不再呼吸,免得看起来还在干活。
   const backgroundServiceOnly =
