@@ -418,7 +418,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     peer.refuseOpen = refuse;
     try {
       const accepted = await Promise.race([session.open(this.withLocalCapabilities(dst, payload), timeoutMs ?? this.requestTimeout()), refused]);
-      if (this.live(dst) !== session || peer.outbound !== 'opening') {
+      if (this.live(dst) !== session || peer.outbound !== 'opening' || peer.refuseOpen !== refuse) {
         throw new DeviceLinkError('LINK_NOT_OPEN', 'session closed while opening the control link');
       }
       const accept = (isRecord(accepted) ? accepted : {}) as unknown as LinkAcceptPayload;
@@ -445,7 +445,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       }
       return accept;
     } catch (error) {
-      if (peer.outbound === 'opening') peer.outbound = 'idle';
+      if (peer.refuseOpen === refuse && peer.outbound === 'opening') peer.outbound = 'idle';
       const failure = error instanceof DeviceLinkError ? error
         : error instanceof SessionError ? toDeviceLinkError(error.code, error.message) : null;
       this.options.log.debug(`agent-net session link open failed dst=${shortDeviceRef(dst)} code=${failure?.code ?? 'UNKNOWN'}`

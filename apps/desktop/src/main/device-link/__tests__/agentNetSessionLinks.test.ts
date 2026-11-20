@@ -645,6 +645,28 @@ describe('AgentNetSessionLinks', () => {
     } finally { links.controller.stop(); links.host.stop(); }
   });
 
+  // Unit: after an explicit close/new open, the old Session reply must not
+  // project acceptance through the new Main request's notification ownership.
+  it('rejects a superseded Session open when its late accept overtakes the new open', async () => {
+    const { links } = pair();
+    const held: Envelope[] = [], accepted: boolean[] = [];
+    links.host.onFrame(env => { if (env.kind === 'link-open') held.push(env); });
+    links.controller.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    try {
+      const old = links.controller.openLink('a-host', openPayload).then(() => 'accepted', error => error.code);
+      await vi.waitFor(() => expect(held).toHaveLength(1));
+      links.controller.closeLink('a-host', 'user');
+      const next = links.controller.openLink('a-host', openPayload);
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      links.host.sendLinkAccept('b-controller', held[0].id!, { appVersion: 'test', allowlistHash: 'test' });
+      expect(await old).toBe('LINK_NOT_OPEN');
+      expect(accepted).toEqual([]);
+      links.host.sendLinkAccept('b-controller', held[1].id!, { appVersion: 'test', allowlistHash: 'test' });
+      await next;
+      expect(accepted).toEqual([false]);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
   it('pairs a Session reverse open with its fresh inbound acceptance, preserving later recovery notifications', async () => {
     const { links } = pair();
     answerOnSession(links.host);
