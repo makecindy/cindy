@@ -1,4 +1,4 @@
-export type MobileMessageWebViewKind = 'mermaid' | 'math' | 'media' | 'composer';
+export type MobileMessageWebViewKind = 'mermaid' | 'math' | 'media' | 'composer' | 'table-body';
 
 export interface MobileMessageWebViewMetrics {
   mounted: number;
@@ -13,12 +13,14 @@ const mountCounts: Record<MobileMessageWebViewKind, number> = {
   math: 0,
   media: 0,
   composer: 0,
+  'table-body': 0,
 };
 const unmountCounts: Record<MobileMessageWebViewKind, number> = {
   mermaid: 0,
   math: 0,
   media: 0,
   composer: 0,
+  'table-body': 0,
 };
 let sequence = 0;
 
@@ -41,6 +43,7 @@ export function getMobileMessageWebViewMetrics(): MobileMessageWebViewMetrics {
     math: 0,
     media: 0,
     composer: 0,
+    'table-body': 0,
   };
   for (const kind of mounted.values()) mountedByKind[kind] += 1;
   return {

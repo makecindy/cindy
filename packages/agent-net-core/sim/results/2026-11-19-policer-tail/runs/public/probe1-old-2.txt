@@ -1,0 +1,12 @@
+  diag {}
+real run1 ok=true ms=614 mib=1 wireUpMiB=3.02 goodputMBps=1.71
+  sender {"packetsSent":2348,"packetsReceived":109,"wireBytesSent":3070932,"retransmittedSegments":862,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10588,"minRttUs":9320,"bandwidth":882075,"rateLimitsFound":0}
+  receiver {"packetsReceived":898,"packetsSent":164,"wireBytesReceived":1172913,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run2 ok=true ms=645 mib=1 wireUpMiB=4.83 goodputMBps=1.63
+  sender {"packetsSent":3752,"packetsReceived":123,"wireBytesSent":4907456,"retransmittedSegments":1577,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":10435,"minRttUs":9519,"bandwidth":893718,"rateLimitsFound":0}
+  receiver {"packetsReceived":886,"packetsSent":172,"wireBytesReceived":1155986,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}
+  diag {}
+real run3 ok=true ms=646 mib=1 wireUpMiB=3.81 goodputMBps=1.62
+  sender {"packetsSent":2964,"packetsReceived":199,"wireBytesSent":3878565,"retransmittedSegments":1958,"bundledSegments":0,"parityPackets":0,"recoveredSegments":0,"timeoutLosses":0,"fastLosses":0,"spuriousLosses":0,"duplicatePackets":0,"srttUs":9631,"minRttUs":8515,"bandwidth":5485443,"rateLimitsFound":0}
+  receiver {"packetsReceived":847,"packetsSent":287,"wireBytesReceived":1106189,"unauthenticatedPackets":0,"replayedPackets":0,"retransmittedSegments":0}

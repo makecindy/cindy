@@ -91,6 +91,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
   const captured: Buffer[] = [];
   const sockets: AgentNetAppSocket[] = [];
+  const udpTraffic = new Map<string, () => { sent: number; received: number }>();
   const make = (api: AgentNetClient, remoteControlEnabled: boolean) => {
     const approvals = sharing && !api.delegation ? createDelegationApprover(api, () => undefined,
       async request => request.scope.guestSubject === 'guest-account') : undefined;
@@ -104,6 +105,10 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
           workerFile: new URL('../../dist/node-worker.mjs', import.meta.url),
           client: api, userId: bootstrap.ownerCertificate.subject, module, udp, bindAddress: '127.0.0.1', lanDiscovery: false, scoped,
           stunServers: ['127.0.0.1:' + relay.udpAddress!.port],
+          observeUdpTraffic: read => {
+            udpTraffic.set(api.identity.deviceId, read);
+            return () => { if (udpTraffic.get(api.identity.deviceId) === read) udpTraffic.delete(api.identity.deviceId); };
+          },
           onDirectory: values => { directories.set(api.identity.deviceId, values); },
           onDelegationRequests: values => approvals?.update(values),
           tap: (data) => captured.push(Buffer.from(data)),
@@ -120,7 +125,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   };
   const host = make(a, true), controller = make(b, false);
   await Promise.all([host.waitUntilOnline(3000), controller.waitUntilOnline(3000)]);
-  return { relay, host, controller, sockets, captured, legacyClient, a, b, bootstrap, root, module, make, httpCalls, notifications, directories };
+  return { relay, host, controller, sockets, captured, legacyClient, a, b, bootstrap, root, module, make, httpCalls, notifications, directories, udpTraffic };
 }
 const openPayload = { controllerName: 'test', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' };
 function serve(host: DeviceLinkClient) {
@@ -173,6 +178,7 @@ it('runs encrypted RPC in isolated workers while the host retains its outbound n
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['worker-business-value'] })).toMatchObject({ ok: true, result: 'worker-business-value' });
   expect(f.sockets.every((socket) => socket instanceof AgentNetWorkerSocket)).toBe(true);
+  expect(f.udpTraffic.get('a-host')?.()).toEqual({ sent: 0, received: 0 });
   expect(f.captured.some((packet) => packet.includes(Buffer.from('worker-business-value')))).toBe(false);
   // A global fetch inside the worker would bypass Main's configured proxy.
   // Exercise the real worker/HTTP receipt, not an import or callback assertion.
@@ -230,7 +236,11 @@ it('binds inbound src and enforces target remote-control preference without trus
 
 // Real existing scoped DeviceLinkClient contract over encrypted V2 streams.
 // Transport grants must not become full-device control or another resource.
-it.each(['shared-task', 'provider-share'] as const)('carries %s requests with host-signed member scope and revokes only that guest', async kind => {
+it.each([
+  { kind: 'shared-task', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: false, purpose: 'revokes only that guest' },
+  { kind: 'provider-share', ownerOffline: true, purpose: 'connects to the executor after the owner disconnects' },
+] as const)('carries $kind requests with host-signed member scope and $purpose', async ({ kind, ownerOffline }) => {
   const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const issuer = 'https://auth.example.test';
   const keys = createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'unit-auth', alg: 'RS256' }] });
@@ -286,6 +296,29 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
   let visitor = f.make(api, false);
   await visitor.waitUntilOnline(3000);
+  if (ownerOffline) {
+    // A separate outage fixture keeps the owner and its unrelated link intact
+    // in the member-revocation cases.
+    serve(f.controller);
+    const input = { shareId: resourceId, memberId, guestDeviceId: guest.deviceId, executorDeviceId: f.b.identity.deviceId };
+    const prepared = await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
+    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
+    const guestPeer = providerShareGuestPeer(resourceId, memberId, guest.deviceId);
+    const guestSocket = f.sockets.find(socket => socket.deviceId === guest.deviceId)!;
+    const executorSocket = f.sockets.find(socket => socket.deviceId === input.executorDeviceId)!;
+    const grant = expect.objectContaining({ generation: prepared.generation });
+    await vi.waitFor(() => {
+      expect(guestSocket.scopedPeerTarget(executorPeer)?.delegation.executors).toContainEqual(grant);
+      expect(executorSocket.scopedPeerTarget(guestPeer)?.delegation.executors).toContainEqual(grant);
+    }, { timeout: 5_000 });
+    f.host.stop();
+    await vi.waitFor(() => expect(f.directories.get(input.executorDeviceId)
+      ?.some(view => view.certificate.deviceId === f.a.identity.deviceId && view.online)).toBe(false), { timeout: 5_000 });
+    await visitor.openLink(executorPeer, openPayload);
+    await expect(visitor.invoke(executorPeer, { channel: 'test:echo', args: ['executor starts while owner is offline'] }))
+      .resolves.toMatchObject({ ok: true, result: 'executor starts while owner is offline' });
+    return;
+  }
   const peer = kind === 'shared-task' ? sharedTaskHostPeer(resourceId, 'a-host') : providerShareHostPeer(resourceId, 'a-host');
   await visitor.openLink(peer, openPayload);
   expect(await visitor.invoke(peer, { channel: 'test:echo', args: ['scoped confidential value'] })).toMatchObject({
@@ -483,6 +516,13 @@ it('tells a directly connected peer right away when its worker socket is termina
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBe('direct'), { timeout: 5_000 });
   const host = f.sockets.find((s) => s.deviceId === 'a-host')!;
   await f.relay.close();
+  // With the relay closed, a bidirectional transfer must increment the actual worker UDP socket in both directions.
+  const read = f.udpTraffic.get('a-host')!;
+  const before = read();
+  const message = randomBytes(4096).toString('base64');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: [message] })).toMatchObject({ ok: true, result: message });
+  expect(read().sent - before.sent).toBeGreaterThanOrEqual(4096);
+  expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
 });

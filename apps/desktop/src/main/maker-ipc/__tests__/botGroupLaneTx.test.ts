@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database | null }));
+vi.mock('../../mcp-integrations/projectManagementCore.js', () => ({ registeredTaskProject: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => '/unused-user-data' } }));
 vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/unused-owner-root' }));
 vi.mock('../../localDb/client/current.js', async () => {
@@ -131,13 +132,13 @@ describe('Bot group lane transactions', () => {
 
   // bot-group-chat.md §7.5: a V2 teammate's group lane follows the group's project folder on this
   // computer. Moving archives the old lane; a restart keeps the folder and fails if it is gone.
-  it.each(['owner', 'tools', 'chat'] as const)('moves a %s group lane into the shared project and restarts it there', async mode => {
-    const routeKey = chatGroupLaneRouteKey('g1', { mode, revision: 1 });
+  it.each(['owner', 'tools'] as const)('moves a %s group lane into the shared project and restarts it there', async mode => {
+    const routeKey = chatGroupLaneRouteKey('g1', { mode, revision: 1, ...(mode === 'tools' ? { maskOwnerId: 'authorized' } : {}) });
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: laneSession('lane-1') } });
     const projectDir = path.join(ownerRoot, 'cindy');
     await mkdir(projectDir);
     const moved = { ...laneSession('lane-2'), workingDir: projectDir, projectDir, workspaceKind: 'project' };
-    expect(tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: moved, replaceOtherWorkingDir: true } }))
+    expect(tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: moved, replaceSessionId: 'lane-1' } }))
       .toEqual({ sessionId: 'lane-2', created: true, replacedSessionId: 'lane-1' });
     expect(db.prepare("SELECT s.status, l.archived_at FROM sessions s JOIN bot_session_links l ON l.session_id = s.id WHERE s.id = 'lane-1'").get())
       .toEqual({ status: 'archived', archived_at: 10 });
@@ -154,7 +155,7 @@ describe('Bot group lane transactions', () => {
   });
 
   it.each(['owner', 'tools', 'chat'] as const)('starts and restores a server plan lane with %s access without a local plan table', async mode => {
-    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:server-plan`;
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1, ...(mode === 'tools' ? { maskOwnerId: 'authorized' } : {}) })}:plan:server-plan`;
     const workingDir = mode === 'chat'
       ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', routeKey)
       : path.join(ownerRoot, 'project-worktree');
@@ -174,27 +175,27 @@ describe('Bot group lane transactions', () => {
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 
-  // Unit: a new chat-only work step persists the resolved group folder, not
-  // an empty cwd or a separate legacy chat workspace. Recovery must accept it.
-  it('restores a chat-only work step from its persisted shared group folder', async () => {
+  it.each(['chat', 'tools'] as const)('isolates even an older %s access lane stored in a development project', async mode => {
     const workingDir = path.join(ownerRoot, 'group-project');
     await mkdir(workingDir);
-    const routeKey = `${chatGroupLaneRouteKey('g1', { mode: 'chat', revision: 1 })}:plan:chat-work`;
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:chat-work`;
     const session = { ...laneSession('chat-project-step'), workingDir, projectDir: workingDir, workspaceKind: 'project' };
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
     const ensureWorkspaceDir = vi.fn(async () => '/private-home');
     const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '', workspaceKind: 'dialogue' };
     await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
-    expect(opts).toMatchObject({ workingDir, workspaceKind: 'project' });
+    expect(opts).toMatchObject({ workingDir: await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', routeKey),
+      workspaceKind: 'dialogue', projectDir: workingDir });
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 
   // bot-group-chat.md §7.0: a queue turn has no project folder. It starts where its group lane works:
   // the teammate's own place, or the grant's isolated chat folder for chat-only access.
   it.each(['owner', 'tools', 'chat'] as const)('starts a %s queue lane where its group lane works', async mode => {
-    const access = { mode, revision: 1 };
+    const access = { mode, revision: 1, ...(mode === 'tools' ? { maskOwnerId: 'authorized' } : {}) };
     const routeKey = chatGroupTalkRouteKey('g1', access, 'queue-1');
-    const workingDir = mode === 'chat' ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', chatGroupLaneRouteKey('g1', access)) : '/private-bot-home';
+    const workingDir = mode === 'chat' ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', chatGroupLaneRouteKey('g1', access)) : path.join(ownerRoot, 'dialogue');
+    await mkdir(workingDir, { recursive: true });
     const session = { ...laneSession('queue-step'), workingDir, workspaceKind: 'dialogue' };
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
     const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
@@ -226,7 +227,7 @@ describe('Bot group lane transactions', () => {
   });
 
   it.each(['owner', 'tools'] as const)('fails closed when a %s server plan has no usable recorded workspace', async mode => {
-    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:server-plan`;
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1, ...(mode === 'tools' ? { maskOwnerId: 'authorized' } : {}) })}:plan:server-plan`;
     const session = { ...laneSession('server-step'), workingDir: path.join(ownerRoot, 'missing'), workspaceKind: 'project' };
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
     const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');

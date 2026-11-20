@@ -2,6 +2,7 @@ import { kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
 import { opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 import type { ProviderView } from '@cindy/model-providers';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import {
@@ -248,11 +249,13 @@ export function ModelSourceDetails({
   label,
   accountIdentity,
   modelId,
+  className,
 }: {
   providerId: string;
   label: string;
   accountIdentity?: string;
   modelId: string;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
@@ -361,7 +364,10 @@ export function ModelSourceDetails({
           ? [source, ...poolParts.map((part) => part.title)].join('\n')
           : [source, ...parts.map((part) => part.title)].join(' · ')
       }
-      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+      className={cn(
+        'flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]',
+        className,
+      )}
     >
       <span className="min-w-0 truncate">{source}</span>
       {tightest && (

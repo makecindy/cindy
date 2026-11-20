@@ -1,4 +1,7 @@
 import { createPiAuthAdapter } from './pi-auth.js';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { piNativeKeyEnvVar, wireProtocolToPiApi, resolvePiBundledModelById, urlOrigin, officialPiRouteMatches, piModelCatalog, anthropicRootForV1Endpoint, type PiCatalogModel } from './pi-native-catalog.js';
 export { buildPiNativeProvidersFromConfigs, type PiBundledModelCatalog, type PiBundledModelInfo, piNativeKeyEnvVar, resolvePiBundledModelById } from './pi-native-catalog.js';
 import { listCindyManagedSkills } from './managed-skills.js';
@@ -205,6 +208,8 @@ export interface BuildPiAgentOpts {
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
   /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
+  /** Credential-free reachability check on the SSH execution host. */
+  probeRemotePiProviderEndpoint?: AgentDeps['probeRemotePiProviderEndpoint'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
   getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
   getRemoteAgentFileOps?: AgentDeps['getRemoteAgentFileOps'];
@@ -234,6 +239,11 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    // Pi can switch providers without respawning. Let each new HTTPS tunnel
+    // resolve its own destination, even if the first model used a direct route.
+    getLocalPiHttpsProxy: async env => hasProxyEnvConfig(env)
+      ? undefined
+      : ensureCliProxyBridge(resolveDesktopOutboundProxy),
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
     // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
@@ -392,6 +402,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     getRemotePiTransport: opts.getRemotePiTransport,
+    probeRemotePiProviderEndpoint: opts.probeRemotePiProviderEndpoint,
     getRemotePiFileOps: opts.getRemotePiFileOps,
     getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,

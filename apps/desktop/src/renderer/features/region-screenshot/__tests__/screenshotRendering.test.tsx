@@ -86,12 +86,16 @@ describe('screenshot rendering recovery', () => {
     expect(screen.getByText('50 × 40')).toBeTruthy(); // a different front window wins immediately
     fireEvent.pointerMove(root, { clientX: 200, clientY: 150 });
     expect(screen.getByText('250 × 200')).toBeTruthy();
+    // Space during a pending native hit must select the window beneath the click-through front.
+    fireEvent.keyDown(window, { key: ' ' });
+    // Moving over a different window before the queued query starts must preserve the keypress target.
+    fireEvent.pointerMove(root, { clientX: 451, clientY: 351 });
     await act(async () => replies[5]({ window: outer, rects: [] }));
+    expect(bridge.elementsAt).toHaveBeenLastCalledWith('one', outer.id, 200, 150);
     expect(screen.getByText('250 × 200')).toBeTruthy(); // stale opaque hit
     await act(async () => replies[6]({ window: corrected, rects: [] }));
-    fireEvent.keyDown(window, { key: 'Enter' });
     fireEvent.pointerMove(root, { clientX: 450, clientY: 350 });
-    expect(screen.getByText('250 × 200')).toBeTruthy();
+    expect(screen.getByText('300 × 300')).toBeTruthy();
     expect(bridge.elementsAt).toHaveBeenCalledTimes(7);
   });
   // PR #7661 discussion_r4398847280: a native null window must not flash the
@@ -191,9 +195,14 @@ describe('screenshot rendering recovery', () => {
     expect(screen.getByText('100 × 100')).toBeTruthy(); // top window occludes cached content
     fireEvent.pointerMove(root, { clientX: 250, clientY: 80 });
     expect(screen.getByText('500 × 350')).toBeTruthy();
-    fireEvent.keyDown(window, { key: 'Enter' });
+    // With a nested element highlighted, Space takes its window and Enter takes the element.
+    fireEvent.keyDown(window, { key: snapshot ? ' ' : 'Enter' });
+    if (snapshot) {
+      await act(async () => replies[5]({ window: front, rects: [] }));
+      await act(async () => replies[6]({ window: outer, rects: [], preferredRect: content }));
+    }
     fireEvent.pointerMove(root, { clientX: 550, clientY: 450 });
-    expect(screen.getByText('500 × 350')).toBeTruthy();
+    expect(screen.getByText(snapshot ? '500 × 400' : '500 × 350')).toBeTruthy();
     // A new capture cannot inherit a region or a late reply from this capture.
     await act(async () => begin({ ...payload, token: 'next', windows: [{ ...outer, snapRects: [] }] }));
     await act(async () => replies[5]({ window: outer, rects: [], preferredRect: content }));

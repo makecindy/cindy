@@ -56,14 +56,17 @@ describe('profile refresh after model selection', () => {
 function createSession(id = 'bot-session', instanceId = 'runtime-1') {
   let running = false;
   let backgroundTasks = 0;
+  let pendingContinuations = 0;
   const session: BotCompactRuntimeSession = {
     id,
     instanceId,
     isTurnRunning: () => running,
+    countPendingWakeContinuations: () => pendingContinuations,
     listBackgroundTasks: () => Array.from({ length: backgroundTasks }),
   };
   return {
     session,
+    setPendingContinuations: (value: number) => { pendingContinuations = value; },
     setRunning: (value: boolean) => { running = value; },
     setBackgroundTasks: (value: number) => { backgroundTasks = value; },
   };
@@ -338,4 +341,47 @@ describe('capability refresh input admission', () => {
     expect(coordinator.hasPending(h.session.id)).toBe(false);
     await expect(coordinator.attempt(h.session)).resolves.toBe('not-bot');
   });
+});
+
+// #8952: empty task snapshots do not prove that native follow-up was delivered.
+// Unit, real coordinator/admission; synthetic Session state isolates this gate.
+it('keeps capability refresh pending while a completed background task awaits native follow-up', async () => {
+  const h = createSession();
+  const refresh = vi.fn(async () => 'refreshed' as const);
+  const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false, refresh });
+  h.setPendingContinuations(1);
+  const deps = {
+    coordinator,
+    readSession: async () => ({ role: 'thread', source: 'bot', status: 'active', workingDir: 'workspace' }),
+    preflight: async () => true,
+  };
+  await expect(prepareBotCapabilityEpochBeforeSend(h.session, deps)).resolves.toBe('kept-current-runtime');
+  expect(refresh).not.toHaveBeenCalled();
+  expect(coordinator.hasPending(h.session.id)).toBe(true);
+  h.setPendingContinuations(0);
+  await expect(coordinator.attempt(h.session)).resolves.toBe('refreshed');
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+// #8952: provider activity can arrive while resource preflight awaits.
+it('rechecks native continuation retention immediately before closing after preflight', async () => {
+  let release!: () => void;
+  let pending = false;
+  let closed = false;
+  const operation = replaceBotRuntimeAfterPreflight({
+    preflight: () => new Promise<void>(resolve => { release = resolve; }),
+    isCurrentOwner: () => true,
+    isIdle: () => !pending,
+    close: async () => { closed = true; },
+    bootstrap: async () => 'replacement',
+  });
+  pending = true;
+  release();
+  await expect(operation).rejects.toThrow('became busy');
+  expect(closed).toBe(false);
+  await expect(replaceBotRuntimeAfterPreflight({
+    preflight: async () => {}, isCurrentOwner: () => true, isIdle: () => true,
+    close: async () => { closed = true; }, bootstrap: async () => 'replacement',
+  })).resolves.toBe('replacement');
+  expect(closed).toBe(true);
 });

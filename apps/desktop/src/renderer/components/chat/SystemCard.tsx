@@ -61,6 +61,7 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/../shared/pluginEngines';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
@@ -1048,6 +1049,8 @@ function AutoResumeActionRow({
       : t('chat.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('chat.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
@@ -1232,11 +1235,18 @@ function handoffCoverageKey(data: Record<string, unknown> | undefined) {
 function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; sessionId?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const engineLabel = (kind: unknown): string =>
-    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
-  const fromLabel = engineLabel(data?.fromAgentKind);
-  const toLabel = engineLabel(data?.toAgentKind);
-  const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 'acp' = 插件引擎(docs/plans/acp-plugin-bridge.md)：用切换时记下的引擎名，缺名称时用通用名称。
+  const engineLabel = (kind: unknown, name: unknown): string =>
+    kind === 'acp'
+      ? (typeof name === 'string' && name ? name : t('newChat.pluginEngines.genericName'))
+      : kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
+  const fromLabel = engineLabel(data?.fromAgentKind, data?.fromEngineName);
+  const toLabel = engineLabel(data?.toAgentKind, data?.toEngineName);
+  const rawToModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 插件引擎的 'default' 是「让引擎自己选」，不把内部取值当模型名显示。
+  const toModel = data?.toAgentKind === 'acp' && rawToModel === PLUGIN_ENGINE_DEFAULT_MODEL
+    ? t('newChat.pluginEngines.defaultModel')
+    : rawToModel;
   const coverageKey = handoffCoverageKey(data);
   const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';

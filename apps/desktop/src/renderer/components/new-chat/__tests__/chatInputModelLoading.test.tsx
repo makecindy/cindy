@@ -1098,10 +1098,11 @@ it('keeps save/cancel when editing a queued companion message', async () => {
 });
 
 // Running-turn delivery: the follow-up preference picks queue/steer for the
-// button and every sending key; the send shortcut only picks which key sends.
+// button and the send key; the send shortcut only picks which key sends. Where
+// the task can be steered and Enter sends, modifier+Enter sends the other way.
 describe.each([
-  { followUp: 'queue', sendShortcut: 'enter', plain: 'queue', modifier: 'queue' },
-  { followUp: 'steer', sendShortcut: 'enter', plain: 'steer', modifier: 'steer' },
+  { followUp: 'queue', sendShortcut: 'enter', plain: 'queue', modifier: 'steer' },
+  { followUp: 'steer', sendShortcut: 'enter', plain: 'steer', modifier: 'queue' },
   { followUp: 'queue', sendShortcut: 'modifier-enter', plain: null, modifier: 'queue' },
   { followUp: 'steer', sendShortcut: 'modifier-enter', plain: null, modifier: 'steer' },
 ] as const)('running follow-up delivery: $followUp default, $sendShortcut send key', ({ followUp, sendShortcut, plain, modifier }) => {
@@ -1128,7 +1129,7 @@ describe.each([
     expect(modeOf(onSend)).toBe(followUp);
   });
 
-  it('every sending key uses the same selected mode and the others keep their newline', async () => {
+  it('the send key uses the selected mode, modifier+Enter reverses it only with Enter as the send key, and the others keep their newline', async () => {
     const onSend = await mountRunning();
     const sendWith = async (init: KeyboardEventInit) => {
       const before = onSend.mock.calls.length;
@@ -1146,7 +1147,7 @@ describe.each([
     before = await sendWith({ metaKey: true });
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(before + 1));
     expect(modeOf(onSend)).toBe(modifier);
-    // No reverse chord: Cmd+Shift+Enter and Shift+Enter send nothing.
+    // Shift never sends: Cmd+Shift+Enter and Shift+Enter send nothing.
     before = await sendWith({ metaKey: true, shiftKey: true });
     await press({ shiftKey: true });
     expect(onSend).toHaveBeenCalledTimes(before);
@@ -1196,29 +1197,50 @@ it('sends idle messages normally under the steer default', async () => {
   expect(onSend.mock.calls[0][6].deliveryMode).toBe('queue');
 });
 
-it('shows the follow-up hint once per dismissal, switches the default from it, and hides on surfaces that cannot steer', async () => {
+// 测试价值
+// - 生产入口与可观察结果：真实 ChatInput 的发送键提示（SendDeliveryTip）——打字时不出现；打开后点「对调」
+//   只改默认不发送；点另一行、修饰键+点击都只把这一条按另一种方式发出，默认不变。
+// - 规则依据：DESIGN.md §14.6「Send button delivery tip」；替换原先常驻提示条的开关用例。
+// - 现有覆盖缺口：上面的矩阵只覆盖发送键与默认点击，没有「这一条换一种发法」和「在提示里改默认」。
+// - 最小失败输入：running + 可插话 + 有草稿，右键打开提示后点对调 / 另一行；不可插话的界面右键不出提示。
+// - tier：unit/jsdom（悬停延迟与定位由 ui:check 的 companion-composer 页面覆盖）。
+it('offers both delivery modes for one message from the Send button tip, and changes the default without sending', async () => {
   localStorage.clear();
   _resetComposerFollowUpPreferenceForTests();
+  _resetComposerSendShortcutPreferenceForTests();
   const onSend = vi.fn().mockResolvedValue(true);
-  const running = { ...companionProps(), sessionId: 'follow-up-hint', isStreaming: true, onSend, onQueueSteer: vi.fn() };
-  const view = render(<ChatInput {...running} />);
-  expect(document.querySelector('[data-composer-follow-up-hint]')).toBeNull();
-  await act(async () => { h.editor!.commands.setContent('<p>Typing while it runs</p>'); });
-  expect(screen.getByText('newChat.followUpHint.queueDefault')).toBeTruthy();
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.followUpHint.switchToSteer' })); });
-  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
-  expect(screen.getByText('newChat.followUpHint.steerDefault')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'newChat.sendButton.steer' })).toBeTruthy();
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.followUpHint.dismiss' })); });
-  expect(document.querySelector('[data-composer-follow-up-hint]')).toBeNull();
-  view.unmount();
+  const running = { ...companionProps(), sessionId: 'send-delivery-tip', isStreaming: true, onSend, onQueueSteer: vi.fn() };
+  const tip = () => screen.queryByRole('menu', { name: 'newChat.sendDelivery.menuAria' });
+  const draft = async (text: string) => { await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); }); };
+  const modeOf = () => onSend.mock.calls.at(-1)?.[6]?.deliveryMode;
   render(<ChatInput {...running} />);
-  await act(async () => { h.editor!.commands.setContent('<p>Second run</p>'); });
-  expect(document.querySelector('[data-composer-follow-up-hint]')).toBeNull();
-  localStorage.removeItem('chat.followUpHint.dismissed');
-  _resetComposerFollowUpPreferenceForTests();
+  await draft('Typing while it runs');
+  expect(tip()).toBeNull();
+
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'newChat.sendDelivery.switchToSteer' })); });
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(onSend).not.toHaveBeenCalled();
+  expect(tip()).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.steer' })).toBeTruthy();
+
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: /followUp\.options\.queue/ })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(modeOf()).toBe('queue');
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(tip()).toBeNull();
+
+  await draft('Second message');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(modeOf()).toBe('queue');
+
   cleanup();
   render(<ChatInput {...running} onQueueSteer={undefined} />);
-  await act(async () => { h.editor!.commands.setContent('<p>No steer surface</p>'); });
-  expect(document.querySelector('[data-composer-follow-up-hint]')).toBeNull();
+  await draft('No steer surface');
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  expect(tip()).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.queue' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3));
+  expect(modeOf()).toBe('queue');
 });

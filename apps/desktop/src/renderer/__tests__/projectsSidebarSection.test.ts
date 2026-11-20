@@ -53,10 +53,14 @@ describe('Projects sidebar section', () => {
       "entry.kind !== 'project' || collapsed.has(entry.project.projectKey)",
     );
     expect(projectsSectionSource).toContain('allSessionGroupsCollapsed');
-    // 平铺时来源标签要覆盖从项目摊出来的会话,不能只喂 dialogues。
+    // task-inbox.md：收件箱候选现在也在普通列表中保持订阅，不能抢占普通列表的来源标签。
+    // 保留已有 guard 接线契约：普通列表覆盖项目、对话和未分类；只有收件箱模式用 inboxSessions。
     expect(projectsSectionSource).toContain('flattenedSessionsForSourceLabels');
     expect(projectsSectionSource).toContain(
-      '[...projects.flatMap((project) => project.sessions), ...dialogues]',
+      "if (taskListMode === 'inbox' && inboxSessions) return inboxSessions",
+    );
+    expect(projectsSectionSource).toContain(
+      '[...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified]',
     );
   });
 

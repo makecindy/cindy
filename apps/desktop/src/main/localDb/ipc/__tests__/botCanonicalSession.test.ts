@@ -30,7 +30,8 @@ import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosav
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
+import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
@@ -155,6 +156,7 @@ vi.mock('electron', () => ({
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: (() => {
     let current: { key: string; client: {
+      readonly drizzle: typeof h.db;
       tx: (name: string, args: unknown) => Promise<unknown>;
       query: (sql: string, params: unknown[]) => Promise<unknown[]>;
     } } | null = null;
@@ -162,6 +164,7 @@ vi.mock('../../client/current', () => ({
       if (!current || current.key !== h.ownerScopeKey) current = {
         key: h.ownerScopeKey,
         client: {
+          get drizzle() { return h.db; },
           tx: (name, args) => h.tx!(name, args),
           query: async (sql, params) => h.sqlite!.prepare(sql).all(...params),
         },
@@ -518,8 +521,9 @@ async function invoke(channel: string, body: unknown): Promise<any> {
 const capabilityDeps = {
   getMaker, getPluginRegistry, isBotToolsetAvailable,
   resolveBotAgentKind: async (): Promise<AgentKind | null> => 'pi',
-  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: AgentKind; remoteHostId?: string }) => buildBotMcpCatalog({
-    agentKind, remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
+  // Same narrowing as the production wiring (maker-host/index.ts): Bot catalogs are built-in only.
+  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: EngineKind; remoteHostId?: string }) => buildBotMcpCatalog({
+    agentKind: requireBuiltinAgentKind(agentKind, 'teammate tools'), remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
     customServers: h.customMcpConfigs.map((config) => ({ ...config, updatedAt: 1 })),
   }),
 };
@@ -771,6 +775,30 @@ describe('Bot canonical Session lifecycle', () => {
     expect(source).not.toHaveProperty('capabilities');
     expect(source).not.toHaveProperty('sessions');
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).toContain(created.id);
+    // Inbox (2026-11-20): the snooze lives on the conversation's Session; both the roster source
+    // and the local profile must mirror it, and it is absent while there is no conversation.
+    const unset = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+    expect(source?.inboxSnooze).toEqual(unset);
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_until = 3000, snoozed_at = 1000, user_send_at = 2000 WHERE id = ?').run(canonical.session.id);
+    const snoozed = { snoozedUntil: new Date(3000).toISOString(), snoozedAt: new Date(1000).toISOString(), userSendAt: new Date(2000).toISOString() };
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual(snoozed);
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze).toEqual(snoozed);
+    // A message another task sends with a tool does not move the Session's userSendAt; the
+    // newest message still counts as input, so the snoozed teammate comes back for it.
+    await createMessage(canonical.session.id, { clientId: 'from-a-task', role: 'user', content: 'Please get a decision', createdAt: 5000 });
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual({ ...snoozed, userSendAt: new Date(5000).toISOString() });
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(5000).toISOString());
+    // Regression #11623: a reply starts before snoozing and seals afterwards. Its
+    // createdAt stays fixed, but the completed turn must wake both local and remote inboxes.
+    await createMessage(canonical.session.id, { clientId: 'streamed-reply', role: 'assistant', content: 'Decision ready', createdAt: 6000 });
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_at = 7000, snoozed_until = 12000, active_turn_started_at = 5500, last_turn_ended_at = 8000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(8000).toISOString());
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(8000).toISOString());
+    // Starting another turn without a new visible reply cannot lend its end time to old text.
+    h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = 9000, last_turn_ended_at = 10000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(6000).toISOString());
+    const bare = await invoke('local-db:bots:create', { id: 'no-chat-yet', name: 'Quiet', identitySource: '', capabilities: { permissions: 'auto' } });
+    expect(await getBotRemoteResourceSource(bare.id)).not.toHaveProperty('inboxSnooze');
     h.sqlite!.prepare('UPDATE bot_profiles SET hidden_at = 1 WHERE id = ?').run(created.id);
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });
@@ -2454,6 +2482,24 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
+    h.sqlite!.exec("CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT); INSERT INTO bot_group_members VALUES ('room','bot-1')");
+    const lane = { botId: 'bot-1', groupId: 'room', title: 'Group', chatAccess: { mode: 'owner' as const, revision: 1 } };
+    const read = (id: string) => h.sqlite!.prepare('SELECT project_dir, working_dir, workspace_kind, status FROM sessions WHERE id = ?').get(id);
+    const first = await ensureBotGroupLaneSession({ ...lane, projectDir: '/development' });
+    if (!first.ok) throw new Error(first.message);
+    const followup = await ensureBotGroupLaneSession({ ...lane, projectDir: '/buddy', continueConversation: true }, async dir => dir);
+    expect(followup).toMatchObject({ sessionId: first.sessionId, created: false });
+    const next = await ensureBotGroupLaneSession({ ...lane, continueConversation: true }, async () => null);
+    if (!next.ok) throw new Error(next.message);
+    expect(read(first.sessionId)).toMatchObject({ status: 'archived' });
+    expect(read(next.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: null });
+    const chat = await ensureBotGroupLaneSession({ ...lane, chatAccess: { mode: 'chat', revision: 2 }, projectDir: '/development' });
+    if (!chat.ok) throw new Error(chat.message);
+    expect(read(chat.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: '/development',
+      working_dir: expect.stringContaining('chat-workspaces') });
+  });
+
   it('resolves Bot history ids in main and never accepts a renderer-owned search scope', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
@@ -2586,6 +2632,8 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'ROOT_UNAVAILABLE' });
     const first = await topicInvoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
     expect(first).toMatchObject({ ok: true, created: true });
+    expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(first.sessionId))
+      .toEqual({ title: 'Plan the launch post' });
     await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
     const canonical = h.sqlite!.prepare('SELECT working_dir AS workingDir, permission_mode AS permissionMode FROM sessions WHERE id = ?')
@@ -2615,12 +2663,19 @@ describe('Bot canonical Session lifecycle', () => {
 
     // The topic's model context names its root; a rewound root is reported as unavailable, not guessed.
     const { readBotDmThreadContextNote } = await import('../../../maker-ipc/botDmThreadContext');
-    await expect(readBotDmThreadContextNote(first.sessionId)).resolves.toContain('Plan the launch post');
+    expect((await readBotDmThreadContextNote(first.sessionId))?.text).toContain('Plan the launch post');
     await expect(readBotDmThreadContextNote(chatId)).resolves.toBeNull();
+    const rootImage = `xdt-image://${chatId}/plan.png`;
+    h.sqlite!.prepare("UPDATE messages SET content = ? WHERE id = 'm-root'")
+      .run(JSON.stringify({ images: [{ url: rootImage, originalName: 'plan.png' }] }));
+    expect(await readBotDmThreadContextNote(first.sessionId)).toMatchObject({
+      sourceSessionId: chatId, imageUrls: [rootImage], text: expect.stringContaining('plan.png'),
+    });
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-root'").run();
     const note = await readBotDmThreadContextNote(first.sessionId);
-    expect(note).toContain('不可用');
-    expect(note).not.toContain('Plan the launch post');
+    expect(note?.text).toContain('不可用');
+    expect(note?.imageUrls).toEqual([]);
+    expect(note?.text).not.toContain('Plan the launch post');
   });
 
   it('gives the companion the quoted message of a quote reply, re-read from its own chat', async () => {
@@ -2634,23 +2689,56 @@ describe('Bot canonical Session lifecycle', () => {
     const sent = (replyQuote: unknown) => JSON.stringify({ text: 'Why Friday?', images: [], files: [], replyQuote });
     // The original comes from the chat itself; the excerpt the renderer sent is display only.
     const note = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: 'forged' }));
-    expect(note).toContain('Ship the launch post on Friday.');
-    expect(note).not.toContain('forged');
+    expect(note?.text).toContain('Ship the launch post on Friday.');
+    expect(note?.text).not.toContain('forged');
     await expect(readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'system', excerpt: '' }))).resolves.toBeNull();
     await expect(readReplyQuoteNote(chatId, JSON.stringify({ text: 'no quote', images: [], files: [] }))).resolves.toBeNull();
     // A quote that points elsewhere or at a rewound row says the original is unavailable.
-    await expect(readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))
-      .resolves.toContain('不可用');
+    expect((await readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))?.text)
+      .toContain('不可用');
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-quoted'").run();
     const rewound = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' }));
-    expect(rewound).toContain('不可用');
-    expect(rewound).not.toContain('Ship the launch post');
+    expect(rewound?.text).toContain('不可用');
+    expect(rewound?.text).not.toContain('Ship the launch post');
     // An owner message with only an attachment is still there, not "unavailable".
     h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: 'x', originalName: 'chart.png' }], files: [] }), 2_000);
+      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: `xdt-image://${chatId}/chart.png`, originalName: 'chart.png' }], files: [] }), 2_000);
     const imageOnly = await readReplyQuoteNote(chatId, sent({ clientId: 'image-1', role: 'user', excerpt: 'chart.png' }));
-    expect(imageOnly).toContain('chart.png');
-    expect(imageOnly).not.toContain('不可用');
+    expect(imageOnly?.text).toContain('chart.png');
+    expect(imageOnly?.text).not.toContain('不可用');
+    const { prependPrivateChatContext } = await import('../../../maker-ipc/privateChatContext');
+    const path = join(h.userDataDir, 'chart.png');
+    writeFileSync(path, Buffer.from('image fixture'));
+    const url = `xdt-image://${chatId}/chart.png`;
+    const image = { type: 'image', path, mimeType: 'image/png', managedUrl: url };
+    const prepare = vi.fn(async () => ({ type: 'user' as const, content: [image] }));
+    const wire = await prependPrivateChatContext('Explain the chart', imageOnly!, chatId, prepare);
+    expect(prepare).toHaveBeenCalledWith(chatId, { type: 'user', content: [{ type: 'image', path: url }] });
+    expect(wire).toMatchObject({ content: [expect.objectContaining({ type: 'text' }), { type: 'text', text: 'Explain the chart' }, image] });
+    prepare.mockClear();
+    const denied = await prependPrivateChatContext('why?', {
+      ...imageOnly!, imageUrls: ['xdt-image://another-session/chart.png', '/tmp/chart.png'],
+    }, chatId, prepare);
+    expect(denied).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await prependPrivateChatContext({ type: 'user', content: [image] }, imageOnly!, chatId, prepare))
+      .toMatchObject({ content: [expect.objectContaining({ type: 'text' }), image] });
+    expect(prepare).not.toHaveBeenCalled();
+    // A blob visible to this account needs a grant from the selected original session.
+    const { recordBlob } = await import('../../../cindy-media/ledger');
+    const hash = 'f'.repeat(64);
+    const managedUrl = `cindy-media://blobs/${hash}.png`;
+    const context = { ...imageOnly!, imageUrls: [managedUrl] };
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare)).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    await recordBlob({ hash, ext: 'png', mimeType: 'image/png', bytes: 13 }, context.owner.client.drizzle);
+    h.sqlite!.prepare('INSERT INTO media_refs (id, hash, ref_kind, ref_id, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('quoted-chart', hash, 'session-attachment', chatId, Date.now());
+    prepare.mockResolvedValue({ type: 'user', content: [{ ...image, managedUrl }] });
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare))
+      .toMatchObject({ content: [expect.anything(), expect.anything(), { type: 'image', managedUrl }] });
+    h.ownerScopeKey = 'other';
+    await expect(prependPrivateChatContext('why?', context, chatId, prepare)).rejects.toThrow('OWNER_CHANGED');
   });
 
   it('records runtime preparation separately from successful Agent startup', async () => {
@@ -2908,7 +2996,9 @@ describe('Bot canonical Session lifecycle', () => {
         inputs.push({ kind: 'toolsets', remoteHostId: input.remoteHostId });
         return [{
           id: 'xdt_helper', name: 'Helper', essential: true,
-          available: helperEnabled && isBotToolsetAvailableOnTarget({ ...input, toolsetId: 'xdt_helper' }),
+          available: helperEnabled && isBotToolsetAvailableOnTarget({
+            ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools'), toolsetId: 'xdt_helper',
+          }),
         }];
       },
     });
@@ -3377,8 +3467,8 @@ describe('Bot canonical Session lifecycle', () => {
       },
     }, { persistSnapshot: false });
 
-    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
-    expect(snapshot?.resolutionStatus).toBe('applied');
+    // The session starts with a degraded snapshot. No individual skill was identified as missing.
+    expect(snapshot?.resolutionStatus).toBe('degraded');
     expect(snapshot?.unavailableSkills).toEqual([]);
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
   });
@@ -3742,7 +3832,7 @@ describe('Bot canonical Session lifecycle', () => {
       const snapshot = await hydrateBotProfileRuntime(opts, {
         listMcpServers: async ({ agentKind: actualRoute, remoteHostId }) => {
           const catalog = buildBotMcpCatalog({
-            agentKind: actualRoute, remoteHostId, providers, builtinNames: [], customServers: configs,
+            agentKind: requireBuiltinAgentKind(actualRoute, 'teammate tools'), remoteHostId, providers, builtinNames: [], customServers: configs,
           });
           expect(JSON.stringify(catalog)).not.toMatch(/FAKE_SECRET|FAKE_TOKEN|example.invalid|Authorization/);
           return catalog;

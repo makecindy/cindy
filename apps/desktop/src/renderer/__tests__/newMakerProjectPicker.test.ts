@@ -581,7 +581,7 @@ describe('Shared create project picker', () => {
     // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
     expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
     expect(chatInputSource).toContain(
-      'kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
+      '(!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
     );
   });
 
@@ -1267,12 +1267,12 @@ describe('Shared create project picker', () => {
    * 它真正依赖的那一半(设备 / 项目)。新增路径时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 七条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
+    // 八条路径:上次创建目标、设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
     // “对话”分组导航请求，以及通用入口在导航请求后或直接挂载时预填默认目录。
     // 声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
     // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(7);
+    expect(calls.length).toBe(8);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
@@ -1470,7 +1470,8 @@ describe('Shared create project picker', () => {
   // 会被静默丢掉、或撞上对端同名的无关目录 —— chip 显示的并不是真实授予的上下文。
   it('hides the reference-directory picker on remote drafts', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
+      // 选着插件引擎时同样不给入口：引擎只拿到任务工作目录。
+      'onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}',
     );
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
@@ -1505,17 +1506,18 @@ describe('Shared create project picker', () => {
   // the executing side explicitly supports the setter.
   it('hides remote add while preserving capability-gated writable grant revocation', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+      'isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine\n                        ? undefined\n                        : handleWritableDirsChange',
     );
     expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(
       'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
     );
+    // 插件引擎任务只拿到任务工作目录，不给可写目录入口。
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirsChange : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
-      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+      'writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirRemove : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
@@ -1792,9 +1794,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
     // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
-    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 四条都用 selection.modelId(wire id),
+    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 上述路径和本次替代模型都用 selection.modelId(wire id),
     // 一处都不能换成行 id，否则目标引擎无法解析首条请求。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(4);
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(6);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

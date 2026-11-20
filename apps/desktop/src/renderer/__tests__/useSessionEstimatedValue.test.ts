@@ -56,7 +56,7 @@ if (!GPT_DETAILS) {
 describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
   it('preserves DB-backed costs before chat history has loaded', () => {
     const current = new Map([['persisted', usdEstimate(0.12)]]);
-    const result = syncEstimatedValueCostsFromStoreSnapshot(current, new Set(), {
+    const result = syncEstimatedValueCostsFromStoreSnapshot(current, [], {
       messages: [],
       historyLoaded: false,
       hasMoreMessages: true,
@@ -71,31 +71,54 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
         ['persisted', usdEstimate(0.12)],
         ['visible', usdEstimate(0.03)],
       ]),
-      new Set(['visible']),
+      ['visible'],
       { messages: [], historyLoaded: true, hasMoreMessages: false },
     );
 
     expect(result?.costs.size).toBe(0);
-    expect(result?.storeClientIds.size).toBe(0);
+    expect(result?.storeClientIds).toHaveLength(0);
   });
 
-  it('removes stale visible ids while keeping DB-only hidden history costs', () => {
+  // Regression: a long task's "本对话" total jumped between the full history
+  // value and only the loaded page whenever the chat window trimmed or reseeded
+  // its oldest rows. Rows leaving the top of the window still exist in the DB;
+  // only rows removed from inside the window (delete / rewind / edit) are gone.
+  it.each([
+    {
+      name: 'keeps history costs for rows that only scrolled out of the loaded window',
+      next: ['middle', 'latest', 'new-visible'],
+      kept: ['hidden-history', 'oldest', 'middle', 'latest', 'new-visible'],
+      removed: [],
+    },
+    {
+      name: 'keeps every history cost when the loaded window is replaced by a newer page',
+      next: ['new-visible'],
+      kept: ['hidden-history', 'oldest', 'middle', 'latest', 'new-visible'],
+      removed: [],
+    },
+    {
+      name: 'removes rows deleted from inside the loaded window',
+      next: ['oldest', 'latest', 'new-visible'],
+      kept: ['hidden-history', 'oldest', 'latest', 'new-visible'],
+      removed: ['middle'],
+    },
+  ])('$name', ({ next, kept, removed }) => {
+    const messages = next.map((clientId) =>
+      clientId === 'new-visible' ? assistantMessage(clientId, 0.04) : assistantMessage(clientId, 0.03),
+    );
     const result = syncEstimatedValueCostsFromStoreSnapshot(
       new Map([
         ['hidden-history', usdEstimate(0.12)],
-        ['old-visible', usdEstimate(0.03)],
+        ['oldest', usdEstimate(0.03)],
+        ['middle', usdEstimate(0.03)],
+        ['latest', usdEstimate(0.03)],
       ]),
-      new Set(['old-visible']),
-      {
-        messages: [assistantMessage('new-visible', 0.04), assistantMessage('visible-no-cost')],
-        historyLoaded: true,
-        hasMoreMessages: true,
-      },
+      ['oldest', 'middle', 'latest'],
+      { messages: [...messages, assistantMessage('visible-no-cost')], historyLoaded: true, hasMoreMessages: true },
     );
 
-    expect(result?.costs.get('hidden-history')?.amount).toBe(0.12);
-    expect(result?.costs.get('new-visible')?.amount).toBe(0.04);
-    expect(result?.costs.has('old-visible')).toBe(false);
+    expect([...(result?.costs.keys() ?? [])].sort()).toEqual([...kept].sort());
+    for (const clientId of removed) expect(result?.costs.has(clientId)).toBe(false);
     expect(result?.costs.has('visible-no-cost')).toBe(false);
   });
 });

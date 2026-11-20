@@ -312,6 +312,23 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run Host regressions
         run: pnpm --filter @cindy/host test
+      # Most acceptance scripts in apps/host/scripts need native engines or a browser and
+      # are not run here. Load each one's imports without running it, so a shared desktop
+      # module that starts importing Electron fails here rather than on the next manual run.
+      - name: Load Host acceptance scripts (imports only)
+        working-directory: apps/host
+        run: node scripts/check-e2e-imports.mjs
+      # These three need no engine, browser, account or network.
+      - name: Host acceptance - provider configuration
+        working-directory: apps/host
+        run: node --import tsx --import ./src/loaders/register-raw.mjs scripts/provider-config.e2e.mjs
+      - name: Host acceptance - IPC route
+        run: pnpm --filter @cindy/host test:ipc-route
+      # Not on Windows: stopping the background Host is refused there (ECONNREFUSED in the
+      # final stop), a recorded baseline gap (docs/host/personal-migration-release-table.md).
+      - name: Host acceptance - lifecycle
+        if: matrix.os != 'windows-latest'
+        run: pnpm --filter @cindy/host test:lifecycle
       # Types are platform independent: once is enough. A shared desktop body that
       # gains a port wired only in the desktop assembly passes the desktop checks
       # and fails here instead of at runtime in the Host.

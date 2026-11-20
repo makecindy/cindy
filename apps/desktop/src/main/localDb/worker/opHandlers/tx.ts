@@ -1,3 +1,4 @@
+import { PROJECT_ARCHIVE_GUARD_SQL, type ProjectArchiveGuard } from '../../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -5,6 +6,7 @@ import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
+import { writeModelUsage, type ModelUsageWrite } from './modelUsageTx.js';
 import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
@@ -74,6 +76,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'usage.recordModelUsage':
+      return db.transaction(() => writeModelUsage(db, txArgs as ModelUsageWrite))();
     case 'usage.recordPiUsage':
       return recordPiUsage(db, txArgs as import('./piUsageTx.js').PiUsageWrite[]);
     case 'chatCache.execute':
@@ -901,7 +905,7 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
       LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
-    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    const replace = existing && existing.sessionId === p.replaceSessionId;
     if (existing && !replace) return { sessionId: existing.sessionId, created: false };
     if (existing) {
       // The group's project folder changed on this computer: the lane moves with it.
@@ -2180,6 +2184,10 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     }> = [];
     const now = Date.now();
     for (const sessionId of sessionIds) {
+      const guard = payload.projectGuard as ProjectArchiveGuard | undefined;
+      if (guard && !db.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+        sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
+      )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
       const existing = selectSession.get(sessionId);
       if (!existing) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
@@ -2240,6 +2248,10 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
   const status = expectString(payload.status, 'status');
   if (status !== 'archived' && status !== 'deleted') throw invalidArgs('invalid terminal status: ' + status);
   const transaction = db.transaction((): SessionsSetTerminalStatusResult => {
+    const guard = payload.projectGuard as ProjectArchiveGuard | undefined;
+    if (guard && !db.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+      sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, 'active',
+    )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
     if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
       || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
       || !db.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
