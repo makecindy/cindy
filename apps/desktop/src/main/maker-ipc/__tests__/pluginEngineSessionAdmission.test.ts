@@ -4,8 +4,8 @@
  * 测试价值
  * - 生产入口与可观察结果：Desktop 的任务开启准入(register.ts 的 setSessionOpeningModelAdmission)对
  *   `agent_kind = 'acp'` 调用的 admitPluginEngineSession；看准入后写进任务行的字段与拒绝原因。
- * - 规则依据：设计「任务记录」与「第一期明确不支持」：插件引擎任务只在本机、只用本机此刻提供的引擎，
- *   不回落到内置引擎。
+ * - 规则依据：设计「任务记录」「第一期明确不支持」与「第三期：自己的其他电脑使用」：引擎是本机此刻提供的，
+ *   或自己账号另一台电脑上的；SSH 与别人分享的供应商不行；不回落到内置引擎。
  * - 现有覆盖缺口：2026-11-18 实机新建插件引擎任务被内置模型目录拒绝(「Agent acp 当前不可用」)，
  *   此前没有任何测试走到这一步。
  * - 最小失败输入：可用引擎 + model 'default' 被拒；不可用 / 已卸载 / 指向另一台电脑的引擎被放行。
@@ -77,10 +77,25 @@ describe('opening a task on a plugin engine', () => {
       'DeepSeek Harness 当前不可用：Run npm i -g @deepseek-ai/dsh'],
     ['the plugin was turned off or removed', body(), [], '提供这个引擎的插件已停用或卸载'],
     ['no engine id', body({ providerId: 'anthropic' }), [harness({ state: 'available' })], '缺少引擎标识'],
-    ['another computer', body({ agentDeviceId: 'mac-mini' }), [harness({ state: 'available' })], '只能在本机运行'],
-    ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '只能在本机运行'],
+    ['a provider someone shared', body({ agentDeviceId: 'share:6f1c' }), [harness({ state: 'available' })], '不提供插件引擎'],
+    ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '不能在 SSH 工作区里运行'],
   ] as const)('refuses with a reason when %s', (_label, input, harnesses, message) => {
     expect(() => admitPluginEngineSession(input, harnesses)).toThrow(message);
+  });
+
+  // 第三期(2026-11-20)：引擎可以是自己账号另一台电脑上的。这台不必装这个插件，所以不按本机的引擎列表拒绝
+  // (那台是否开放它，由那台在任务启动时核对)；分享来的供应商不是自己的电脑，上面的用例仍然拒绝。
+  // 最小失败输入：本机没有任何插件引擎、agentDeviceId 指向自己的另一台电脑。
+  it('admits an engine of another computer of the same account without needing the plugin here', () => {
+    expect(admitPluginEngineSession(body({ agentDeviceId: 'mac-mini', model: '', effort: 'high', fastMode: true }), [])).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+      agentDeviceId: 'mac-mini',
+      model: 'default',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(admitPluginEngineSession(body({ agentDeviceId: 'mac-mini', effort: 'turbo' }), []).effort).toBe('');
   });
 });
 

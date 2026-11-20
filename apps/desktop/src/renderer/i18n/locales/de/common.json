@@ -8553,6 +8553,13 @@
         "openInSidebar": "In der Seitenleiste öffnen",
         "panelPageHosted": "Öffnet sich über die Plugin-Seite · schließt sich beim Verlassen",
         "panelNone": "Dieses Plugin hat kein Panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: Remote-Nutzung erlauben",
+          "description": "Wenn aktiviert, können deine anderen Computer Aufgaben mit dieser Engine ausführen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent. Dateien und Befehle bleiben auf dem Computer, auf dem die Aufgabe liegt.",
+          "unsupported": "Dieses Plugin unterstützt die Nutzung seiner Engine von anderen Computern aus noch nicht.",
+          "remoteControlOff": "Dieser Computer ermöglicht noch keine Fernsteuerung, sodass andere Computer diese Engine nicht nutzen können.",
+          "ariaLabel": "Deinen anderen Computern die Nutzung von {{engine}} erlauben"
+        },
         "githubRelease": {
           "title": "Plugin-Updates",
           "installed": "Installiert {{version}}",
@@ -15907,6 +15914,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Dieser Computer kann den bisherigen Zustand der Sitzung nicht wiederherstellen. Wähle ein Modell von einem anderen Computer oder Anbieter, um den Kontext zu übergeben und fortzufahren. Bestehende Nachrichten bleiben erhalten.",
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "Die Plugin-Engine konnte das vorherige Gespräch nicht wiederherstellen. Deine Nachrichten bleiben erhalten. Wähle eine andere Engine oder starte eine neue Aufgabe.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Diese Plugin-Engine kann die Tools des Computers, auf dem die Aufgabe liegt, nicht nutzen und kann die Aufgabe daher noch nicht von einem anderen Computer aus ausführen. Wähle eine andere Engine oder ein anderes Modell.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Diese Plugin-Engine kann nur Aufgaben auf diesem Computer ausführen. Andere Computer können sie noch nicht nutzen.",
       "REMOTE_AGENT_RESUME_REJECTED": "Der Computer, auf dem das Modell läuft, kann diese Sitzung nicht fortsetzen. Erstelle über die Sitzungsliste eine neue Sitzung und kopiere die benötigten Inhalte dorthin. Die ursprüngliche Sitzung und die Nachrichten in der Warteschlange bleiben erhalten.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort beim Anbieter „Remote-Nutzung erlauben“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",

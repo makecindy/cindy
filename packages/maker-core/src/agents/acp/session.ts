@@ -83,6 +83,12 @@ export interface OpenAcpSessionOptions {
   cwd: string;
   clientInfo: AcpClientInfo;
   mcpServers?: readonly AcpMcpServer[];
+  /**
+   * Names in `mcpServers` the task cannot run without (for a task whose files are on another
+   * computer, the server that replaces the agent's own file and command tools). An agent that
+   * cannot connect to one of them is refused before any session is created.
+   */
+  requiredMcpServers?: readonly string[];
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
   model?: string;
@@ -116,6 +122,14 @@ export class AcpAuthRequiredError extends Error {
   constructor(readonly authMethods: readonly AcpAuthMethod[]) {
     super('The agent needs you to sign in before it can start a session');
     this.name = 'AcpAuthRequiredError';
+  }
+}
+
+/** The agent cannot connect to an MCP server this task depends on. */
+export class AcpRequiredMcpUnavailableError extends Error {
+  constructor(readonly servers: readonly string[]) {
+    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    this.name = 'AcpRequiredMcpUnavailableError';
   }
 }
 
@@ -196,6 +210,8 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
+    if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;

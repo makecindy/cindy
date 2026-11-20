@@ -154,7 +154,7 @@ import type {
   PluginEngineSessionPickerProps,
   PluginEnginesPickerProps,
 } from './PluginEnginesSection';
-import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES } from '@/lib/pluginEngineSelection';
+import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES, isSamePluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
   enqueueEffortChange,
@@ -1463,7 +1463,8 @@ export function ChatInput({
     if (pluginEngineSession) return pluginEngineSession.engine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
     const active = !sessionId ? pluginEngines?.active : null;
     if (!active) return undefined;
-    return pluginEngines?.engines.find((engine) => engine.providerId === active.providerId)?.permissionModes
+    // 同一个插件可以装在几台电脑上：按「引擎 + 所在电脑」找，不拿本机的同名引擎顶替另一台的。
+    return pluginEngines?.engines.find((engine) => isSamePluginEngineChoice(engine, active))?.permissionModes
       ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
   }, [pluginEngineSession, pluginEngines, sessionId]);
   // Keep the existing draft/editor mounted during a companion call, but reuse
