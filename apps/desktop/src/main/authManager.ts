@@ -3569,6 +3569,7 @@ async function runAuthRefreshWithReplacementRetry(
     realm: AuthRegion;
     withTransientRetry: boolean;
     expectedActiveVaultAccountKey?: string;
+    rejectedRefreshTokens?: ReadonlySet<string>;
     rateLimitDelayMs?: number;
     onFailure?: (info: RefreshFailureInfo) => void;
   },
@@ -3615,13 +3616,15 @@ async function runAuthRefreshWithReplacementRetry(
       return result;
     },
     readLatestStoredTokens: () => {
-      if (!expectedActiveVaultAccountKey) return readStoredRefreshTokenCandidates(opts.realm);
-      const vault = readAuthAccountVault();
-      const resource = vault.activeAccountKey === expectedActiveVaultAccountKey
-        ? vault.resources[expectedActiveVaultAccountKey] : undefined;
-      // The recursive cold-start path has already selected the authoritative
-      // owner. Do not chase its rejected compatibility projection again.
-      return [resource?.realm === opts.realm ? resource.refreshToken : null];
+      if (expectedActiveVaultAccountKey) {
+        const vault = readAuthAccountVault();
+        if (vault.activeAccountKey !== expectedActiveVaultAccountKey) return [];
+      }
+      // Keep every source: a rollback build may rotate only its compatibility
+      // record. Reject known stale generations, not the source that held them.
+      return readStoredRefreshTokenCandidates(opts.realm).filter(
+        (token) => !token || !opts.rejectedRefreshTokens?.has(token),
+      );
     },
     transientRetry: opts.withTransientRetry
       ? {
@@ -5088,6 +5091,13 @@ async function runColdStartRefreshFlow(
 ): Promise<AuthState> {
   const attemptedOwnershipTokens = new Set(ownershipRecovery.attemptedTokens);
   attemptedOwnershipTokens.add(storedToken);
+  if (ownershipRecovery.expectedActiveVaultAccountKey) {
+    // This entry already selected the vault over its pre-existing projections.
+    // Ignore those old values, while still admitting later compatibility writes.
+    for (const token of readStoredRefreshTokenCandidates(storedRealm)) {
+      if (token && token !== storedToken) attemptedOwnershipTokens.add(token);
+    }
+  }
   const epochAtStart = authStateEpoch;
   let expectedActiveVaultAccountKey = ownershipRecovery.expectedActiveVaultAccountKey;
   /**
@@ -5168,11 +5178,13 @@ async function runColdStartRefreshFlow(
         realm: storedRealm,
         withTransientRetry: false,
         expectedActiveVaultAccountKey,
+        rejectedRefreshTokens: attemptedOwnershipTokens,
       });
       // Replacement recovery may have consumed a newer credential. Keep this
       // attempt's deadline and failure history attached to the actual request,
       // including when a paused flow resumes from that credential on disk.
       expectedActiveVaultAccountKey = run.expectedActiveVaultAccountKey ?? expectedActiveVaultAccountKey;
+      for (const token of run.rejectedTokens) attemptedOwnershipTokens.add(token);
       storedToken = run.requestedToken;
       retry.refreshToken = storedToken;
       // A successful rotation must become durable even when publication was

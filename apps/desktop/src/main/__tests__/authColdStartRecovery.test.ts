@@ -215,7 +215,7 @@ function setup(random = 0) {
     writeResourceSessionToVault,
     isDefinitiveRefreshError,
     readAuthAccountVault: () => vault,
-    readSafe: () => null,
+    readSafe: vi.fn((): string | null => null),
     readPersistedRefreshToken: (realm: string) => saved.session?.realm === realm ? saved.session.refreshToken : null,
     writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
@@ -1241,6 +1241,29 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     expect(fresh.request).toHaveBeenCalledWith('test-newer-projection', 'global');
     expect(fresh.state().isAuthenticated).toBe(true);
     expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+  });
+
+  it.each(['projection', 'legacy'] as const)('follows a new %s rotation written during the selected vault request', async target => {
+    const fresh = setup();
+    fresh.saved.session.refreshToken = 'test-stale-projection';
+    fresh.useProductionCandidates();
+    fresh.request.mockImplementation(async (token: unknown) => {
+      if (token === 'test-refresh') {
+        if (target === 'projection') fresh.saved.session.refreshToken = 'test-new-compatibility';
+        else fresh.deps.readSafe.mockReturnValue('test-new-compatibility');
+      }
+      if (token === 'test-new-compatibility') return fresh.ok;
+      return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
+    });
+    const startup = fresh.start();
+    await vi.advanceTimersByTimeAsync(1_250);
+    await startup;
+    expect(fresh.state().isAuthenticated).toBe(true);
+    expect(fresh.request.mock.calls.map(([token]: unknown[]) => token)).toEqual([
+      'test-stale-projection', 'test-refresh', 'test-new-compatibility',
+    ]);
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+    expect(fresh.clear).not.toHaveBeenCalled();
   });
 
   it.each(['absent', 'stale'] as const)('recovers the authoritative vault account with an %s compatibility projection', async projection => {
