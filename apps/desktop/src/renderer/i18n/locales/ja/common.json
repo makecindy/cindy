@@ -19417,7 +19417,6 @@
       "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
       "savedModelUnavailable": "前回選択したモデルまたはその接続元を利用できません。",
-      "pluginEngineNoWorktree": "プラグインエンジンの Worker は worktree を使えません。worktree のオプションをオフにしてから作成してください。",
       "reselectModel": "モデルを選び直す",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",

@@ -544,6 +544,47 @@ describe('Worker worktree subproject directory', () => {
       }
     },
   );
+
+  it('passes awaitFullCheckout to WorktreeManager when requested and resolves HEAD inside a linked worktree', async () => {
+    const target = path.join(fixture, 'acp-wt');
+    mkdirSync(target, { recursive: true });
+    vi.mocked(createWorktree).mockResolvedValue({
+      ok: true,
+      meta: { path: target, branch: 'cindy/acp', baseRepo: repo },
+    } as never);
+    vi.mocked(awaitBackgroundCheckout).mockReset();
+
+    expect(await createWorkerWorktree('acp-root', alias, 'main', { awaitFullCheckout: true })).toBe(target);
+    expect(createWorktree).toHaveBeenLastCalledWith(
+      { sessionId: 'acp-root', baseRepo: repo, name: '', sourceBranch: 'main' },
+      { trackBackgroundCheckout: true, awaitFullCheckout: true },
+    );
+    expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+
+    // Linked worktree on a different commit than main checkout: explicit HEAD must resolve
+    // the linked worktree's commit SHA rather than passing literal 'HEAD' to baseRepo.
+    const linkedWt = path.join(fixture, 'linked-wt');
+    const gitIn = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    gitIn(repo, 'worktree', 'add', '-b', 'linked-branch', linkedWt, 'HEAD');
+    writeFileSync(path.join(linkedWt, 'linked.txt'), 'linked commit\n');
+    gitIn(linkedWt, 'add', 'linked.txt');
+    gitIn(
+      linkedWt,
+      '-c', 'user.name=Fixture',
+      '-c', 'user.email=fixture@example.invalid',
+      '-c', 'commit.gpgsign=false',
+      'commit', '-m', 'linked commit',
+    );
+    const linkedSha = gitIn(linkedWt, 'rev-parse', 'HEAD');
+    const mainSha = gitIn(repo, 'rev-parse', 'HEAD');
+    expect(linkedSha).not.toBe(mainSha);
+
+    expect(await createWorkerWorktree('acp-linked', linkedWt, 'HEAD', { awaitFullCheckout: true })).toBe(target);
+    expect(createWorktree).toHaveBeenLastCalledWith(
+      { sessionId: 'acp-linked', baseRepo: repo, name: '', sourceBranch: linkedSha },
+      { trackBackgroundCheckout: true, awaitFullCheckout: true },
+    );
+  });
 });
 
 // PR2 unit: validate the tool's optional source before any worktree side effect.
