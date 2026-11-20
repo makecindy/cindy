@@ -74,7 +74,7 @@ const NEW_TAB_GRACE_MS = 5000;
 
 export function SidebarTabWindowLayout() {
   const { t } = useTranslation();
-  const { effectiveLocale, setLocale } = useLocale();
+  const { setDisplayLocale } = useLocale();
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
   useEffect(() => {
@@ -160,11 +160,9 @@ export function SidebarTabWindowLayout() {
 
   useEffect(() => {
     return (
-      api?.onLocaleChanged?.((locale) => {
-        if (locale !== effectiveLocale) setLocale(locale);
-      }) ?? undefined
+      api?.onLocaleChanged?.(setDisplayLocale) ?? undefined
     );
-  }, [api, effectiveLocale, setLocale]);
+  }, [api, setDisplayLocale]);
 
   // 显隐:隐藏时模糊焦点 + 重挂 chrome;显示时同样先模糊,避免继承旧焦点。
   useEffect(() => {

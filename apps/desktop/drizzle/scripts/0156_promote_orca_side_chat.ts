@@ -5,7 +5,10 @@ function run(db: Database.Database): void {
     const columns = db.prepare('SELECT name FROM pragma_table_info(?)').pluck().all(table);
     return names.every(name => columns.includes(name));
   };
-  if (!has('sessions', 'source', 'status') || !has('orca_teams', 'id', 'lead_session_id', 'status')
+  if (has('sessions', 'id') && !has('sessions', 'side_chat_promoted')) {
+    db.exec('ALTER TABLE sessions ADD side_chat_promoted integer DEFAULT false NOT NULL');
+  }
+  if (!has('sessions', 'source', 'status', 'side_chat_promoted') || !has('orca_teams', 'id', 'lead_session_id', 'status')
       || !has('orca_workers', 'team_id')) return;
   db.exec(`
     UPDATE sessions SET side_chat_promoted = 1

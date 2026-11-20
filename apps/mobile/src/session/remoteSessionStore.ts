@@ -1,6 +1,6 @@
 import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
@@ -5409,7 +5409,7 @@ export const remoteSessionStore = {
         : (isTurnStart ? true : current.generationReliable);
       // 速度属于产生它的那一轮：新一轮清掉，没带字段的帧沿用最近一次（含收尾平均）。
       // 标记不可靠又不带速度的帧，表示电脑端撤回了速度（休眠／时钟异常）。
-      const tokenSpeed = readTokenSpeedSnapshot(data?.tokenSpeed)
+      const tokenSpeed = receiveTokenSpeedSnapshot(data?.tokenSpeed, isTurnStart ? undefined : current.tokenSpeed)
         ?? (isTurnStart || data?.generationReliable === false ? undefined : current.tokenSpeed);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流

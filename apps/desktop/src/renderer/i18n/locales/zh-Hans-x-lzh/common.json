@@ -1412,6 +1412,7 @@
     "UPSTREAM_ERROR": "上游服务谬误（5xx），请稍后再试",
     "UPSTREAM_UNREACHABLE": "不能连端点，请察网络与基础 URL",
     "TIMEOUT": "连接逾时，请察网络与基础 URL",
+    "CERT_ERROR": "凭证验证失败，请核基础 URL 主机名与凭证是否相符，并查凭证链及企业 CA 信任设置",
     "UNKNOWN": "未详之谬，请察日志以知其详",
     "upstreamToast": "供方「{{provider}}」请求未成：{{message}}"
   },
@@ -1423,6 +1424,10 @@
     "details": "谬误详情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本地数据库损坏",
+      "description": "检测到本地数据库损坏，已停止访问以保护数据。可重新打开本地数据；若仍失败，请复制技术细节并联系支持人员。请勿覆盖或删除数据库文件。"
+    },
     "schemaLease": {
       "title": "此机数据暂不能启",
       "retry": "重启此机数据",
@@ -2771,9 +2776,7 @@
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
       "analyticsLabel": "使用统计",
-      "analyticsDescription": "助吾等知 Cindy 之启动与留存。所报者为设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登门后兼含君之名籍 ID；不含任何言谈内容、卷或提示词。阖之则即止上报。",
-      "productTokenUsage": "参与模型用量统计",
-      "productTokenUsageHint": "开启后，本机上此账号新增的 token 数按接入来源和模型计数。所属区域汇总后发送至 TapDB。",
+      "analyticsDescription": "启此项，则以匿名代号代账号与设备 ID，察回访之况，汇各模型之用量，以改进本品。君之言谈、卷册与提示词皆不在所报之列。",
       "analyticsEnabledToast": "已启使用统计",
       "analyticsDisabledToast": "已阖使用统计",
       "analyticsSaveFailed": "使用统计之设未能存",
@@ -3676,6 +3679,8 @@
           "edit": "修",
           "editFailed": "请核地址、协议与密钥，再试。",
           "editNote": "密钥留空则沿用已读凭据；改地址或协议，须另填密钥。",
+          "useSavedCredential": "用所存凭证",
+          "confirmDestination": "于此地址用所存 Claude Code 凭证乎？",
           "name": "显示名称",
           "baseUrl": "基础 URL",
           "protocol": "接口协议",
@@ -4384,6 +4389,7 @@
         "authorizedToast": "已登 {{name}}",
         "authorizeFailed": "{{name}} 登录未成，请再试",
         "nameLabel": "显名",
+        "geminiImageKeyNote": "存之，此钥通新连之问答，亦供其后 Gemini 绘图。惟欲绘图，可不择问答模型。",
         "onlyAgentNote": "此供方唯支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无须客户端密钥；Cindy 转发前将除 CLI 之订阅凭证。",
@@ -6776,6 +6782,17 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "traffic": {
+          "title": "本机连线流量",
+          "range": "计量时段",
+          "last5m": "近 5 分钟",
+          "lastHour": "近 1 小时",
+          "lastDay": "近 24 小时",
+          "sent": "所发",
+          "received": "所收",
+          "total": "共计",
+          "scope": "直连、中继之收发量皆为估值，文件直传亦计。寻机广播、另循他途之音像及 HTTP 传输不计。"
         },
         "relayTransport": {
           "udp": "UDP",
@@ -13025,6 +13042,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
+        "audioInputUnavailable": "今所接模型未能直辨其声。可请 Cindy 先录为文字，再续其事。",
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
           "consecutive": "模型连呼同一工具 {{n}} 次，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
@@ -14062,6 +14080,8 @@
         "fastBadge": "疾"
       },
       "source": {
+        "lastConfirmed": "上次重整：{{time}}",
+        "unconfirmed": "模型录未新",
         "unavailable": "模型不可用",
         "reconnect": "重连",
         "manage": "理来源",
@@ -14981,6 +15001,8 @@
     },
     "runningStatus": {
       "currentRate": "近速",
+      "lastRequestRate": "前请均速",
+      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方采样",
       "averageRate": "本轮均速",
       "rateHistory": "生成速率史",
@@ -15130,6 +15152,11 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
+      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
       "precheck": "自动查验暂受阻。",
       "rateLimited": "自动查验暂受阻：请求限流。",
       "pluginMissing": "自动查验暂受阻：「{{name}}」法器未装，装毕自复。",
@@ -16985,6 +17012,12 @@
       "unspecifiedDir": "未定目录"
     },
     "workdirBrowse": {
+      "previewFile": "预览",
+      "filterDirectory": "筛此目录…",
+      "projectTree": "项目树",
+      "systemPreview": "系统预览",
+      "listView": "列表",
+      "gridView": "缩图",
       "backToProjects": "返诸案",
       "switchProject": "易案",
       "activeSessionCount_one": "{{count}} 个活跃差事",
@@ -19349,6 +19382,7 @@
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
       "savedModelUnavailable": "前选模型或其来源今不可用。",
+      "pluginEngineNoWorktree": "法器引擎之 Worker 不可用 worktree，去其勾选而后建之。",
       "reselectModel": "重选模型",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",

@@ -223,8 +223,18 @@ export interface DeviceLinkAgentNetPeerRouteView {
   rttMs: number | null;
 }
 
+export interface LinkTrafficBytes {
+  sent: number;
+  received: number;
+}
+
+export type LinkTrafficTotals = Record<'agent-net' | 'device-link', LinkTrafficBytes>;
+export type LinkTrafficSnapshot = Record<'last5m' | 'lastHour' | 'lastDay', LinkTrafficTotals>;
+
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {
+  /** Local transport counters for this account on this computer. Never sent to peers. */
+  traffic?: LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';

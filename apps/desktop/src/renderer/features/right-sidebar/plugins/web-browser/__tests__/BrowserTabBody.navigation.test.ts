@@ -12,6 +12,7 @@ import {
   registerNativePopupTab,
 } from '../../../lib/nativePopupTabs';
 import { browserWebviewPool } from '../../../lib/browserWebviewPool';
+import * as sidebarTabs from '../../../store';
 import { BrowserTabBody } from '../BrowserTabBody';
 import { useLocalHtmlAutoReload } from '../useLocalHtmlAutoReload';
 
@@ -218,6 +219,37 @@ describe('BrowserTabBody navigation', () => {
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  // #11392: two groups can each have an active tab, but only the focused guest
+  // may receive the host's browser shortcuts.
+  it('ignores browser shortcuts when a different guest has keyboard focus', () => {
+    browserState = makeBrowserState({ canGoBack: true, canGoForward: true });
+    const close = vi.spyOn(sidebarTabs, 'closeTab').mockResolvedValue(undefined);
+    const other = document.createElement('webview') as HTMLElement;
+    try {
+      render(renderBrowserTab('https://example.com/'));
+      const command = vi.mocked(window.electronAPI.onRsbBrowserCommand).mock.lastCall![0];
+      other.tabIndex = 0;
+      document.body.appendChild(other);
+      other.focus();
+      act(() => vi.mocked(window.electronAPI.onRsbBrowserFocusUrlBar).mock.lastCall![0]());
+      expect(document.activeElement).toBe(other);
+      act(() => command({ command: 'close-tab' }));
+      act(() => command({ command: 'reload' }));
+      act(() => command({ command: 'go-back' }));
+      act(() => command({ command: 'go-forward' }));
+      expect(close).not.toHaveBeenCalled();
+      expect(browserState.reload).not.toHaveBeenCalled();
+      expect(browserState.goBack).not.toHaveBeenCalled();
+      expect(browserState.goForward).not.toHaveBeenCalled();
+      other.blur();
+      act(() => command({ command: 'close-tab' }));
+      expect(close).toHaveBeenCalledWith('session-a', 'tab-browser');
+    } finally {
+      other.remove();
+      close.mockRestore();
+    }
   });
 
   it('hides a native popup view while the renderer more-menu portal is open', () => {

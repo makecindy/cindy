@@ -176,6 +176,7 @@ interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 interface DeviceLinkPeerLinksSnapshot {
+  traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
@@ -492,6 +493,8 @@ interface AuthUser {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 
@@ -1232,6 +1235,8 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
+  restoreDisplayLanguage?: (legacy: import('../shared/locale').LocalePreference | null) => Promise<import('../shared/locale').LocalePreference | null>;
+  saveDisplayLanguage?: (preference: import('../shared/locale').LocalePreference, onlyIfUnset?: boolean) => Promise<boolean>;
   onLocaleChanged?: (
     cb: (locale: import('../shared/locale').SupportedLocale) => void,
   ) => () => void;
@@ -2388,7 +2393,6 @@ interface ElectronAPI {
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
-  setProductTokensEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
@@ -3539,6 +3543,8 @@ interface ElectronAPI {
 
   /** 图片 lightbox 字节层:http / cindy-remote-media 源取字节(标注/位图复制)。 */
   readImageBytes: (params: { url: string }) => Promise<{ base64: string; mimeType: string }>;
+
+  openSystemPreview: (filePath: string) => Promise<boolean>;
 
   /**
    * 附件卡缩略图:本机文件走系统缩略图服务(macOS QuickLook / Windows Shell)。
@@ -5072,13 +5078,14 @@ interface ElectronAPI {
 
   // ── chat-data-localization (M-FE2) — local SQLite IPC bridge ──
   localDb: {
+    onRuntimeCorruption?: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */
-    ensureReady: (userId: string) => Promise<
+    ensureReady: (userId: string, recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => Promise<
       | { ready: true }
       | {
           ready: false;
           error: {
-            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
+            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED' | 'DB_RUNTIME_CORRUPT';
             message: string;
           };
         }
@@ -5664,6 +5671,7 @@ interface ElectronAPI {
    * 跟 localDb 平级放在 ElectronAPI 顶层。
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload) => Promise<unknown>;
     /** webview dom-ready 后调,上报 (sessionId, tabId, webContentsId)。 */
     report: (input: {
       sessionId: string;
@@ -5803,6 +5811,8 @@ interface ElectronAPI {
      * tunnelled over device-link, so remote drafts and tasks never call it.
      */
     listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /** Read the private account snapshot of one approved plugin engine. */
+    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
     /**
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
@@ -6504,7 +6514,8 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
-        workerAgent: 'claude-code' | 'codex' | 'pi';
+        /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
+        workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;
         role?: string;
         label?: string;

@@ -62,6 +62,29 @@ function setup(ghosts: InstalledGhost[], published: Record<string, unknown> = {}
 }
 
 describe('plugin harness registry', () => {
+  // Account data belongs only to the approved engine. A worker can return extra private fields,
+  // or outlive revocation while its provider request is in flight. Exercise the production read.
+  it('reads only opted-in engines and drops private or late account data', async () => {
+    const { registry, deps, publish, setGhosts } = setup([ghost()]);
+    const key = 'dsh-plugin:dsh';
+    const row = { currency: 'CNY', amount: '0.00' };
+    const read = vi.fn(async () => ({ updatedAt: 1234, balances: [{ ...row, account: 'private' }] }));
+    deps.readUsage = read;
+    expect(await registry.readUsage(key)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    publish({ harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] });
+    expect(await registry.readUsage('dsh-plugin:other')).toBeNull();
+    expect(await registry.readUsage(key)).toEqual({ updatedAt: 1234, balances: [row] });
+    expect(read).toHaveBeenCalledExactlyOnceWith('dsh-plugin', 'dsh');
+    deps.readUsage = async () => ({ updatedAt: 1234, windows: [{ label: 'Week', remainingPercent: -1 }] });
+    expect(await registry.readUsage(key)).toBeNull();
+    deps.readUsage = async () => {
+      setGhosts([ghost({ approvedHarnesses: [] })]);
+      return { updatedAt: 1234, balances: [row] };
+    };
+    expect(await registry.readUsage(key)).toBeNull();
+  });
+
   it('lists only enabled, approved, declared, receipt-approved engines with a known protocol', () => {
     const { registry } = setup([
       ghost(),

@@ -1443,6 +1443,7 @@
     "UPSTREAM_ERROR": "Erro do servidor a montante (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não é possível contactar o endpoint. Verifique a rede e o URL base",
     "TIMEOUT": "O tempo de ligação esgotou-se. Verifique a rede e o URL base",
+    "CERT_ERROR": "A verificação do certificado falhou. Verifica se o nome do anfitrião do URL base corresponde ao certificado, bem como a cadeia de certificados e a configuração de confiança da CA da tua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os registos para obter detalhes",
     "upstreamToast": "O pedido ao fornecedor \"{{provider}}\" falhou: {{message}}"
   },
@@ -1454,6 +1455,10 @@
     "details": "Detalhes do erro"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de dados local danificada",
+      "description": "Foi detetada uma corrupção na base de dados. O acesso foi interrompido para proteger os seus dados. Pode tentar reabrir os dados locais. Se falhar, copie os detalhes técnicos e contacte o suporte. Não substitua nem elimine os ficheiros da base de dados."
+    },
     "schemaLease": {
       "title": "Ainda não é possível abrir os dados locais",
       "retry": "Reabrir dados locais",
@@ -2839,9 +2844,7 @@
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível guardar as definições de atualização automática",
       "analyticsLabel": "Estatísticas de utilização",
-      "analyticsDescription": "Ajuda-nos a compreender com que frequência o Cindy é iniciado e utilizado. Envia informações sobre o dispositivo e o ambiente de utilização — como o modelo do dispositivo, a versão do sistema operativo, a versão da aplicação e um identificador do dispositivo — e, após iniciar sessão, o ID da sua conta; nunca conversas, ficheiros ou prompts. Desativar esta opção interrompe imediatamente o envio.",
-      "productTokenUsage": "Partilhar utilização de modelos",
-      "productTokenUsageHint": "Os novos tokens desta conta neste dispositivo são agregados por origem e modelo na sua região antes do envio para o TapDB.",
+      "analyticsDescription": "Se ativar esta opção, usaremos pseudónimos em vez dos identificadores da sua conta e do seu dispositivo. As visitas recorrentes e os totais de utilização por modelo ajudam-nos a melhorar o produto. Estas estatísticas não incluem as suas conversas, ficheiros ou instruções.",
       "analyticsEnabledToast": "Estatísticas de utilização ativadas",
       "analyticsDisabledToast": "Estatísticas de utilização desativadas",
       "analyticsSaveFailed": "Não foi possível guardar as definições das estatísticas de utilização",
@@ -3766,6 +3769,8 @@
           "edit": "Editar",
           "editFailed": "Verifique o URL, o protocolo e a chave e tente novamente.",
           "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar o URL ou o protocolo requer uma nova chave.",
+          "useSavedCredential": "Utilizar credenciais guardadas",
+          "confirmDestination": "Utilizar as credenciais guardadas do Claude Code neste endereço?",
           "name": "Nome apresentado",
           "baseUrl": "URL base",
           "protocol": "Protocolo da API",
@@ -4483,6 +4488,7 @@
         "authorizedToast": "Sessão iniciada em {{name}}",
         "authorizeFailed": "Não foi possível iniciar sessão em {{name}}. Tente novamente.",
         "nameLabel": "Nome apresentado",
+        "geminiImageKeyNote": "Ao guardar, esta chave será usada nas conversas desta ligação e nas próximas imagens geradas pelo Gemini. Para gerar apenas imagens, desmarque todos os modelos de conversa.",
         "onlyAgentNote": "Este fornecedor só suporta {{agent}}",
         "endpointLabel": "URL base de {{agent}}",
         "noAuthNote": "Este proxy não precisa de uma chave de cliente; Cindy remove as credenciais de subscrição da CLI antes de reencaminhar.",
@@ -6886,6 +6892,17 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "traffic": {
+          "title": "Tráfego neste computador",
+          "range": "Intervalo de tempo",
+          "last5m": "Últimos 5 min",
+          "lastHour": "Última hora",
+          "lastDay": "Últimas 24 h",
+          "sent": "Enviado",
+          "received": "Recebido",
+          "total": "Total",
+          "scope": "Estimativa do tráfego das ligações diretas e por retransmissão, incluindo transferências diretas de ficheiros. Exclui anúncios de descoberta de dispositivos e transmissões independentes de áudio, vídeo e HTTP."
         },
         "relayTransport": {
           "udp": "UDP",
@@ -13185,6 +13202,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. A tentar novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço a montante não tem capacidade neste momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em «Tentar novamente» na aplicação de computador também continua a tarefa, mas o resultado não volta a esta mensagem.)"
         },
+        "audioInputUnavailable": "Esta ligação ao modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente demasiadas vezes, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
           "consecutive": "O modelo chamou a mesma ferramenta {{n}} vezes seguidas, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
@@ -14232,6 +14250,8 @@
         "fastBadge": "Rápido"
       },
       "source": {
+        "lastConfirmed": "Última atualização: {{time}}",
+        "unconfirmed": "Lista de modelos desatualizada",
         "unavailable": "Modelo indisponível",
         "reconnect": "Restabelecer ligação",
         "manage": "Gerir fonte",
@@ -15149,6 +15169,8 @@
     },
     "runningStatus": {
       "currentRate": "Velocidade mais recente",
+      "lastRequestRate": "Média do último pedido",
+      "recentTokenRate": "Recente {{rate}} tok/s",
       "waitingSample": "Amostragem",
       "averageRate": "Média do turno",
       "rateHistory": "Histórico de velocidade de geração",
@@ -15305,6 +15327,11 @@
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
+      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_timeout": "A ligação ao GitHub excedeu o tempo limite em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_auth": "Volte a iniciar sessão no GitHub em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
@@ -17222,6 +17249,12 @@
       "unspecifiedDir": "Diretório não especificado"
     },
     "workdirBrowse": {
+      "previewFile": "Pré-visualizar",
+      "filterDirectory": "Filtrar esta pasta…",
+      "projectTree": "Árvore do projeto",
+      "systemPreview": "Pré-visualização do sistema",
+      "listView": "Lista",
+      "gridView": "Miniaturas",
       "backToProjects": "Voltar aos projetos",
       "switchProject": "Mudar de projeto",
       "activeSessionCount_one": "{{count}} sessão ativa",
@@ -19607,6 +19640,7 @@
       "permissionLabel": "Modo de permissões",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a ligação ao fornecedor e as credenciais nas Definições.",
       "savedModelUnavailable": "O modelo guardado ou a sua origem não está disponível.",
+      "pluginEngineNoWorktree": "Os Workers com motor de plugin não podem usar um worktree. Desative a opção de worktree para criar este Worker.",
       "reselectModel": "Escolher um modelo",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",

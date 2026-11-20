@@ -51,9 +51,11 @@ export function sanitizeToolResultDiagnostics(value: unknown): ToolResultDiagnos
       'window_id_not_found', 'window_not_found', 'stale_element_token',
       'screenshot_context_missing', 'capture_expired', 'typed_output_mismatch',
       'background_unavailable', 'browser_consent_required',
+      'minimized_or_hidden_window', 'target_focus_unconfirmed', 'off_space_or_ax_unresolved', 'tool_invocation_failed',
       'element_outside_target_window', 'type_text_incomplete', 'select_menu_would_raise_window',
       'ACT_INVALID_REQUEST', 'BROWSER_UNAVAILABLE', 'BROWSER_NOT_CONNECTED',
       'BROWSER_RUNTIME_ACTION_FAILED', 'BROWSER_RUNTIME_INVALID_REQUEST', 'TIMEOUT',
+      'BROWSER_RUNTIME_NOT_CONFIGURED', 'BROWSER_RUNTIME_UNAVAILABLE', 'BROWSER_SCREENSHOT_INVALID',
     ],
   };
   enums.observationErrorCode = enums.errorCode;

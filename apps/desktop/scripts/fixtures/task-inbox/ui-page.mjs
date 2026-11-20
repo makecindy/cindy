@@ -3,8 +3,8 @@ export default {
   name: 'task-inbox',
   entry: './fixture.tsx',
   viewport: { width: 320, height: 640 },
-  real: 'TaskInbox, SessionEntryRows, SessionItem, shared inbox classifier',
-  notCovered: 'Persistence, remote devices, mobile native sheets and full sidebar filtering',
+  real: 'TaskInbox, SessionEntryRows, SessionItem, TeammateInboxRow, shared inbox classifier',
+  notCovered: 'Persistence, remote devices, mobile native sheets, full sidebar filtering, and how a teammate row is resolved from the roster stores (teammateInbox.test.ts)',
   stubs: {
     'src/renderer/contexts/AuthContext': {
       partial: 'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});',
@@ -22,6 +22,9 @@ export default {
     },
     reply: {
       about: 'Replying to the open task moves it to Working at once without scrolling the sidebar',
+    },
+    teammates: {
+      about: 'Each teammate conversation is one row by whose turn it is; idle ones are left out; Done only where reading settles it',
     },
     intro: {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
@@ -42,6 +45,55 @@ export default {
       await page.waitForTimeout(400);
       assert.equal(await scroller.evaluate((node) => node.scrollTop), 0, 'The sidebar does not scroll after the moved row');
       await ui.capture('replied');
+      return;
+    }
+    if (ui.case === 'teammates') {
+      const section = async (key) => page.locator('section > button')
+        .filter({ hasText: await ui.t(`ccAgent.sidebar.inbox.${key}`) }).locator('..');
+      const row = (id) => page.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`);
+      for (const key of ['working', 'snoozed']) await (await section(key)).locator('> button').click();
+      const pending = await section('inbox');
+      // Teammates lead their section; the idle one is not in the inbox at all.
+      for (const id of ['pm', 'qa', 'older']) await pending.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`).waitFor();
+      await (await section('working')).locator('[data-teammate-inbox-row="teammate:local:momo"]').waitFor();
+      await (await section('snoozed')).locator('[data-teammate-inbox-row="teammate:local:lulu"]').waitFor();
+      assert.equal(await row('idle').count(), 0, 'An idle, read teammate is not listed');
+      const header = await page.locator('section > button').first().boundingBox();
+      const task = await page.locator('[data-session-id="ready"]').boundingBox();
+      const first = await row('pm').boundingBox();
+      assert.ok(header && task && first);
+      assert.ok(Math.abs(first.width - task.width) <= 1 && Math.abs(first.height - task.height) <= 1,
+        `A teammate row uses the task row geometry: ${first.width}x${first.height} / ${task.width}x${task.height}`);
+      await page.mouse.move(1, 639);
+      await ui.capture('teammate-rows');
+      const done = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snooze = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const actions = async (id) => {
+        await row(id).hover();
+        return [await row(id).getByRole('button', { name: snooze, exact: true }).count(),
+          await row(id).getByRole('button', { name: done, exact: true }).count()];
+      };
+      // A pending request cannot be completed; a running one has nothing to complete;
+      // a computer that does not mirror the snooze offers none.
+      assert.deepEqual(await actions('pm'), [1, 0]);
+      assert.deepEqual(await actions('momo'), [1, 0]);
+      assert.deepEqual(await actions('older'), [0, 1]);
+      assert.deepEqual(await actions('qa'), [1, 1]);
+      const hovered = await row('qa').boundingBox();
+      assert.ok(hovered && Math.abs(hovered.width - first.width) <= 1, 'Hover actions do not change the row width');
+      await ui.capture('teammate-actions');
+      await row('qa').getByRole('button', { name: snooze, exact: true }).click();
+      const tomorrow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.tomorrow') });
+      const until = await tomorrow.locator('time').getAttribute('datetime');
+      await ui.capture('teammate-snooze-menu');
+      await tomorrow.click();
+      // The snooze is written to the conversation's own Session.
+      await page.waitForFunction((expected) => document.documentElement.dataset.snoozedUntil === expected
+        && document.documentElement.dataset.snoozedSession === 'chat-qa', until);
+      await row('lulu').hover();
+      await row('lulu').getByRole('button', { name: snooze, exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.wake'), exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       return;
     }
     if (ui.case === 'intro') {
@@ -168,6 +220,10 @@ export default {
     await ready.hover();
     // Inbox shows a one-click Done instead of the two-step archive.
     const archiveLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    const pinned = page.locator('[data-session-id="waiting"]');
+    assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -176,7 +232,6 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
-    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
