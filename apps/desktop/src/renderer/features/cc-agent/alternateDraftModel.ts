@@ -4,6 +4,7 @@ import type { VendorPrefs } from '@/state/newMakerDraft';
 
 export interface AlternateDraftModel {
   ownerGeneration: number;
+  pageKey: string;
   vendor: MakerVendor;
   prefs: Pick<VendorPrefs, 'model' | 'providerId' | 'effort'>;
   fast: boolean | 'ultrafast';

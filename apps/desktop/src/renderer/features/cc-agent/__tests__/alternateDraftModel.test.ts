@@ -6,7 +6,7 @@ import { alternateDraftModelFor, setAlternateDraftModel, type AlternateDraftMode
 describe('alternate draft selection lifetime', () => {
   it('restores the selection for its owner and draft, and clears it on completion', () => {
     const alternate: AlternateDraftModel = {
-      ownerGeneration: 12, vendor: 'pi', prefs: { model: 'auto', providerId: 'xd', effort: 'high' },
+      ownerGeneration: 12, pageKey: 'draft-page', vendor: 'pi', prefs: { model: 'auto', providerId: 'xd', effort: 'high' },
       fast: false, favoriteUid: null,
     };
     setAlternateDraftModel('draft-a', alternate);

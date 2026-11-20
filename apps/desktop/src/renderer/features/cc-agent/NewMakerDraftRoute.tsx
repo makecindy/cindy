@@ -3285,7 +3285,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const token = `${dataOwnerId}:${location.key}`;
     if (handledGenericDefaultLocationRef.current === token) return;
     handledGenericDefaultLocationRef.current = token;
-    if (location.state?.workspacePrompt === 'generic') setAlternateModel(null);
+    if (location.state?.workspacePrompt === 'generic' && alternateModel?.pageKey !== location.key) setAlternateModel(null);
     if (location.state?.restoreLastCreatedWorkspace === true) {
       const workspace = getLastCreatedTaskWorkspace(dataOwnerId);
       if (workspace) {
@@ -3766,6 +3766,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }
         setAlternateModel({
           ownerGeneration: dataOwnerGeneration,
+          pageKey: location.key,
           agentDevice: selection.agentDevice ?? null,
           vendor: selection.vendor,
           prefs: {
@@ -3990,6 +3991,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       localModelIssue,
       dataOwnerGeneration,
       savedDraft.lastByVendor,
+      location.key,
       usesDeviceCatalog,
       catalogDeviceId,
       controlledModelRoute.catalogHostDeviceId,

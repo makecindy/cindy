@@ -1706,14 +1706,14 @@ it('applies a replacement for an unavailable saved model only to the current loc
   const patchVendorPrefs = vi.fn();
   const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
     localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
-    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
     switchVendor, patchVendorPrefs,
   });
   select({
     vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high', fast: false, favoriteUid: null,
   });
   expect(setAlternateModel).toHaveBeenCalledWith({
-    ownerGeneration: 12, agentDevice: null, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
+    ownerGeneration: 12, pageKey: 'draft-page', agentDevice: null, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
     fast: false, favoriteUid: null,
   });
   expect(switchVendor).not.toHaveBeenCalled();
@@ -1727,7 +1727,7 @@ it('keeps a remote alternate engine outside the persisted local defaults', () =>
   const rememberAgentDeviceSelection = vi.fn();
   const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
     localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
-    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
     switchVendor, rememberAgentDeviceSelection, normalizeDbAgentKind, dbToMakerAgentKind,
   });
   const agentDevice = { deviceId: 'other-computer', name: 'Other computer' };
