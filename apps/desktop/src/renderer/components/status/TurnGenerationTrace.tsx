@@ -27,7 +27,7 @@ export function TurnGenerationTrace({ trace }: { trace: GenerationTrace }) {
   return (
     <div className="space-y-1.5" data-testid="turn-generation-trace">
       <GenerationTraceChart
-        points={trace.speed.map(([at, rate]) => ({ at, rate }))}
+        points={trace.speed.map(([at, rate]) => ({ at, rate, settled: trace.requestRateTimes?.includes(at) }))}
         marks={marks}
         fromMs={0}
         toMs={toMs}

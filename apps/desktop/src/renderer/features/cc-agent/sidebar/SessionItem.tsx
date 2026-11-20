@@ -1379,7 +1379,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
  *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 标准按钮圆角 /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
  *  hover 只叠一层同色半透明高光)。 */
-function SessionAction({
+export function SessionAction({
   inboxComplete,
   label,
   onClick,

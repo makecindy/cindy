@@ -13199,6 +13199,7 @@
           "overloadRetryingNoCount": "Le service du modèle est occupé. Nouvelle tentative automatique en cours…",
           "overloadFailed": "⚠️ Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Renvoyez ce message ici pour réessayer, ou passez à un autre modèle dans Cindy. (Cliquer sur « Réessayer » dans l'application de bureau poursuit aussi la tâche, mais le résultat ne reviendra pas dans ce message.)"
         },
+        "audioInputUnavailable": "Cette connexion au modèle ne permet pas de traiter directement l’audio. Demandez à Cindy de le transcrire avant de poursuivre.",
         "toolLoop": {
           "generic": "Le modèle a appelé des outils de façon répétée trop de fois : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
           "consecutive": "Le modèle a appelé le même outil {{n}} fois d'affilée : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -14246,6 +14247,8 @@
         "fastBadge": "Rapide"
       },
       "source": {
+        "lastConfirmed": "Dernière actualisation : {{time}}",
+        "unconfirmed": "Liste des modèles non actualisée",
         "unavailable": "Modèle indisponible",
         "reconnect": "Se reconnecter",
         "manage": "Gérer la source",
@@ -15163,6 +15166,8 @@
     },
     "runningStatus": {
       "currentRate": "Vitesse récente",
+      "lastRequestRate": "Moyenne de la dernière requête",
+      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",

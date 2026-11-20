@@ -13092,6 +13092,7 @@
           "overloadRetryingNoCount": "The model service is busy. Retrying automatically…",
           "overloadFailed": "⚠️ The model service is busy — the upstream has no capacity right now. Resend this message here to try again, or switch to another model in Cindy. (Clicking “Retry” in the desktop app also continues the task, but the result won’t come back to this message.)"
         },
+        "audioInputUnavailable": "This model connection can’t read audio directly. Ask Cindy to transcribe the audio first, then continue.",
         "toolLoop": {
           "generic": "The model called tools repeatedly too many times, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
           "consecutive": "The model called the same tool {{n}} times in a row, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
@@ -14131,6 +14132,8 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "lastConfirmed": "Last refreshed: {{time}}",
+        "unconfirmed": "Model list not up to date",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",
@@ -15068,6 +15071,8 @@
     },
     "runningStatus": {
       "currentRate": "Latest speed",
+      "lastRequestRate": "Last request average",
+      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",

@@ -5,7 +5,7 @@ import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
 import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { TaskSnoozeSheet } from './TaskSnoozeSheet';
-import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { taskSnoozeUntil, type TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 import { buildInboxHomeSections } from './homeSections';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
@@ -89,6 +89,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { HomeTeammatesSection, useHomeTeammatesSectionContext } from './HomeTeammatesSection';
+import { InboxTeammateRow, InboxTeammatesProvider, nextInboxTeammateWake, useInboxTeammates } from './InboxTeammates';
 import { HomeRosterProvider } from './HomeRosterContext';
 import { createDisclosureListCell, DisclosureGroupView, DisclosureItem, ListDisclosureScope, useDisclosurePrepare, useListDisclosureTransition } from './listDisclosureTransition';
 import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
@@ -2460,6 +2461,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : filteredSharedRows;
   const contentFilterCount = activeContentFilterCount(contentFilters);
+  // Teammates' main conversations join the inbox wherever the teammate section itself is shown:
+  // not while a filter narrows the tasks, and only the matching ones while searching.
+  const inboxTeammates = useInboxTeammates({
+    context: teammatesSectionContext, cloud: cloudTeammates, push: guardedPush, registry: swipeRegistry, query: searchQuery,
+    enabled: taskListMode === 'inbox' && indexedSearch.activeFilterCount === 0 && contentFilterCount === 0,
+  });
+  const inboxTeammateEntries = inboxTeammates.entries;
   const filteredHome = useMemo(
     () => applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now()),
     [contentFilters, filterTick, sharedGroup.home],
@@ -2467,10 +2475,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   useEffect(() => {
     if (!screenFocused) return;
     const now = Date.now();
-    const next = Math.min(...homeSessions.map(taskSnoozeUntil).filter(at => at > inboxNow));
+    const next = Math.min(nextInboxTeammateWake(inboxTeammateEntries, inboxNow),
+      ...homeSessions.map(taskSnoozeUntil).filter(at => at > inboxNow));
     const timer = Number.isFinite(next) ? setTimeout(() => setInboxNow(Date.now()), Math.min(2_147_483_647, Math.max(1, next - now))) : undefined;
     return () => clearTimeout(timer);
-  }, [homeSessions, screenFocused, inboxNow]);
+  }, [homeSessions, inboxTeammateEntries, screenFocused, inboxNow]);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
       if (state === 'active') setInboxNow(Date.now());
@@ -2490,10 +2499,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         sortBy,
       });
       return taskListMode === 'inbox'
-        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow)]
+        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries)]
         : regular;
     },
-    [taskListMode, inboxCollapsed, priorityContext, inboxNow, displayedManualProjectOrder, displayedProjectOrder,
+    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
       filteredHome, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
@@ -3158,7 +3167,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     item: HomeRow;
     index: number;
     section: HomeSection;
-  }) => (
+  }) => item.kind === 'teammate' ? (
+    // Drawn from the live roster (InboxTeammatesProvider), outside the task row's memo.
+    <InboxTeammateRow rowKey={item.teammate.key} section={section.key.slice('inbox-'.length) as TaskInboxSection}
+      last={isBlockHomeRow(section.data[index + 1])} timeLabel={item.sourceLabel} />
+  ) : (
     <HomeListRow
       inboxMode={section.key.startsWith('inbox-')}
       expandedAutomationGroups={expandedAutomationGroups}
@@ -3352,6 +3365,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     : (headerHeight ?? (embedded ? spacing.lg : edgePadding.paddingTop)
       + Math.max(HOME_HEADER_MIN_HEIGHT, navigationChrome.target + spacing.md));
   const homeListNode = (
+    <InboxTeammatesProvider value={inboxTeammates.value}>
     <HomeRowDisplayContext.Provider value={rowDisplay}>
     <HomeListViewportContext.Provider value={childViewport}>
     <ListDisclosureScope controller={disclosure.controller}>
@@ -3586,6 +3600,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     </ListDisclosureScope>
     </HomeListViewportContext.Provider>
     </HomeRowDisplayContext.Provider>
+    </InboxTeammatesProvider>
   );
   const homeListOverlays = (<>
 
@@ -3922,6 +3937,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={snoozeSessionTarget !== null}>{() => <TaskSnoozeSheet visible={snoozeSessionTarget !== null}
         onClose={closeSnooze} onClosed={handleSnoozeClosed} onConfirm={confirmSnooze} />}</MountOnFirstOpen>
+      {inboxTeammates.sheet}
       <MountOnFirstOpen open={renameSessionTarget !== null}>{() => <RenameSessionModal
         draft={renameSessionDraft}
         onCancel={closeRenameSession}
@@ -4681,7 +4697,8 @@ function HomeListRowInner({
   expandedAutomationGroups: readonly string[];
   /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
   isLastPinnedRow: boolean;
-  item: HomeRow;
+  /** Teammate conversations of the inbox are drawn by InboxTeammateRow. */
+  item: Exclude<HomeRow, { kind: 'teammate' }>;
   machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;

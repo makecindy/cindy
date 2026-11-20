@@ -13039,6 +13039,7 @@
           "overloadRetryingNoCount": "モデルサービスが混雑しています。自動で再試行しています…",
           "overloadFailed": "⚠️ モデルサービスが混雑しています。上流に空き容量がありません。ここでこのメッセージを再送して再試行するか、Cindy で別のモデルに切り替えてください。（デスクトップ版で「再試行」を押してもタスクは続行できますが、結果はこのメッセージには戻りません。）"
         },
+        "audioInputUnavailable": "現在のモデル接続では音声を直接読み取れません。先に音声を文字に起こしてから続けるよう Cindy に依頼してください。",
         "toolLoop": {
           "generic": "モデルがツールを繰り返し呼び出した回数が多すぎるため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
           "consecutive": "モデルが同じツールを {{n}} 回繰り返し呼び出したため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
@@ -14077,6 +14078,8 @@
         "fastBadge": "高速"
       },
       "source": {
+        "lastConfirmed": "最終更新：{{time}}",
+        "unconfirmed": "モデル一覧を更新できません",
         "unavailable": "モデルを利用できません",
         "reconnect": "再接続",
         "manage": "接続先を管理",
@@ -15004,6 +15007,8 @@
     },
     "runningStatus": {
       "currentRate": "直近の速度",
+      "lastRequestRate": "直近のリクエストの平均",
+      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",

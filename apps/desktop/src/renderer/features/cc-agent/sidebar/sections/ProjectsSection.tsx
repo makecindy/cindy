@@ -125,7 +125,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInbox } from '../TaskInbox';
+import { TaskInboxWithTeammates } from '../TaskInboxWithTeammates';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -1400,7 +1400,7 @@ export function ProjectsSection({
         </div>
       ) : null}
       {taskListMode === 'inbox' && inboxSessions && (
-        <TaskInbox
+        <TaskInboxWithTeammates
           sessions={inboxSessions}
           contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
