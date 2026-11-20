@@ -33,6 +33,7 @@ import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
+import { serializeSessionOrigin, sessionOriginFromInputMeta } from '../../../shared/sessionOrigin.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -252,6 +253,8 @@ function botTaskDispatchHarness(
     createId: () => 'generated-client-id',
     permissionModeOrAsk,
     readSenderIdentity: async () => ({}),
+    // #11610: the create branch records the source task on the new row (real helpers, no-op broadcast).
+    sessionOriginFromInputMeta, serializeSessionOrigin, broadcastSessionPatched: noop,
     sessionQueueOriginForDispatcher: noop,
     extractPlainText: (value: unknown) => String(value ?? ''),
     assertReviewExternalInputAllowed: asyncNoop,
