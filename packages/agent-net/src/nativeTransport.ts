@@ -6,6 +6,11 @@ import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } fro
 
 export interface NativeEnginePort {
   command<T = unknown>(command: Record<string, unknown>): Promise<T>;
+  /**
+   * `native-wait` binaries: resolves true as soon as the engine has something to read with `poll`, false after `maxMs`.
+   * Meanwhile the engine receives, acknowledges and runs its timers by itself (see `NativeTransport.rest`).
+   */
+  wait?(maxMs: number): Promise<boolean>;
   destroy(): Promise<void>;
   assertCurrent?(): void;
 }
@@ -44,7 +49,13 @@ const WRITE_CHUNK = 65_536;
 const FAST_POLL_MS = 8;
 const IDLE_POLL_MS = 50;
 const ACTIVE_WINDOW_MS = 1_000;
-/** The admitted peers are worked out again at least this often, also when the socket reports no change (see `poll`). */
+/**
+ * `native-wait` binaries: with nothing to write, the engine is left waiting this long at a time. When it comes back empty
+ * JS only looks at what it mirrors into the engine (the admitted peers' revision, the relay's UDP credentials) and polls
+ * when one changed, and otherwise once per IDLE_FULL_POLL_MS for round trips, paths and admission that lapses with time.
+ */
+const IDLE_WAIT_MS = 250;
+const IDLE_FULL_POLL_MS = 1_000;
 const ADMISSION_RECHECK_MS = 1_000;
 const now = () => performance.now();
 
@@ -57,6 +68,10 @@ const now = () => performance.now();
  * - `stream-buffered`: the core's send buffer per stream, counted in the session backlog as the Desktop does.
  * - `stun`: this port's address outside the NAT, announced to peers as a candidate.
  * - `relay-udp-v2`: datagrams relayed through the Agent-Net relay go over UDP (docs/dev-rules/protocol-compatibility/agent-net-udp-relay.md).
+ * - `native-wait`: the engine waits for packets and its timers on a native thread and wakes JS when there is something to
+ *   read. Without it JS polls on timers: React Native runs timers on the display's frames, so every step of a request (hand
+ *   it to the engine, pick up the answer) waited for the next frame; requests took 30–60 ms longer than over Device Link and
+ *   an idle app kept the JS thread 9–22% busy (2026-11-20, docs/agent-net-session-plan.md 10.2 v2-4).
  * Session lanes need only streams, so they work on every native build.
  */
 export class NativeTransport implements Transport {
@@ -68,9 +83,13 @@ export class NativeTransport implements Transport {
   private timerDelay = 0;
   /** Poll fast until then (a new transport starts out connecting). */
   private activeUntil = now() + ACTIVE_WINDOW_MS;
+  /** `native-wait`: the engine wakes JS; no timers. Turned off if a wait ever fails (the timers take over). */
+  private waits = false;
   /** A poll is running; `again`: something happened meanwhile, so one more follows it. */
   private polling = false;
   private again = false;
+  /** The wait whose return decides the next step; a later one supersedes it. */
+  private waitRound = 0;
   private polledAt = 0;
   /** When a wake last polled at once (see `wake`). */
   private wokeAt = Number.NEGATIVE_INFINITY;
@@ -104,6 +123,7 @@ export class NativeTransport implements Transport {
     this.id = keyHex(identity.transportKey);
     this.dial = identity.udpPort ? { udp: { address: '0.0.0.0', port: identity.udpPort } } : {};
     this.features = new Set(Array.isArray(identity.features) ? identity.features : []);
+    this.waits = enhanced && this.features.has('native-wait') && typeof engine.wait === 'function';
     this.relayUdpServer = options.relayUdpServer;
     this.localAddresses = addresses;
     this.candidateList = this.computeCandidates();
@@ -124,7 +144,7 @@ export class NativeTransport implements Transport {
       const transport = new NativeTransport(engine, options, identity, initial, enhanced ? read : null, enhanced);
       await transport.synchronizeAdmission();
       await transport.startStun();
-      transport.schedule();
+      if (transport.waits) transport.drive(); else transport.schedule();
       return transport;
     } catch (error) { await engine.destroy().catch(() => undefined); throw error; }
   }
@@ -247,13 +267,14 @@ export class NativeTransport implements Transport {
   }
   /**
    * Something to move: poll now. React Native runs timers on the display's frames, so a zero timer was up to a frame late
-   * (7–20 ms measured, 2026-11-21) and a request sat in JS that long before the engine saw it. A wake within FAST_POLL_MS
-   * of the previous one keeps that rhythm instead, so a run of writes does not poll per write.
+   * (7–20 ms measured, 2026-11-21) and a request sat in JS that long before the engine saw it. On timers (binaries without
+   * `native-wait`), a wake within FAST_POLL_MS of the previous one keeps that rhythm instead, so a run of writes does not
+   * poll per write.
    */
   wake(): void {
     this.activeUntil = now() + ACTIVE_WINDOW_MS;
     if (this.closed) return;
-    if (!this.polling && now() - this.wokeAt < FAST_POLL_MS) {
+    if (!this.waits && !this.polling && now() - this.wokeAt < FAST_POLL_MS) {
       if (this.timer && this.timerDelay > FAST_POLL_MS) { clearTimeout(this.timer); this.timer = null; }
       this.schedule(FAST_POLL_MS);
       return;
@@ -263,7 +284,10 @@ export class NativeTransport implements Transport {
   }
   /** The roster or the peer rule changed: mirror it into the engine now rather than at the next poll. */
   admissionChanged(): void { this.wake(); }
-  /** Poll now. During a poll a wake is noted and one more poll follows it; then the next poll is scheduled. */
+  /**
+   * Poll now. During a poll a wake is noted and one more poll follows it; after that the engine is left waiting (`rest`), or on
+   * timers the next poll is scheduled.
+   */
   private drive(): void {
     if (this.closed) return;
     if (this.polling) { this.again = true; return; }
@@ -276,8 +300,34 @@ export class NativeTransport implements Transport {
       } catch { this.polling = false; await this.close(); return; }
       this.polling = false;
       this.again = false;
-      this.schedule();
+      if (this.waits) this.rest(); else this.schedule();
     })();
+  }
+  /**
+   * `native-wait`: leave the engine to itself until it has something for JS. With bytes still to hand to it (or a dial, a
+   * close draining) JS comes back after FAST_POLL_MS at the latest, as the timers did; otherwise after IDLE_WAIT_MS, and
+   * then polls only if something it mirrors changed or the last poll is IDLE_FULL_POLL_MS old.
+   */
+  private rest(): void {
+    if (this.closed) return;
+    const round = ++this.waitRound;
+    const busy = this.waiting.size > 0 || [...this.channels.values()].some(channel => channel.moving);
+    void this.engine.wait!(busy ? FAST_POLL_MS : IDLE_WAIT_MS).then((work) => {
+      if (this.closed) return;
+      // A superseded wait that found something still counts: the engine has it ready and its newer wait may be asleep.
+      if (work) { this.drive(); return; }
+      if (round !== this.waitRound) return;
+      if (busy || this.mirrorChanged() || now() - this.polledAt >= IDLE_FULL_POLL_MS) this.drive(); else this.rest();
+    }, () => {
+      if (this.closed || !this.waits) return;
+      // The binary said it can wait and cannot: keep the connection on the timers.
+      this.waits = false;
+      this.schedule(0);
+    });
+  }
+  private mirrorChanged(): boolean {
+    return this.options.admissionVersion?.() !== this.mirroredVersion
+      || (this.options.relay?.udpCredentials?.() ?? null) !== (this.relayCredentials ?? null);
   }
   private async poll(): Promise<void> {
     this.polledAt = now();
