@@ -378,6 +378,12 @@ export interface CodexSessionMcpConfigInput {
   vendorOptions?: Record<string, unknown>;
 }
 
+export interface CodexDownshiftModelRejection {
+  model: string;
+  /** A bridge receipt has already verified an explicit model denial in the upstream body. */
+  transport: 'http' | 'bridge';
+}
+
 export interface CodexExtraSpawnConfig {
   /** Exact root-connection model IDs frozen with the custom context catalog. */
   contextProviderModels?: readonly string[];
@@ -1408,7 +1414,7 @@ export interface AgentDeps {
   }) => void;
 
   /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
-  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => string | undefined;
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {

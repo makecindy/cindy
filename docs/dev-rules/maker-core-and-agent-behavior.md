@@ -321,6 +321,8 @@ Codex 同引擎切模（包括自动任务、Orca、设备互联与 SSH）保留
 本地代理观察到当前根线程、当前轮在采样前为缩窗自动压缩，且上游明确拒绝了这次请求中的旧型号时，
 沿用上述有界交接。按请求关联原生元数据与 HTTP 拒绝，下一次采样使旧证据失效。目标模型被拒、
 账号权限错误、手动压缩及缺乏请求证据的错误仍按原分类处理。
+Chat Completions、Anthropic Messages 和使用原生 SDK 的桥接以同一条请求的上游错误为证据。
+桥接包装或脱敏前识别明确的模型拒绝，保留型号及拒绝类别，普通 403 不触发交接。
 真实 CLI 的同供应商、跨供应商与逐 thread 预算回归见
 `apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`；逐 thread 回归在本机
 模拟服务运行，不代表完成了真实 SSH 端到端验收。

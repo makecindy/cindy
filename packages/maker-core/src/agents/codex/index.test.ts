@@ -27656,14 +27656,17 @@ describe('CodexAgent turn lifecycle', () => {
 
   // Native can report the denial with a retry, with a terminal notification, or only on completion.
   it.each([
-    ['retry', 'old', 'codex_compaction_model_unavailable'],
-    ['terminal', 'old', 'codex_compaction_model_unavailable'],
-    ['completed', 'old', 'codex_compaction_model_unavailable'],
-    ['retry', 'selected', 'model_unavailable'],
-  ])('attributes a %s denial of %s to the correct model', async (notification, rejected, reason) => {
+    ['retry', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['retry', 'selected', 'http', 'model_unavailable'],
+    ['retry', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+  ] as const)('attributes a %s denial of %s via %s to the correct model', async (notification, rejected, transport, reason) => {
     const agent = new CodexAgent(createDeps({}, {
       getRejectedCodexDownshiftModel: (session, thread, turn) =>
-        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? rejected : undefined,
+        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? { model: rejected, transport } : undefined,
     }));
     const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? {} : undefined);
     const handle = await agent.startSession({ sessionId: 'downshift', model: 'selected', workingDir: '/repo' });
@@ -27672,7 +27675,9 @@ describe('CodexAgent turn lifecycle', () => {
       const iterator = handle.events()[Symbol.asyncIterator]();
       const threadId = 'start-thread-id';
       const turnId = 'turn-1';
-      const error = { message: 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
+      const error = { message: transport === 'bridge'
+        ? 'Native provider request failed [phase=adapter-event; HTTP 403; category=permission; request=fixture]'
+        : 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
       handlers.turnStarted?.({ threadId, turn: { id: turnId } });
       if (notification === 'completed') {
         handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });

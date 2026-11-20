@@ -61,6 +61,7 @@ import {
   TurnDispatchRejectedError,
   type AgentSessionHandle,
   type AgentDeps,
+  type CodexDownshiftModelRejection,
   type CodexExtraSpawnConfig,
   type StartSessionOptions,
   type OneShotOptions,
@@ -4786,12 +4787,12 @@ assertRouteCurrent();
       serviceTier?: ServiceTier | null;
     }>();
 
-    const previousCompactionModelRejected = (errorThread: string, turnId: string): boolean => {
-      if (opts.remoteHostId || errorThread !== threadId || !turnId) return false;
-      const model = this.deps.getRejectedCodexDownshiftModel?.(sid, errorThread, turnId);
+    const previousCompactionModelRejection = (errorThread: string, turnId: string): CodexDownshiftModelRejection | undefined => {
+      if (opts.remoteHostId || errorThread !== threadId || !turnId) return;
+      const rejection = this.deps.getRejectedCodexDownshiftModel?.(sid, errorThread, turnId);
       const target = turnOriginByTurnId.get(turnId)?.model;
-      return !!model && !!target && target === activeTurnModel &&
-        model !== target && model !== activeTurnWireModel && model !== mutableModel;
+      if (rejection && target && target === activeTurnModel && rejection.model !== target
+        && rejection.model !== activeTurnWireModel && rejection.model !== mutableModel) return rejection;
     };
 
     const hasOtherInFlightStart = (seq: number): boolean => {
@@ -11545,8 +11546,9 @@ assertRouteCurrent();
     const recordAutomaticRecoveryIntent = (
       deadTurnId: string,
       error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
+      downshiftRejection?: CodexDownshiftModelRejection,
     ): boolean => {
-      if (isCodexAccessRejectedError(error)) return false;
+      if (isCodexAccessRejectedError(error, downshiftRejection)) return false;
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
@@ -11632,6 +11634,7 @@ assertRouteCurrent();
       const finalAssistantText = assistantReply?.finalText ?? assistantReply?.lastText ?? '';
       turnInterruptOrigins.delete(turn.id);
       if (reconnectStallTurnId === turn.id) clearReconnectStall();
+      const downshiftRejection = previousCompactionModelRejection(params.threadId, turn.id);
       let recoveryState = overloadRetry;
       let pendingRecovery =
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
@@ -11640,7 +11643,7 @@ assertRouteCurrent();
       const rejectedSummaryRecovery = pendingRecovery?.reason === SUMMARY_RECOVERY
         && !!turn.error && !canRecoverRemoteCompaction(turn.id, turn.error);
       if (recoveryState && pendingRecovery
-        && (isCodexAccessRejectedError(turn.error) || rejectedSummaryRecovery)) {
+        && (isCodexAccessRejectedError(turn.error, downshiftRejection) || rejectedSummaryRecovery)) {
         // The authoritative error can refine a preliminary rejection into an
         // exhausted account or another failure that must not trigger a summary.
         recoveryState.pendingAutomaticRecovery = null;
@@ -11650,7 +11653,7 @@ assertRouteCurrent();
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
       ) {
-        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
+        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error, downshiftRejection)) {
           recoveryState = overloadRetry;
           pendingRecovery =
             recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
@@ -11906,7 +11909,7 @@ assertRouteCurrent();
         planCycleActive = false;
         currentTurnPlanModeActive = false;
         if (turn.error?.message) {
-          const classified = classifyCodexError(turn.error, previousCompactionModelRejected(params.threadId, turn.id));
+          const classified = classifyCodexError(turn.error, downshiftRejection);
           eventQueue.push({
             type: 'error',
             data: {
@@ -13683,16 +13686,18 @@ assertRouteCurrent();
           || targetsIdLessPendingStart;
         // Interrupt only an identified active turn. Generic reconnect notices
         // and errors without a turn ID do not prove this turn's model was rejected.
+        const downshiftRejection = isTransportError ? undefined
+          : previousCompactionModelRejection(params.threadId, params.turnId);
         if (
           !isTerminalError && !isTransportError && isTurnInFlight &&
           params.threadId === threadId && params.turnId && params.turnId === currentTurnId &&
-          isCodexAccessRejectedError(params.error)
+          isCodexAccessRejectedError(params.error, downshiftRejection)
         ) {
           if (reconnectStallCleanupTurnId === params.turnId || skipIfStaleHost('turn/interrupt')) return;
           if (overloadRetry?.pendingAutomaticRecovery?.deadTurnId === params.turnId) {
             overloadRetry.pendingAutomaticRecovery = null;
           }
-          const rejection = classifyCodexError(params.error, previousCompactionModelRejected(params.threadId, params.turnId));
+          const rejection = classifyCodexError(params.error, downshiftRejection);
           interruptTurnForProviderFailure({
             reason: rejection.reason,
             message: rejection.message,
@@ -13816,7 +13821,7 @@ assertRouteCurrent();
           const recoveryTurnId = effectiveParams.turnId || currentTurnId || '';
           // error notification 只登记恢复意图并保持 logical turn 运行；
           // 权威 turn/completed 才负责收口旧 turn 与发起一次 HTTP 重投。
-          if (recordAutomaticRecoveryIntent(recoveryTurnId, effectiveParams.error)) return;
+          if (recordAutomaticRecoveryIntent(recoveryTurnId, effectiveParams.error, downshiftRejection)) return;
         }
         // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
         // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
@@ -13824,7 +13829,7 @@ assertRouteCurrent();
         translateErrorNotification(effectiveParams, eventQueue, {
           rt: translatorRt,
           log,
-          previousCompactionModelRejected: previousCompactionModelRejected(effectiveParams.threadId, effectiveParams.turnId),
+          previousCompactionModelRejection: downshiftRejection,
           onSamplingAttemptFailed: () => assistantReplyByTurn.delete(effectiveParams.turnId),
           tryTakeOverOverload: () => {
             // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
@@ -13838,7 +13843,7 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error)) return null;
+            if (params.willRetry === true || isCodexAccessRejectedError(effectiveParams.error, downshiftRejection)) return null;
             const rawMessage = effectiveParams.error?.message ?? '';
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (

@@ -43,6 +43,7 @@ import {
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData, GeneratedImageEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import type { CodexDownshiftModelRejection } from '../base-agent.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import {
@@ -461,7 +462,7 @@ export interface CodexTranslateContext {
   background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
-  previousCompactionModelRejected?: boolean;
+  previousCompactionModelRejection?: CodexDownshiftModelRejection;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -823,8 +824,12 @@ function codexAccountAccessDenial(error: CodexErrorInput | null | undefined): { 
 }
 
 /** Both denials reuse the current-turn interrupt and exclude automatic replay. */
-export function isCodexAccessRejectedError(error: CodexErrorInput | null | undefined): boolean {
-  return codexAccountAccessDenial(error) !== null || isCodexModelUnavailableError(error);
+export function isCodexAccessRejectedError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
+  return codexAccountAccessDenial(error) !== null
+    || isCodexModelUnavailableError(error, previousCompactionModelRejection);
 }
 
 function hasModelRejection(text: string, status: number | undefined): boolean {
@@ -848,7 +853,10 @@ function hasModelRejection(text: string, status: number | undefined): boolean {
 }
 
 /** Require an explicit model rejection. A generic reconnect or HTTP 404 is ambiguous. */
-export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
+export function isCodexModelUnavailableError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
 
@@ -865,6 +873,11 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
   if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  // Bridges can wrap the body's code or omit it entirely. Only the matching
+  // bridge receipt can refine those generic errors into a model denial.
+  const wrappedBridgeError = /\bupstream_error\b|\bNative provider request failed \[phase=(?:adapter-event|stream-read); HTTP (?:400|403|404);/;
+  if (previousCompactionModelRejection?.transport === 'bridge'
+    && (wrappedBridgeError.test(message) || wrappedBridgeError.test(details))) return true;
   if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
   return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
@@ -874,7 +887,10 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: CodexErrorInput | null | undefined, previousCompactionModelRejected = false): ClassifiedCodexError {
+export function classifyCodexError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const accountDenial = codexAccountAccessDenial(error);
   if (accountDenial) {
@@ -886,9 +902,9 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined, pr
       data: { message, reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON, willRetry: false },
     };
   }
-  if (isCodexModelUnavailableError(error)) {
-    const reason = previousCompactionModelRejected ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
-    const message = previousCompactionModelRejected
+  if (isCodexModelUnavailableError(error, previousCompactionModelRejection)) {
+    const reason = previousCompactionModelRejection ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
+    const message = previousCompactionModelRejection
       ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE] Context compaction failed during the switch because this connection cannot use the previous model.'
       : CODEX_MODEL_UNAVAILABLE_MESSAGE;
     return {
@@ -968,7 +984,7 @@ export function translateErrorNotification(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejected);
+  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejection);
   const safeMessage = classified.message;
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;
