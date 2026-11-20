@@ -14,6 +14,8 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
  */
 
 export interface MakerSessionCreateOpts extends CreateSessionOptions {
+  /** Optional mobile hint: persist an ordinary dialogue before its first-send bootstrap. */
+  deferRuntimeStart?: boolean;
   orcaRole?: 'lead' | 'worker' | null;
   /**
    * Codex-only escape hatch for tests / special callers. Normal desktop paths

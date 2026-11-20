@@ -5,7 +5,7 @@
  * `maker:create-session` 自手机远控首版起支持 opts.id 透传,maker-core 对
  * provided id 幂等——active 复用 / storage 命中跳过 insert),因此乐观会话行、
  * projection、路由参数、订阅 topic 从一开始就是最终 id,无需 rekey 对账。
- * openLink / createSession / 首条消息 enqueue 全部在本模块后台串行完成。
+ * openLink / createSession / 首条消息 enqueue 在本模块后台完成；订阅 ACK 不阻塞发送。
  *
  * 状态机:running → done(task 移除)
  *              → create-failed(保留草稿与附件，自动返回编辑)
@@ -991,7 +991,7 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 async function createSessionIdempotent(
   task: InternalTask,
   effectiveDraft: NewSessionDraft,
-): Promise<{ workDir: string | null; finalDraft: NewSessionDraft }> {
+): Promise<{ workDir: string | null; finalDraft: NewSessionDraft; session?: RemoteSession }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
   // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
@@ -1000,6 +1000,9 @@ async function createSessionIdempotent(
   let createOpts = {
     ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
+    ...(effectiveDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree && !task.params.orcaEnable
+      && !effectiveDraft.agentDeviceId && !effectiveDraft.pluginEngine
+      ? { deferRuntimeStart: true } : {}),
   };
 
   if (task.precreatedWorktree) {
@@ -1089,7 +1092,7 @@ async function createSessionIdempotent(
       if (!result || result.sessionId !== task.sessionId) {
         throw new Error(i18n.t('session.new.worktreeCleanupPending'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session };
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       try {
@@ -1141,7 +1144,7 @@ async function createSessionIdempotent(
         // 错误会话。按确定性失败收敛到重试面(不自动重试,避免再建一个空会话)。
         throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session };
     } catch (err) {
       if (isStaleNewSessionOwnerError(err)) throw err;
       // 确定性失败(鉴权 / 参数 / 路径 guard 等)重试无意义,直接抛给重试面;
@@ -1276,11 +1279,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
       assertTaskOwnerCurrent(task);
       await openLink(params.deviceId);
       assertTaskOwnerCurrent(task);
-      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
-      assertTaskOwnerCurrent(task);
     });
-    // 建链/订阅完成后再启动鉴权 fresh revalidate(codex review P2:将最终目录
-    // 刷新放到建链和订阅之后)——与建链并行启动时,listProviders 可能在建链完成
+    // Subscription intents are registered synchronously. Their ACK is not a
+    // prerequisite for an authorized invoke or for durably accepting the input.
+    void subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']).catch(() => undefined);
+    // 建链完成、订阅意图登记后再启动鉴权 fresh revalidate。无需等待订阅 ACK，
+    // 但不能与建链并行：listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
     // 重验仍会向已删除来源创建。改为建链后拉取,终检目录是「建链后最新」。
     phase('checkingModel');
@@ -1338,7 +1342,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     let freshSession: RemoteSession | null = null;
     try {
       assertTaskOwnerCurrent(task);
-      freshSession = await maker.getSession(sessionId);
+      freshSession = createOutcome.session ?? await maker.getSession(sessionId);
       assertTaskOwnerCurrent(task);
       // 权威行落地时**保留** pendingLocalCreation 禁发标:enqueue 还没发生,此刻
       // 解禁的话,getSession → (setPlanMode) → enqueue 的弱网窗口(可达一两个往返)

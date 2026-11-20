@@ -169,6 +169,7 @@ export function applyRemoteAgentPick(
 }
 
 export interface CreateSessionResult {
+  session?: RemoteSession;
   sessionId: string;
   agentKind?: string;
   workDir?: string;
@@ -1201,6 +1202,11 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
   if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
   return {
     sessionId,
+    ...(record.session && typeof record.session === 'object' && !Array.isArray(record.session)
+      && (record.session as RemoteSession).id === sessionId
+      && typeof (record.session as RemoteSession).workingDir === 'string'
+      && (record.session as RemoteSession).workingDir === record.workDir
+      ? { session: record.session as RemoteSession } : {}),
     agentKind: readString(record.agentKind),
     workDir: readString(record.workDir),
     capabilities: record.capabilities,
