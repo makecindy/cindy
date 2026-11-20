@@ -1007,6 +1007,44 @@ describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
     expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
   });
 
+  it('releases a crash-restored pause for another queued request without enqueueing the persisted duplicate', async () => {
+    // #7512 review P1:用户行已落库的重试在 dispatch 层就返回,进不了 enqueue 的
+    // 去重放行。队里活下来的是另一条请求。这条路径只解开崩溃恢复暂停并 drain,
+    // 不再把已落库的那条重新入队。
+    const h = createHarness();
+    const sid = 'persisted-authorized-release';
+    h.setLoadQueueSnapshot(async () => [makeItem('other-queued', 'survived the crash')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    expect(h.coordinator.releaseCrashRestoredPausedQueue(sid, 'persisted-authorized-release')).toBe(true);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'survived the crash' });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual([]);
+  });
+
+  it('does not release a restart-held pause when asked to release a persisted duplicate', async () => {
+    const h = createHarness();
+    const sid = 'persisted-restart-hold';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('kept', 'kept request')],
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    expect(h.coordinator.releaseCrashRestoredPausedQueue(sid, 'persisted-authorized-release')).toBe(false);
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['kept']);
+  });
+
   it('keeps the restart-held pause when an authorized retry hits the duplicate guard', async () => {
     // 守卫里的放行只认崩溃恢复暂停:「重启伙伴」按住的队列(暂停来源已随快照落盘)
     // 不因同 clientId 重发解开,重试只确认投递,不重放用户已收手的请求。

@@ -13150,6 +13150,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: 'Previous welcome acceptance is unconfirmed; retry is required.' };
       }
       if (persisted && !params.toolsDisabled) {
+        // 用户行已落库就不再入队(避免第二条)。但这条守卫在入队之前返回,
+        // 授权盖章因此到不了放行逻辑:同一次重试被记成已送达,队里另一条崩溃
+        // 恢复出来的请求继续停着(#7512 review P1)。已授权的重试在这里解开
+        // 崩溃恢复暂停,不重放「重启伙伴」按住的队列。
+        if (isAuthorizedExternalDelivery({
+          externalAuthorizedDelivery: params.externalAuthorizedDelivery,
+          origin: params.origin,
+        })) {
+          await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+          inputCoordinator.releaseCrashRestoredPausedQueue(params.targetSessionId, 'persisted-authorized-release');
+        }
         await params.onAccepted?.(true);
         return {
           ok: true as const,

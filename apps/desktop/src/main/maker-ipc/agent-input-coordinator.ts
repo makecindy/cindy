@@ -2215,6 +2215,31 @@ export class AgentInputCoordinator {
     }
   }
 
+  /**
+   * 放行崩溃恢复暂停并补一次 drain,不入队。
+   *
+   * 已授权的重试有两条路都会走到「这条消息本身不能再入队」:协调器去重
+   * (队里已经有同一 clientId),以及更高一层的用户行已落库守卫(register.ts
+   * 的 persisted-row)。后者在入队之前就返回,去重分支的放行够不着;队里若还
+   * 有另一条崩溃恢复出来的请求,重试会被记成已送达而那条请求继续停着。
+   * 只认 `queuePausedByCrashRestore`——「重启伙伴」和用户 Stop 不动。
+   *
+   * @returns 是否真的解开了暂停
+   */
+  releaseCrashRestoredPausedQueue(sessionId: string, reason = 'authorized-crash-restore-release'): boolean {
+    const state = this.states.get(sessionId);
+    if (!state?.queuePaused || !state.queuePausedByCrashRestore) return false;
+    state.queuePaused = false;
+    state.queuePausedByRestore = false;
+    state.queuePausedByCrashRestore = false;
+    log.info('crash-restored paused queue released by an external Bot DM delivery', {
+      sessionId,
+      reason,
+    });
+    this.scheduleDrain(sessionId, reason);
+    return true;
+  }
+
   enqueue(
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -2253,16 +2278,8 @@ export class AgentInputCoordinator {
       // 走不到,队列停在暂停态而重试已报成功。只放行崩溃恢复暂停——「重启
       // 伙伴」按住的队列不因重发解开。放行后补一次 drain:队首已在内存里,
       // 没有新项入队,靠下面的入队路径不会被调度。
-      if (opts?.resumeCrashRestoredPausedQueue && state.queuePaused && state.queuePausedByCrashRestore) {
-        state.queuePaused = false;
-        state.queuePausedByRestore = false;
-        state.queuePausedByCrashRestore = false;
-        log.info('crash-restored paused queue released by an external Bot DM delivery', {
-          sessionId,
-          clientId: item.clientId,
-          duplicate: true,
-        });
-        this.scheduleDrain(sessionId, 'duplicate-authorized-release');
+      if (opts?.resumeCrashRestoredPausedQueue) {
+        this.releaseCrashRestoredPausedQueue(sessionId, 'duplicate-authorized-release');
       }
       opts?.onDuplicate?.();
       return this.getProjection(sessionId);

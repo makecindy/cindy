@@ -792,6 +792,60 @@ describe('bot dispatch files-branch pause-release flag', () => {
   });
 });
 
+// #7512 review P1:用户行已落库时 dispatch 在入队前返回 already-active,授权盖章
+// 到不了协调器。已授权的重试要放行崩溃恢复暂停,且不能再入队第二条。
+describe('bot dispatch persisted-row pause release', () => {
+  function persistedHarness() {
+    const releaseCrashRestoredPausedQueue = vi.fn();
+    const enqueue = vi.fn();
+    const dbChain = {
+      from: () => dbChain,
+      innerJoin: () => dbChain,
+      where: () => dbChain,
+      limit: async () => [{ id: 'msg-1' }],
+    };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+      inputCoordinator: {
+        ensureQueueRestored: async () => {},
+        shouldQueueNewTurn: () => false,
+        enqueue,
+        releaseCrashRestoredPausedQueue,
+      },
+    });
+    return { h, enqueue, releaseCrashRestoredPausedQueue };
+  }
+
+  it('releases the crash-restore pause and does not enqueue a second row', async () => {
+    const { h, enqueue, releaseCrashRestoredPausedQueue } = persistedHarness();
+    const onAccepted = vi.fn();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'room message',
+      externalAuthorizedDelivery: true,
+      onAccepted,
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'already-active' });
+    expect(releaseCrashRestoredPausedQueue).toHaveBeenCalledTimes(1);
+    expect(releaseCrashRestoredPausedQueue).toHaveBeenCalledWith('child', 'persisted-authorized-release');
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(onAccepted).toHaveBeenCalledWith(true);
+  });
+
+  it('does not release the pause for a persisted row that is not an authorized delivery', async () => {
+    const { h, enqueue, releaseCrashRestoredPausedQueue } = persistedHarness();
+    const result = await h.dispatchBotSessionMessage({
+      targetSessionId: 'child',
+      clientId: 'bot-group:run-1',
+      message: 'group retry',
+    });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'already-active' });
+    expect(releaseCrashRestoredPausedQueue).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
 describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
   // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
   // account recovery changed the persisted source. Execute the real dispatch closure: a legacy
