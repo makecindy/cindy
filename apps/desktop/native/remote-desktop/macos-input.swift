@@ -1082,37 +1082,43 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
   RunLoop.main.run()
   exit(2)
 }
-// A small icon-only authentication control inside a panel we own. The system still draws
-// and judges the check; we only choose where it appears, so the owner's screen is not
-// taken over by the standard authentication alert. `sharingType = .none` keeps the
-// control out of screenshots and recordings, which the standard alert cannot do.
-func ownerPromptPanel(context: LAContext) -> NSPanel {
-  let side: CGFloat = 32
-  let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
-    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-  panel.isOpaque = false
-  panel.backgroundColor = .clear
-  panel.hasShadow = false
-  panel.animationBehavior = .none
-  panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-  panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-  panel.sharingType = .none
-  let host = NSView(frame: NSRect(x: 0, y: 0, width: side, height: side))
-  let control = LAAuthenticationView(context: context, controlSize: .small)
-  control.translatesAutoresizingMaskIntoConstraints = false
-  host.addSubview(control)
-  NSLayoutConstraint.activate([
-    control.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-    control.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-  ])
-  panel.contentView = host
-  if let screen = NSScreen.main {
-    // Just above the Dock, centered: quiet enough to read as part of the cover.
-    let visible = screen.visibleFrame
-    panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
+// The system's authentication control, drawn into a transparent panel we own. The system
+// still judges the check; we only choose where it appears, so the owner's screen is not
+// taken over by the standard authentication alert. `sharingType = .none` keeps it out of
+// screenshots and recordings, which the standard alert cannot do.
+final class OwnerPromptPanel {
+  let panel: NSPanel
+  init(context: LAContext, alpha: CGFloat) {
+    let side: CGFloat = 32
+    panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = false
+    panel.animationBehavior = .none
+    panel.alphaValue = alpha
+    panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+    panel.sharingType = .none
+    let host = NSView(frame: NSRect(x: 0, y: 0, width: side, height: side))
+    let control = LAAuthenticationView(context: context, controlSize: .small)
+    control.translatesAutoresizingMaskIntoConstraints = false
+    host.addSubview(control)
+    NSLayoutConstraint.activate([
+      control.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+      control.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+    ])
+    panel.contentView = host
+    if let screen = NSScreen.main {
+      // Just above the Dock, centered: quiet enough to read as part of the cover.
+      let visible = screen.visibleFrame
+      panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
+    }
+    panel.orderFrontRegardless()
   }
-  panel.orderFrontRegardless()
-  return panel
+  func close() {
+    panel.orderOut(nil)
+  }
 }
 // `--owner-prompt <reason>`: while the privacy screen itself keeps the display awake,
 // the owner's Touch ID check stays armed so a finger on the sensor uncovers the screen
@@ -1133,13 +1139,35 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     print("unavailable"); exit(0)
   }
   let reason = String(CommandLine.arguments[2].prefix(200))
-  let panel = ownerPromptPanel(context: context)
+  // Invisible by intent (2026-11-20 user decision): the system draws its control, but the
+  // panel sits at two percent opacity, so nothing recognizable reaches the screen. A system
+  // that refuses to verify against a control the user cannot see is not something we can
+  // argue with, so a refusal that arrives instantly re-mounts the same control at full
+  // opacity and asks once more, rather than leaving touch-to-return silently broken.
+  var panel = OwnerPromptPanel(context: context, alpha: 0.02)
   var answered = false
-  context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
-    guard !answered else { return }
-    answered = true
-    print(success ? "verified" : "denied"); fflush(stdout); exit(0)
+  var retried = false
+  func arm(_ context: LAContext) {
+    let started = DispatchTime.now()
+    context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+      guard !answered else { return }
+      let code = (error as NSError?)?.code
+      let instant = DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds < 1_500_000_000
+      if !success, !retried, instant,
+        code == LAError.notInteractive.rawValue || code == LAError.systemCancel.rawValue {
+        retried = true
+        panel.close()
+        let visible = LAContext()
+        visible.localizedFallbackTitle = ""
+        panel = OwnerPromptPanel(context: visible, alpha: 1)
+        arm(visible)
+        return
+      }
+      answered = true
+      print(success ? "verified" : "denied"); fflush(stdout); exit(0)
+    }
   }
+  arm(context)
   // Versioned greeting: an older helper that predates this mode falls through to the
   // generic input loop and would also print a bare `ready`, so Main must not read that as
   // "the system sheet is up". Only this exact token arms the prompt.
@@ -1153,7 +1181,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     DispatchQueue.main.async {
       answered = true
       context.invalidate()
-      panel.orderOut(nil)
+      panel.close()
       print("stopped"); fflush(stdout); exit(0)
     }
   }

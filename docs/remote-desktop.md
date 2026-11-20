@@ -177,11 +177,14 @@ clicks still turn into the lock. The check lives only as long as the cover holds
 display awake, and goes when the cover locks, ends, or enters the lock-failed state; it
 never unlocks a locked Mac.
 
-The check is not the standard authentication alert. The helper owns a 32 pt transparent
-panel (`sharingType = .none`) above the cover and puts an `LAAuthenticationView` in it
-(`LocalAuthenticationEmbeddedUI`), so the system keeps drawing and judging the prompt —
-Cindy only chooses its size and place, and the control stays out of screenshots and
-recordings the way the system alert cannot. Mounting is still suppressed while any
+The check is not the standard authentication alert. The helper owns a transparent panel
+(`sharingType = .none`) above the cover and puts an `LAAuthenticationView`
+(`LocalAuthenticationEmbeddedUI`) in it, so the system keeps drawing and judging the
+prompt. The panel sits at 2% opacity — invisible on purpose (2026-11-20 user request) —
+because a system that refuses to verify against a control the user cannot see is the only
+thing that can stop it: an instant `LAErrorNotInteractive` / `systemCancel` re-mounts the
+same control at full opacity and asks once more. Cindy still only chooses size and place,
+and the control stays out of screenshots and recordings the way the system alert cannot. Mounting is still suppressed while any
 Computer Use session is open (`openComputerUseSessions` / `onComputerUseSessionsChange`)
 and while a remote viewer holds a lease (`RemoteDesktopController.hasActiveLease`,
 including the few seconds after one ends, when native input may still be landing):
