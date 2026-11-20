@@ -4900,11 +4900,12 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
-  // PR #11683 review (model-groups.md §6.2), unit, real editor + picker: choosing a model group
-  // waits for a preview from main; a plain pick made meanwhile must win over the late preview.
-  // Minimal input: pick a group, change the chain, then resolve the preview.
-  it('applies a model group preview, but drops one that returns after the chain changed', async () => {
-    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+  // PR #11683 reviews (model-groups.md §6.2), unit, real editor + picker in a controlled form like the settings
+  // pages: picking a group records it at once (an immediate Create keeps it); the preview only swaps in the group's
+  // source while the entry still holds that group. Minimal inputs: resolve late after re-picking the same plain model.
+  it('records a model group at once, fills in its source from the preview, and drops a late preview after a plain pick', async () => {
+    type Route = { harness: 'codex'; providerId: string; model: string; effort: string; fastMode: boolean; modelGroup?: string };
+    const route: Route = { harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
     const previews: Array<(value: unknown) => void> = [];
     vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
       get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'Late group', strategy: 'order',
@@ -4918,8 +4919,14 @@ describe('Teammate settings with the real model picker', () => {
     });
     const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' },
       modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] };
-    const change = vi.fn();
-    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    const saved: Route[][] = [];
+    let setChain!: (next: Route[]) => void;
+    function Form() {
+      const [chain, setState] = React.useState<Route[]>([route]);
+      setChain = setState;
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next as Route[]); setState(next as Route[]); }} />;
+    }
+    const view = render(<Form />);
     const chooseGroup = async () => {
       fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
       const rail = await waitFor(() => {
@@ -4932,15 +4939,18 @@ describe('Teammate settings with the real model picker', () => {
     };
 
     await chooseGroup();
+    // Recorded before the preview returns: submitting now keeps the group, with the previous model as its fallback.
+    expect(saved.at(-1)).toEqual([{ ...route, modelGroup: 'grp' }]);
     await act(async () => previews.shift()!(routed));
-    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', modelGroup: 'grp' })]);
+    expect(saved.at(-1)).toEqual([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', modelGroup: 'grp' })]);
 
-    change.mockClear();
+    await act(async () => setChain([route]));
     await chooseGroup();
-    // A plain model is chosen (and saved) before the preview returns.
-    view.rerender(<BotModelChainEditor value={[{ ...route, model: 'gpt-5.4' }]} onChange={change} />);
+    const count = saved.length;
+    // The same plain model is picked again before the preview returns: the final chain equals the original one.
+    await act(async () => setChain([route]));
     await act(async () => previews.shift()!(routed));
-    expect(change).not.toHaveBeenCalled();
+    expect(saved.length).toBe(count);
   });
 
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local

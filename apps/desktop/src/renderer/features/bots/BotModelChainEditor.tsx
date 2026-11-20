@@ -103,23 +103,31 @@ export function BotModelChainEditor({
       : [{ harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false }];
     onChange(editable.map((route, at) => (at === index ? merge(route, patch) : route)));
   };
-  // 预览要等主进程(可能读别处的目录与额度)：用最新的链落结果，等待期间有过别的修改或又选了组就作废。
-  const latest = useRef({ snapshot: '', replace });
-  latest.current = { snapshot: JSON.stringify([routes, pendingRoute]), replace };
+  // 预览要等主进程(可能读别处的目录与额度)：结果只落到最新一次渲染的链上。
+  const latest = useRef({ entryAt: (_index: number): BotModelRoute | undefined => undefined, replace });
+  latest.current = {
+    entryAt: (index) => (pendingRoute && index === routes.length ? pendingRoute : routes[index]),
+    replace,
+  };
   const pickSeq = useRef(0);
   /**
-   * 选中一个模型组：按组的规则预览一次(不推进轮流)，把那个来源存成这一项的具体模型，旧版本和
-   * 组被删掉时都按它运行；真正用谁在伙伴开始用这个设置时由组的规则决定。
+   * 选中一个模型组：立刻记下(按钮马上显示组名，紧接着提交也带上组)，这一项暂以原来的模型作存下的具体模型；
+   * 再按组的规则预览一次(不推进轮流)，把组此刻会选的来源换进来，旧版本和组被删掉时都按它运行。
+   * 预览回来时这一项已不是「这个组 + 原来的模型」(选了普通模型、哪怕还是同一个，或又选了别的组)就作废。
+   * 真正用谁在伙伴开始用这个设置时由组的规则决定。
    */
   const pickGroup = async (index: number, selection: ModelGroupSelection) => {
     const seq = ++pickSeq.current;
-    const before = latest.current.snapshot;
     const name = groupsConfig.routes.find((route) => route.id === selection.id)?.name ?? '';
+    const chosenFrom = latest.current.entryAt(index)?.model ?? '';
+    replace(index, { modelGroup: selection.id });
     const result = await previewModelGroup(selection);
-    if (seq !== pickSeq.current || latest.current.snapshot !== before) return;
+    const entry = latest.current.entryAt(index);
+    if (seq !== pickSeq.current || entry?.modelGroup !== selection.id || entry.model !== chosenFrom) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
     if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
+      latest.current.replace(index, { modelGroup: undefined });
       return;
     }
     const { route } = result;
@@ -127,7 +135,6 @@ export function BotModelChainEditor({
       harness: harnessFor(route.agentKind),
       model: route.model,
       providerId: route.providerId,
-      effort: route.effort ?? '',
       fastMode: false,
       agentDeviceId: route.agentDeviceId ?? null,
       modelGroup: selection.id,
