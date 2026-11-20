@@ -192,6 +192,25 @@ describe('mobile plugin pages', () => {
     expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
   });
 
+  // Workspace plugins create ordinary tasks too; reuse the same trusted Host settings API.
+  // Opt-out hides the card without revoking the existing owner's settings access. tier: unit.
+  it.each([true, false])('offers workspace task settings with card visibility %s', async (showTaskPreferences) => {
+    const h = setup();
+    h.ghost.manifest.workspace = true;
+    h.ghost.manifest.showTaskPreferences = showTaskPreferences;
+    const detail = await h.provider.get!({ controllerDeviceId: 'phone-a' }, {
+      ref: { collectionId: 'plugins', kind: 'plugin', id: 'practice' },
+      client: { protocolVersion: 1, primitives: ['plugin-capabilities'] },
+    });
+    expect(detail.blocks?.find(block => block.id === 'capabilities')?.data)
+      .toMatchObject({ tasks: showTaskPreferences });
+    await h.invoke('task-settings:get');
+    expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+    await h.invoke('task-settings:set', { expectedRevision: 'settings-r1', permissionMode: 'ask' });
+    expect(h.taskSettings.update).toHaveBeenCalledWith('practice', 'r1',
+      { expectedRevision: 'settings-r1', permissionMode: 'ask' }, expect.any(Function));
+  });
+
   // Detailed introduction: the detail resource only carries a flag; the phone fetches the
   // content for its own locale, and one reply stays within the device-link message budget.
   it('offers the detailed introduction on demand within the reply budget', async () => {
@@ -652,8 +671,8 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   const pc = toGhostPluginDetail(h.ghost);
   const facts = await read();
   const values = Object.fromEntries(facts.map(fact => [fact.key, fact.value]));
-  expect(values).toMatchObject({version: 'v' + pc.version, author: pc.author, identifier: pc.id, location: pc.installDir, trust: 'Unverified / unsigned', panel: 'This plugin has no panel'});
-  expect(facts.map(fact => fact.title)).toEqual(['Version', 'Author', 'Source & signature', 'Identifier', 'Contains', 'Panel', 'Install location']);
+  expect(values).toMatchObject({version: 'v' + pc.version, author: pc.author, identifier: pc.id, location: pc.installDir, source: 'Unknown source', trust: 'Unverified / unsigned', panel: 'This plugin has no panel'});
+  expect(facts.map(fact => fact.title)).toEqual(['Version', 'Author', 'Source', 'Signature', 'Identifier', 'Contains', 'Panel', 'Install location']);
   expect(values.contents).toBe('Custom settings UI · Executable code');
   h.ghost.trust = {level: 'unverified', publisherSigned: true, publisherVerified: false, reviewed: false, publisherName: 'Independent publisher', publisherKeyId: 'not-a-display-field'};
   const signed = await read();

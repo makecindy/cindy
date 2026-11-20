@@ -70,6 +70,16 @@ export type MobileMarkdownBlock =
   | { type: 'math'; key: string; srcLine?: number; text: string }
   | { type: 'code'; key: string; srcLine?: number; language?: string; text: string };
 
+/** Preserve the rendered grid when pasting a complete table into a spreadsheet. */
+export function mobileMarkdownTableToTsv(table: Extract<MobileMarkdownBlock, { type: 'table' }>): string {
+  const rows = [table.header, ...table.rows.map(row => row.cells)];
+  const columns = Math.max(...rows.map(row => row.length));
+  return rows.map(row => Array.from({ length: columns }, (_, index) =>
+    (row[index] ?? []).map(inline => inline.type === 'image' ? inline.alt : inline.text)
+      .join('').replace(/[\t\r\n]+/g, ' '),
+  ).join('\t')).join('\n');
+}
+
 /** Plain summaries share the message parser, keeping labels and omitting link destinations. */
 export function mobileMarkdownPreviewText(markdown: string): string {
   const inlineText = (inlines: MobileMarkdownInline[]) => inlines.map(inline => inline.type === 'image' ? inline.alt : inline.text).join('');

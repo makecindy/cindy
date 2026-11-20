@@ -289,7 +289,10 @@ describe('shared task guests never see the owner private message sources', () =>
     subscriptions.subscribe(guestA, ['session:task-a']);
     subscriptions.subscribe('own-task', ['session:task-a']);
     const sourceDevice = { deviceId: 'owner-phone', name: 'Owner iPhone', platform: 'mobile' };
-    const sourcePlugin = { pluginId: 'owner-plugin', name: 'Owner Plugin' };
+    // A plugin IM relay (message-source.md, 2026-11-16) rides inside sourcePlugin: guests get neither the
+    // relayed chat/speaker nor the data the owner's clients derive the IM card from.
+    const sourcePlugin = { pluginId: 'owner-plugin', name: 'Owner Plugin', relay: { platform: 'wechat', chatType: 'group',
+      chatName: 'Owner WeChat group', sender: { id: 'wxid_owner_friend', name: 'Owner friend', isOwner: false } } };
     const schedulerOrigin = { kind: 'scheduler', scheduleId: 'owner-schedule', scheduleName: 'Owner nightly', runId: 'run-1' };
     const deviceRow = { clientId: 'm2', sessionId: 'task-a', role: 'user', content: 'hi', agentMeta: { sourceDevice, sourceGroup: { groupId: 'owner-group', name: 'Private group' }, uuid: 'u2' } };
     const scheduledRow = {
@@ -331,7 +334,7 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(guestQueue[1].origin).toEqual({ kind: 'scheduler' });
     expect(guestQueue[1].text).toBe('nightly');
     expect(JSON.stringify(guestPushes)).not.toMatch(
-      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-group|Private group|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
+      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-group|Private group|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack|relay|wechat|Owner WeChat group|wxid_owner_friend|Owner friend/,
     );
     // Same-account controllers keep the full attribution.
     expect(ownPushes.filter((payload) => payload.message).map((payload) => payload.message.agentMeta))
@@ -395,7 +398,7 @@ describe('shared task MCP App data stays at the owner boundary', () => {
     },
   };
   const expected = {
-    mcpAppHistory: { version: 1, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
+    mcpAppHistory: { version: 1, customMcp: true, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
   };
 
   it.each(['online', 'reconnecting'])(

@@ -179,6 +179,28 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
     makerChatStore.mirrorSessionFields(s, { agentSwitchIntent: null });
     expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
   });
+
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)：待切到插件引擎的意图必须指出是哪个引擎；切换落地
+  // (agentKind 翻成 'acp')时清掉意图，事件仍走与直接打开的插件引擎任务相同的 reducer。
+  it('插件引擎意图:只认带引擎标识的；切换落地后清除并走插件引擎任务的 reducer', async () => {
+    const { builtinAgentSwitchIntent, makerChatStore, pluginEngineAgentSwitchIntent } = await import('@/lib/makerChatStore');
+    const s = sid();
+    makerChatStore.mirrorAgentSwitchIntent(s, { targetAgentKind: 'acp', model: 'default', providerId: 'openai' });
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
+
+    makerChatStore.noteAgentSwitched(s, 'codex');
+    makerChatStore.mirrorSessionFields(s, {
+      agentSwitchIntent: { targetAgentKind: 'acp', model: 'deepseek-v4', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh' },
+    });
+    const intent = makerChatStore.getSnapshot(s).agentSwitchIntent;
+    expect(pluginEngineAgentSwitchIntent(intent)).toMatchObject({ target: 'acp', model: 'deepseek-v4' });
+    // 内置引擎的展示链路看不到它。
+    expect(builtinAgentSwitchIntent(intent)).toBeNull();
+
+    makerChatStore.mirrorSessionFields(s, { agentKind: 'acp' } as { fastMode?: unknown });
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('claude-code');
+  });
 });
 
 describe('isAgentSwitchResponseFresh（远程意图读回的新鲜度守卫）', () => {
@@ -853,7 +875,8 @@ describe("ChatInput 的入口门控与调用路由", () => {
     const expression = source.match(/const sessionAgentSwitchSupported =\s*([\s\S]*?);/)?.[1];
     if (!expression) throw new Error('Agent switch capability expression was not found');
     const supported = new Function('sessionOrcaRole', 'runtimeAgentKind', 'deviceLinkDeviceId',
-      'ccSupportsSessionAgentSwitch', 'codexSupportsSessionAgentSwitch', `return ${expression};`);
+      'ccSupportsSessionAgentSwitch', 'codexSupportsSessionAgentSwitch', 'pluginEngineTaskSwitchable = false',
+      `return ${expression};`);
     for (const role of [null, 'lead', 'worker']) {
       expect(supported(role, 'codex', null, false, false)).toBe(true);
       expect(supported(role, undefined, null, true, true)).toBe(false);
@@ -861,6 +884,8 @@ describe("ChatInput 的入口门控与调用路由", () => {
       expect(supported(role, 'codex', 'host', false, true)).toBe(true);
     }
     expect(supported(undefined, 'codex', null, true, true)).toBe(false);
+    // 本机插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为空)，仍走同一个切换入口。
+    expect(supported(null, null, null, false, false, true)).toBe(true);
     const remoteOptions = source.slice(source.indexOf('const sessionRemoteAgentOptions ='),
       source.indexOf('// composer pill 尾部引擎小标'));
     const relocationGuard = remoteOptions.match(/if \(([\s\S]*?)\) return undefined;/)?.[1];
@@ -911,6 +936,7 @@ describe("ChatInput 的入口门控与调用路由", () => {
     const bindings = { sessionOrcaRole, settingsLocked: false, sessionId: 's1',
       sessionAgentSwitchSupported: true, remoteHostId: null, runtimeAgentKind: 'codex',
       makerChatStore: { getAgentSwitchIntent: () => null }, performAgentSwitch: switchAgent,
+      builtinAgentSwitchIntent: (intent: unknown) => intent ?? null,
       effectiveSourceId: 'provider-old', activeModel: 'model-old' };
     function callback(name: string) {
       if (!callbacks.has(name)) throw new Error(`Composer callback ${name} was not found`);

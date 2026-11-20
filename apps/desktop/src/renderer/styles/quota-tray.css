@@ -1,0 +1,210 @@
+@font-face {
+  font-family: "Quota Barlow";
+  src: url("../../../native/menubar/BarlowCondensed-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: swap;
+}
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  background: transparent;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+#root, .panel { height: 100dvh; }
+.panel {
+  display: flex; flex-direction: column; color: var(--ink);
+  border-radius: var(--panel-radius); overflow: hidden;
+  background: radial-gradient(ellipse at top left, var(--panelGlow), transparent 60%),
+    linear-gradient(125deg, transparent, var(--panelGlow2)),
+    linear-gradient(var(--panelTint), var(--panelTint)), var(--panelBase);
+}
+header, footer { flex: none; display: flex; align-items: center; gap: 8px; }
+header { padding: 12px 12px 4px 18px; min-height: 44px; }
+header > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header small { font-size: 11px; }
+.wordmark { width: 40px; height: auto; display: block; }
+.refresh, .done { margin-left: auto; }
+main { position: relative; overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--ink4) transparent; }
+.page { display: flow-root; }
+.page[data-leaving] { position: absolute; inset: 0 0 auto; pointer-events: none; }
+small { color: var(--ink3); font-size: 11px; }
+.secondary { color: var(--ink2); margin: 4px 0 0; }
+h1 { font-size: 21px; line-height: 1.2; margin: 0; letter-spacing: -.035em; }
+h2 { font-size: 13px; margin: 14px 0 8px; }
+button, select { font: inherit; color: inherit; }
+button { background: transparent; border: 0; border-radius: 8px; cursor: pointer; padding: 0; min-height: 28px; }
+button:hover { background: var(--ink5); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
+button:disabled { opacity: .3; cursor: default; }
+.icon-button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--ink2); border-radius: 50%; }
+.icon-button:hover { color: var(--ink); }
+.headline { padding: 6px 20px 0; }
+.headline .secondary { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.secondary[data-alert=true]::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--warn); }
+.sources { display: flex; gap: 6px; padding: 10px 16px 0; }
+.source { flex: 1 1 0; min-width: 0; text-align: center; padding: 4px 0; }
+.source:hover, .more:hover { background: none; }
+.more:hover { color: var(--ink); }
+.count { position: relative; display: inline-block; }
+.count > :first-child { visibility: hidden; }
+.count > :last-child { position: absolute; top: 0; right: 0; white-space: nowrap; }
+.source > span:not(.logo), .source > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric { font-family: "Quota Barlow", "Segoe UI", sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+.source > b { font-size: 22px; line-height: 1.2; }
+.metric small { font-family: inherit; font-size: 60%; }
+.tube { position: relative; overflow: hidden; margin: 8px auto; height: var(--tube-height); width: 40px; background: linear-gradient(var(--wellTop), var(--wellBottom)); box-shadow: inset 0 1px 3px var(--wellShade); border-radius: 12px; }
+.tube[data-best=true] { outline: 1px solid var(--ink2); }
+.well { position: absolute; inset: 3px; overflow: hidden; border-radius: 8px; }
+.tube i { position: absolute; inset: auto 0 0; }
+.tube svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: var(--liquid); }
+.tube[data-level=error] svg { fill: var(--error); }
+.tube[data-level=warn] svg { fill: var(--warn); }
+.source > small[data-level=error] { color: var(--error); }
+.source > small[data-level=warn] { color: var(--warn); }
+.logo { display: inline-block; width: 14px; height: 14px; background: currentColor; mask-size: contain; mask-position: center; mask-repeat: no-repeat; flex: none; }
+.source > .logo { margin: 0 auto 4px; color: var(--ink); }
+.source > span:not(.logo) { color: var(--ink2); font-size: 12px; }
+.source > small { margin-top: 3px; }
+.tabs { display: flex; gap: 16px; padding: 12px 20px 6px; flex-wrap: wrap; }
+.tabs button { font-size: 12px; font-weight: 500; color: var(--ink3); position: relative; white-space: nowrap; }
+.tabs small { margin-left: 4px; font-size: inherit; }
+.tabs button[aria-pressed=true] { color: var(--ink); }
+.tabs button[aria-pressed=true]::after { content: ''; position: absolute; width: 12px; height: 1.5px; border-radius: 9999px; background: var(--ink2); bottom: 0; left: 0; }
+.rows { padding: 0 10px; }
+.task-summary { padding: 0 20px; }
+.task-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; }
+.task-icon { position: relative; display: grid; place-items: center; background: var(--tile); border-radius: 8px; width: 28px; height: 28px; flex: none; }
+.task-content { flex: 1; min-width: 0; }
+.task-title { display: flex; align-items: baseline; gap: 8px; }
+.task-title strong, .task-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
+.task-title strong { flex: 1; font-size: 12px; }
+.task-title small { flex: none; }
+.task-preview { color: var(--ink2); font-size: 12px; }
+.empty { color: var(--ink3); padding: 8px 10px; margin: 0; }
+.more { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; color: var(--ink3); font-size: 12px; }
+.more > span:last-child { display: inline-flex; align-items: center; }
+.tile { border-radius: var(--tile-radius); background: var(--tile); border: .5px solid var(--line); }
+.usage.tile:hover { background: var(--tile); }
+.usage { margin: 8px 12px 12px; width: calc(100% - 24px); display: grid; grid-template-columns: auto minmax(40px,1fr) auto; align-items: center; gap: 8px; padding: 9px 12px; text-align: left; }
+.usage > span:first-child { display: contents; }
+.usage small { grid-column: 1 / -1; line-height: 1; }
+.usage b { font-size: 26px; line-height: 1; }
+.chart { height: 30px; width: 100%; overflow: visible; color: var(--ink2); }
+.chart polygon { fill-opacity: .66; }
+.chart .claude { fill: var(--claude); }
+.chart .codex { fill: var(--codex); }
+.chart .pi { fill: var(--pi); }
+.expand { display: inline-flex; align-items: center; color: var(--ink2); font-size: 12px; white-space: nowrap; }
+footer { justify-content: space-between; padding: 8px 10px 12px 12px; }
+footer[hidden] { display: none; }
+.primary { padding: 4px 12px; border-radius: 9999px; font-weight: 600; background: var(--cta); color: var(--onInk); }
+.primary:hover { background: var(--ink); }
+.open-app { display: flex; align-items: center; gap: 8px; height: 30px; }
+.open-app > svg { width: 7px; height: 11px; fill: var(--brand); }
+kbd { font: inherit; opacity: .45; }
+.remote, .unmeasured { display: flex; align-items: center; gap: 8px; width: calc(100% - 24px); margin: 4px 12px; padding: 6px; text-align: left; }
+.remote > span, .unmeasured > span:not(.logo) { flex: 1; min-width: 0; }
+.remote small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage, .detail, .usage-page { padding: 8px 14px 16px; }
+.section-caption { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0 8px; }
+.manage-source { display: flex; gap: 8px; align-items: center; padding: 6px 8px; }
+.manage-source + .manage-source, .setting + .setting { border-top: .5px solid var(--line); }
+.manage-source label { display: grid; grid-template-columns: minmax(0,1fr) auto; flex: 1; min-width: 0; cursor: pointer; }
+.manage-source label strong, .manage-source label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage-source label strong { font-size: 12px; }
+.manage-source label small { grid-row: 2; }
+.manage-source input { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.reorder { display: flex; }
+.reorder button { width: 28px; display: grid; place-items: center; }
+.setting { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px; gap: 10px; }
+.setting > span { min-width: 0; overflow-wrap: anywhere; }
+input { accent-color: var(--codex); }
+input[role=switch] { appearance: none; width: 28px; height: 17px; border-radius: 9999px; background: var(--ink4); position: relative; flex: none; cursor: pointer; }
+input[role=switch]::before { content: ''; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px; background: white; border-radius: 50%; }
+input[role=switch]:checked { background: var(--codex); }
+input[role=switch]:checked::before { left: 13px; }
+.scope { flex-wrap: wrap; }
+select { max-width: 100%; background: var(--tile); padding: 5px; border: 1px solid var(--ink4); border-radius: 8px; }
+.manage-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--ink3); font-size: 12px; }
+.detail { text-align: center; }
+.detail > .logo { width: 24px; height: 24px; }
+.detail h1 { margin-top: 8px; font-size: 18px; overflow-wrap: anywhere; }
+.rings { position: relative; width: var(--ring-size); height: var(--ring-size); margin: 16px auto; }
+.rings > svg { width: 100%; height: 100%; }
+.rings circle { fill: none; stroke-width: 8px; stroke-linecap: round; }
+.ring-track { stroke: var(--ink5); }
+.rings > div { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 30px; }
+.rings b { font-size: 34px; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; text-align: left; margin: 16px 0; }
+.facts > div { padding: 10px; }
+.facts strong, .facts small { display: block; overflow-wrap: anywhere; }
+.legend { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+.range { display: flex; gap: 4px; }
+.range button { flex: 1; padding: 4px; }
+.range button[aria-pressed=true] { background: var(--tile); }
+.usage-total { font-size: 38px; display: block; margin-top: 14px; }
+.usage-page > .chart { height: 100px; margin-top: 16px; }
+
+/*
+ * Motion of the Swift panel (native/menubar/macos-menubar-helper.swift), same curves and
+ * durations: Motion.fill/page 500ms, Motion.liquid 900ms, Motion.quick 200ms ease-out. It starts
+ * once the prewarmed card is shown, and everything is still under reduced motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .panel[data-visible=true] { --quota-ease: cubic-bezier(.22, 1, .36, 1); --quota-spring: cubic-bezier(.3, 1.5, .5, 1); }
+  .panel[data-visible=true] :is(.tube, .well) { animation-delay: inherit; }
+  .panel[data-visible=true] .tube i {
+    transform-origin: center bottom;
+    animation: quota-rise 900ms var(--quota-ease) backwards;
+    animation-delay: inherit;
+    transition: height 900ms var(--quota-ease);
+  }
+  .panel[data-visible=true] .rings circle[pathLength] {
+    animation: quota-ring 500ms var(--quota-ease) backwards;
+    transition: stroke-dasharray 500ms var(--quota-ease);
+  }
+  /* Pages: the overview slides a third of the way left, the others move in from the right. */
+  .panel[data-visible=true] .page[data-kind=sub] { animation: quota-page-sub 500ms var(--quota-ease) backwards; }
+  .panel[data-visible=true] .page[data-kind=main][data-returning=true] { animation: quota-page-main 500ms var(--quota-ease) backwards; }
+  /* The page being left eases out on the same curve, not a reversed one that would hold it opaque. */
+  .panel[data-visible=true] .page[data-leaving][data-kind=sub] { animation: quota-page-sub-out 500ms var(--quota-ease) forwards; }
+  .panel[data-visible=true] .page[data-leaving][data-kind=main] { animation: quota-page-main-out 500ms var(--quota-ease) forwards; }
+  .panel[data-visible=true] button { transition: background-color 200ms ease-out, color 200ms ease-out; }
+  /* A source lifts under the pointer, squeezes when pressed and springs back. */
+  .panel[data-visible=true] .source { transition: translate 250ms var(--quota-ease), scale 350ms var(--quota-spring); }
+  .source:hover { translate: 0 -3px; }
+  .panel[data-visible=true] .source:active { scale: .95; transition: translate 250ms var(--quota-ease), scale 100ms ease-out; }
+  .panel[data-visible=true] .usage.tile { transition: translate 200ms ease-out; }
+  .usage.tile:hover { translate: 0 -1px; }
+  .panel[data-visible=true] :is(.primary, .range button) { transition: background-color 200ms ease-out, scale 120ms ease-out; }
+  :is(.primary, .range button):active { scale: .97; }
+  /* The logo's ">" slides in on opening, leans forward on hover and pushes on press. */
+  .panel[data-visible=true] .open-app > svg {
+    transform-origin: right center;
+    animation: quota-mark 700ms var(--quota-ease) 450ms backwards;
+    transition: translate 350ms var(--quota-spring), scale 350ms var(--quota-spring);
+  }
+  .open-app:hover > svg { translate: 2px; }
+  .panel[data-visible=true] .open-app:active > svg { translate: 4px; scale: .8 1; transition: translate 120ms ease-out, scale 120ms ease-out; }
+  .panel[data-visible=true] .manage-source input[data-shake=true] { animation: quota-shake 60ms ease-in-out 4 alternate; }
+  .panel[data-visible=true] .refresh svg { transition: rotate 900ms cubic-bezier(.4, .1, .3, 1); }
+  input[role=switch], input[role=switch]::before { transition: background-color 200ms ease-out, left 200ms ease-out; }
+  /* A running task's icon sends out a slow ring. */
+  .panel[data-visible=true] .task-icon[data-running=true]::after {
+    content: ''; position: absolute; inset: -3px; border: 1px solid var(--ink3); border-radius: 12px;
+    animation: quota-pulse 2200ms ease-out infinite;
+  }
+}
+@keyframes quota-rise { from { transform: scaleY(0); } }
+@keyframes quota-ring { from { stroke-dasharray: 0 1; } }
+@keyframes quota-page-sub { from { opacity: 0; transform: translateX(100%); } }
+@keyframes quota-page-main { from { opacity: 0; transform: translateX(-30%); } }
+@keyframes quota-page-sub-out { to { opacity: 0; transform: translateX(100%); } }
+@keyframes quota-page-main-out { to { opacity: 0; transform: translateX(-30%); } }
+@keyframes quota-mark { from { opacity: 0; transform: translateX(-5px); } }
+@keyframes quota-shake { to { translate: 4px; } }
+@keyframes quota-pulse { from { opacity: .7; transform: scale(.92); } to { opacity: 0; transform: scale(1.12); } }

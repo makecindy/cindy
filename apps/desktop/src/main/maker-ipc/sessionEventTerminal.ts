@@ -59,6 +59,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly saveRemoteNativeHistory?: (sessionId: string, data: unknown, anchor: string, persisted: Promise<unknown>) => void;
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
@@ -228,8 +229,10 @@ export function finishSessionTerminalEvent(
       // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
       // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
       // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+      // 宿主退出也会直接以 cancelled done 收口 Claude/Pi；半截回复不能盖成功章。
       const isSuccessfulDone =
         event.type === 'done' &&
+        isSuccessfulAssistantReplyDoneData(event.data) &&
         (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
       if (!isSuccessfulDone) {
         void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
@@ -485,6 +488,9 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (event.type === 'done' && event.source === 'pi' && turnBoundaryAssistantPersistId) {
+        deps.saveRemoteNativeHistory?.(session.id, event.data, turnBoundaryAssistantPersistId, drainPersistQueue());
+      }
       if (
         event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {

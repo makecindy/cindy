@@ -12,8 +12,9 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
   const codex = createCodexEnvironment({ ...http, ...ports });
   const pi = createPiEnvironment(http);
   const logger = createMakerLogger('maker/mcp');
-  const codexDeps: Pick<AgentDeps, 'prepareCodexExtraSpawnConfig' | 'registerCodexMcpThreadContext' |
-    'unregisterCodexMcpThreadContext' | 'prepareCodexMcpToolCancellation' | 'withCodexMcpDiscoveryContext'> = {
+  // Required: every member is set, and the engine bags in runtime.ts count them as written.
+  const codexDeps: Required<Pick<AgentDeps, 'prepareCodexExtraSpawnConfig' | 'registerCodexMcpThreadContext' |
+    'unregisterCodexMcpThreadContext' | 'prepareCodexMcpToolCancellation' | 'withCodexMcpDiscoveryContext'>> = {
     prepareCodexExtraSpawnConfig: providers => codex.getCodexExtraSpawnConfig({ mcpProviders: providers, logger }),
     registerCodexMcpThreadContext: ({ threadId, ...context }) => {
       const disabled = readDisabledBuiltinPluginIds(context.vendorOptions)
@@ -26,7 +27,7 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
     withCodexMcpDiscoveryContext: (context, run) => codex.withCodexMcpDiscoveryContext({ ...context, agentKind: 'codex' }, run),
   };
   // PiAgent calls (providers, ctx); the shared environment also takes the logger.
-  const piDeps: Pick<AgentDeps, 'preparePiExtraSpawnConfig'> = {
+  const piDeps: Required<Pick<AgentDeps, 'preparePiExtraSpawnConfig'>> = {
     preparePiExtraSpawnConfig: (providers, ctx) => pi.getPiExtraSpawnConfig(providers, logger, ctx),
   };
   return {

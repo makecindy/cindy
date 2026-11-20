@@ -282,6 +282,13 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 能力查询 ——
   'maker:get-capabilities',
   'maker:list-available-agents',
+  // 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md，只读)：手机在被控电脑上新建 / 切换到插件
+  // 引擎时读那台的引擎列表(名称、图标、模型、思考深度、工作模式)；刷新只请那台的插件重新上报模型
+  // (插件各自冷却)。数据真相在被控端，无 sender 依赖、无本机 UI 副作用。老被控端无此准入 →
+  // CHANNEL_NOT_ALLOWED → 控制端按「没有插件引擎」隐藏入口。
+  'maker:list-plugin-engines',
+  'maker:refresh-plugin-engines',
+  'maker:get-plugin-engine-usage',
   // device-link 远程草稿镜像(只读):控制端为被控设备新建项目草稿时,读被控端**当前 New Maker
   // 草稿**在该 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed 控制端草稿。
   // 数据真相在被控端(其 renderer 草稿),无 sender 依赖、无本机副作用 → 准入。老被控端无此 handler
@@ -382,6 +389,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 窄口径元数据写:仅 status / title / pinnedAt(归档/删除/恢复/重命名/置顶)。专用
   // handler、白名单字段、不是裸 update(update 写任意字段、不放行)。支撑远程删/归档/改名/置顶对等。
   'local-db:sessions:patch-meta',
+  'local-db:sessions:project-archive',
+  // Atomic empty-task cleanup; older hosts reject the channel without deleting anything.
+  'local-db:sessions:discard-unused',
   // 只读:「疑似中断」(startedAt > endedAt)的 active 会话 id(错误红点数据源)。
   // 与 sessions:list 同安全级。
   'local-db:sessions:interrupted-pending',
@@ -957,6 +967,11 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
   // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
   'worktree:create': 300_000,
+  // 被控端 await agent.startSession:Codex app-server 冷启动 + thread/start 没有更短
+  // deadline,机器高负载时实测 41.6s / 42.4s(2026-11-18)。默认 30s 会让控制端先超时:
+  // 被控端照样建完任务,控制端却当失败处理,首条消息没发、用户重试又建一个新任务,
+  // 旧的空任务永久滞留。给 2 分钟执行预算;被控端执行不受此值影响。
+  'maker:create-session': 120_000,
   // User-triggered fetch (30s) plus local probes and process cleanup. Never replay.
   'worktree:sync-branch': 90_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。

@@ -2,6 +2,7 @@ import { kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
 import { opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 import type { ProviderView } from '@cindy/model-providers';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import {
@@ -215,7 +216,7 @@ function modelSourceQuota(
     const data = usage.claude;
     const weekly = data && (matchScopedWindowForModel(data.scoped, modelId) ?? data.sevenDay);
     return {
-      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier),
+      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier, data?.planDisplayName),
       windows: [
         data?.fiveHour && { window: data.fiveHour, windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
         weekly && { window: weekly, windowMinutes: WEEKLY_WINDOW_MINUTES },
@@ -248,11 +249,13 @@ export function ModelSourceDetails({
   label,
   accountIdentity,
   modelId,
+  className,
 }: {
   providerId: string;
   label: string;
   accountIdentity?: string;
   modelId: string;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
@@ -304,7 +307,7 @@ export function ModelSourceDetails({
     const memberPlan =
       codex
         ? formatCodexPlanLabel(account.planType ?? account.plan)
-        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier);
+        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
     return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
   });
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
@@ -312,7 +315,7 @@ export function ModelSourceDetails({
   const plan = pickerAccount
     ? codex
       ? formatCodexPlanLabel(pickerAccount.planType ?? pickerAccount.plan)
-      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier)
+      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier, pickerAccount.planDisplayName)
     : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
@@ -350,7 +353,7 @@ export function ModelSourceDetails({
   const identity = poolParts?.length
     ? undefined
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : accountIdentity;
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
@@ -361,7 +364,10 @@ export function ModelSourceDetails({
           ? [source, ...poolParts.map((part) => part.title)].join('\n')
           : [source, ...parts.map((part) => part.title)].join(' · ')
       }
-      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+      className={cn(
+        'flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]',
+        className,
+      )}
     >
       <span className="min-w-0 truncate">{source}</span>
       {tightest && (

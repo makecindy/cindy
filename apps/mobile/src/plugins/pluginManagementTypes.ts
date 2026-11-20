@@ -85,6 +85,7 @@ export interface PluginManagementReceipt {
   errorCode?: string;
   consent?: {
     requestId: string;
+    installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource;
     initiator: 'user' | 'agent';
     origin: 'market' | 'custom-market' | 'local-file' | 'forge';
     originLabel?: string;

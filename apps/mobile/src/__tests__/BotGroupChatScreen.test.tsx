@@ -229,7 +229,7 @@ vi.mock('@/components/MobilePrimitives', () => ({
   }, action.label),
   MainWindowOptionButton: ({ label, onPress, selected, disabled, testID }: any) => el('button',
     { 'data-testid': testID, 'aria-pressed': selected, disabled, onClick: onPress }, label),
-  MainWindowRowButton: ({ children, onPress, testID }: any) => el('button', { 'data-testid': testID, onClick: onPress }, children),
+  MainWindowRowButton: ({ children, disabled, onPress, testID }: any) => el('button', { 'data-testid': testID, disabled, onClick: onPress }, children),
   MainWindowEmptyState: ({ title, copy, children, testID }: any) => el('section', { 'data-testid': testID }, title, copy, children),
 }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({
@@ -1381,7 +1381,7 @@ describe('group timeline', () => {
     // The organizer is chosen among teammates in 群管理, never a person.
     await click('botGroup.settings.manage');
     expect(byId('botGroup.settings.organizer.action.person')).toBeNull();
-    expect(byId('botGroup.settings.organizer.action.abu')).not.toBeNull();
+    expect(byId('botGroup.settings.organizer.action.abu')).toBeNull();
     await click('botGroup.settings.back');
     await click('botGroup.settings.tab.members');
     await click('botGroup.settings.memberMenu.person.action.remove');
@@ -1747,57 +1747,27 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [removed === 'picked' ? 'abu' : 'mimi'] } }));
   });
 
-  it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
+  it('sends an ordinary request and keeps its clientId on retry', async () => {
     await render(group({ openPlan: null }));
-    expect(byId('botGroup.divisionTag')).toBeNull();
-    await click('botGroup.composer.menu.action.division');
-    expect(byId('botGroup.divisionTag')).not.toBeNull();
-    expect(byId('placeholder')?.textContent).toBe('groupChat.composer.placeholderDivision');
     await type('做个官网');
     h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '做个官网', clientId: 'uuid-1', division: true }));
-    expect(h.alert).toHaveBeenCalledWith('groupChat.composer.sendFailed');
-    // The draft and its tag come back; the retry reuses the same idempotency key.
     expect(h.row.value).toBe('做个官网');
-    expect(byId('botGroup.divisionTag')).not.toBeNull();
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ clientId: 'uuid-1', division: true }));
-    expect(byId('botGroup.divisionTag')).toBeNull();
-    // Removing the tag makes it a different message with its own key.
-    await click('botGroup.composer.menu.action.division');
-    await type('再做一个');
-    h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
-    await click('botGroup.composer.send');
-    expect(h.chat.act.mock.calls.at(-1)![1]).toMatchObject({ clientId: 'uuid-2', division: true });
-    await click('botGroup.divisionTag.remove');
-    await click('botGroup.composer.send');
-    const last = h.chat.act.mock.calls.at(-1)![1];
-    expect(last).toMatchObject({ text: '再做一个', clientId: 'uuid-3' });
-    expect(last).not.toHaveProperty('division');
-  });
-
-  // bot-group-chat.md §7.0 (2026-10-23): the computer arranges a 分工 in single-speaker rooms too,
-  // so a phone working through it keeps 安排分工; a phone talking to the server directly does not, nor one
-  // whose older computer would answer the request as a queue (no supportsDivision) (component tier).
-  it.each([[true, true, false, true], [true, false, false, false], [false, false, false, true], [true, true, true, false]])(
-    'offers 安排分工 (singleSpeaker=%s, supportsDivision=%s, direct=%s)', async (singleSpeaker, supportsDivision, direct, offered) => {
-    h.chat.server = direct;
-    await render(parseBotGroupChatData(group({ serverBacked: true, singleSpeaker, ...(supportsDivision ? { supportsDivision } : {}), replyMode: 'mentioned', openPlan: null }))!);
-    expect(!!byId('botGroup.composer.menu.action.division')).toBe(offered);
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '做个官网', clientId: 'uuid-1' }));
+    expect(h.chat.act.mock.calls.at(-1)![1]).not.toHaveProperty('division');
   });
 
   it.each(['all', 'mentioned'] as const)('keeps the running work-plan gate and uses truthful %s copy', async replyMode => {
     const data = group({
-      replyMode,
+      serverBacked: true, replyMode,
       openPlan: { id: 'p1', status: 'running', currentStep: 0, stepCount: 2, currentBotName: '咪咪', currentStepStatus: 'running' },
       round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 's1', activity: 'step' }], canContinue: false },
     });
     data.plans[0] = { ...data.plans[0]!, kind: 'work', status: 'running', currentStep: 0, steps: [{ ...data.plans[0]!.steps[0]!, status: 'running' }, data.plans[0]!.steps[1]!] };
     await render(data);
     expect(byId('botGroup.composer.menu')).toBeNull();
-    await click('botGroup.composer.more');
-    expect(h.alert).toHaveBeenCalledWith('groupChat.composer.division', 'groupChat.composer.divisionBusy');
+    expect(byId('botGroup.composer.more')).toBeNull();
     expect(byId('placeholder')?.textContent).toBe(replyMode === 'mentioned'
       ? 'groupChat.composer.placeholder' : 'groupChat.composer.placeholderPlanRunning(name=咪咪)');
     await click('botGroup.composer.stop');
@@ -1850,8 +1820,7 @@ describe('group attachments', () => {
 
   it('offers no attachments when the computer does not support them, and ignores pasted images', async () => {
     await render(group({ openPlan: null }));
-    expect(byId('botGroup.composer.menu.action.division')).not.toBeNull();
-    await click('botGroup.composer.more');
+    expect(byId('botGroup.composer.more')).toBeNull();
     expect(byId('botGroup.contextSheet')).toBeNull();
     expect(byId('botGroup.contextSheetPhotoRow')).toBeNull();
     await act(async () => { h.row.onPasteImages(['file:///cache/cindy-composer-paste-1.png']); });
@@ -1860,7 +1829,7 @@ describe('group attachments', () => {
     // Offline: the + stays the old disabled menu even on a computer that takes attachments.
     h.chat = { pending: [], ...h.chat, online: false };
     await render(group({ openPlan: null, supportsAttachments: true }));
-    expect(byId('botGroup.composer.menu')).not.toBeNull();
+    expect(byId('botGroup.composer.menu')).toBeNull();
     expect(byId('botGroup.composer.more')?.disabled).toBe(true);
   });
 
@@ -1879,8 +1848,7 @@ describe('group attachments', () => {
     expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
     await click('botGroup.contextSheetFileRow');
     expect(h.local.addDocument).toHaveBeenCalled();
-    await click('botGroup.contextSheetDivisionRow');
-    expect(byId('botGroup.divisionTag')).not.toBeNull();
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
     // A tap in the recent-photo strip queues that photo through the shared pipeline.
     await click('botGroup.contextSheetPhotos');
     expect(h.local.enqueueUploads).toHaveBeenCalledWith([expect.objectContaining({ kind: 'image', uri: 'ph://asset-1', sourceId: 'asset-1' })], expect.anything());
@@ -1890,8 +1858,7 @@ describe('group attachments', () => {
     running.plans[0] = { ...running.plans[0]!, status: 'running', currentStep: 0 };
     await render(running);
     await click('botGroup.composer.more');
-    expect(byId('botGroup.contextSheetDivisionRow')?.disabled).toBe(true);
-    expect(byId('botGroup.contextSheetDivisionRow')?.textContent).toContain('groupChat.composer.divisionBusy');
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
   });
 
   // A topic with attachments must retain the same collapsed badge as the main group.
@@ -1932,6 +1899,9 @@ describe('group attachments', () => {
     });
     // Sent attachments leave the tray and are not reclaimed by the phone (the computer took them).
     expect(byId('botGroup.attachmentTray')).toBeNull();
+    // A delivered message folds the composer and keyboard away; a failed one keeps them (below).
+    expect(h.inputBlur).toHaveBeenCalled();
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
     expect(h.local.release).toHaveBeenCalledWith(['att-1']);
     expect(h.discarded).toEqual([]);
   });
@@ -2376,7 +2346,7 @@ describe('group settings', () => {
     expect(byId('botGroup.settings.manage')).toBeNull();
   });
 
-  it('renames, changes the organizer and edits members on this computer', async () => {
+  it('renames and edits members on this computer', async () => {
     h.teammates = { rows: [{ key: 'k', host: { deviceId: 'mac', deviceName: 'Mac' }, item: {
       ref: { collectionId: 'teammates', kind: 'bot', id: 'ahua' }, revision: '1', display: { title: '阿花' }, links: [],
     } }, { key: 'k2', host: { deviceId: 'mac', deviceName: 'Mac' }, item: {
@@ -2388,8 +2358,7 @@ describe('group settings', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('update', { name: '新名字' });
     // The organizer is not offered again; each member row opens its own menu.
     expect(byId('botGroup.settings.memberMenu.mimi.action.organizer:mimi')).toBeNull();
-    await click('botGroup.settings.memberMenu.abu.action.organizer:abu');
-    expect(h.chat.act).toHaveBeenLastCalledWith('update', { organizerBotId: 'abu' });
+    expect(byId('botGroup.settings.memberMenu.abu.action.organizer:abu')).toBeNull();
     await click('botGroup.settings.memberMenu.xiaoman.action.remove:xiaoman');
     expect(h.chat.act).toHaveBeenLastCalledWith('set-members', { botIds: ['mimi', 'abu'] });
     await click('botGroup.settings.add');
@@ -2417,7 +2386,8 @@ describe('group settings', () => {
     const data = group();
     data.members = data.members.slice(0, 2);
     await openSettings(data);
-    expect(byId('botGroup.settings.memberMenu.abu.action.remove:abu')?.disabled).toBe(true);
+    await click('botGroup.settings.member.abu');
+    expect(byId('botGroup.settings.memberMenu.abu.option.remove:abu')?.disabled).toBe(true);
   });
 
   it.each(['member', 'admin'] as const)('uses explicit leave for a server %s without granting archive or compatibility delete', async (role) => {

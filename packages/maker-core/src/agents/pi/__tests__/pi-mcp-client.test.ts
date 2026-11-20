@@ -71,6 +71,61 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
 
 afterEach(() => vi.useRealTimers());
 
+// Native registration boundary: an unselected/isolated task installs no plugin
+// listeners and cannot serialize tool data or send an extension UI request.
+describe('Pi native plugin hook opt-in', () => {
+  it.each([
+    { points: '', guest: false, review: false, events: [] },
+    { points: 'call', guest: false, review: false, events: ['tool_call'] },
+    { points: 'result', guest: false, review: false, events: ['tool_result'] },
+    { points: 'call,result', guest: true, review: false, events: [] },
+    { points: 'call,result', guest: false, review: true, events: [] },
+    { points: 'call,result', guest: false, review: false, events: ['tool_call', 'tool_result'] },
+  ])('registers only the selected native points: $points/$guest/$review', async ({ points, guest, review, events }) => {
+    const start = source.indexOf('  // Native plugin hooks run before');
+    const end = source.indexOf('  // ── 权限门', start);
+    const on = vi.fn();
+    const stringify = vi.fn(JSON.stringify);
+    const input = vi.fn(async () => '{}');
+    const permission = vi.fn(() => ({ reviewOnly: review }));
+    runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+      process: { env: { CINDY_PI_TOOL_LIFECYCLE: points } },
+      pi: { on }, guestToolGate: guest, currentPermissionState: permission,
+      JSON: { stringify, parse: JSON.parse },
+    });
+    expect(on.mock.calls.map(([event]) => event)).toEqual(events);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    if (!points) expect(permission).not.toHaveBeenCalled();
+    if (events.includes('tool_call')) {
+      const callback = on.mock.calls.find(([event]) => event === 'tool_call')![1];
+      await callback({ toolName: 'read', toolCallId: 'call', input: { path: 'fixture.txt' } }, { ui: { input } });
+      expect(input).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+// Security regression: JSON __proto__ must remain an enumerable own property,
+// rather than introducing an inherited path that later scanners cannot see.
+it('keeps transformed Pi input as own JSON data without invoking prototype setters', async () => {
+  const start = source.indexOf('  // Native plugin hooks run before');
+  const end = source.indexOf('  // ── 权限门', start);
+  let callback: ((event: { toolName: string; toolCallId: string; input: Record<string, unknown> }, ctx: unknown) => Promise<unknown>) | undefined;
+  runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    process: { env: { CINDY_PI_TOOL_LIFECYCLE: 'call' } }, guestToolGate: null,
+    currentPermissionState: () => ({ reviewOnly: false }),
+    pi: { on: (_event: string, handler: typeof callback) => { callback = handler; } },
+  });
+  const input: Record<string, unknown> = { path: '/fixture/safe.txt' };
+  const prototype = Object.getPrototypeOf(input);
+  await callback!({ toolName: 'read', toolCallId: 'call', input }, { ui: {
+    input: async () => '{"input":{"__proto__":{"path":"/fixture/.ssh/id_rsa"}}}',
+  } });
+  expect(Object.getPrototypeOf(input)).toBe(prototype);
+  expect(input.path).toBeUndefined();
+  expect(Object.entries(input)).toEqual([['__proto__', { path: '/fixture/.ssh/id_rsa' }]]);
+});
+
 describe('Pi MCP request lifecycle', () => {
   // #10691: the registered gateway and real approval hook must reject missing
   // ghost_id, including an extra args wrapper, before approval/HTTP. Previously
@@ -106,7 +161,7 @@ describe('Pi MCP request lifecycle', () => {
     await h.approveInput(input);
     h.gateway.add('cindy', h.client, [{ name: 'ghost_call', inputSchema: { type: 'object' } }]);
     await h.list({ server: 'cindy', tool: 'ghost_call' });
-    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    await expect(h.invoke(input)).rejects.toThrow('"inputSchema":{"type":"object"}');
     expect(h.approvals).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
     await h.approveInput(input, 'fresh');
@@ -176,7 +231,7 @@ describe('Pi MCP request lifecycle', () => {
       expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
     ]);
     const input = { server: displayName, tool: 'probe', args: { value: 'example' } };
-    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    await expect(h.invoke(input)).rejects.toThrow(JSON.stringify(inputSchema));
     expect((await h.list({ server: displayName, tool: 'probe' })).details.tools[0].inputSchema).toEqual(inputSchema);
     await h.approveInput(input, 'alias');
     await expect(h.invoke(input, 'alias')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
@@ -195,6 +250,24 @@ describe('Pi MCP request lifecycle', () => {
       expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
     ]);
     expect(calls).toHaveLength(2); // Reconnecting must not replay a tool call.
+  });
+
+  // A first-call receipt must not insert a large third-party definition into context.
+  // Unit: use the registered Pi gateway. An exact lookup must still return that same definition in full.
+  it('leaves oversized first-use definitions behind a named lookup', async () => {
+    const fetchImpl = vi.fn();
+    const h = gatewayWithFetch(fetchImpl);
+    const description = 'long description '.repeat(150);
+    h.gateway.add('catalog', h.client, [{ name: 'lookup', description, inputSchema: { type: 'object' } }]);
+    const input = { server: 'catalog', tool: 'lookup', args: {} };
+    await h.approveInput(input, 'large');
+    const attempt = h.invoke(input, 'large');
+    await expect(attempt).rejects.toThrow('cindy_mcp_list_tools with {"server":"catalog","tool":"lookup"}');
+    await expect(attempt).rejects.not.toThrow(description);
+    expect(h.approvals).toHaveLength(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const exact = await h.list({ server: 'catalog', tool: 'lookup' });
+    expect(exact.details.tools[0].description).toBe(description);
   });
 
   it.each([

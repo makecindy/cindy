@@ -432,7 +432,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":1,"type":"settings_changed","domain":"appearance","value":{"theme":"dark"}}\n\n');
           res.write('data: {"seq":2,"type":"session_changed","action":"create","sessionId":"s1"}\n\n');
           res.write('data: {"seq":3,"type":"message_created","sessionId":"s1","messageId":"m1"}\n\n');
-          res.write('data: {"seq":4,"type":"project_aliases_changed"}\n\n');
+          res.write('data: {"seq":4,"type":"project_aliases_changed","catalogChanged":true}\n\n');
           res.write('data: {"seq":5,"type":"input_projection","projection":{"sessionId":"s1","turnInProgress":true}}\n\n');
           res.write('data: {"seq":6,"type":"interaction_request","sessionId":"s1","request":{"requestId":"r1"}}\n\n');
           res.write('data: {"seq":7,"type":"text","sessionId":"s1"}\n\n');
@@ -469,8 +469,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       onErrorPersisted: (event) => historyChanges.push(event),
       onSubagentRunsChanged: (event) => historyChanges.push(event),
       onRightSidebarTabsChanged: (event) => sidebarChanges.push(event),
-      onProjectAliasesChanged: () => {
-        projectAliasesNotified = true;
+      onProjectAliasesChanged: event => {
+        projectAliasesNotified = event.catalogChanged === true;
       },
       onError: (err) => {
         console.error('SSE bridge error:', err);
@@ -521,4 +521,21 @@ it('delegates browser settings only from the trusted renderer and keeps Host aut
   await expect(handlers.get('browser-backend:set-kind')!(trusted, { kind: 'user-browser' })).resolves.toEqual({ ok: true, active: 'user-browser' });
   expect(request).toHaveBeenCalledWith('/api/browser-backend/set-kind', { kind: 'user-browser' });
   expect(local).not.toHaveBeenCalled();
+});
+
+// Unit: the project channel must never forward Renderer input to the generic owner write route.
+it('routes a delegated project mutation through its window-bound authorization adapter', async () => {
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  const ipcMain = { removeHandler() {}, handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) { handlers.set(channel, fn); } };
+  const client = { request: vi.fn(async () => ({})) };
+  const event = {} as IpcMainInvokeEvent;
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const channel = 'sidebar-settings:set-project-info';
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {} });
+  await expect(handlers.get(channel)!(event, input)).rejects.toThrow('PERMISSION_DENIED');
+  const forwardProjectWrite = vi.fn(async () => ({}));
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {}, forwardProjectWrite });
+  await handlers.get(channel)!(event, input);
+  expect(forwardProjectWrite).toHaveBeenCalledWith(client, event, input);
+  expect(client.request).not.toHaveBeenCalled();
 });

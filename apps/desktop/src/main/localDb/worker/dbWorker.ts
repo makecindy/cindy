@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { parentPort, workerData } from 'node:worker_threads';
 import type Database from 'better-sqlite3';
 
+import { isSqliteCorruption, createCorruptDbUnavailableError } from '../client/sqliteCorruption.js';
 import type { RpcRequest, RpcResponse, WorkerEvent } from '../client/DbTransport.js';
 import { dispatch, serializeWorkerError } from './dispatcher.js';
 import { readLocalWorktreeReferences } from './worktreeReferences.js';
@@ -24,6 +25,7 @@ const startupOptions = (workerData ?? {}) as DbWorkerStartupOptions;
 const DatabaseCtor = loadDatabaseConstructor(startupOptions.betterSqliteModulePath);
 
 let db: Database.Database | null = null;
+let corruptionError: unknown = null;
 let initError: { code: string; message: string; stack?: string } | null = null;
 
 setDatabase(startupOptions);
@@ -35,6 +37,7 @@ activeWorkerPort.on('message', async (req: RpcRequest) => {
     const result = await dispatchRequest(req);
     activeWorkerPort.postMessage({ id: req.id, ok: true, result, timing: timing() } satisfies RpcResponse);
   } catch (err) {
+    if (isSqliteCorruption(err)) corruptionError = err;
     activeWorkerPort.postMessage({
       id: req.id,
       ok: false,
@@ -78,6 +81,7 @@ function setDatabase(opts: DbWorkerStartupOptions): void {
 }
 
 async function dispatchRequest(req: RpcRequest): Promise<unknown> {
+  if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
   const readyDb = requireReadyDb();
   if (req.op === 'worktreeReferences') {
     return readLocalWorktreeReferences(readyDb, DatabaseCtor, startupOptions.nativeBinding);

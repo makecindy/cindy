@@ -157,26 +157,10 @@ it('keeps the drawer out of the window drag region so its close button stays cli
 });
 
 describe('BotGroupSettingsDrawer 分工 settings', () => {
-  it('tags the organizer and lets another active member take over', async () => {
+  it('shows members without a permanent organizer', () => {
     renderDrawer();
-    expect(within(memberRow('咪咪')).getByText('bots.groupChat.organizer')).toBeTruthy();
-    expect(within(memberRow('咪咪')).queryByRole('button', { name: /setOrganizerNamed/ })).toBeNull();
-    // A paused member cannot organize.
-    expect(within(memberRow('阿布')).queryByRole('button', { name: /setOrganizerNamed/ })).toBeNull();
-    expect(screen.getByText('bots.groupChat.settings.organizerNote')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.setOrganizerNamed:小满' }));
-    await waitFor(() =>
-      expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'g1', organizerBotId: 'xiaoman' }),
-    );
-    expect(mocks.refreshBotGroups).toHaveBeenCalled();
-  });
-
-  it('shows the organizer error in place', async () => {
-    mocks.updateBotGroup.mockResolvedValue({ ok: false, errorCode: 'INVALID_PARAMS', message: '' });
-    renderDrawer();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.setOrganizerNamed:小满' }));
-    expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.settings.organizerSaveFailed');
+    expect(memberRow('咪咪')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /setOrganizerNamed/ })).toBeNull();
   });
 
   it('chooses a project folder through the system picker', async () => {

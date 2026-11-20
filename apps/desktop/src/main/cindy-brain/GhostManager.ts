@@ -64,6 +64,7 @@ import {
   type InstalledGhost,
   declaredAutoApproveTools,
   declaredGhostControlPoints,
+  declaredGhostHarnesses,
   isGhostRuntimeControlPoint,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
@@ -116,6 +117,7 @@ import {
 import {
   assertManagedPluginParentSync,
   approvedCindyModelActionsField,
+  approvedHarnessesField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -314,7 +316,7 @@ function cloneParsedGhostPackage(parsed: ParsedGhostPackage): ParsedGhostPackage
 export interface GhostManagerOptions {
   /** Read-only source projections. Does not affect running, installation, or publishing ACL. */
   sourcesForInstance?: (record: PluginInstanceRecord, receipt: PluginInstanceReceiptFact | null | undefined) =>
-    Pick<InstalledGhost, 'publishingSource'>;
+    Pick<InstalledGhost, 'publishingSource' | 'installationSource'>;
   /** One listing's source facts, discarded after the scan; never runtime authorization. */
   prepareListingSources?: () => {
     project: NonNullable<GhostManagerOptions['sourcesForInstance']>;
@@ -1028,6 +1030,7 @@ export class GhostManager {
     sources = this.options.sourcesForInstance): {
     instanceKey?: string;
     publishingSource?: InstalledGhost['publishingSource'];
+    installationSource?: InstalledGhost['installationSource'];
     namespace?: string | null;
     namespaceState?: PluginInstanceRecord['namespaceState'];
   } {
@@ -1035,9 +1038,15 @@ export class GhostManager {
     if (this.instanceRegistryService.isBlocked() || !registry) return {};
     const record = findInstanceByContentRelId(registry, relId);
     if (!record || record.ghostId !== ghostId) return {};
+    const fact = this.receiptFact(relId, approval);
+    const projected = sources?.(record, fact && approval.state === 'approved'
+      ? { ...fact, installOrigin: approval.receipt.installOrigin } : fact);
+    const source = projected?.installationSource;
     return {
       instanceKey: record.instanceKey,
-      ...sources?.(record, this.receiptFact(relId, approval)),
+      ...projected,
+      ...(source?.kind === 'market' && approval.state === 'approved' && approval.receipt.trust?.level === 'cindy-official'
+        ? { installationSource: { kind: 'official' as const } } : {}),
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),
@@ -3165,6 +3174,7 @@ export class GhostManager {
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
           ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
+          ...approvedHarnessesField(receipt.approvedHarnesses, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -4122,6 +4132,8 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedCindyModelActions?: readonly string[];
+      /** Task engines whose permission row the user saw in this confirmation. */
+      approvedHarnesses?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4158,6 +4170,8 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedCindyModelActions?: readonly string[];
+      /** Task engines whose permission row the user saw in this confirmation. */
+      approvedHarnesses?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4339,6 +4353,7 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           approvedCindyModelActions: opts?.approvedCindyModelActions,
+          approvedHarnesses: opts?.approvedHarnesses,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4473,6 +4488,8 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedCindyModelActions?: readonly string[];
+      /** Task engines whose permission row the user saw in this confirmation. */
+      approvedHarnesses?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4514,6 +4531,8 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedCindyModelActions?: readonly string[];
+      /** Task engines whose permission row the user saw in this confirmation. */
+      approvedHarnesses?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4851,6 +4870,11 @@ export class GhostManager {
         approvedCindyModelActions: [
           ...(opts.approvedCindyModelActions ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
+        ],
+        // 执行引擎同口径：同实例延续已批准 id(按新 manifest 过滤)，本次确认新显示的并入，换源不继承。
+        approvedHarnesses: [
+          ...(opts.approvedHarnesses ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHarnesses ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5285,6 +5309,8 @@ export class GhostManager {
         approvedControlPoints: approvedManifest.subscribe?.hooks?.filter(point => !isGhostRuntimeControlPoint(point)) ?? [],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
+        // 随包种子与控制节点同口径：Cindy 自己发布，声明的执行引擎随版本视为已批准。
+        approvedHarnesses: declaredGhostHarnesses(approvedManifest).map((harness) => harness.id),
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

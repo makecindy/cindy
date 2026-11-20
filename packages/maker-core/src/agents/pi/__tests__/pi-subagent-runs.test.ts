@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   canHostControlPiSubagentRun,
   controlPiSubagentRuns,
+  hasActivePiSubagentRuns,
   hasActivePiSubagentRunsSync,
   killVerifiedPiSubagentRunner,
   verifyPiSubagentRunnerIdentity,
@@ -221,8 +222,10 @@ describe('PI durable subagent run store', () => {
     await writeStatus(root, older);
     await writeStatus(root, newer);
     const discovered = [];
-    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true })) discovered.push(run);
+    const observed: string[] = [];
+    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true, onRead: run => { observed.push(run.runId); } })) discovered.push(run);
     expect(discovered.map((run) => run.runId)).toEqual([newer.runId]);
+    expect(observed.sort()).toEqual([older.runId, newer.runId].sort());
   });
 
   it('streams historical status files lazily and closes the directory after early cancellation', async () => {
@@ -457,6 +460,27 @@ describe('PI durable subagent run store', () => {
       action: string;
     };
     expect(control.action).toBe('stop');
+  });
+
+  it('polls completed history without inspecting its owner process', async () => {
+    const agentHome = await makeRoot();
+    const root = piSubagentRunRoot(agentHome, 'session-1');
+    const runId = '123e4567-e89b-42d3-a456-426614174005';
+    const scope = { hostPid: process.pid };
+    await writeStatus(root, status(runId, {
+      state: 'completed',
+      runtimeOwnerId: `${process.ppid}.100:other-window`,
+    }));
+
+    childProcess.spawnSync.mockClear();
+    expect(hasActivePiSubagentRunsSync(agentHome, scope)).toBe(false);
+    expect(childProcess.spawnSync).not.toHaveBeenCalled();
+    await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(false);
+    expect(childProcess.spawnSync).not.toHaveBeenCalled();
+
+    // A run directory can exist before the launcher finishes publishing its status.
+    await rm(path.join(root, runId, 'status.json'));
+    await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(true);
   });
 
   it('only treats a missing runs directory as idle; other scan failures stay active', () => {
@@ -989,6 +1013,33 @@ describe('PI durable subagent run store', () => {
       // Three runs, one owner pid, one spawn. Without the memo this is a `ps`
       // per run per pass, which shows up as logout latency.
       expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('checks a shared live owner asynchronously once per update poll and notices PID reuse', async () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      const started = nowSec() - 600;
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      for (const runId of ['123e4567-e89b-42d3-a456-4266141740a5', '123e4567-e89b-42d3-a456-4266141740a6']) {
+        await writeStatus(root, status(runId, {
+          runtimeOwnerId: foreignOwnerId(ownerPid, started),
+          updatedAt: Date.now(),
+        }));
+      }
+      let startTimeOutput = process.platform === 'win32' ? String(started) : '10:00';
+      const probe = vi.fn(async () => ({
+        stdout: startTimeOutput,
+        stderr: '',
+      }));
+      childProcess.asyncProbe = probe;
+      const scope = { hostPid: process.pid };
+      await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(false);
+      expect(probe).toHaveBeenCalledTimes(1);
+      startTimeOutput = process.platform === 'win32' ? String(nowSec() - 5) : '00:05';
+      await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(true);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
     });
 
     it('re-probes on the next sweep, so a recycled pid cannot hide behind a memo', async () => {

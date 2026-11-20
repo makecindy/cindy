@@ -1,0 +1,205 @@
+/* SendDeliveryTip — 发送键上的「排队 / 插话」提示（DESIGN.md §14.6）。
+   两种模式下提示都是深底：次级文字、行高亮、键帽底色都由 --tooltip-text 按比例混出，
+   不引入新的颜色值。圆角按 §5：容器 12px（rounded-xl），行与对调按钮 8px，键帽 4px。 */
+
+div.send-delivery-tip {
+  display: flex;
+  align-items: center;
+  /* 窄窗口加长文案时不超出窗口：说明文字先省略，名称与快捷键保持完整。 */
+  max-width: var(--radix-popover-content-available-width);
+  line-height: 18px;
+  user-select: none;
+  /* Dark 下提示底与页面几乎同色；与用量图表提示一样，加一圈由文字色混出的细线。 */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--tooltip-text) 10%, transparent),
+    var(--shadow-menu);
+}
+
+/* 提示与发送键之间有 6px 空隙：补一条看不见的桥，鼠标移上来时不会中途关闭。 */
+div.send-delivery-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.send-delivery-rows {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 一块高亮在两行之间滑动：停在下面一行（默认方式）或滑到上面一行（另一种方式）。 */
+.send-delivery-glide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tooltip-text) 10%, transparent);
+  pointer-events: none;
+  transition: transform var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-glide[data-on='default'] {
+  transform: translateY(100%);
+}
+
+.send-delivery-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px 0 8px;
+  border-radius: 8px;
+  outline: none;
+  text-align: left;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--tooltip-text) 62%, transparent);
+  transition:
+    color var(--motion-fast) var(--motion-ease-out),
+    transform var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-row[data-active] {
+  color: var(--tooltip-text);
+}
+
+.send-delivery-row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus-ring-soft);
+}
+
+.send-delivery-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 说明与「设为默认 / 已设为默认」叠在同一格里淡入淡出，行宽不跳。 */
+.send-delivery-hint {
+  display: grid;
+  min-width: 0;
+  padding-right: 20px;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--tooltip-text) 46%, transparent);
+  transition: color var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-row[data-active] .send-delivery-hint {
+  color: color-mix(in srgb, var(--tooltip-text) 70%, transparent);
+}
+
+.send-delivery-hint > span {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-hint > [data-layer='note'] {
+  opacity: 0;
+  color: color-mix(in srgb, var(--tooltip-text) 92%, transparent);
+}
+
+.send-delivery-row[data-note] [data-layer='hint'] {
+  opacity: 0;
+}
+
+.send-delivery-row[data-note] [data-layer='note'] {
+  opacity: 1;
+}
+
+.send-delivery-keys {
+  display: flex;
+  gap: 2px;
+  justify-self: end;
+}
+
+.send-delivery-keys kbd {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tooltip-text) 10%, transparent);
+  color: color-mix(in srgb, var(--tooltip-text) 55%, transparent);
+  font-family: inherit;
+  font-size: var(--text-11);
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  transition:
+    color var(--motion-fast) var(--motion-ease-out),
+    background-color var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-row[data-active] kbd {
+  background: color-mix(in srgb, var(--tooltip-text) 16%, transparent);
+  color: color-mix(in srgb, var(--tooltip-text) 90%, transparent);
+}
+
+/* 对调：放在最左边，鼠标从发送键上来走的是右侧，路径上碰不到它。 */
+.send-delivery-swap {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 1px;
+  border-radius: 8px;
+  outline: none;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--tooltip-text) 40%, transparent);
+  transition:
+    color var(--motion-fast) var(--motion-ease-out),
+    background-color var(--motion-fast) var(--motion-ease-out);
+}
+
+.send-delivery-swap svg {
+  transition: transform var(--motion-enter) var(--motion-ease-out);
+}
+
+.send-delivery-swap:hover,
+.send-delivery-swap:focus-visible,
+.send-delivery-swap[data-hot] {
+  color: var(--tooltip-text);
+  background: color-mix(in srgb, var(--tooltip-text) 10%, transparent);
+}
+
+/* 指向对调时，两行微微靠拢，预告它们会交换。 */
+.send-delivery-tip[data-preview] .send-delivery-row[data-row='alternate'] {
+  transform: translateY(2px);
+}
+
+.send-delivery-tip[data-preview] .send-delivery-row[data-row='default'] {
+  transform: translateY(-2px);
+}
+
+/* 触屏长按打开时：行高放大到好点的尺寸，不显示快捷键。 */
+.send-delivery-tip[data-touch] .send-delivery-row {
+  height: 40px;
+  padding: 0 12px;
+}
+
+.send-delivery-tip[data-touch] .send-delivery-glide {
+  height: 40px;
+}
+
+.send-delivery-tip[data-touch] .send-delivery-keys {
+  display: none;
+}
+
+.send-delivery-tip[data-touch] .send-delivery-hint {
+  padding-right: 4px;
+}
+
+.send-delivery-tip[data-touch] .send-delivery-swap {
+  width: 36px;
+  height: 36px;
+  margin: 0 2px;
+}

@@ -17,15 +17,20 @@ import hostContext from '../../../resources/system-skills/cindy-plugin-creator/r
 import agentCallContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-call-context.md?raw';
 import chatCards from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-chat-cards.md?raw';
 import eventSubscriptions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md?raw';
+import toolObservation from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-tool-observation.md?raw';
 import messageHooks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-message-hooks.md?raw';
 import controlPoints from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-control-points.md?raw';
 import pluginModels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-models.md?raw';
+import pluginHarnesses from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-harnesses.md?raw';
 import network from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-network.md?raw';
 import settings from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-settings.md?raw';
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
 import hostTools from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md?raw';
+import queueControl from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-queue-control.md?raw';
+import nativeToolCatalog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-native-tool-catalog.md?raw';
+import historyAndHttp from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-history-and-http.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
 import hostUi from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
@@ -64,15 +69,20 @@ export const FORGE_GUIDE = [
   agentCallContext,
   chatCards,
   eventSubscriptions,
+  toolObservation,
   messageHooks,
   controlPoints,
   pluginModels,
+  pluginHarnesses,
   network,
   settings,
   notifications,
   filesAndLibrary,
   agentTasks,
   hostTools,
+  queueControl,
+  nativeToolCatalog,
+  historyAndHttp,
   nodeWorker,
   sessionContext,
   directoryPicker,

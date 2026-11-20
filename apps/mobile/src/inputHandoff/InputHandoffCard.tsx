@@ -81,6 +81,9 @@ export function InputHandoffCard({
   const started = useRef(false);
   const [draft, setDraft] = useState<InputHandoffValues>({});
   const [sending, setSending] = useState(false);
+  // The sealed receipt can arrive before the next screen snapshot. Never
+  // reopen a cleared form until a new step or an explicit retry arrives.
+  const [acceptedStep, setAcceptedStep] = useState<{ key: string; revision: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Stays wanted across steps: after Continue the sheet hides while the
   // computer types and comes back by itself for the next screen to fill.
@@ -113,6 +116,9 @@ export function InputHandoffCard({
     setDraft((d) => ({ ...d, [id]: value }));
   };
 
+  const retryRequested = snapshot.phase === "ready" && !!snapshot.failure &&
+    acceptedStep !== null && snapshot.revision > acceptedStep.revision;
+  const awaitingNextStep = acceptedStep?.key === stepKey && !retryRequested;
   const busy = decisionBusy || sending;
   const decide = (action: Decision) => {
     if (action === "picture")
@@ -124,7 +130,7 @@ export function InputHandoffCard({
     });
   };
   const submit = async (action: InputHandoffAction) => {
-    if (busy || snapshot.remoteInput !== true) return;
+    if (busy || awaitingNextStep || snapshot.remoteInput !== true) return;
     setSending(true);
     setError(null);
     const values = changedInputHandoffValues(snapshot, draft);
@@ -134,6 +140,7 @@ export function InputHandoffCard({
         values,
         action,
       });
+      setAcceptedStep({ key: stepKey, revision: snapshot.revision });
       setDraft({});
       setFieldEpoch((n) => n + 1);
     } catch (e) {
@@ -147,7 +154,7 @@ export function InputHandoffCard({
     }
   };
 
-  const sheetContent = inputHandoffSheetHasContent(snapshot, heldElsewhere);
+  const sheetContent = !awaitingNextStep && inputHandoffSheetHasContent(snapshot, heldElsewhere);
   // Scan-to-sign-in: the code arrives sealed while the sheet is open, and follows refreshes by itself.
   const qrScan = snapshot.qr === "scan" && snapshot.picture === true;
   const [qrNotice, setQrNotice] = useState<string | null>(null);
@@ -238,6 +245,10 @@ export function InputHandoffCard({
         ? `interaction.inputHandoff.failure.${snapshot.failure}`
         : `interaction.inputHandoff.terminal.${snapshot.phase}`,
     );
+  } else if (awaitingNextStep && snapshot.phase === "ready") {
+    status = t("interaction.inputHandoff.phase.working");
+    spinner = true;
+    actions = [skip];
   } else if (snapshot.phase === "ready" && heldElsewhere) {
     status = t("interaction.inputHandoff.holder.elsewhere", {
       device: holderLabel(snapshot, t),
@@ -262,6 +273,7 @@ export function InputHandoffCard({
   } else if (
     snapshot.phase === "ready" &&
     snapshot.directSignIn &&
+    !snapshot.preferRemoteForm &&
     openLiveView &&
     formFor !== snapshot.requestId
   ) {
@@ -378,6 +390,7 @@ export function InputHandoffCard({
       ) : null}
       {snapshot.phase === "ready" &&
       snapshot.directSignIn &&
+      !snapshot.preferRemoteForm &&
       openLiveView &&
       sheetContent &&
       formFor !== snapshot.requestId ? (

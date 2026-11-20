@@ -20,10 +20,10 @@ import { useGroupPersonalMask } from '@/session/useGroupPersonalMask';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined, result: ReturnType<typeof useGroupPersonalMask>, server: ChatMaskState;
 const remote = async () => undefined;
-function Probe({ enabled }: { enabled: boolean }) { result = useGroupPersonalMask('room', '', enabled, remote, 0); return null; }
-async function render(enabled = true) {
+function Probe({ enabled, change = 0 }: { enabled: boolean; change?: number }) { result = useGroupPersonalMask('room', '', enabled, remote, change); return null; }
+async function render(enabled = true, change = 0) {
   root ??= createRoot(document.createElement('div'));
-  await act(async () => { root!.render(createElement(Probe, { enabled })); });
+  await act(async () => { root!.render(createElement(Probe, { enabled, change })); });
 }
 beforeEach(() => {
   vi.clearAllMocks(); h.online = true;
@@ -33,6 +33,19 @@ beforeEach(() => {
   h.client.maskMentions.mockResolvedValue({ mentions: [{ messageId: 'question', sequence: '1', authorName: 'Jamie', text: '@Alex please confirm' }], hasMore: false });
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
+
+// Unit, group-open latency: opening the screen started the same read from two effects, so
+// the mask and its mentions were requested twice before anything had changed.
+it('reads the mask once on opening and again only when the group changes', async () => {
+  await render();
+  expect(h.client.mask).toHaveBeenCalledTimes(1);
+  expect(h.client.maskMentions).toHaveBeenCalledTimes(1);
+  await render(true, 0);
+  expect(h.client.mask).toHaveBeenCalledTimes(1);
+  await render(true, 1);
+  expect(h.client.mask).toHaveBeenCalledTimes(2);
+  expect(h.client.maskMentions).toHaveBeenCalledTimes(2);
+});
 
 // Unit: the production hook must keep permanent delegation on while typing,
 // while its existing explicit switch still persists off. Prior tests cover reads/retries only.

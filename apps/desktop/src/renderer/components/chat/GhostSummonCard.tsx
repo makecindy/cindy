@@ -1,11 +1,39 @@
 /**
- * User-selected plugin annotation. It preserves directive details without
- * attributing the assistant's later tool choices or execution state to the user.
- * Historical mentions remain quiet pills; actual calls appear in the work log.
+ * GhostSummonCard — 用户气泡内的「插件召唤标注行」(chip 形态)。
+ *
+ * 2026-07-29 改版:此前 $指令 / 软提示兑现 / 语义召唤走「卡片即消息」合并
+ * 形态(整条正文收进一张独立大卡),卡头压过一句话正文、插件调用看起来像
+ * 一条系统卡片而非用户发言。现改为:正文回归普通文字气泡,召唤信息缩为
+ * 气泡顶部一行 26px 标注(法阵 + 意识名 + 状态文字 + 展开 caret),由
+ * UserMessage 嵌入气泡内部渲染。三种来源同形态:
+ *
+ * - **硬指令($指令 显式点名)**:气泡正文 = 剥掉 $token 的余文,标注行
+ *   报意识名;展开区按来源双色渲染追加给模型的指令原文
+ *   (commandDirectiveSegments 单一事实源):系统模板文字降透明度,意识
+ *   身份卡注入的值(指令词/名称/id)全亮,用户一眼可辨"哪些字是系统说
+ *   的、哪些是这段意识填的"(第三方意识的信任边界视图)。
+ * - **软提示(语言提及,2026-07-14 起发送期已停止生成,仅服务历史消息)**:
+ *   未兑现保持低调描边胶囊(由 UserMessage 放在气泡下方);一旦被真实
+ *   ghost_call(GhostFulfillmentContext),升级为与硬指令完全同形态
+ *   的标注行,区别只在展开区内容(软提示原文 vs 硬指令原文)。
+ * - **语义自主召唤(semantic,无追加段)**:消息一个触发词都没命中,AI
+ *   本轮仍通过 ghost_call 召唤了意识——UserMessage 据兑现关联合成
+ *   semantic 展示数据,渲染同一行标注。展开区如实说明"AI 自主判断召唤、
+ *   消息未追加指令"(透明性:没追加就说没追加,不伪造原文)。
+ *
+ * 状态仅跟随真实调用:有未返回调用时「调用中…」,调用过则「已调用」;
+ * 只选择而未执行时「已选择」。所有调用结果到达才显示完成勾。
+ *
+ * 透明性承诺不变:追加文本对用户可见、不做暗改;$指令 徽章 / 版本号 /
+ * 指令原文双色图例全部保留,收进点击展开的抽屉。
+ *
+ * 召唤法阵(SummonSeal)双弧几何与 2.4s 旋转动画与旧版一致(用户明确
+ * 要求保留),新增终态编舞——见 SummonSeal 头注与 DESIGN.md §14.4 登记。
  */
-import { useState } from 'react';
+
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Ghost } from 'lucide-react';
+import { Check, ChevronDown, Ghost } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import { Collapse } from '@/components/ui/collapse';
@@ -20,16 +48,58 @@ import {
   type HostCapabilityDirectiveDisplay,
 } from '@/cindy-brain/hostCapabilityInvocation';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isValidGhostId } from '../../../shared/ghost';
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import {
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
+  installedGhostLogicalIdentity,
   parsePluginInstanceId,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
+  pluginStoragePart,
 } from '../../../shared/pluginIdentity';
 
-/** Only persisted user selections/mentions belong on the user's message. */
-export type GhostSummonDisplay = GhostDirectiveDisplay | HostCapabilityDirectiveDisplay;
+/**
+ * 插件调用摘要:按用户消息关联真实调用、未返回调用与活动状态。
+ * MessageStream 从会话历史现算并 Provider 下发;软提示卡据此把"被兑现"的
+ * 意识从徽章升级成召唤标注,状态文字据此区分「已调用/已完成」。
+ * 渲染期推导、不落状态,重启幂等。
+ */
+export interface GhostCallSummary {
+  ghostIds: ReadonlySet<string>;
+  /** Issued calls without a matching result, including interrupted historical calls. */
+  pendingGhostIds: ReadonlySet<string>;
+  /** Only outstanding calls in the active user turn may animate. */
+  running: boolean;
+}
+
+export const GhostFulfillmentContext = createContext<ReadonlyMap<string, GhostCallSummary>>(
+  new Map(),
+);
+
+/** Match call status only; legacy bare directives must not acquire a live install's identity. */
+export function hasGhostSummonFulfillment(
+  fulfilledIds: ReadonlySet<string> | undefined,
+  ghostId: string,
+): boolean {
+  if (!fulfilledIds) return false;
+  if (fulfilledIds.has(ghostId)) return true;
+  return (
+    isValidGhostId(ghostId) &&
+    fulfilledIds.has(pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId })))
+  );
+}
+
+/**
+ * 召唤标注展示数据:发送期追加段解析出的 command / mention 之外,再加一种
+ * semantic——消息没有任何追加段、AI 纯靠语义自主召唤(只有 ghostId 清单,
+ * 来自兑现关联),由 UserMessage 合成。定义在本组件而非 ghostCommand.ts:
+ * 它不是"追加文本的解析结果",只是渲染层的展示形态。
+ */
+export type GhostSummonDisplay =
+  GhostDirectiveDisplay | HostCapabilityDirectiveDisplay | { kind: 'semantic'; ghostIds: string[] };
 
 /** 展开区正文:按来源双色渲染分段(injected = 意识注入值,高亮)。 */
 function DirectiveSegments({
@@ -53,32 +123,119 @@ function DirectiveSegments({
   );
 }
 
-/** Static identity mark: execution progress belongs to the tool's own row. */
-function SummonSeal({ iconDataUrl }: { iconDataUrl: string | null }) {
+/** 法阵终态编舞:缺口收拢时长(旋转中;DESIGN.md §14.4 登记的一次性瞬态)。 */
+const SEAL_CLOSE_MS = 600;
+/** 法阵终态编舞:光晕荡开 + ✓ 弹出时长,结束后摘除旋转(满圆旋转不可见,零跳变)。 */
+const SEAL_SETTLE_MS = 900;
+
+type SealPhase = 'running' | 'closing' | 'settling' | 'done';
+
+/**
+ * 幽灵印记(召唤法阵):两道反向圆弧环,环心是意识头像(声明了 icon 时),
+ * 否则回退通用幽灵图标;圆弧走 currentColor 随主题文本色。
+ *
+ * 双弧几何(外弧 83/17 · 内弧 39/61)与 running 旋转(2.4s 匀速,挂 HTML
+ * wrapper 而非 SVG,规则 7 compositor-only)保持旧版原样。终态编舞
+ * (2026-07-29,DESIGN.md §14.4 登记)解决"完成后缺口留在原地像卡死":
+ *
+ *   running(旋转) → closing(仍在旋转中,两道弧缺口收拢至满圆,600ms
+ *   一次性 stroke-dasharray 过渡,globals.css .summon-seal-arc) →
+ *   settling(fulfilled 时光晕从法阵荡开一圈 + ✓ 在头像角弹出;满圆旋转
+ *   不可见,此刻摘除旋转动画零跳变) → done(静态)。
+ *
+ * 语义自洽:缺口 = 调用进行中,满圆 = 停止。✓ 与光晕只在 fulfilled(真实
+ * 调用的结果全部返回)时出现——$指令 被取消 / AI 最终没调插件的,环中性
+ * 闭合、不放成功徽标,不将仅选择或中断伪装成完成(不伪造成功,review 反馈)。
+ * 历史消息挂载时已非 running,直接渲 done 静态帧、零动画(规则 7);
+ * motion-reduce 下旋转/过渡/光晕全部禁用(globals.css 白名单)且 JS 状态机
+ * 直落终态帧。
+ */
+function SummonSeal({
+  iconDataUrl,
+  running,
+  fulfilled,
+}: {
+  iconDataUrl: string | null;
+  running?: boolean;
+  /** 实际调用是否全部返回:完成徽标(✓/光晕)的唯一开关,中断只中性闭环。 */
+  fulfilled?: boolean;
+}) {
+  const reducedMotion = useReducedMotion();
+  const [phase, setPhase] = useState<SealPhase>(running ? 'running' : 'done');
+  // 本次挂载期间是否亲历过 running:只有亲历者播终态编舞,历史消息静态落帧。
+  const livedRunningRef = useRef(Boolean(running));
+  useEffect(() => {
+    if (running) {
+      livedRunningRef.current = true;
+      setPhase('running');
+      return;
+    }
+    if (!livedRunningRef.current) return undefined;
+    if (reducedMotion) {
+      livedRunningRef.current = false;
+      setPhase('done');
+      return undefined;
+    }
+    setPhase('closing');
+    const settleTimer = window.setTimeout(() => setPhase('settling'), SEAL_CLOSE_MS);
+    const doneTimer = window.setTimeout(() => setPhase('done'), SEAL_CLOSE_MS + SEAL_SETTLE_MS);
+    return () => {
+      window.clearTimeout(settleTimer);
+      window.clearTimeout(doneTimer);
+    };
+  }, [running, reducedMotion]);
+
+  const spinning = phase === 'running' || phase === 'closing';
+  const closed = phase !== 'running';
+  const showTick = Boolean(fulfilled) && (phase === 'settling' || phase === 'done');
+
   return (
     <span className="relative flex h-[26px] w-[26px] shrink-0 items-center justify-center">
-      <span aria-hidden="true" className="absolute inset-0">
+      <span
+        aria-hidden="true"
+        className={cn(
+          'absolute inset-0',
+          spinning && 'summon-seal-spin',
+        )}
+      >
         <svg viewBox="0 0 40 40" aria-hidden="true" className="h-full w-full">
           <circle
+            className="summon-seal-arc"
             cx="20"
             cy="20"
             r="19"
             fill="none"
             stroke="currentColor"
             strokeWidth="1.5"
-            opacity={0.55}
+            opacity={closed ? 0.55 : 0.45}
+            pathLength="100"
+            strokeDasharray={closed ? '100 0' : '83 17'}
+            strokeLinecap="round"
+            transform="rotate(120 20 20)"
           />
           <circle
+            className="summon-seal-arc"
             cx="20"
             cy="20"
             r="15"
             fill="none"
             stroke="currentColor"
             strokeWidth="1"
-            opacity={0.28}
+            opacity={closed ? 0.28 : 0.22}
+            pathLength="100"
+            strokeDasharray={closed ? '100 0' : '39 61'}
+            strokeLinecap="round"
+            transform="rotate(-40 20 20)"
           />
         </svg>
       </span>
+      {fulfilled && phase === 'settling' && (
+        <span
+          aria-hidden="true"
+          className="summon-seal-halo pointer-events-none absolute inset-0 rounded-full border"
+          style={{ borderColor: 'var(--card-status-done)' }}
+        />
+      )}
       {iconDataUrl ? (
         <img
           src={iconDataUrl}
@@ -89,16 +246,42 @@ function SummonSeal({ iconDataUrl }: { iconDataUrl: string | null }) {
       ) : (
         <Ghost size={12} strokeWidth={1.75} aria-hidden="true" />
       )}
+      {showTick && (
+        <span
+          aria-hidden="true"
+          className={cn(
+            'absolute -bottom-px -right-px flex h-[11px] w-[11px] items-center justify-center rounded-full',
+            'border border-[var(--msg-user-bg)]',
+            // 弹出动画只给亲历编舞的挂载;历史静态直显(both 保持终帧,
+            // motion-reduce 下动画禁用、自然落在 scale(1))。
+            livedRunningRef.current && 'summon-seal-tick-pop',
+          )}
+          style={{ backgroundColor: 'var(--card-status-done)' }}
+        >
+          <Check
+            size={7}
+            strokeWidth={3}
+            className="text-[var(--completion-badge-fg)]"
+            aria-hidden="true"
+          />
+        </span>
+      )}
     </span>
   );
 }
 
 export function GhostSummonCard({
   directive,
+  running,
+  messageClientId,
   commandNamespace,
   className,
 }: {
   directive: GhostSummonDisplay;
+  /** 本条消息所属的真实插件调用是否仍有未返回项。 */
+  running?: boolean;
+  /** 本条用户消息的 clientId(查"提及 → 兑现"关联;状态文字与软提示升级用)。 */
+  messageClientId?: string;
   commandNamespace?: string;
   /** 外层附加样式:UserMessage 在气泡内嵌时用它加分隔线与间距。 */
   className?: string;
@@ -129,13 +312,31 @@ export function GhostSummonCard({
       ? { namespace: directiveNamespace, ghostId: directive.ghostId }
       : null;
 
-  const ghostForDirective = (ghostId: string) =>
-    commandIdentity && ghostId === commandIdentity.ghostId
-      ? findInstalledGhostByIdentity(installedGhosts, commandIdentity)
-      : ghostByInstanceId(ghostId);
+  const commandInstanceId = commandIdentity ? pluginStoragePart(commandIdentity) : null;
+  const ghostForDirective = (ghostId: string) => commandIdentity && ghostId === commandIdentity.ghostId
+    ? findInstalledGhostByIdentity(installedGhosts, commandIdentity)
+    : ghostByInstanceId(ghostId);
   const iconByGhostId = (ghostId: string): string | null =>
     ghostByInstanceId(ghostId)?.iconDataUrl ?? null;
-  if (directive.kind === 'mention') {
+  // 「提及 → 兑现」:本条消息触发的那一轮,AI 真召唤了哪些意识。
+  const fulfillment = useContext(GhostFulfillmentContext);
+  const calls = messageClientId ? fulfillment.get(messageClientId) : undefined;
+  const fulfilledIds = calls?.ghostIds;
+  const matchesCall = (ids: ReadonlySet<string> | undefined, ghostId: string) => {
+    if (!ids) return false;
+    if (commandIdentity && commandInstanceId && ghostId === commandIdentity.ghostId) {
+      if (ids.has(commandInstanceId)) return true;
+      if (ids.has(pluginInstallStoragePart(pluginNewInstallRelId(commandIdentity)))) return true;
+      const matches = installedGhosts.filter((ghost) => ghost.manifest.id === commandIdentity.ghostId);
+      const match = matches.length === 1 ? matches[0] : undefined;
+      return Boolean(match && ids.has(commandIdentity.ghostId) &&
+        installedGhostLogicalIdentity(match).namespace === commandIdentity.namespace);
+    }
+    if (hasGhostSummonFulfillment(ids, ghostId)) return true;
+    const ghost = ghostForDirective(ghostId);
+    return ghost ? ids.has(pluginStoragePart(installedGhostLogicalIdentity(ghost))) : false;
+  };
+  if (directive.kind === 'mention' && !fulfilledIds?.size) {
     const soloIcon =
       directive.ghosts.length === 1 ? iconByGhostId(directive.ghosts[0].ghostId) : null;
     const names = directive.ghosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
@@ -192,16 +393,72 @@ export function GhostSummonCard({
   // ── 标注行形态:普通插件调用与 Host capability 共用外观,路由语义分开──
   const isCommand = directive.kind === 'command';
   const isHostCapability = directive.kind === 'host-capability';
-  // Resolve live artwork/version without changing the persisted selection name.
-  const installedGhost = ghostForDirective(directive.ghostId);
-  const versionLabel = installedGhost
-    ? `v${installedGhost.manifest.version.replace(/^v/i, '')}`
+  const selectedGhosts: Array<{ name: string; ghostId: string; command?: string }> = isCommand
+    ? [{ name: directive.name, ghostId: directive.ghostId, command: directive.command }]
+    : isHostCapability
+      ? [{ name: directive.name, ghostId: directive.ghostId }]
+      : directive.kind === 'mention'
+        ? directive.ghosts
+        : directive.ghostIds.map((id) => {
+            const g = ghostByInstanceId(id);
+            return {
+              name: g?.manifest.name ?? parsePluginInstanceId(id)?.ghostId ?? id,
+              ghostId: id,
+              ...(g?.manifest.command ? { command: g.manifest.command } : {}),
+            };
+          });
+  // 有调用时展示完整的实际清单;选择只提供匹配身份的历史名称,不能把 A 的
+  // 选择身份套给实际调用的 B。没有调用时继续静态展示原选择。
+  const cardGhosts = !isHostCapability && fulfilledIds?.size
+    ? [...fulfilledIds].map((id) => {
+        const selected = selectedGhosts.find((g) => matchesCall(new Set([id]), g.ghostId));
+        const ghost = selected ? ghostForDirective(selected.ghostId) : ghostByInstanceId(id);
+        return {
+          ...(selected ?? { name: ghost?.manifest.name ?? parsePluginInstanceId(id)?.ghostId ?? id, ghostId: id }),
+          installedGhost: ghost,
+        };
+      })
+    : selectedGhosts.map((g) => ({ ...g, installedGhost: ghostForDirective(g.ghostId) }));
+  // 兜底:空清单不渲(semantic 由 UserMessage 保证非空,此处防御性短路)。
+  if (cardGhosts.length === 0) return null;
+  // 命中已装意识时取实时安装态(头像/版本号);已卸下则都不显示,
+  // 与消息文本里固化的 id/名字解耦(不缓存失效数据)。
+  const installedGhost = cardGhosts[0].installedGhost;
+  // 抽屉描述原指令,版本归属也保持原选择,不借用其他实际调用的版本。
+  const directiveGhost =
+    selectedGhosts.length === 1 ? ghostForDirective(selectedGhosts[0].ghostId) : undefined;
+  // 版本号统一 v 前缀展示(身份卡 version 是自由字符串,作者已带 v 时不重复);
+  // 多意识并列时不展示(版本归属不明)。
+  const versionLabel = directiveGhost
+    ? `v${directiveGhost.manifest.version.replace(/^v/i, '')}`
     : null;
-  const badgeCommand = isCommand ? directive.command : undefined;
+  const cardNames = cardGhosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
+  // $指令 徽章:单意识且声明了指令词才有(软提示兑现的意识可能没有 command)。
+  const badgeCommand = selectedGhosts.length === 1 ? selectedGhosts[0].command : undefined;
+  // 展开区正文:与实际发送字节同源(commandDirectiveSegments /
+  // mentionDirectiveSegments 是各自模板的单一事实源);semantic 没有追加段,
+  // 展开区改为如实说明(segments = null)。
   const segments = isCommand
     ? commandDirectiveSegments(directive)
-    : hostCapabilityDirectiveSegments(directive);
-  const statusText = t('chat.ghostSummon.status.selected');
+    : isHostCapability
+      ? hostCapabilityDirectiveSegments(directive)
+      : directive.kind === 'mention'
+        ? mentionDirectiveSegments(directive.ghosts)
+        : null;
+  // 未执行的选择保持静态;合排状态由这条消息的全部真实调用共同决定。
+  const anyFulfilled = !isHostCapability && Boolean(fulfilledIds?.size);
+  const allReturned = anyFulfilled && !calls?.pendingGhostIds.size;
+  const callRunning = Boolean(running) && !isHostCapability && Boolean(calls?.pendingGhostIds.size);
+  // Host capability selection is not a ghost_call fulfillment event. Until
+  // Host MCP fulfillment is tracked separately, report only the fact we know:
+  // the user selected this route. Do not show a success tick or "已调用".
+  const statusText = isHostCapability
+    ? t('chat.ghostSummon.status.selected')
+    : callRunning
+      ? t('chat.ghostSummon.status.running')
+      : anyFulfilled
+        ? t('chat.ghostSummon.status.called')
+        : t('chat.ghostSummon.status.selected');
 
   // 分享图不带插件标注(同来源标签):整行连同分隔线一起移除,气泡与普通消息一致。
   return (
@@ -214,7 +471,11 @@ export function GhostSummonCard({
             ? 'chat.ghostSummon.collapseAria'
             : isCommand
               ? 'chat.ghostSummon.expandAria'
-              : 'chat.ghostSummon.hostCapabilityExpandAria',
+              : isHostCapability
+                ? 'chat.ghostSummon.hostCapabilityExpandAria'
+                : directive.kind === 'mention'
+                  ? 'chat.ghostSummon.mentionExpandAria'
+                  : 'chat.ghostSummon.semanticExpandAria',
         )}
         onClick={() => setExpanded((v) => !v)}
         className={cn(
@@ -223,12 +484,16 @@ export function GhostSummonCard({
           'focus-visible:ring-[var(--focus-ring-soft)]',
         )}
       >
-        <SummonSeal iconDataUrl={installedGhost?.iconDataUrl ?? null} />
+        <SummonSeal
+          iconDataUrl={installedGhost?.iconDataUrl ?? null}
+          running={callRunning}
+          fulfilled={allReturned}
+        />
         <span
           className="min-w-0 truncate text-xs font-medium transition-colors group-hover:text-[var(--text-primary)]"
           style={{ color: 'var(--text-secondary)' }}
         >
-          {directive.name}
+          {cardNames}
         </span>
         <span className="shrink-0 text-xs" style={{ color: 'var(--text-tertiary)' }}>
           {statusText}
@@ -270,7 +535,9 @@ export function GhostSummonCard({
                 {t(
                   isCommand
                     ? 'chat.ghostSummon.directiveLabel'
-                    : 'chat.ghostSummon.hostCapabilityDirectiveLabel',
+                    : isHostCapability
+                      ? 'chat.ghostSummon.hostCapabilityDirectiveLabel'
+                      : 'chat.ghostSummon.mentionDirectiveLabel',
                 )}
               </div>
               <div
@@ -289,7 +556,12 @@ export function GhostSummonCard({
                 injectedClassName="text-[var(--text-primary)]"
               />
             </>
-          ) : null}
+          ) : (
+            /* semantic:没有追加段,如实说明来由(不伪造"指令原文")。 */
+            <div className="text-xs leading-[1.5]" style={{ color: 'var(--text-tertiary)' }}>
+              {t('chat.ghostSummon.semanticNote')}
+            </div>
+          )}
         </div>
       </Collapse>
     </div>

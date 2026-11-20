@@ -202,7 +202,8 @@ async function applyGeneratedSessionDisposition(
         void window.electronAPI.cleanupSessionImages(sessionId).catch(() => undefined);
       }
       makerChatStore.purgeSession(sessionId);
-      discardComposerDraft(sessionId);
+      // 归档可恢复，未发送草稿保留；只有删除才丢弃草稿与附件暂存副本。
+      if (disposition === 'delete') discardComposerDraft(sessionId);
     } catch {
       failed.push(sessionId);
     }

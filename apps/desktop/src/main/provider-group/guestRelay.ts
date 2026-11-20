@@ -17,7 +17,7 @@ import type { RemoteAgentInvoke, RemoteAgentPoller } from '../remote-agent/contr
 import { RemoteAgentRunClient } from '../remote-agent/controller/runClient.js';
 import { readSharedGroupStatus } from './sharedStatus.js';
 import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from './remoteHandler.js';
-import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
+import { providerGroupImageModelId, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
 import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals } from './failurePolicy.js';
 import type { ProviderGroupOwnerScope } from './runtime.js';
 
@@ -90,7 +90,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
 
     noteReshareDenied: (agentDeviceId, reshareKey) => deps.noteReshareDenied?.(agentDeviceId, reshareKey),
 
-    async plan({ kind, model, providerId, exclude, reserve, reshareKey }) {
+    async plan({ kind, model, providerId, capability, exclude, reserve, reshareKey }) {
       const config = deps.readGroup(providerId);
       if (!config) return null;
       const skip = new Set(exclude);
@@ -105,6 +105,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         providerId,
         agentKind: kind as AgentKind,
         model,
+        ...(capability ? { capability } : {}),
         exclude: skip,
         // 这一轮试过不行的再来选：现读最新状态(状态以本机为准，2026-10-11)。
         ...(exclude.size > 0 ? { fresh: true } : {}),
@@ -117,15 +118,21 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         return { kind: 'unavailable' };
       }
       if (pick.kind === 'none') return null;
-      if (pick.kind === 'unavailable') return { kind: 'unavailable' };
+      if (pick.kind === 'unavailable') {
+        const { full, usageLimit } = pick;
+        return { kind: 'unavailable', full, usageLimit };
+      }
       const { member } = pick;
       if (member.kind === 'local' || !member.agentDeviceId) return { kind: 'local', ...(load ? { load } : {}) };
+      const view = capability ? pick.resolved.find(row => row.member.key === member.key)?.view : undefined;
+      const imageModelId = view ? providerGroupImageModelId(view, providerId, model) : undefined;
       return {
         kind: 'member',
         memberKey: member.key,
         agentDeviceId: member.agentDeviceId,
         providerId: member.providerId,
         sameAccount: member.kind === 'device',
+        ...(imageModelId ? { imageModelId } : {}),
         ...(load ? { load } : {}),
       };
     },

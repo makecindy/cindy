@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   send: vi.fn(),
   readToken: vi.fn(),
+  readTokenDetailed: vi.fn(),
   disposers: [] as Array<() => void>,
   connected: undefined as undefined | (() => void),
   focused: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
@@ -36,9 +37,12 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard }));
-vi.mock('../git-context/ghBinary', () => ({ configureManagedGhRoot: vi.fn() }));
+vi.mock('../git-context/ghBinary', () => ({
+  configureManagedGhRoot: vi.fn(),
+  exposeInstalledManagedGh: vi.fn(async () => undefined),
+}));
 vi.mock('../git-context/ghCliTokenSource', () => ({
-  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken }),
+  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken, readTokenDetailed: mocks.readTokenDetailed }),
 }));
 vi.mock('../git-context/githubSetup', () => ({
   createGithubSetup: (_root: string, connected: () => void) => {
@@ -56,6 +60,7 @@ beforeEach(() => {
   vi.mocked(readGhostSecret).mockReset();
   vi.mocked(outboundFetch).mockReset();
   mocks.readToken.mockResolvedValue(null);
+  mocks.readTokenDetailed.mockResolvedValue({ ok: false, reason: 'gh-not-logged-in' });
 });
 afterEach(() => mocks.disposers.splice(0).forEach(dispose => dispose()));
 
@@ -75,6 +80,13 @@ describe('GitHub setup IPC boundary', () => {
       expect(mocks.send).toHaveBeenCalledWith('git-context:github-connected');
     },
   );
+  it('preserves a local CLI timeout as inconclusive and still verifies a configured fallback', async () => {
+    mocks.readTokenDetailed.mockResolvedValue({ ok: false, reason: 'gh-timeout' });
+    expect(await readGithubConnection()).toEqual({ status: 'network', source: 'gh-cli' });
+    vi.mocked(readGhostSecret).mockReturnValue('fake-fallback');
+    vi.mocked(outboundFetch).mockResolvedValue(new Response('{"login":"test-user"}'));
+    expect(await readGithubConnection()).toMatchObject({ status: 'connected', source: 'token' });
+  });
   it('does not verify or subscribe to a same-name enterprise credential', async () => {
     const instanceId = '_ns__acme__cindy-github';
     vi.mocked(readGhostSecret).mockImplementation((id) => id === instanceId ? 'synthetic-enterprise-pat' : null);

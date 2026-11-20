@@ -162,6 +162,8 @@ export interface IMHostMediaCache {
     options?: {
       /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
       shouldReuse?: () => boolean;
+      /** Background-only reuse keeps the blob eligible for cache collection. */
+      staging?: boolean;
     },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
@@ -197,6 +199,8 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** In-process ingress lease. Recheck before admitting queued work; never serialize to models or clients. */
+  assertCurrent?(): void;
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
     /** A queued retry was withdrawn by a later owner stop command. */
@@ -291,6 +295,8 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /** Verified BlueBubbles inline-reply root, resolved in the same connected chat. */
+  imessageReplyGuid?: string;
   /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
@@ -374,6 +380,12 @@ export interface InteractiveCardSpec {
   /** Markdown body. */
   body: string;
   buttons: InteractiveCardButton[];
+  /**
+   * 按钮排布。`row`(默认): 少量短按钮横排, 如允许 / 拒绝。
+   * `list`: 选项列表(模型、项目、会话等), 每个选项独占一行、按卡片宽度展开,
+   * 避免多按钮挤在一行时文字被压缩截断。不支持排布的渠道忽略此字段。
+   */
+  buttonLayout?: 'row' | 'list';
 }
 
 /**

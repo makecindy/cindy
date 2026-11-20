@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { localDbFatalDetailsText } from '../../../shared/localDbFatalDetails';
 import { resolveLocalDbFatalView } from './localDbFatalView';
 
@@ -29,7 +30,7 @@ export function LocalDbFatalScreen({
   onRetry?: () => void;
 }) {
   const { t } = useTranslation();
-  const { status, progress } = useUpdateStatus();
+  const { status, progress, download } = useUpdateStatus();
   // 点了「重启并安装更新」后应用即将退出重启，期间锁住按钮防止重复触发。
   const [installing, setInstalling] = useState(false);
   // 复制失败（无剪贴板权限、Wayland 写入落空等）时展开技术细节，用户仍可手动选中复制。
@@ -38,7 +39,7 @@ export function LocalDbFatalScreen({
   const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
-    if (view === 'retry-local-db') {
+    if (view === 'retry-local-db' || view === 'runtime-corrupt') {
       onRetry?.();
       return;
     }
@@ -61,7 +62,9 @@ export function LocalDbFatalScreen({
   };
 
   const title =
-    view === 'retry-local-db'
+    view === 'runtime-corrupt'
+      ? t('localDbFatal.runtimeCorrupt.title')
+      : view === 'retry-local-db'
       ? t('localDbFatal.schemaLease.title')
       : view === 'corrupt'
         ? t('localDbFatal.corrupt.title')
@@ -71,7 +74,9 @@ export function LocalDbFatalScreen({
             ? t('localDbFatal.noUpdate.title')
             : t('localDbFatal.updateReady.title');
   const description =
-    view === 'retry-local-db'
+    view === 'runtime-corrupt'
+      ? t('localDbFatal.runtimeCorrupt.description')
+      : view === 'retry-local-db'
       ? (message ?? t('localDbFatal.schemaLease.lock-unreadable'))
       : view === 'corrupt'
         ? t('localDbFatal.corrupt.description')
@@ -83,7 +88,7 @@ export function LocalDbFatalScreen({
               ? t('localDbFatal.preparing.description')
               : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'retry-local-db'
+    view === 'retry-local-db' || view === 'runtime-corrupt'
       ? t('localDbFatal.schemaLease.retry')
       : view === 'init-failed' || view === 'corrupt'
         ? t('localDbFatal.initFailed.retry')
@@ -110,12 +115,17 @@ export function LocalDbFatalScreen({
         onConfirm={handleConfirm}
         content={
           <>
-            {view === 'preparing-update' && typeof progress === 'number' && (
-              <p className="text-13 text-[var(--confirm-desc)]">
-                {t('localDbFatal.preparing.progress', { progress: Math.round(progress) })}
-              </p>
+            {view === 'preparing-update' && download ? (
+              <DownloadMeter label={t('downloadProgress.phase.downloading')} progress={download} />
+            ) : (
+              view === 'preparing-update' &&
+              typeof progress === 'number' && (
+                <p className="text-13 text-[var(--confirm-desc)]">
+                  {t('localDbFatal.preparing.progress', { progress: Math.round(progress) })}
+                </p>
+              )
             )}
-            {(view === 'corrupt' || view === 'init-failed') && (message || code) && (
+            {(view === 'corrupt' || view === 'runtime-corrupt' || view === 'init-failed') && (message || code) && (
               <Button
                 variant="secondary"
                 size="sm"

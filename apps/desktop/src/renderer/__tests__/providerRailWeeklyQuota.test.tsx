@@ -4,6 +4,7 @@ import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { modelAccountQuotaStatus, modelQuotaWarning } from '@/components/new-chat/modelAccountQuotaStatus';
 import { ModelPickerAccountProvider, useModelPickerAccount } from '@/components/new-chat/ModelPickerAccount';
+import { SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
 import { ModelPoolQuotaSummary } from '@/components/new-chat/ModelPoolQuota';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
@@ -155,6 +156,7 @@ describe('provider weekly quota identity and windows', () => {
     reads.claude.mockReturnValue(null);
     const account = (id: string, used: number, paused = false) => ({
       id, identity: `${id}@example.test`, paused, status: 'ready', running: id === 'a' ? 4 : 0, limit: 4,
+      plan: 'pro', planDisplayName: providerId === 'anthropic' ? (id === 'a' ? 'Ultra' : 'Pro') : undefined,
       usage: { claude: { sevenDay: { utilization: used } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } },
     });
     const pool = { providerId, kind: providerId === 'anthropic' ? 'anthropic' : 'openai', configured: true,
@@ -181,6 +183,11 @@ describe('provider weekly quota identity and windows', () => {
     expect(view.container.textContent).not.toContain('34% / 80%');
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('a@example.test');
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('b@example.test');
+    if (providerId === 'anthropic') {
+      const title = view.container.querySelector('[data-model-source-details]')?.getAttribute('title');
+      expect(title).toContain('a@example.test · Ultra');
+      expect(title).toContain('b@example.test · Pro');
+    }
     // Native pool bridges use the same account buckets as runtime admission.
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34%');
 
@@ -209,6 +216,7 @@ describe('provider weekly quota identity and windows', () => {
   it.each(['device', 'task', 'owner'] as const)('hides retained quota after a %s change and rejects the old reply', async change => {
     const pool = { providerId: 'anthropic', configured: true, accounts: [
       { id: 'a', identity: 'a@example.test', paused: false, status: 'ready', running: 0, limit: 4,
+        plan: 'pro', planDisplayName: 'Ultra',
         usage: { claude: { sevenDay: { utilization: 22 } } } },
     ] };
     const command = vi.fn().mockResolvedValue(pool);
@@ -219,7 +227,7 @@ describe('provider weekly quota identity and windows', () => {
     } });
     function Account() {
       const account = useModelPickerAccount('anthropic');
-      return <span>{account?.identity ?? 'unknown'}</span>;
+      return <span>{account?.identity ? `${account.identity} · ${account.planDisplayName}` : 'unknown'}</span>;
     }
     const tree = (deviceId: string | null = null, taskId?: string) =>
       <ModelPickerAccountProvider enabled providerIds={['anthropic']} deviceId={deviceId} taskId={taskId}>
@@ -227,11 +235,11 @@ describe('provider weekly quota identity and windows', () => {
       </ModelPickerAccountProvider>;
     const view = render(tree());
     await act(async () => {});
-    expect(view.container.textContent).toBe('a@example.test');
+    expect(view.container.textContent).toBe('a@example.test · Ultra');
     let resolve!: (value: typeof pool) => void;
     command.mockImplementation(() => new Promise<typeof pool>(done => { resolve = done; }));
     act(() => window.dispatchEvent(new Event('focus')));
-    expect(view.container.textContent).toBe('a@example.test');
+    expect(view.container.textContent).toBe('a@example.test · Ultra');
     const oldReply = resolve;
     if (change === 'owner') setDataOwnerGeneration('quota-new-owner');
     view.rerender(tree(change === 'device' ? 'other-device' : null, change === 'task' ? 'other-task' : undefined));
@@ -306,7 +314,8 @@ describe('provider weekly quota identity and windows', () => {
     reads.claude.mockImplementation(enabled => enabled ? { sevenDay: { utilization: 93 }, subscriptionType: 'pro' } : null);
     const command = vi.fn().mockResolvedValue({ providerId, configured: true, accounts: [
       { id: 'default', identity: 'a@example.test', paused: true, status: 'ready', running: 0, limit: 4 },
-      { id: 'b', identity: 'b@example.test', plan: providerId === 'anthropic' ? 'max' : 'pro', paused: false, status: 'ready', running: 0, limit: 4,
+      { id: 'b', identity: 'b@example.test', plan: 'pro', planTier: 'pro',
+        planDisplayName: providerId === 'anthropic' ? 'Ultra' : undefined, paused: false, status: 'ready', running: 0, limit: 4,
         usage: { claude: { sevenDay: { utilization: 0 } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: 0 } } } } } },
     ] });
     Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
@@ -324,12 +333,45 @@ describe('provider weekly quota identity and windows', () => {
     await act(async () => {});
     const button = screen.getByRole('button', { name: 'Claude · b@example.test' });
     expect(button.querySelector('[data-weekly-remaining="100"]')).not.toBeNull();
-    expect(view.container.textContent).toContain(providerId === 'anthropic' ? 'b@example.test · Max' : 'b@example.test · Pro');
+    expect(view.container.textContent).toContain(providerId === 'anthropic' ? 'b@example.test · Ultra' : 'b@example.test · Pro');
     expect(view.container.textContent).not.toContain('a@example.test');
     expect(command.mock.calls).toEqual([
       [{ action: 'preview', providerId }],
       [{ action: 'read', providerId }],
     ]);
+  });
+
+  // Unit: task bindings override pool previews; the official display name must follow that account,
+  // and must disappear when another task's host only reports the legacy machine plan.
+  it('keeps the bound Claude display name with its task through the picker projection', async () => {
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true, accounts: [
+      { id: 'default', identity: 'default@example.test', plan: 'pro', planDisplayName: 'Preview Plan',
+        paused: false, status: 'ready', running: 0, limit: 4 },
+    ] });
+    const sessionAccount = vi.fn().mockImplementation(({ sessionId }) => Promise.resolve({
+      providerId: 'anthropic', state: 'bound', account: {
+        isDefault: false, number: 2, identity: `${sessionId}@example.test`, paused: false, status: 'ready',
+        plan: 'pro', planTier: 'pro', ...(sessionId === 'ultra-task' ? { planDisplayName: 'Ultra' } : {}),
+      },
+    }));
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, sessionAccount, onChanged: () => () => {} } } });
+    function Account() {
+      const account = useModelPickerAccount('anthropic');
+      return <span>{account?.identity ? `${account.identity} · ${account.planDisplayName ?? account.plan}` : 'unknown'}</span>;
+    }
+    const tree = (sessionId: string) => <ModelPickerAccountProvider enabled providerIds={['anthropic']} deviceId={null}>
+      <SessionSubscriptionAccountProvider providerId="anthropic" deviceId={null} sessionId={sessionId} nativeSessionId={null}>
+        <Account />
+      </SessionSubscriptionAccountProvider>
+    </ModelPickerAccountProvider>;
+    const view = render(tree('ultra-task'));
+    await act(async () => {});
+    expect(view.container.textContent).toBe('ultra-task@example.test · Ultra');
+    view.rerender(tree('legacy-task'));
+    expect(view.container.textContent).toBe('unknown');
+    await act(async () => {});
+    expect(view.container.textContent).toBe('legacy-task@example.test · pro');
+    expect(view.container.textContent).not.toContain('Preview Plan');
   });
 
   // #8010 merge regression / unit: main added Kimi after self-source normalization.
@@ -1083,5 +1125,28 @@ describe('shared provider rail weekly quota', () => {
     await tick();
     expect(command).toHaveBeenCalledTimes(2);
     expect(bar()).toBeNull();
+  });
+
+  it('staggers and coalesces the first quota refresh after the share host comes back online', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      sharing.received = [{ ...share, hostOnline: false }];
+      command.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] no data path'));
+      const view = render(<><Rail /><Rail /></>);
+      await act(async () => {});
+      expect(command).toHaveBeenCalledTimes(1);
+
+      sharing.received = [share];
+      view.rerender(<><Rail /><Rail /></>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_249); });
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(bar()).toBeNull();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(command).toHaveBeenCalledTimes(2);
+      expect(bar()).not.toBeNull();
+    } finally {
+      random.mockRestore();
+    }
   });
 });

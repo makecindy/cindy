@@ -865,3 +865,13 @@ it('a drawer status read never replaces the full home binding cache', async () =
   expect(await loadSessionScheduleIndexThrottled('device', reload)).toBe(full);
   expect(reload).not.toHaveBeenCalled();
 });
+
+it('publishes a follow-up binding change even when the latest run metadata is unchanged', () => {
+  const info: RemoteSessionScheduleInfo = { scheduleId: 'paused', scheduleName: 'Paused', scheduleStatus: 'paused',
+    running: false, latestRunAt: 1, unreadCount: 0, unreadRunIds: [], hasActiveFollowUp: true };
+  const current = new Map([['task', info]]);
+  const next = new Map([['task', { ...info, hasActiveFollowUp: false }]]);
+  const updated = replaceSessionScheduleIndexEntries(current, ['task'], next);
+  expect(updated).not.toBe(current);
+  expect(updated.get('task')?.hasActiveFollowUp).toBe(false);
+});

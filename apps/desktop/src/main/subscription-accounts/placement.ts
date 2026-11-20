@@ -29,6 +29,8 @@ const PROVIDER_ID = /^[a-z0-9_-]{1,40}$/;
 const CREATED_PROVIDER_ID = /^(openai|anthropic)-sub-[a-f0-9]{8}$/;
 const MAX_PLACEMENTS = 1024;
 const MAX_PROVIDER_NAME = 64;
+/** The upgrade split counted past ids already taken by the owner's created providers. */
+const UPGRADE_SPLIT_ID_ATTEMPTS = 16;
 
 /** A provider Cindy created for one subscription account (2026-11-13), e.g. a separate account. */
 export interface CreatedSubscriptionProvider {
@@ -213,6 +215,7 @@ export async function placeSubscriptionAccount(
   kind: SubscriptionProvider,
   accountId: string | readonly string[],
   providerId: string,
+  assertCanMove?: () => void,
 ): Promise<void> {
   const ids = typeof accountId === 'string' ? [accountId] : accountId;
   if (ids.some(id => !accountIdValid(id)) || !PROVIDER_ID.test(providerId))
@@ -221,6 +224,7 @@ export async function placeSubscriptionAccount(
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
     assertOwner(owner);
+    assertCanMove?.();
     const accounts = { ...value.accounts };
     // The built-in provider is the default; storing it explicitly records the user's choice so a
     // later load never mistakes this account for one the upgrade merged.
@@ -320,19 +324,6 @@ export function readOpenAiMergedLegacyAccountsIfReadable(): Readonly<Record<stri
   );
 }
 
-/** Only current members of actually shared pools inherit the pool's revert grant.
- * Historical aliases survive a split for saved tasks; they are not sharing intent.
- */
-export function readSharedOpenAiLegacyAccountsIfReadable(sharedProviders: ReadonlySet<string>): Readonly<Record<string, string>> | null {
-  const aliases = readOpenAiLegacyAccountsIfReadable();
-  file.invalidateIfChanged();
-  if (!aliases || file.isUnreadable()) return null;
-  const members = new Set(readPool('openai')?.accounts.map(account => account.id));
-  return Object.fromEntries(Object.entries(aliases).filter(([providerId, accountId]) =>
-    members.has(accountId) && accountProviderId('openai', accountId) !== providerId
-    && sharedProviders.has(accountProviderId('openai', accountId))));
-}
-
 /**
  * Undo the 2026-11-11 upgrade merge (v0.1.135): every legacy Codex connection that was folded into
  * OpenAI without the user choosing it belongs to its own connection again. Runs on each catalog
@@ -424,74 +415,18 @@ export async function restoreAutoMergedLegacyCodexAccounts(
 }
 
 /**
- * Split old wizard/pool additions too (2026-11-14 user correction): an unplaced non-default
- * account was pooled before users could choose. Explicit additions/merges have a placement and
- * stay where chosen. Legacy Codex aliases are restored by the preceding legacy restoration;
- * an alias whose original connection is missing must not become a different provider here.
- * Only placement metadata changes; directories, task bindings, pauses and limits stay intact.
+ * Providers that the 0.1.137–0.1.139 upgrade split created for an old pooled account (PR #10461,
+ * superseded on 2026-11-18: upgrades no longer split pooled accounts, see
+ * subscription-account-pools.md「升级不再自动拆分」). That upgrade derived the id from the account
+ * key (`<kind>-sub-<sha256(key:n)>`, n counting past ids already taken), while providers the user
+ * creates get a random suffix, so only upgrade-made providers match.
  */
-export async function restoreUnplacedSubscriptionAccounts(options: {
-  prepare(kind: SubscriptionProvider, providerId: string): void;
-  disable(providerId: string): void;
-  isCurrent?: () => boolean;
-}): Promise<boolean> {
-  if (options.isCurrent?.() === false) return false;
-  file.invalidateIfChanged();
-  // Both kinds share the same pool file; this also checks that it is readable before any write.
-  const aliases = readOpenAiLegacyAccountsIfReadable();
-  if (!aliases || file.isUnreadable()) return false;
-  const legacy = new Set(Object.values(aliases));
-  const placed = file.read().accounts;
-  const candidates = (['openai', 'anthropic'] as const).flatMap(kind =>
-    (readPool(kind)?.accounts ?? []).filter(account => account.id !== 'default'
-      && !Object.hasOwn(placed, keyOf(kind, account.id))
-      && !(kind === 'openai' && legacy.has(account.id))).map(account => ({ kind, account })),
-  );
-  // Keep collision reservations and partially prepared settings stable even if the pool order changes.
-  candidates.sort((a, b) => {
-    const left = keyOf(a.kind, a.account.id);
-    const right = keyOf(b.kind, b.account.id);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-  if (!candidates.length) return false;
-  const owner = activeOwnerScopeKey();
-  let changed = false;
-  await file.updateAtomic(({ value }) => {
-    assertOwner(owner);
-    if (options.isCurrent?.() === false) throw new Error('Subscription accounts changed');
-    const currentAliases = readOpenAiLegacyAccountsIfReadable();
-    if (!currentAliases) throw new Error('Subscription accounts are unreadable');
-    const accounts = { ...value.accounts };
-    const providers = { ...value.providers };
-    for (const { kind, account } of candidates) {
-      const key = keyOf(kind, account.id);
-      const pool = readPool(kind);
-      // Recheck inside the write lock: a concurrent move, removal or legacy registration wins.
-      if (Object.hasOwn(accounts, key) || !pool?.accounts.some(entry => entry.id === account.id)
-        || (kind === 'openai' && Object.values(currentAliases).includes(account.id))) continue;
-      let providerId = Object.entries(providers)
-        .find(([, entry]) => entry.kind === kind && entry.account === account.id)?.[0];
-      if (!providerId) {
-        // Preparing settings writes a separate file before placement commits. Retry the same IDs
-        // after either write fails, instead of accumulating orphan overrides under random IDs.
-        let collision = 0;
-        do {
-          const suffix = createHash('sha256').update(`${key}:${collision++}`).digest('hex').slice(0, 8);
-          providerId = `${kind}-sub-${suffix}`;
-        } while (providers[providerId]);
-      }
-      options.prepare(kind, providerId);
-      // Splitting a disconnected pool must not turn its accounts back on.
-      if (pool.disconnected) options.disable(providerId);
-      const brand = kind === 'openai' ? 'OpenAI' : 'Claude';
-      providers[providerId] ??= { kind, name: account.lastConfirmedIdentity
-        ? `${brand} · ${account.lastConfirmedIdentity}` : brand, account: account.id };
-      accounts[key] = providerId;
-      changed = true;
-    }
-    assertOwner(owner);
-    if (options.isCurrent?.() === false) throw new Error('Subscription accounts changed');
-    return { accounts, providers };
-  });
-  return changed;
+export function isUpgradeSplitProvider(providerId: string, entry: CreatedSubscriptionProvider): boolean {
+  const prefix = `${entry.kind}-sub-`;
+  if (!providerId.startsWith(prefix)) return false;
+  const key = keyOf(entry.kind, entry.account);
+  for (let collision = 0; collision < UPGRADE_SPLIT_ID_ATTEMPTS; collision++) {
+    if (providerId === prefix + createHash('sha256').update(`${key}:${collision}`).digest('hex').slice(0, 8)) return true;
+  }
+  return false;
 }
