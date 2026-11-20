@@ -56,6 +56,7 @@ export interface UseDeviceProvidersResult {
 }
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
+const MAX_RETAINED_MODEL_RETRIES = 2;
 
 function canRecoverProviderRead(error: unknown): boolean {
   return isAutoRecoveringRemoteError(error)
@@ -279,7 +280,7 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false, retain
   }, [catalogGeneration, connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
   const ready = deviceId !== undefined && readyFor === deviceId && readyGen === getDeviceProvidersGen(deviceId);
-  const retained = useRetainedProviderModel(maker, ready ? payload : undefined, retainedModel, pickerOpen);
+  const retained = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, retainedModel, pickerOpen);
   return {
     providers: retained.payload?.providers ?? payload.providers,
     modelVisibilityOverrides: retained.payload?.modelVisibilityOverrides ?? payload.modelVisibilityOverrides,
@@ -293,23 +294,30 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false, retain
 /** Keep the running task's exception private to its view. A replacement catalog (including a
  * revocation or owner change) immediately retires the old result, even during render. */
 export function useRetainedProviderModel(
-  maker: MobileMakerTransport, base: DeviceProvidersPayload | undefined,
+  deviceId: string | undefined, maker: MobileMakerTransport, base: DeviceProvidersPayload | undefined,
   route: ProviderPickerModel | undefined, pickerOpen = false,
 ) {
+  const { status, recoveringDeviceIds } = useDeviceLink(deviceId);
+  const peerReady = !!deviceId && status === 'online' && !recoveringDeviceIds.has(deviceId);
   const agent = route?.agent;
   const modelId = route?.modelId;
   const providerId = route?.providerId;
   const needed = !!modelId && !!base?.deferredProviderIds?.some(id => providerId === null || id === providerId);
   const [result, setResult] = useState<{
-    base: DeviceProvidersPayload; key: string; payload?: DeviceProvidersPayload; error?: string;
+    base: DeviceProvidersPayload; key: string; payload?: DeviceProvidersPayload; error?: string; failedPickerOpen?: boolean;
   }>();
   const key = JSON.stringify([agent, providerId, modelId]);
   const current = needed && result?.base === base && result?.key === key ? result : undefined;
-  const loaded = !!current?.payload;
+  // A peer recovering can rearm exhausted transient reads. Permanent errors wait for a new user attempt.
+  const settled = !!current?.payload
+    || (!!current?.error && current.failedPickerOpen === pickerOpen && !canRecoverProviderRead(current.error));
   useEffect(() => {
-    if (!needed || !base || !agent || !modelId || providerId === undefined || loaded) return;
+    if (!needed || !base || !agent || !modelId || providerId === undefined || !peerReady || settled) return;
     let cancelled = false;
-    void readRetainedProviderModel(base, key, () => maker.listProviders({ agent, modelId, providerId })).then(reply => {
+    let retries = 0;
+    let retryDelay: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const applyReply = (reply: DeviceProvidersPayload) => {
       if (cancelled) return;
       // A downgraded host can reply with a full directory. Only the exact suspended route
       // may supplement this snapshot; no other source or model becomes selectable.
@@ -329,10 +337,32 @@ export function useRetainedProviderModel(
       const payload = orderDeviceProviders({ ...base, providers: [...base.providers.filter(p => !received.has(p.id)), ...kept],
         modelVisibilityOverrides: visibility });
       setResult({ base, key, payload });
-    }).catch(reason => {
-      if (!cancelled) setResult({ base, key, error: formatRemoteError(reason) });
-    });
-    return () => { cancelled = true; };
-  }, [agent, base, key, loaded, maker, modelId, needed, pickerOpen, providerId]);
+    };
+    const scheduleRetry = (state = AppState.currentState) => {
+      clearTimeout(timer);
+      if (state === 'active' && retryDelay !== undefined) timer = setTimeout(read, retryDelay);
+    };
+    const read = () => {
+      retryDelay = undefined;
+      void readRetainedProviderModel(base, key, () => maker.listProviders({ agent, modelId, providerId }))
+        .then(applyReply).catch(reason => {
+          if (cancelled) return;
+          if (canRecoverProviderRead(reason) && retries < MAX_RETAINED_MODEL_RETRIES) {
+            retryDelay = connectionRecoverySyncRetryDelayMs(retries++);
+            scheduleRetry();
+            return;
+          }
+          setResult({ base, key, error: formatRemoteError(reason), failedPickerOpen: pickerOpen });
+        });
+    };
+    const subscription = AppState.addEventListener('change', scheduleRetry);
+    if (AppState.currentState === 'active') read();
+    else retryDelay = 0;
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [agent, base, key, maker, modelId, needed, peerReady, pickerOpen, providerId, settled]);
   return { payload: current?.payload, loading: needed && !current, error: current?.error ?? null };
 }

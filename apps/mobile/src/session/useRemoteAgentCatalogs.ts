@@ -264,8 +264,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   const retainedDevice = input.retainedModel?.deviceId;
   const retainedBase = retainedDevice && input.enabled ? catalogs.get(retainedDevice) : undefined;
   const retainedMaker = useMobileMakerTransport(retainedDevice ?? '');
-  const retained = useRetainedProviderModel(retainedMaker, retainedBase?.status === 'ready' ? retainedBase.payload : undefined,
-    input.retainedModel?.route, !keepOnly);
+  const retained = useRetainedProviderModel(retainedDevice, retainedMaker,
+    retainedBase?.status === 'ready' ? retainedBase.payload : undefined, input.retainedModel?.route, !keepOnly);
   const result = useMemo(() => {
     if (devices.length === 0 && shareCatalogs.length === 0) return NO_CATALOGS;
     void presenceVersion;

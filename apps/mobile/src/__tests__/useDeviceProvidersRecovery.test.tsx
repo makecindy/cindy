@@ -70,20 +70,21 @@ afterEach(async () => {
 });
 
 describe('model catalog failure recovery', () => {
+  const route = { agent: 'codex' as const, modelId: 'current', providerId: 'off' };
+  const active = { ...catalog('on'), deferredProviderIds: ['off'], providerOrder: ['off', 'on'] };
+  const reply = { providers: [{ id: 'off', suspended: true, models: { codex: [{ id: 'current' }, { id: 'sibling' }] } }] };
+  const show = (retained?: ProviderPickerModel) => act(async () => {
+    root.render(createElement(Probe, { deviceId: 'a', open: true, retained }));
+  });
+
   // A task-specific response arriving after navigation must never enter the common picker cache.
   it('shows only the bound suspended model and discards it when switching tasks', async () => {
-    const route = { agent: 'codex' as const, modelId: 'current', providerId: 'off' };
-    const active = { ...catalog('on'), deferredProviderIds: ['off'], providerOrder: ['off', 'on'] };
     const read = state.makers.get('a')!.listProviders;
     let finish!: (reply: object) => void;
     read.mockResolvedValueOnce(active).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const show = (retained?: ProviderPickerModel) => act(async () => {
-      root.render(createElement(Probe, { deviceId: 'a', open: true, retained }));
-    });
     await show(route);
     expect(read.mock.calls).toEqual([[], [route]]);
     expect(values.a.ready).toBe(false);
-    const reply = { providers: [{ id: 'off', suspended: true, models: { codex: [{ id: 'current' }, { id: 'sibling' }] } }] };
     await show();
     await act(async () => finish(reply));
     expect(values.a.providers.map(p => p.id)).toEqual(['on']);
@@ -94,6 +95,71 @@ describe('model catalog failure recovery', () => {
     expect(values.a.providers[0].models.codex?.map(m => m.id)).toEqual(['current']);
     await show();
     expect(values.a.providers.map(p => p.id)).toEqual(['on']);
+  });
+
+  // PR #11693: a successful ordinary catalog leaves only the existing task's model read to
+  // recover. Exercise the picker hook with transport failures and virtual time (unit).
+  it('recovers the bound model after a timeout without reopening or refreshing the catalog', async () => {
+    const read = state.makers.get('a')!.listProviders;
+    read.mockResolvedValueOnce(active).mockRejectedValueOnce(timeout()).mockResolvedValue(reply);
+    await show(route);
+    expect(values.a.ready).toBe(false);
+    await advance(899);
+    expect(read.mock.calls).toEqual([[], [route]]);
+    await advance(1);
+    expect(values.a.ready).toBe(true);
+    expect(values.a.error).toBeNull();
+    expect(values.a.providers[0].models.codex?.map(m => m.id)).toEqual(['current']);
+    expect(read.mock.calls).toEqual([[], [route], [route]]);
+  });
+
+  it.each([
+    ['DEVICE_LINK_TIMEOUT', 3, true],
+    ['ACCESS_REVOKED', 1, false],
+  ] as const)('stops retained reads after %s and exposes the final error', async (code, attempts, resumes) => {
+    const read = state.makers.get('a')!.listProviders;
+    read.mockResolvedValueOnce(active).mockRejectedValue(new Error(`[${code}] failed`));
+    await show(route);
+    await advance(60_000);
+    expect(read.mock.calls).toEqual([[], ...Array.from({ length: attempts }, () => [route])]);
+    expect(values.a.ready).toBe(false);
+    expect(values.a.error).toContain(code);
+    // Only the affected peer recovering may rearm a transient failure after the budget is spent.
+    state.context.recoveringDeviceIds.add('b');
+    await show(route);
+    expect(read).toHaveBeenCalledTimes(1 + attempts);
+    state.context.recoveringDeviceIds.add('a');
+    await show(route);
+    await advance(60_000);
+    expect(read).toHaveBeenCalledTimes(1 + attempts);
+    read.mockResolvedValue(reply);
+    state.context.recoveringDeviceIds.delete('a');
+    await show(route);
+    expect(values.a.ready).toBe(resumes);
+    expect(read.mock.calls.slice(1 + attempts)).toEqual(resumes ? [[route]] : []);
+  });
+
+  it.each(['task change', 'catalog replacement', 'unmount'])('pauses retained retries in background and cancels on %s', async change => {
+    const read = state.makers.get('a')!.listProviders;
+    read.mockResolvedValueOnce(active).mockRejectedValue(timeout());
+    await show(route);
+    await foreground('background');
+    await advance(60_000);
+    expect(read.mock.calls).toEqual([[], [route]]);
+    await foreground('active');
+    await advance(900);
+    expect(read.mock.calls).toEqual([[], [route], [route]]);
+    if (change === 'task change') await show();
+    if (change === 'catalog replacement') {
+      await act(async () => { await fetchDeviceProvidersFresh('a', async () => catalog('replacement')); });
+    }
+    if (change === 'unmount') await act(async () => root.render(null));
+    await advance(60_000);
+    expect(read.mock.calls).toEqual([[], [route], [route]]);
+    if (change !== 'unmount') {
+      expect(values.a.ready).toBe(true);
+      expect(values.a.providers.map(p => p.id)).toEqual([change === 'task change' ? 'on' : 'replacement']);
+    }
   });
 
   it('mounted picker and fresh submit share the replacement after a burst invalidates a failed read', async () => {

@@ -29,6 +29,7 @@ const link = vi.hoisted(() => ({
   readDeviceList: vi.fn(),
   connectionEpoch: 1,
   rosterVersion: 0,
+  recoveringDeviceIds: new Set<string>(),
   providerShareCatalogVersions: {} as Record<string, number>,
   status: 'online' as const,
   presenceVersion: 1,
@@ -37,6 +38,7 @@ const link = vi.hoisted(() => ({
 
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => link }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
+vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
 
 const device = (deviceId: string, name: string) => ({
   deviceId,
@@ -87,6 +89,7 @@ beforeEach(async () => {
   latest = [];
   link.presenceVersion = 1;
   link.rosterVersion = 0;
+  link.recoveringDeviceIds.clear();
   link.providerShareCatalogVersions = {};
   link.getPresenceAvailability.mockImplementation(() => null);
   link.readDeviceList.mockResolvedValue({ devices: [device('controlled', 'Home Mac'), device('studio', 'Studio Mac')] });
@@ -109,6 +112,26 @@ afterEach(async () => {
 });
 
 describe('remote Agent catalogs with provider shares', () => {
+  // #11693: the stored model can belong to a different execution computer. The controlled
+  // computer's recovery must never suppress or restart that model's read (unit, real hook).
+  it('resumes the retained model on the execution computer while the controlled computer is recovering', async () => {
+    const route = { agent: 'claude-code' as const, providerId: 'off', modelId: 'off-model' };
+    const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: ['studio'], keepOnly: true,
+      retainedModel: { deviceId: 'studio', route } };
+    link.recoveringDeviceIds.add('studio');
+    link.invoke.mockResolvedValueOnce({ providers: [], deferredProviderIds: ['off'] })
+      .mockResolvedValueOnce({ providers: [{ ...provider('off', 'Bound source'), suspended: true }] });
+    await render(props);
+    expect(latest[0].status).toBe('loading');
+    expect(link.invoke).toHaveBeenCalledTimes(1);
+    link.recoveringDeviceIds.delete('studio');
+    link.recoveringDeviceIds.add('controlled');
+    await render(props);
+    expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: route })]);
+    expect(latest[0]).toMatchObject({ deviceId: 'studio', status: 'ready',
+      providers: [{ id: 'off', models: { 'claude-code': [{ id: 'off-model' }] } }] });
+  });
+
   it('clears same-account device rows on a roster invalidation but keeps share catalogs', async () => {
     const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] };
     await render(props);

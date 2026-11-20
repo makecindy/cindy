@@ -275,6 +275,36 @@ describe('createProviderService', () => {
     expect(reads).toEqual(['on', 'off', 'other']);
   });
 
+  // PR #11693, unit: implicit legacy routes can need a model from a cold account pool.
+  // The explicit-source picker test starts with model membership already populated.
+  it('restores an implicit model from a cold suspended OpenAI pool before checking its connection', async () => {
+    const openai = BUNDLED_CATALOG.providers.find(p => p.id === 'openai')!;
+    const model = { ...openai.models.codex![0], id: 'discovered-only' };
+    const unrelated = buildUserProvider({ id: 'other', name: 'Other', runtimes: {
+      codex: { baseUrl: 'https://other.invalid/v1', models: [{ id: 'other-model', name: 'Other model' }] },
+    } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const catalog = { ...BUNDLED_CATALOG, providers: [openai, unrelated] };
+    let discovered = false;
+    const refreshes: string[][] = [];
+    const otherConnection = vi.fn(() => true);
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      getModelAccess: () => ({ disabledProviders: { openai: true, other: true } }),
+      refreshPickerPools: async providers => {
+        refreshes.push(providers.map(p => p.id));
+        discovered = providers.some(p => p.id === 'openai');
+      },
+      projectCatalog: base => ({ ...base, providers: base.providers.map(p =>
+        p.id === 'openai' && discovered ? { ...p, models: { codex: [model] } } : p) }),
+      connection: { openai: () => discovered, xd: otherConnection, anthropic: otherConnection, xai: otherConnection },
+      customApiKeyConnected: otherConnection,
+    });
+    const views = await svc.listProviders({ picker: { scope: { agent: 'codex', providerId: null, modelId: model.id } } });
+    expect(views).toMatchObject([{ id: 'openai', connected: true, suspended: true, models: { codex: [{ id: model.id }] } }]);
+    expect(refreshes).toEqual([['openai']]);
+    expect(otherConnection).not.toHaveBeenCalled();
+  });
+
   it('preserves Auto membership for a suspended Cindy source without checking its login', async () => {
     const xd = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
     const sample = xd.models.codex![0];
