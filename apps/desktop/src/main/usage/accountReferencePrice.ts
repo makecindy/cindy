@@ -16,6 +16,13 @@ const DIRECT_API_PRESET_REGISTRY_IDS: Readonly<Record<string, string>> = {
   'xai-api': 'xai',
 };
 
+function candidateRegistryModelIds(catalogId: string, modelId: string): string[] {
+  if (catalogId === 'xai' && !modelId.startsWith('xai/')) {
+    return [modelId, `xai/${modelId}`];
+  }
+  return [modelId];
+}
+
 function candidateCatalogIds(
   provider: Provider | undefined,
   providerId: string,
@@ -61,15 +68,17 @@ export function providerHasRegistryReferenceTariff(
   if (!registry) return false;
   const registryAgent = agent === 'pi' ? undefined : agent;
   for (const catalogId of candidateCatalogIds(provider, providerId, modelId, agent)) {
-    const matched = findModelRegistryRoute(registry, catalogId, modelId, registryAgent);
-    if (!matched) continue;
-    if ((matched.route.referencePrices?.length ?? 0) > 0) return true;
-    if (matched.route.referencePriceGroup && matched.entry.modelRef) {
-      const base = findBaseModel(registry, matched.entry.modelRef);
-      if (base?.referencePriceGroups?.some(
-        group => group.id === matched.route.referencePriceGroup && group.prices.length > 0,
-      )) {
-        return true;
+    for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
+      const matched = findModelRegistryRoute(registry, catalogId, candidateModelId, registryAgent);
+      if (!matched) continue;
+      if ((matched.route.referencePrices?.length ?? 0) > 0) return true;
+      if (matched.route.referencePriceGroup && matched.entry.modelRef) {
+        const base = findBaseModel(registry, matched.entry.modelRef);
+        if (base?.referencePriceGroups?.some(
+          group => group.id === matched.route.referencePriceGroup && group.prices.length > 0,
+        )) {
+          return true;
+        }
       }
     }
   }
@@ -82,9 +91,13 @@ export const accountReferencePriceQuote: typeof providerReferencePriceQuote = (
 ) => {
   const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
   for (const catalogId of candidateCatalogIds(provider, providerId, modelId, options?.agent)) {
-    const quote = providerReferencePriceQuote(catalogId, modelId, registry, options);
-    if (quote) {
-      return catalogId !== providerId ? { ...quote, providerId, modelId } : quote;
+    for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
+      const quote = providerReferencePriceQuote(catalogId, candidateModelId, registry, options);
+      if (quote) {
+        return catalogId !== providerId || candidateModelId !== modelId
+          ? { ...quote, providerId, modelId }
+          : quote;
+      }
     }
   }
   return undefined;
@@ -98,9 +111,13 @@ export function providerSnapshotReferencePriceQuote(
   options?: Parameters<typeof providerReferencePriceQuote>[3],
 ) {
   for (const catalogId of candidateCatalogIds(provider, provider.id, modelId, options?.agent)) {
-    const quote = providerReferencePriceQuote(catalogId, modelId, registry, options);
-    if (quote) {
-      return catalogId !== provider.id ? { ...quote, providerId: provider.id, modelId } : quote;
+    for (const candidateModelId of candidateRegistryModelIds(catalogId, modelId)) {
+      const quote = providerReferencePriceQuote(catalogId, candidateModelId, registry, options);
+      if (quote) {
+        return catalogId !== provider.id || candidateModelId !== modelId
+          ? { ...quote, providerId: provider.id, modelId }
+          : quote;
+      }
     }
   }
   return undefined;

@@ -310,6 +310,17 @@ describe('API-key preset reference prices and static cost precedence', () => {
       },
     },
   });
+  const xaiApiAccount = buildUserProvider({
+    id: 'xai-api-work',
+    name: 'xAI API Work',
+    runtimes: {
+      pi: {
+        baseUrl: 'https://api.x.ai/v1',
+        catalogPresetId: 'xai-api',
+        models: [{ id: 'grok-4.7', name: 'Grok 4.7' }],
+      },
+    },
+  });
   const openrouterGemini = buildUserProvider({
     id: 'openrouter-work',
     name: 'OpenRouter Work',
@@ -323,9 +334,10 @@ describe('API-key preset reference prices and static cost precedence', () => {
   });
 
   it('prefers dated, tiered Registry tariffs over static model.cost on custom API-key accounts', () => {
-    const providers = [geminiAccount, openaiApiAccount, openrouterGemini];
+    const providers = [geminiAccount, openaiApiAccount, xaiApiAccount, openrouterGemini];
     const nov20 = getReferenceModelPricing({ at: '2026-11-20', providers });
     const dec01 = getReferenceModelPricing({ at: '2026-12-01', providers });
+    const preXai = getReferenceModelPricing({ at: '2026-09-20', providers });
 
     // Custom multi-account google-gemini-api resolves Registry tariffs including Priority.
     expect(getModelPriceQuote(nov20, 'gemini-work', 'gemini-4-neon', 'pi')).toMatchObject({
@@ -364,6 +376,19 @@ describe('API-key preset reference prices and static cost precedence', () => {
       inputPerMtok: 2,
       outputPerMtok: 10,
     });
+
+    // Official direct preset xai-api with bare model ID resolves xai/grok-4.7 Registry
+    // tariffs (including Fast/priority and effectiveFrom date gating) while keeping bare ID.
+    expect(getModelPriceQuote(nov20, 'xai-api-work', 'grok-4.7', 'pi')).toMatchObject({
+      providerId: 'xai-api-work',
+      modelId: 'grok-4.7',
+      currency: 'USD',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+      priority: { inputPerMtok: 4, outputPerMtok: 12, cacheReadPerMtok: 1 },
+    });
+    expect(getModelPriceQuote(preXai, 'xai-api-work', 'grok-4.7', 'pi')).toBeUndefined();
 
     // Non-Registry providers (OpenRouter) keep imported model.cost and project cost.tiers.
     expect(getModelPriceQuote(nov20, 'openrouter-work', 'google/gemini-3.1-pro-preview', 'pi')).toMatchObject({
