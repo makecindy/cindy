@@ -1,6 +1,7 @@
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps, readProviderShareGroupSize, type InvokeResultPayload, type ProviderShareReceived } from '@cindy/device-link';
 import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX, providerShareIdOfAgentDeviceId } from '../../shared/providerShare.js';
 import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { canShareSubscriptionImage } from './sharedSubscriptionImage.js';
 import type { ProviderMediaRuntimeModel } from './providerMediaRuntime.js';
 
 const SHARE_CATALOG_TIMEOUT_MS = 10_000;
@@ -44,13 +45,15 @@ export async function listSharedImageModels(sourceId?: string): Promise<Provider
       ]);
       if (!result) return [];
       const [catalog, capabilities] = result;
-      if (catalog.stale || !capabilities.ok || !parseRemoteAgentCaps(capabilities.result).sharedImageGeneration
-        || ports.findReceivedShare(share.shareId)?.status !== 'active') return [];
+      if (catalog.stale || !capabilities.ok || ports.findReceivedShare(share.shareId)?.status !== 'active') return [];
+      const caps = parseRemoteAgentCaps(capabilities.result);
+      if (!caps.sharedImageGeneration) return [];
       const provider = catalog.views.find(view => view.id === share.providerId);
-      if (!provider?.connected || provider.suspended || provider.auth?.native !== 'codex' || provider.source === 'organization') return [];
+      if (!provider?.connected || provider.suspended
+        || (provider.auth?.native !== 'codex' && !caps.sharedBuiltinOpenAiImage)) return [];
       const group = readProviderShareGroupSize(provider) !== null;
       return (provider.imageModels ?? []).flatMap((model): ProviderMediaRuntimeModel[] =>
-        model.disabled || model.availability === 'requires_payment'
+        !canShareSubscriptionImage(provider, model.id) || model.disabled || model.availability === 'requires_payment'
           || (!group && provider.availableMediaModelIds && !provider.availableMediaModelIds.includes(model.id))
           || (model.modalities && (!model.modalities.input.includes('text') || !model.modalities.output.includes('image')))
           ? []

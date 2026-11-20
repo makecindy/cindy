@@ -6001,6 +6001,8 @@ function MobileAutoResumeActionRow({
       : t('message.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('message.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'

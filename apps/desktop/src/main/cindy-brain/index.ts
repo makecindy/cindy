@@ -20,6 +20,7 @@ import { releasePluginUiRegions } from '../mcp-apps/visibility.js';
 import { releasePluginAppearance } from '../mcp-apps/appearance.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { deviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
 import { RemotePluginPreferences } from './remotePluginPreferences.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
@@ -795,6 +796,7 @@ import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { probeImageSize } from './imageProbe.js';
+import { canShareSubscriptionImage } from '../cindy-media/sharedSubscriptionImage.js';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
@@ -2443,7 +2445,43 @@ export function getGhostRuntime(): GhostRuntime {
   return runtimeSingleton;
 }
 
+let primaryChoiceOpen = false;
 export const pluginDeviceSync = new PluginDeviceSync({
+  async automationHost(ghost, key, choice, current) {
+    const account = pluginAutomationAccount(key, current);
+    let role;
+    try { role = await account.read(); }
+    catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 404) return { ok: false, errorCode: 'AUTOMATION_SERVICE_PENDING' };
+      throw error;
+    }
+    if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+    if (choice) {
+      if (choice.revision !== role.revision) return { ok: false, errorCode: 'HOST_CHOICE_CHANGED' };
+      const parent = getDeepLinkMainWindow();
+      if (!parent || parent.isDestroyed() || primaryChoiceOpen) return { ok: false, errorCode: 'HOST_NOT_READY' };
+      primaryChoiceOpen = true;
+      try {
+        const message = t(choice.useThisDevice ? 'settings.ghosts.detail.automationHostSelect' : 'settings.ghosts.detail.automationHostClear')
+          .replaceAll('{{name}}', () => ghost.manifest.name);
+        const answer = await dialog.showMessageBox(parent, { type: 'question', message,
+          buttons: [t('commonUi.confirmDialog.confirm'), t('commonUi.confirmDialog.cancel')], defaultId: 1, cancelId: 1, noLink: true });
+        if (answer.response !== 0) return { ok: false, errorCode: 'CANCELLED' };
+        if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+        try { role = await account.select(choice.revision, choice.useThisDevice); }
+        catch (err) {
+          if ((err as { statusCode?: number }).statusCode === 409) return { ok: false, errorCode: 'HOST_CHOICE_CHANGED' };
+          throw err;
+        }
+      } finally { primaryChoiceOpen = false; }
+    }
+    if (!current()) return { ok: false, errorCode: 'SYNC_OFFLINE' };
+    if (getCurrentDbClientUserId() !== getActiveAppSession().dataOwnerId) return { ok: false, errorCode: 'HOST_NOT_READY' };
+    const schedules = localDbSchema.schedules;
+    const rows = await getDbClient().drizzle.select({ status: schedules.status }).from(schedules).where(eq(schedules.primaryHostKey, key));
+    const localSchedule = rows.some(r => r.status === 'active') ? 'active' : rows.some(r => r.status === 'paused') ? 'paused' : rows.length ? 'expired' : 'none';
+    return { ok: true, ...role, localSchedule };
+  },
   scope: activeOwnerScopeKey,
   keys: deviceSyncKeyStore,
   getGhost: findGhostForInstanceId,
@@ -5756,7 +5794,7 @@ configureProviderMediaRuntime({
     const beforeDispatch = () => {
       assertAllowed();
       const provider = getActiveCatalog().providers.find(candidate => candidate.id === providerId);
-      if (!provider || provider.auth.native !== 'codex' || isOrganizationManagedProvider(provider)
+      if (!provider || !canShareSubscriptionImage(provider, model)
         || !listLocalProviderMediaModels(false, ['image.generate']).some(candidate =>
           candidate.providerId === providerId && candidate.id === model)) {
         throw new Error('SHARED_IMAGE_UNAVAILABLE');
@@ -9480,7 +9518,7 @@ export function registerGhostIpc(): void {
     isAvailable: isGhostAvailableForActiveSession,
     readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
     uiLocale: () => currentGhostAppContext().context.uiLocale,
-    spawn: (ghostId, harnessId) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId),
+    spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
     readUsage: async (ghostId, harnessId) => {
       const owner = captureDataOwnerBroadcastScope();

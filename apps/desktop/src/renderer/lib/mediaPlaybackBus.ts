@@ -26,25 +26,22 @@
 
 const registered = new Set<HTMLMediaElement>();
 
-function pauseMedia(el: HTMLMediaElement): void {
-  if (el.paused) return;
-  try {
-    el.pause();
-  } catch {
-    /* 元素已 detach / 销毁中 — 静默 */
-  }
-}
-
 /** 已脱离页面的播放器 pause 后仍可能留着解码管线；只清这类元素的源。 */
 function releaseDetachedPipeline(el: HTMLMediaElement): void {
   if (el.isConnected) return;
+  const sources = Array.from(el.querySelectorAll('source'));
+  const hasSource = (el.srcObject !== null && el.srcObject !== undefined)
+    || el.hasAttribute('src')
+    || sources.some((source) => source.hasAttribute('src'));
+  // 浮层自己可能已先释放；不要在 effect cleanup 里重复 load、重置同一媒体。
+  if (!hasSource) return;
   try {
     el.srcObject = null;
   } catch {
     /* 已脱离文档或浏览器不接受清空 */
   }
   el.removeAttribute('src');
-  for (const source of el.querySelectorAll('source')) source.removeAttribute('src');
+  for (const source of sources) source.removeAttribute('src');
   try {
     el.load();
   } catch {
@@ -54,7 +51,14 @@ function releaseDetachedPipeline(el: HTMLMediaElement): void {
 
 function pauseOthers(active: HTMLMediaElement): void {
   for (const el of registered) {
-    if (el !== active) pauseMedia(el);
+    if (el === active) continue;
+    if (!el.paused) {
+      try {
+        el.pause();
+      } catch {
+        /* 元素已 detach / 销毁中 — 静默 */
+      }
+    }
   }
 }
 
@@ -70,8 +74,13 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   registered.add(el);
   el.addEventListener('play', onPlay);
   return () => {
-    // 先停播再移出注册表。否则 stopAllMedia 再也找不到它，Chromium 会继续走时钟。
-    pauseMedia(el);
+    // 无条件 pause 涵盖 play() pending、paused 仍为 true 的窗口。
+    // 仍挂载的元素保留源供 effect replay；脱离页面的元素释放解码管线。
+    try {
+      el.pause();
+    } catch {
+      /* 元素已 detach / 销毁中 — 静默 */
+    }
     releaseDetachedPipeline(el);
     el.removeEventListener('play', onPlay);
     registered.delete(el);
@@ -85,7 +94,13 @@ export function registerMedia(el: HTMLMediaElement): () => void {
  */
 export function stopAllMedia(): void {
   for (const el of registered) {
-    pauseMedia(el);
+    if (!el.paused) {
+      try {
+        el.pause();
+      } catch {
+        /* 元素已 detach — 静默 */
+      }
+    }
   }
 }
 

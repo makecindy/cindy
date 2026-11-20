@@ -111,6 +111,17 @@
     "quotaAverageHint": "Weekly quota · Equal weight per account",
     "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
   },
+  "modelGroups": {
+    "title": "Model groups",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": "Expiring first",
+      "order": "In order",
+      "rotate": "Rotate",
+      "cheapest": "Cheapest"
+    }
+  },
   "pluginEngines": {
     "genericName": "Plugin engine",
     "defaultModel": "Default model",

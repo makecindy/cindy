@@ -37,6 +37,7 @@ import {
   Search,
   X,
   LayoutGrid,
+  Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -171,6 +172,31 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       {p.error ? (
         <Section>
           <NativeErrorNotice message={p.error} />
+        </Section>
+      ) : null}
+      {/* 模型组(被控电脑上的)：一段，列在最前；点了由被控电脑按组的规则选来源。 */}
+      {p.modelGroups?.rows.length ? (
+        <Section title={p.modelGroups.title}>
+          {p.modelGroups.rows.map((row) => (
+            <ComposerNativeRow
+              key={row.id}
+              modifiers={[id(`model-group:${row.id}`)]}
+              title={row.title}
+              subtitle={row.subtitle}
+              leading={
+                <RNHostView matchContents>
+                  <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                    <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                  </View>
+                </RNHostView>
+              }
+              selectionIcon={mark(Check)}
+              selected={row.selected}
+              disabled={p.busy}
+              onPress={() => p.modelGroups?.onSelect(row.id)}
+              testID={`${p.testID}.modelGroup.${row.id}`}
+            />
+          ))}
         </Section>
       ) : null}
       {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
@@ -371,7 +397,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           ))}
         </Section>
       ))}
-      {!p.groups.length && !p.pluginEngines?.groups.length ? (
+      {!p.groups.length && !p.pluginEngines?.groups.length && !p.modelGroups?.rows.length ? (
         <Section>
           <Text modifiers={[foregroundStyle(colors.textSecondary)]}>
             {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}

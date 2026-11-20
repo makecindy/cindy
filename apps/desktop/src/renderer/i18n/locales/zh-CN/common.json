@@ -8266,7 +8266,7 @@
         "agentErrand": "可以新建任务、执行工作并读取结果",
         "agentErrandDetail": "创建的任务会出现在 Cindy 的任务列表中，可以查看过程并继续交流。",
         "agentSchedule": "可以请你新建自动化",
-        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。",
+        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。支持设备同步的插件还可以请你确认由哪台电脑运行自动化。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -8510,6 +8510,13 @@
         "openInSidebar": "在侧边栏中打开",
         "panelPageHosted": "从插件页打开 · 离开插件页自动关闭",
         "panelNone": "这个插件不含面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：允许被远程调用",
+          "description": "开启后，你的其他电脑可以用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
+          "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
+          "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
+          "ariaLabel": "允许你的其他电脑使用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "当前版本 {{version}}",
@@ -8578,6 +8585,8 @@
         "browserUse": "使用此浏览器扩展",
         "browserActivated": "已选择此浏览器扩展",
         "browserActivationFailed": "未能选择此扩展，请确认扩展已启用，并完成连接切换确认。",
+        "automationHostSelect": "将这台电脑设为「{{name}}」的自动化主机？",
+        "automationHostClear": "取消这台电脑作为「{{name}}」的自动化主机？",
         "browserSwitchTitle": "切换浏览器扩展连接？",
         "browserSwitchMessage": "将此浏览器连接交给「{{name}}」？",
         "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n这会替换当前注册，扩展将连接到此插件。",
@@ -15877,6 +15886,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "这台电脑无法恢复任务原来的运行状态。请选择其他电脑或供应商的模型，通过上下文交接继续；原消息会保留。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢复之前的对话。消息已保留。请选择其他引擎继续，或新建任务。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "这个插件引擎用不了任务所在电脑的工具，暂时不能从另一台电脑运行这个任务。请换一个引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "这个插件引擎只能运行本机的任务，还不能让其他电脑使用。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑上给这个供应商打开「允许被远程调用」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
@@ -16079,9 +16090,15 @@
       "toggle": "展开或收起「{{title}}」的回信",
       "openTask": "打开任务"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建议的时间自动重试",
+      "title": "Gemini 每分钟输入量已达上限",
+      "exhausted": "已自动重试一次，Gemini 仍受限。稍后可手动重试。",
+      "retryIn": "{{seconds}} 秒后自动重试"
+    },
     "subscriptionAccountError": {
-      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
-      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+      "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
+      "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
       "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
       "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
@@ -16315,6 +16332,14 @@
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
+      "savedModel": {
+        "loading": "正在连接所选模型…",
+        "checkFailed": "未能检查所选模型",
+        "engine": "所选引擎不可用，请为本次任务选择模型",
+        "source": "所选来源不可用，请为本次任务选择模型",
+        "model": "所选模型不可用，请为本次任务选择模型",
+        "thisTaskOnly": "所选模型仅用于本次任务"
+      },
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
       "branchChanged": "项目当前分支已变成 {{branch}}，请确认后再发送",
@@ -22089,7 +22114,8 @@
       "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
       "manage": "管理模型组",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
-      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。"
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",

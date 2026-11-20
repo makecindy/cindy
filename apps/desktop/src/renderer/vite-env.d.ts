@@ -1746,15 +1746,7 @@ interface ElectronAPI {
      * 每个窗口都跳页弹表单)。独立的插件面板窗 / 右侧栏窗收不到本推送。
      */
     onScheduleDraft: (
-      callback: (payload: {
-        requestId: string;
-        ghostId: string;
-        ghostName: string;
-        iconDataUrl?: string;
-        name: string;
-        prompt: string;
-        intervalMs?: number;
-      }) => void,
+      callback: (payload: import('../shared/ghost').GhostScheduleDraftPush) => void,
     ) => () => void;
     /** 运行时状态快照(错误接管态首帧数据源)。 */
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
@@ -5817,6 +5809,11 @@ interface ElectronAPI {
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
     refreshPluginEngines?: () => Promise<void>;
+    /**
+     * Opens or closes one engine of this computer for the owner's other computers
+     * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
+     */
+    setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,

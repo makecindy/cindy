@@ -745,6 +745,7 @@
     "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
     "REMOTE_AGENT_INVALID": "Algo salió mal al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue pasando, actualiza Cindy en ambas computadoras.",
     "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
+    "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Este motor de complemento no puede usar las herramientas de la computadora donde está la tarea, así que por ahora no puede ejecutarla desde otra computadora. Elige otro motor o modelo.",
     "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no permite el uso remoto de este proveedor. En esa computadora, activa «Permitir uso remoto» en Configuración → Proveedores o elige otro modelo.",

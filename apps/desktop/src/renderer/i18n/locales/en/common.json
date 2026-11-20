@@ -8309,7 +8309,7 @@
         "agentErrand": "Create tasks, perform work, and read results",
         "agentErrandDetail": "Created tasks appear in Cindy’s task list, where you can view progress and continue the conversation.",
         "agentSchedule": "Can ask you to create an automation",
-        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply.",
+        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply. For plugins with device sync, you can also confirm which computer runs the automation.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -8553,6 +8553,13 @@
         "openInSidebar": "Open in the sidebar",
         "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: Allow remote use",
+          "description": "When on, your other computers can run tasks with this engine. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
+          "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
+          "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
+          "ariaLabel": "Allow your other computers to use {{engine}}"
+        },
         "githubRelease": {
           "title": "Plugin updates",
           "installed": "Installed {{version}}",
@@ -8621,6 +8628,8 @@
         "browserUse": "Use this browser extension",
         "browserActivated": "Browser extension selected",
         "browserActivationFailed": "The extension could not be selected. Check that it is enabled and approve any connection switch.",
+        "automationHostSelect": "Use this computer for {{name}}’s automatic tasks?",
+        "automationHostClear": "Clear the primary computer for {{name}}’s automatic tasks?",
         "browserSwitchTitle": "Switch browser extension connection?",
         "browserSwitchMessage": "Use “{{name}}” for this browser connection?",
         "browserSwitchDetail": "Instance: {{instance}}\nRegistration: {{host}}\nThis replaces the current registration. The extension will connect to this plugin.",
@@ -15942,6 +15951,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "The plugin engine could not restore the previous conversation. Your messages are kept. Choose another engine or start a new task.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "This plugin engine can’t use the tools of the computer the task is on, so it can’t run this task from another computer yet. Choose another engine or model.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "This plugin engine can only run tasks on this computer. Other computers can’t use it yet.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
@@ -16153,9 +16164,15 @@
       "toggle": "Show or hide the reply from “{{title}}”",
       "openTask": "Open task"
     },
+    "geminiRateLimit": {
+      "retried": "Retried automatically after the Gemini rate limit",
+      "title": "Gemini’s per-minute input token limit was reached.",
+      "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+      "retryIn": "Retrying automatically in {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
-      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
+      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
       "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
       "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
@@ -16389,6 +16406,14 @@
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
+      "savedModel": {
+        "loading": "Connecting to the selected model…",
+        "checkFailed": "Could not check the selected model",
+        "engine": "The selected engine is unavailable. Choose a model for this task.",
+        "source": "The selected source is unavailable. Choose a model for this task.",
+        "model": "The selected model is unavailable. Choose a model for this task.",
+        "thisTaskOnly": "Model selected for this task only"
+      },
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
       "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
@@ -22178,7 +22203,8 @@
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
       "switched": "“{{name}}” switched this task to {{model}}",
-      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed."
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",

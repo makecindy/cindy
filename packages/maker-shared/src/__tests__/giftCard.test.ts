@@ -4,6 +4,7 @@ import {
   formatGiftCardCode,
   giftCardCodeFromInput,
   giftCardCodeRegion,
+  giftCardFaceName,
   giftCardFailureForError,
   normalizeGiftCardCode,
   projectGiftCardPreview,
@@ -54,7 +55,7 @@ describe('gift card server responses', () => {
   it('keeps only the fields the redeem surfaces render', () => {
     // 旧服务端不下发 destination：它发出的卡都是后台发放，进赠送余额。
     expect(projectGiftCardPreview({ card: { ...card, claimedByMembershipId: 'member-1' } }))
-      .toEqual({ card: { ...card, destination: 'PROMOTIONAL' } });
+      .toEqual({ card: { ...card, face: null, destination: 'PROMOTIONAL' } });
     const redeemed = projectGiftCardRedemption({
       card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-16T12:00:00.000Z' },
       credit: { state: 'PENDING', amount: '20.000000000', expiresAt: null, grantId: 'grant-1' },
@@ -172,6 +173,64 @@ describe('gift card server responses', () => {
       card: { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' },
       credit: { state: 'APPLIED', amount: '20', expiresAt: null },
     }).credit).toEqual({ state: 'APPLIED', amount: '20', expiresAt: null });
+  });
+
+  // 卡面改由服务端下发（底图 + 金额印法 + 名称），新卡面不用发版就能显示。卡面信息不合法时只丢弃它、
+  // 按 faceCode 用内置卡面：旧版本把不认识的内容当坏响应会让整张卡打不开，这里绝不能这样。
+  it('takes the server card face and drops only face details it cannot draw', () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+    };
+    const read = (face: unknown) => projectGiftCardPreview({ card: { ...card, faceCode: 'snow', face } }).card;
+    expect(read(snow)).toMatchObject({ faceCode: 'snow', face: snow });
+    // 本机开发的服务端可以是 http://localhost。
+    const local = { ...snow, imageUrl: 'http://localhost:3339/api/public/gift-cards/faces/snow.webp' };
+    expect(read(local).face).toEqual(local);
+    for (const broken of [
+      undefined,
+      null,
+      'snow',
+      { ...snow, code: 'cat' },
+      { ...snow, imageUrl: 'http://cdn.example.com/snow.webp' },
+      { ...snow, imageUrl: 'javascript:alert(1)' },
+      { ...snow, imageUrl: 'https://user:secret@cdn.example.com/snow.webp' },
+      { ...snow, names: {} },
+      { ...snow, names: { en: '' } },
+      { ...snow, names: { en: 'x'.repeat(41) } },
+      { ...snow, names: { 'not a tag': 'Snow' } },
+      { ...snow, amount: { ...snow.amount, color: 'red' } },
+      { ...snow, amount: { ...snow.amount, x: 1200 } },
+      { ...snow, amount: { ...snow.amount, baseline: 0 } },
+      { ...snow, amount: { ...snow.amount, size: Number.NaN } },
+      { ...snow, amount: { ...snow.amount, x: 800, maxWidth: 401 } },
+      // 基线与字号各自都在卡面内，但字形上沿超出卡面顶部 / 下沿（$ 的竖线）超出底部：金额会被裁掉。
+      { ...snow, amount: { ...snow.amount, baseline: 100 } },
+      { ...snow, amount: { ...snow.amount, baseline: 757 } },
+      { ...snow, amount: null },
+    ]) {
+      const parsed = read(broken);
+      expect(parsed.face).toBeNull();
+      expect(parsed.amount).toBe('20.000000000');
+    }
+  });
+
+  // 卡面名称跟着界面语言：服务端没给这种语言时依次退到繁简中文、同一语言、英文、第一项。
+  it('picks the card face name for the interface language', () => {
+    const names = { 'zh-CN': '雪 · 夜色', 'zh-TW': '雪 · 夜色（繁）', en: 'Snow · Night', 'pt-BR': 'Neve · Noite' };
+    for (const [locale, expected] of [
+      ['zh-CN', '雪 · 夜色'],
+      ['zh-Hant-x-lzh', '雪 · 夜色（繁）'],
+      ['zh-Hans-x-lzh', '雪 · 夜色'],
+      ['pt-PT', 'Neve · Noite'],
+      ['de', 'Snow · Night'],
+    ] as const) {
+      expect(giftCardFaceName(names, locale)).toBe(expected);
+    }
+    expect(giftCardFaceName({ 'zh-CN': '雪' }, 'ja')).toBe('雪');
+    expect(giftCardFaceName({}, 'en')).toBeNull();
   });
 
   it('tells a card state the server reported apart from an outage', () => {

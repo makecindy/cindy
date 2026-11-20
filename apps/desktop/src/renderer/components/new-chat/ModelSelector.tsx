@@ -83,15 +83,23 @@ import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
+  activePluginEngineModelId,
   matchPluginEngineRows,
   PluginEngineSessionPanel,
   PluginEnginesSection,
+  usePluginEngineChoiceLabel,
   type PluginEnginePendingSelection,
   type PluginEngineSessionPickerProps,
   type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
-import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineModelName, resolvePluginEngineEffort } from '@/lib/pluginEngineSelection';
-import type { PluginEngineEffort, PluginEngineView } from '../../../shared/pluginEngines';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isSamePluginEngineChoice,
+  pluginEngineModelName,
+  resolvePluginEngineEffort,
+  type PluginEngineChoice,
+} from '@/lib/pluginEngineSelection';
+import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -159,6 +167,7 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  displayNameOfStoredModelId,
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
@@ -842,6 +851,8 @@ export interface ModelSelectorBaseProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** A saved draft retains its model trigger while the source is being checked or unavailable. */
+  preserveDraftModel?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
   /** Task whose existing subscription binding should be displayed, when browsing its host. */
@@ -1361,6 +1372,8 @@ function ModelSelectorContentView({
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
+  // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   const favoriteModelGroupCount = useFavoriteModelGroupCount(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
@@ -3794,7 +3807,7 @@ function ModelSelectorContentView({
                 || (!!pluginEngines && matchPluginEngineRows(
                   pluginEngines.engines,
                   query,
-                  (engine) => (pluginEngines.active?.providerId === engine.providerId ? pluginEngines.active.modelId : null),
+                  (engine) => activePluginEngineModelId(pluginEngines.active, engine),
                   t('newChat.pluginEngines.defaultModel').toLowerCase(),
                 ) > 0),
             } : {})}
@@ -3806,14 +3819,20 @@ function ModelSelectorContentView({
             {...(pluginEngines && pluginEngines.engines.length > 0 ? {
               // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
               // 「全部」最上方照旧列出全部引擎。
+              // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
               pluginEngineTabs: pluginEngines.engines.map((engine) => ({
                 providerId: engine.providerId,
-                name: engine.name,
+                ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+                name: pluginEngineChoiceLabel(engine),
                 ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
               })),
-              renderPluginEngine: (providerId: string) => (
+              renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
                 <PluginEnginesSection
-                  picker={{ ...pluginEngines, engines: pluginEngines.engines.filter((engine) => engine.providerId === providerId) }}
+                  picker={{
+                    ...pluginEngines,
+                    engines: pluginEngines.engines.filter((engine) =>
+                      isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
+                  }}
                   query=""
                   onPicked={() => onDismiss?.()}
                 />
@@ -4427,6 +4446,7 @@ export function ModelSelector({
   'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
+  preserveDraftModel = false,
   actualRoute = false,
   subscriptionTaskId,
   taskStarted = false,
@@ -4435,6 +4455,8 @@ export function ModelSelector({
   agentSwitch,
 }: ModelSelectorProps) {
   const { t, i18n } = useTranslation();
+  // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const sshCodexRefresh = sshCodex?.refresh;
@@ -4695,6 +4717,7 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
+      (preserveDraftModel && modelId ? displayNameOfStoredModelId(modelId) : null) ??
       (unconfirmedList ? modelId : null) ??
       (modelId
         ? t(localModelLoading
@@ -4774,6 +4797,7 @@ export function ModelSelector({
     !providersOverride &&
     !sshCodexCurrent &&
     !actualRoute &&
+    !preserveDraftModel &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
     !deviceId &&
@@ -4903,7 +4927,7 @@ export function ModelSelector({
   // 与内置引擎的意图一样写成「下条：引擎 · 模型」，前面带等待标记。
   const triggerEngine: {
     name: string;
-    engine: PluginEngineView | null;
+    engine: PluginEngineChoice | null;
     modelId: string;
     effort: PluginEngineEffort | null;
     pending?: boolean;
@@ -4924,9 +4948,9 @@ export function ModelSelector({
       }
     : (() => {
         const active = pluginEngines?.active;
-        const engine = active ? pluginEngines?.engines.find((item) => item.providerId === active.providerId) : undefined;
+        const engine = active ? pluginEngines?.engines.find((item) => isSamePluginEngineChoice(item, active)) : undefined;
         return active && engine
-          ? { name: engine.name, engine, modelId: active.modelId, effort: resolvePluginEngineEffort(engine, active.modelId, active.effort) }
+          ? { name: pluginEngineChoiceLabel(engine), engine, modelId: active.modelId, effort: resolvePluginEngineEffort(engine, active.modelId, active.effort) }
           : null;
       })();
   // The engine's level reads like a built-in task's: compact name after the model, full name in the title.
@@ -5098,11 +5122,25 @@ export function ModelSelector({
       {triggerEngine ? (
         <>
           <span data-plugin-engine-trigger className="flex shrink-0 items-center" aria-hidden="true">
-            <PluginEngineIcon
-              size={isCreateAgentVariant ? 12 : 14}
-              iconDataUrl={triggerEngine.engine?.iconDataUrl}
-              className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
-            />
+            {triggerEngine.engine?.deviceId ? (
+              // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置不变。
+              <RemoteSourceMark
+                markSize={isCreateAgentVariant ? 12 : 14}
+                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+              >
+                <PluginEngineIcon
+                  size={isCreateAgentVariant ? 12 : 14}
+                  iconDataUrl={triggerEngine.engine.iconDataUrl}
+                  className="text-current"
+                />
+              </RemoteSourceMark>
+            ) : (
+              <PluginEngineIcon
+                size={isCreateAgentVariant ? 12 : 14}
+                iconDataUrl={triggerEngine.engine?.iconDataUrl}
+                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+              />
+            )}
           </span>
           {/* 引擎名与内置任务的「Agent · 模型」前缀同一位置与颜色；窄工具条只留模型名，
               完整「引擎 · 模型」仍在 title / aria-label 里。 */}

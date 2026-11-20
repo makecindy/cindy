@@ -10,8 +10,9 @@
  * Device Link has a separate catalogue for each computer in the current account. Task pickers
  * read it on demand, and task rows reuse the result without making their own requests.
  */
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
 import {
@@ -20,6 +21,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -120,11 +122,34 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 
 interface DeviceCatalogue {
   read(): Promise<void>;
+  ensureLoaded(): void;
+  prefetch(): Promise<void>;
+  markStale(): void;
+  evict(): void;
+  hasSubscribers(): boolean;
   subscribe(listener: () => void): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
 
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
+
+function sameEngineViews(
+  a: readonly PluginEngineView[] | null,
+  b: readonly PluginEngineView[],
+): boolean {
+  if (a === null || a.length !== b.length) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function isUnsupportedRemoteListError(error: unknown): boolean {
+  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('CHANNEL_NOT_ALLOWED');
+}
+
+function existingDeviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue | undefined {
+  return deviceCatalogues.get(owner)?.get(deviceId);
+}
 
 function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCatalogue {
   let devices = deviceCatalogues.get(owner);
@@ -137,25 +162,82 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
 
   let current: readonly PluginEngineView[] | null = null;
   let pending: Promise<void> | undefined;
+  let deviceGeneration = 0;
+  let lastReadAt = 0;
+  let lastFailedAt = 0;
+  let unsupported = false;
   const subscribers = new Set<() => void>();
   const catalogue: DeviceCatalogue = {
     read() {
-      if (!isDataOwnerGenerationCurrent(owner)) return Promise.resolve();
-      pending ??= Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner)
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
+      if (pending) return pending;
+      const readGeneration = deviceGeneration;
+      const run = Promise.resolve()
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
           ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
-          if (!isDataOwnerGenerationCurrent(owner) || !Array.isArray(reply)) return;
+          if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
+            return;
+          }
           const next = sanitize(reply);
+          lastReadAt = Date.now();
+          lastFailedAt = 0;
+          unsupported = false;
           retainReportingPluginEngines(owner, deviceId, next);
+          if (sameEngineViews(current, next)) return;
           current = next;
           for (const subscriber of subscribers) subscriber();
         })
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
-        .catch(() => undefined)
-        .finally(() => { pending = undefined; });
-      return pending;
+        .catch((error: unknown) => {
+          if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
+          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          else lastFailedAt = Date.now();
+        })
+        .finally(() => {
+          if (pending === run) pending = undefined;
+        });
+      pending = run;
+      return run;
+    },
+    ensureLoaded() {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return;
+      // Once the full catalogue for this computer has been read (even if empty or missing an
+      // uninstalled plugin), reuse it instead of re-downloading on scroll or additional rows.
+      if (current !== null || pending || unsupported) return;
+      if (lastFailedAt > 0 && Date.now() - lastFailedAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) return;
+      void catalogue.read();
+    },
+    prefetch() {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
+      if (pending) return pending;
+      if (current !== null && lastReadAt > 0 && Date.now() - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) {
+        return Promise.resolve();
+      }
+      lastFailedAt = 0;
+      unsupported = false;
+      return catalogue.read();
+    },
+    markStale() {
+      lastReadAt = 0;
+      lastFailedAt = 0;
+      unsupported = false;
+    },
+    evict() {
+      deviceGeneration += 1;
+      pending = undefined;
+      lastReadAt = 0;
+      lastFailedAt = 0;
+      unsupported = false;
+      retainReportingPluginEngines(owner, deviceId, []);
+      if (current !== null) {
+        current = null;
+        for (const subscriber of subscribers) subscriber();
+      }
+    },
+    hasSubscribers() {
+      return subscribers.size > 0;
     },
     subscribe(listener) {
       subscribers.add(listener);
@@ -167,6 +249,27 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   };
   devices.set(deviceId, catalogue);
   return catalogue;
+}
+
+/** Whether any mounted UI currently subscribes to a remote computer's plugin engine catalogue. */
+export function hasRemotePluginEngineSubscribers(deviceId: string): boolean {
+  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasSubscribers() ?? false;
+}
+
+/** One coalesced background catalogue read for a remote computer (used on bootstrap/reconnect). */
+export function prefetchRemotePluginEngines(deviceId: string): Promise<void> {
+  if (!deviceId || isSharedTaskPeer(deviceId)) return Promise.resolve();
+  return deviceCatalogue(getDataOwnerGeneration(), deviceId).prefetch();
+}
+
+/** Keep cached icons while a remote computer is transiently offline, but refresh on reconnect. */
+export function markRemotePluginEnginesStale(deviceId: string): void {
+  existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.markStale();
+}
+
+/** Drop cached engines and discard in-flight reads when a computer is revoked, removed or disabled. */
+export function evictRemotePluginEngines(deviceId: string): void {
+  existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
 function unreadSnapshot(): null {
@@ -192,6 +295,66 @@ export function useRemotePluginEngines(deviceId?: string, readOnEntry = false): 
   return { engines: remoteEngines, read };
 }
 
+/**
+ * A picker that lists other computers' engines asks each of them when it opens. Opening it again
+ * right away reuses the answer instead of asking every computer once more.
+ */
+export const DEVICE_PLUGIN_ENGINES_REREAD_MS = 15_000;
+const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
+
+/**
+ * The engine lists of several other computers of this account, for a picker that offers their
+ * engines next to this computer's (new-task draft). Nothing is read until `read()` is called — the
+ * picker calls it when it opens: one read-only request per computer, at most once per
+ * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
+ * `null` = that computer has not answered yet (or could not be reached).
+ */
+export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+  catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
+  read: (deviceId?: string) => void;
+} {
+  const owner = getDataOwnerGeneration();
+  const key = deviceIds.join('\n');
+  const sources = useMemo(
+    () => (key ? key.split('\n') : []).map((deviceId) => ({ deviceId, catalogue: deviceCatalogue(owner, deviceId) })),
+    [owner, key],
+  );
+  const read = useCallback((deviceId?: string) => {
+    const now = Date.now();
+    for (const source of sources) {
+      if (deviceId !== undefined && source.deviceId !== deviceId) continue;
+      const last = pickerReadAt.get(source.catalogue);
+      if (last !== undefined && now - last < DEVICE_PLUGIN_ENGINES_REREAD_MS) continue;
+      pickerReadAt.set(source.catalogue, now);
+      void source.catalogue.read();
+    }
+  }, [sources]);
+  const subscribe = useCallback((listener: () => void) => {
+    const offs = sources.map((source) => source.catalogue.subscribe(listener));
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [sources]);
+  // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
+  const cache = useRef<{
+    sources: typeof sources;
+    parts: Array<readonly PluginEngineView[] | null>;
+    map: ReadonlyMap<string, readonly PluginEngineView[] | null>;
+  } | null>(null);
+  const snapshot = useCallback(() => {
+    const parts = sources.map((source) => source.catalogue.snapshot());
+    const previous = cache.current;
+    if (previous && previous.sources === sources && previous.parts.every((part, index) => part === parts[index])) {
+      return previous.map;
+    }
+    const map = new Map(sources.map((source, index) => [source.deviceId, parts[index]] as const));
+    cache.current = { sources, parts, map };
+    return map;
+  }, [sources]);
+  const catalogues = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return { catalogues, read };
+}
+
 /** Engine behind a task's `providerId` (`acp-plugin:<ghostId>:<harnessId>`), or null when it is gone. */
 export function findPluginEngine(
   list: readonly PluginEngineView[],
@@ -213,14 +376,36 @@ export function usePluginEngineName(providerId: string | null | undefined): stri
 /**
  * Name and mark for a plugin-engine task: the engine's name and its plugin's icon, or the generic
  * label and no icon (the caller draws the generic engine mark) once the plugin is gone.
+ *
+ * For a remote computer (`deviceId`), shares one initial catalogue read across every mounted task
+ * row for that computer so sidebar icons resolve without opening a task first.
  */
 export function usePluginEngineIdentity(
   providerId: string | null | undefined,
   deviceId?: string,
+  options?: {
+    /** False while the remote computer is known to be disconnected/connecting: keep cached icon, skip new read. */
+    readRemote?: boolean;
+  },
 ): { name: string; iconDataUrl?: string } {
   const { t } = useTranslation();
+  const remoteDeviceId = deviceId && !isSharedTaskPeer(deviceId) ? deviceId : undefined;
   const localEngines = usePluginEngines(!!providerId && !deviceId);
-  const { engines: remoteEngines } = useRemotePluginEngines(providerId ? deviceId : undefined);
+  const owner = getDataOwnerGeneration();
+  const catalogue = useMemo(
+    () => (providerId && remoteDeviceId ? deviceCatalogue(owner, remoteDeviceId) : null),
+    [owner, providerId, remoteDeviceId],
+  );
+  const remoteEngines = useSyncExternalStore(
+    catalogue?.subscribe ?? subscribeDisabled,
+    catalogue?.snapshot ?? unreadSnapshot,
+    unreadSnapshot,
+  );
+  const readRemote = options?.readRemote !== false;
+  useEffect(() => {
+    if (!catalogue || !readRemote) return;
+    catalogue.ensureLoaded();
+  }, [catalogue, readRemote]);
   const engine = findPluginEngine(deviceId ? remoteEngines ?? NO_ENGINES : localEngines, providerId);
   if (!engine) return { name: t('newChat.pluginEngines.genericName') };
   return { name: engine.name, ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}) };

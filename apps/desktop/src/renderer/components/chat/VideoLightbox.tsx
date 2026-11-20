@@ -123,8 +123,9 @@ function VideoLightboxContent({
     if (el.getAttribute('src') === null) el.setAttribute('src', srcRef.current);
     const unregister = registerMedia(el);
     return () => {
-      unregister();
+      // 本组件已经负责完整释放；先清空源，总线注销就不会重复 load。
       releaseMediaElement(el);
+      unregister();
     };
   }, []);
 

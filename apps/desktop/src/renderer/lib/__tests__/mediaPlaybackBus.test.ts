@@ -13,10 +13,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { registerMedia, stopAllMedia, __resetMediaBusForTests } from '../mediaPlaybackBus';
 
-function audio(src = '/tone.wav'): HTMLAudioElement {
+function audio(src = '/tone.wav', initiallyPaused = false): HTMLAudioElement {
   const el = document.createElement('audio');
   el.setAttribute('src', src);
-  let paused = false;
+  let paused = initiallyPaused;
   Object.defineProperty(el, 'paused', { configurable: true, get: () => paused });
   vi.spyOn(el, 'pause').mockImplementation(() => {
     paused = true;
@@ -43,12 +43,20 @@ describe('registerMedia cleanup (#11715)', () => {
     expect(el.pause).not.toHaveBeenCalled();
   });
 
+  it('cancels a pending play even while paused is still true', () => {
+    const el = audio('/pending.wav', true);
+    registerMedia(el)();
+    expect(el.pause).toHaveBeenCalledOnce();
+  });
+
   it('releases a detached element and keeps a mounted element reusable', () => {
     const detached = audio('/detached.wav');
     const nested = document.createElement('source');
     nested.setAttribute('src', '/nested.wav');
     detached.append(nested);
-    registerMedia(detached)();
+    const unregister = registerMedia(detached);
+    unregister();
+    unregister();
     expect(detached.getAttribute('src')).toBeNull();
     expect(nested.getAttribute('src')).toBeNull();
     expect(detached.load).toHaveBeenCalledOnce();

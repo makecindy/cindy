@@ -190,9 +190,15 @@
     "worked": "Worked for {{duration}}",
     "workDetails": "Work details"
   },
+  "geminiRateLimit": {
+    "retried": "Retried automatically after the Gemini rate limit",
+    "title": "Gemini’s per-minute input token limit was reached.",
+    "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+    "retryIn": "Retrying automatically in {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
-    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
+    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
     "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
     "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
     "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",

@@ -8381,7 +8381,7 @@
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
-        "agentScheduleDetail": "Ele só pode abrir o painel de nova automação com os campos preenchidos; você decide se ela será criada — escolha um modelo e salve por conta própria. Após a criação, a Cindy a executa no horário definido por você. Pode haver cobrança pelo uso do modelo.",
+        "agentScheduleDetail": "Ele só pode abrir o painel de nova automação com os campos preenchidos; você decide se ela será criada — escolha um modelo e salve por conta própria. Após a criação, a Cindy a executa no horário definido por você. Pode haver cobrança pelo uso do modelo. Nos plugins com sincronização, você também pode confirmar qual computador executará a automação.",
         "nodeRuntime": "Pode executar neste computador um programa Node incluído no plugin",
         "nodeMcp": "Pode executar neste computador um MCP stdio incluído no plugin",
         "nodeRuntimeDetail": "Alto risco: ele tem o mesmo acesso local da sua conta de usuário, incluindo arquivos, rede e inicialização de outros programas. A Cindy não pode contê-lo na sandbox do navegador.",
@@ -8625,6 +8625,13 @@
         "openInSidebar": "Abrir na barra lateral",
         "panelPageHosted": "Abre pela página do plugin · fecha ao sair",
         "panelNone": "Este plugin não tem painel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: permitir uso remoto",
+          "description": "Quando ativado, seus outros computadores podem executar tarefas com este mecanismo. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está.",
+          "unsupported": "Este plugin ainda não permite usar o mecanismo dele a partir de outros computadores.",
+          "remoteControlOff": "Este computador ainda não permite controle remoto, então outros computadores não podem usar este mecanismo.",
+          "ariaLabel": "Permitir que seus outros computadores usem {{engine}}"
+        },
         "githubRelease": {
           "title": "Atualizações do plug-in",
           "installed": "Instalada {{version}}",
@@ -8693,6 +8700,8 @@
         "browserUse": "Usar esta extensão do navegador",
         "browserActivated": "Extensão do navegador selecionada",
         "browserActivationFailed": "Não foi possível selecionar a extensão. Verifique se ela está ativada e aprove a troca de conexão.",
+        "automationHostSelect": "Usar este computador para as tarefas automáticas de {{name}}?",
+        "automationHostClear": "Remover este computador como principal para as tarefas automáticas de {{name}}?",
         "browserSwitchTitle": "Trocar a conexão da extensão?",
         "browserSwitchMessage": "Usar “{{name}}” nesta conexão?",
         "browserSwitchDetail": "Instância: {{instance}}\nRegistro: {{host}}\nIsso substitui o registro atual. A extensão se conectará a este plugin.",
@@ -16046,6 +16055,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "O mecanismo do plug-in não conseguiu restaurar a conversa anterior. Suas mensagens foram preservadas. Escolha outro mecanismo ou inicie uma nova tarefa.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "Este mecanismo de plug-in não consegue usar as ferramentas do computador em que a tarefa está, então ainda não pode executá-la a partir de outro computador. Escolha outro mecanismo ou modelo.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "Este mecanismo de plug-in só pode executar tarefas deste computador. Outros computadores ainda não podem usá-lo.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir uso remoto” neste provedor lá. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
@@ -16304,9 +16315,15 @@
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
     },
+    "geminiRateLimit": {
+      "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+      "title": "O limite de entrada por minuto do Gemini foi atingido.",
+      "exhausted": "O Gemini ainda está limitado após uma nova tentativa. Você pode tentar novamente manualmente.",
+      "retryIn": "Nova tentativa automática em {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
-      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
       "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
       "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
       "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
@@ -16544,6 +16561,14 @@
       "remoteProviderUnsupported": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
       "remoteNativeOauthUnavailable": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
       "claudeSubscriptionWorkspaceOverride": "As configurações .claude desta pasta alteram para onde o Claude envia solicitações ou como ele faz login, então a assinatura do Claude não pode ser usada aqui. Remova essas configurações ou escolha um modelo com gateway ou chave de API",
+      "savedModel": {
+        "loading": "Conectando ao modelo selecionado…",
+        "checkFailed": "Não foi possível verificar o modelo selecionado",
+        "engine": "O mecanismo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "source": "A origem selecionada não está disponível. Escolha um modelo para esta tarefa.",
+        "model": "O modelo selecionado não está disponível. Escolha um modelo para esta tarefa.",
+        "thisTaskOnly": "O modelo selecionado se aplica somente a esta tarefa"
+      },
       "deviceStillLoading": "O dispositivo remoto ainda está carregando. Aguarde",
       "remoteDefaultsLoadFailed": "Não foi possível carregar as configurações do dispositivo remoto. Verifique a conexão; o Cindy está tentando novamente.",
       "branchChanged": "O projeto agora está em {{branch}}. Confira e envie novamente.",
@@ -22392,7 +22417,8 @@
       "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
       "manage": "Gerenciar grupos de modelos",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
-      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
+      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
