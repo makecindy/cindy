@@ -1,6 +1,6 @@
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { createOfficialDeviceLinkApiFetch } from './deviceLinkApi.js';
 
 const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch({ getClientEndpoint, serverApiFetch });
@@ -21,15 +21,27 @@ export function pluginAutomationAccount(key: string, current: () => boolean = ()
       throw new Error('Plugin automation account is unavailable');
     }
   }
-  const options = { beforeHop: assertCurrent, timeoutMs: 8000 };
+  async function request<T>(path: string, options: Pick<ApiFetchOptions, 'method' | 'body' | 'signal'> = {}): Promise<T> {
+    const ownerLifetime = new AbortController();
+    const unsubscribe = onAppSessionInvalidated(() => ownerLifetime.abort());
+    try {
+      const signal = options.signal ? AbortSignal.any([options.signal, ownerLifetime.signal]) : ownerLifetime.signal;
+      const result = await officialDeviceLinkApiFetch<T>(path, { ...options, beforeHop: assertCurrent, signal, timeoutMs: 8000 });
+      signal.throwIfAborted();
+      assertCurrent();
+      return result;
+    } finally {
+      unsubscribe();
+    }
+  }
   return {
-    read: () => officialDeviceLinkApiFetch<AutomationHostChoice>(endpoint + '?key=' + encodeURIComponent(key), options),
-    select: (revision: number, useThisDevice: boolean) => officialDeviceLinkApiFetch<AutomationHostChoice>(endpoint, {
-      ...options, method: 'PUT', body: { key, revision, useThisDevice },
+    read: () => request<AutomationHostChoice>(endpoint + '?key=' + encodeURIComponent(key)),
+    select: (revision: number, useThisDevice: boolean) => request<AutomationHostChoice>(endpoint, {
+      method: 'PUT', body: { key, revision, useThisDevice },
     }),
     run: (action: 'acquire' | 'renew' | 'release', runId: string, signal?: AbortSignal) =>
-      officialDeviceLinkApiFetch<{ granted?: boolean; validForMs?: number }>(endpoint + '/run', {
-        ...options, signal, method: 'POST', body: { action, key, runId },
+      request<{ granted?: boolean; validForMs?: number }>(endpoint + '/run', {
+        signal, method: 'POST', body: { action, key, runId },
       }),
   };
 }
