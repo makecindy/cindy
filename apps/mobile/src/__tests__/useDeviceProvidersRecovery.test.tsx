@@ -9,7 +9,7 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
 import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
-import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
+import { blockedSessionModelAtSend, taskModelCatalogRoutes } from '@/session/sessionModelAtSend';
 
 const state = vi.hoisted(() => ({
   context: { connectionEpoch: 1, status: 'online', recoveringDeviceIds: new Set<string>() },
@@ -34,8 +34,8 @@ let root: Root;
 let values: Record<string, UseDeviceProvidersResult>;
 const catalog = (id: string) => ({ providers: [{ id } as ProviderView] });
 const timeout = () => new Error('[DEVICE_LINK_TIMEOUT] no invoke-result');
-function Probe({ deviceId, open, retained }: { deviceId: string; open: boolean; retained?: ProviderPickerModel }) {
-  values[deviceId] = useDeviceProviders(deviceId, open, retained);
+function Probe({ deviceId, open, retained, pending }: { deviceId: string; open: boolean; retained?: ProviderPickerModel; pending?: ProviderPickerModel }) {
+  values[deviceId] = useDeviceProviders(deviceId, open, retained, pending);
   return null;
 }
 async function render(deviceId = 'a', open = false, other = false) {
@@ -107,9 +107,45 @@ describe('model catalog failure recovery', () => {
     });
     await show(route);
     const session = { agentKind: route.agent, model: route.modelId, providerId: route.providerId };
-    expect(hiddenSessionModelAtSend(session, 'a', values.a.retainedCatalog)).toEqual(route);
-    expect(hiddenSessionModelAtSend(session, 'a')).toBeUndefined();
+    expect(blockedSessionModelAtSend(session, 'a', values.a.retainedCatalog)).toEqual({ ...route, reason: 'hidden' });
+    expect(blockedSessionModelAtSend(session, 'a')).toEqual({ ...route, reason: 'checking' });
     expect(read.mock.calls).toEqual([[], [route]]);
+  });
+
+  // An implicit route can already have a definitive owner; a deferred provider is only worth
+  // reading when it could outrank that owner under the host's actual source order.
+  it.each([
+    { source: 'openai', deferred: 'custom', order: ['custom', 'openai'], reads: 1 },
+    { source: 'xd', deferred: 'openai', order: ['xd', 'openai'], reads: 2 },
+    { source: 'first', deferred: 'second', order: ['first', 'second'], reads: 1 },
+    { source: 'second', deferred: 'first', order: ['first', 'second'], reads: 2 },
+    { source: 'custom', deferred: 'other', order: undefined, reads: 2 },
+  ])('reads only possible owners for a legacy Codex task: $source, $deferred, $order', async ({ source, deferred, order, reads }) => {
+    const read = state.makers.get('a')!.listProviders;
+    const model = { id: 'current', name: 'Current', efforts: [], contextWindow: 32000 };
+    read.mockResolvedValueOnce({ providers: [{ id: source, agents: ['codex'], connected: true,
+      routing: { codex: {} }, models: { codex: [model] } }], deferredProviderIds: [deferred], providerOrder: order })
+      .mockResolvedValue({ providers: [] });
+    await show({ ...route, providerId: null });
+    expect(read).toHaveBeenCalledTimes(reads);
+    expect(values.a.ready).toBe(true);
+    expect(values.a.providers[0].id).toBe(source);
+  });
+
+  it('keeps both the running and pending models of one suspended source private to an existing task', async () => {
+    const session = { agentKind: 'codex' as const, providerId: 'off', model: 'current',
+      agentSwitchIntent: { targetAgentKind: 'pi' as const, providerId: 'off', model: 'next' } };
+    const { running, pending } = taskModelCatalogRoutes(session, 'a');
+    const read = state.makers.get('a')!.listProviders;
+    read.mockResolvedValueOnce(active).mockResolvedValueOnce(reply)
+      .mockResolvedValueOnce({ providers: [{ id: 'off', suspended: true, models: { pi: [{ id: 'next' }] } }] });
+    await act(async () => root.render(createElement(Probe, { deviceId: 'a', open: true, retained: running?.route, pending: pending?.route })));
+    expect(read.mock.calls).toEqual([[], [running?.route], [pending?.route]]);
+    expect(values.a.providers[0].models).toEqual({ codex: [{ id: 'current' }], pi: [{ id: 'next' }] });
+    expect(blockedSessionModelAtSend(session, 'a', values.a.retainedCatalog, values.a.pendingCatalog)).toBeUndefined();
+    await show(running?.route);
+    expect(values.a.providers[0].models.pi).toBeUndefined();
+    expect(values.a.providers[0].models.codex).toEqual([{ id: 'current' }]);
   });
 
   it('recovers the bound model after a timeout without reopening or refreshing the catalog', async () => {

@@ -7,7 +7,7 @@
  * 语义对齐桌面 `useDeviceProviders`:按 deviceId 隔离 + inflight 去重 + 代际驱逐
  * (evict 时自增代际,作废在途 fetch 的回写,防设备切换 / 重连后串旧供应商)。
  */
-import type { ProviderView } from '@cindy/model-providers/registry';
+import { actualSourceIdForModel, nativeDefaultSourceId, type ProviderView } from '@cindy/model-providers/registry';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetadataContinuity, type ProviderPickerModel } from '@cindy/device-link';
 
@@ -26,7 +26,7 @@ export interface DeviceProvidersPayload {
 /** 被控端供应商目录的取数器(通常 = `() => transport.listProviders()`)。 */
 export type DeviceProvidersFetcher = () => Promise<DeviceProvidersPayload>;
 
-/** This projection belongs to the task that requested it. Only the ordinary base is cached by device. */
+/** Only exact suspended rows and their visibility, scoped to the requesting task and base snapshot. */
 export interface RetainedProviderCatalog {
   base: DeviceProvidersPayload;
   key: string;
@@ -35,6 +35,50 @@ export interface RetainedProviderCatalog {
 
 export function retainedProviderModelKey(route: ProviderPickerModel): string {
   return JSON.stringify([route.agent, route.providerId, route.modelId]);
+}
+
+export function needsRetainedProviderModel(base: DeviceProvidersPayload, route: ProviderPickerModel): boolean {
+  const deferred = base.deferredProviderIds;
+  if (!route.modelId || !deferred?.length) return false;
+  if (route.providerId !== null) return deferred.includes(route.providerId);
+  const source = actualSourceIdForModel(base.providers, null, route.modelId, route.agent);
+  if (!source) return true;
+  // Even if every deferred source offered this model, could any of them win the existing route?
+  // Without a complete host order, give the unknown sources the earliest possible fallback position.
+  const candidates = new Set([...deferred, source]);
+  const ordered = new Set(base.providerOrder?.filter(id => candidates.has(id)));
+  const ids = ordered.size === candidates.size ? [...ordered] : [...candidates];
+  return nativeDefaultSourceId(ids.map(id => ({ id })), route.agent) !== source;
+}
+
+/** Compose the running and pending rows for display without publishing either to the device cache. */
+export function taskProviderCatalog(
+  base: DeviceProvidersPayload,
+  ...catalogs: (RetainedProviderCatalog | undefined)[]
+): DeviceProvidersPayload {
+  const matches = catalogs.filter((catalog): catalog is RetainedProviderCatalog => catalog?.base === base);
+  if (!matches.length) return base;
+  const kept = new Map<string, ProviderView>();
+  const visibility = { ...base.modelVisibilityOverrides };
+  for (const { payload } of matches) {
+    Object.assign(visibility, payload.modelVisibilityOverrides);
+    for (const provider of payload.providers) {
+      const previous = kept.get(provider.id);
+      if (!previous) {
+        kept.set(provider.id, provider);
+        continue;
+      }
+      // Two selections can belong to the same source, including different models of the same agent.
+      const models = { ...previous.models };
+      for (const agent of Object.keys(provider.models) as (keyof ProviderView['models'])[]) {
+        const entries = models[agent] ?? [];
+        models[agent] = [...entries, ...(provider.models[agent] ?? []).filter(m => !entries.some(old => old.id === m.id))];
+      }
+      kept.set(provider.id, { ...previous, models });
+    }
+  }
+  return orderDeviceProviders({ ...base, providers: [...base.providers.filter(p => !kept.has(p.id)), ...kept.values()],
+    modelVisibilityOverrides: visibility });
 }
 
 /** Recognize both transport codes and the host's serialized IPC error prefix. */

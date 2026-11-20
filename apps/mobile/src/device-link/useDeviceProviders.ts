@@ -8,7 +8,7 @@
  * React 接线。优雅回退:被控端为旧版(allowlist 无 `maker:provider:list`)→ listProviders
  * reject → 暴露 unsupported,调用方才回退到基于 capabilities 的扁平模型列表。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppState } from 'react-native';
 
 import type { ProviderPickerModel } from '@cindy/device-link';
@@ -18,7 +18,8 @@ import { connectionRecoverySyncRetryDelayMs, formatRemoteError, isAutoRecovering
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
-  orderDeviceProviders,
+  needsRetainedProviderModel,
+  taskProviderCatalog,
   readRetainedProviderModel,
   retainedProviderModelKey,
   fetchDeviceProvidersFresh,
@@ -42,6 +43,7 @@ export { evictDeviceProviders } from './deviceProvidersCache';
 export interface UseDeviceProvidersResult {
   providers: ProviderView[];
   retainedCatalog?: RetainedProviderCatalog;
+  pendingCatalog?: RetainedProviderCatalog;
   /** 被控端「模型显示/隐藏」override 快照;undefined = 旧被控端(列表不过滤)。 */
   modelVisibilityOverrides?: Record<string, boolean>;
   loading: boolean;
@@ -67,7 +69,12 @@ function canRecoverProviderRead(error: unknown): boolean {
 }
 
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
-export function useDeviceProviders(deviceId?: string, pickerOpen = false, retainedModel?: ProviderPickerModel): UseDeviceProvidersResult {
+export function useDeviceProviders(
+  deviceId?: string,
+  pickerOpen = false,
+  retainedModel?: ProviderPickerModel,
+  pendingModel?: ProviderPickerModel,
+): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
   // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
@@ -284,14 +291,18 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false, retain
 
   const ready = deviceId !== undefined && readyFor === deviceId && readyGen === getDeviceProvidersGen(deviceId);
   const retained = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, retainedModel, pickerOpen);
+  const pending = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, pendingModel, pickerOpen);
+  const display = useMemo(() => taskProviderCatalog(payload, retained.catalog, pending.catalog),
+    [payload, retained.catalog, pending.catalog]);
   return {
-    providers: retained.catalog?.payload.providers ?? payload.providers,
-    modelVisibilityOverrides: retained.catalog?.payload.modelVisibilityOverrides ?? payload.modelVisibilityOverrides,
+    providers: display.providers,
+    modelVisibilityOverrides: display.modelVisibilityOverrides,
     retainedCatalog: retained.catalog,
-    loading: loading || retained.loading,
-    error: (errorDeviceId === deviceId ? error : null) ?? retained.error,
+    pendingCatalog: pending.catalog,
+    loading: loading || retained.loading || pending.loading,
+    error: (errorDeviceId === deviceId ? error : null) ?? retained.error ?? pending.error,
     unsupported: errorDeviceId === deviceId && isDeviceProvidersUnsupportedError(error),
-    ready: ready && !retained.loading && !retained.error,
+    ready: ready && !retained.loading && !retained.error && !pending.loading && !pending.error,
   };
 }
 
@@ -306,7 +317,8 @@ export function useRetainedProviderModel(
   const agent = route?.agent;
   const modelId = route?.modelId;
   const providerId = route?.providerId;
-  const needed = !!modelId && !!base?.deferredProviderIds?.some(id => providerId === null || id === providerId);
+  const needed = useMemo(() => !!base && !!agent && !!modelId && providerId !== undefined
+    && needsRetainedProviderModel(base, { agent, modelId, providerId }), [base, agent, modelId, providerId]);
   const [result, setResult] = useState<RetainedProviderCatalog | {
     base: DeviceProvidersPayload; key: string; error: string; failedPickerOpen: boolean;
   }>();
@@ -331,17 +343,14 @@ export function useRetainedProviderModel(
           const model = p.models[agent]?.find(m => m.id === modelId);
           return model ? [{ ...p, models: { [agent]: [model] } }] : [];
         });
-      const visibility = { ...base.modelVisibilityOverrides };
+      const visibility: Record<string, boolean> = {};
       for (const id of base.deferredProviderIds ?? []) {
         if (providerId !== null && id !== providerId) continue;
         const key = `${agent}:${id}:${modelId}`;
         const visible = reply.modelVisibilityOverrides?.[key];
         if (visible !== undefined) visibility[key] = visible;
       }
-      const received = new Set(kept.map(p => p.id));
-      const payload = orderDeviceProviders({ ...base, providers: [...base.providers.filter(p => !received.has(p.id)), ...kept],
-        modelVisibilityOverrides: visibility });
-      setResult({ base, key, payload });
+      setResult({ base, key, payload: { providers: kept, modelVisibilityOverrides: visibility } });
     };
     const scheduleRetry = (state = AppState.currentState) => {
       clearTimeout(timer);

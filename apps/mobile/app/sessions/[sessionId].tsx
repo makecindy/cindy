@@ -23,7 +23,7 @@ import { incomingShareDestination } from '@/session/incomingShare';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
-import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
+import { blockedSessionModelAtSend, taskModelCatalogRoutes } from '@/session/sessionModelAtSend';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
@@ -2326,15 +2326,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
     workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
   });
-  const currentModelRoute = currentSession?.model ? {
-    agent: resolveSessionAgentKind(currentSession),
-    modelId: currentSession.model,
-    providerId: currentSession.providerId ?? null,
-  } : undefined;
+  const { running: runningModel, pending: pendingModel } = taskModelCatalogRoutes(currentSession, deviceId);
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
     modelSheetOpen,
-    !sessionAgentRunsOnOtherComputer(currentSession) ? currentModelRoute : undefined,
+    runningModel?.deviceId === deviceId ? runningModel.route : undefined,
+    pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
@@ -2873,7 +2870,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => [...new Set([currentAgentDeviceId, nextAgentDeviceId].filter((id): id is string => !!id))],
     [currentAgentDeviceId, nextAgentDeviceId],
   );
-  const { catalogs: remoteAgentCatalogs, retainedCatalog: remoteRetainedCatalog } = useRemoteAgentCatalogsWithStatus({
+  const { catalogs: remoteAgentCatalogs, retainedCatalog: remoteRetainedCatalog, pendingCatalog: remotePendingCatalog } = useRemoteAgentCatalogsWithStatus({
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
     // 共享任务访客读到的是自己账号的设备,与任务无关,不读。
     enabled: !!deviceId && !isSharedTaskPeer(deviceId) && (
@@ -2881,7 +2878,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ),
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
-    retainedModel: currentAgentDeviceId && currentModelRoute ? { deviceId: currentAgentDeviceId, route: currentModelRoute } : undefined,
+    retainedModel: runningModel?.deviceId !== deviceId ? runningModel : undefined,
+    pendingModel: pendingModel?.deviceId !== deviceId ? pendingModel : undefined,
     keepOnly: !(agentLocationMovable && modelSheetOpen),
   });
   const modelSheetRemoteCatalogs = useMemo(
@@ -6841,13 +6839,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     // A known hidden model requires an explicit choice before consuming the draft or enqueueing.
     const sessionAtSend = readSessionRowNow() ?? currentSession;
-    const hiddenModel = !earlyLocalCommand && !earlyDesktopCommand
-      && hiddenSessionModelAtSend(sessionAtSend, deviceId, currentAgentDeviceId ? remoteRetainedCatalog : composerDeviceProviders.retainedCatalog);
-    if (hiddenModel) {
-      setError(t('session.common.modelHiddenReselect', { model: hiddenModel.modelId }));
+    const blockedModel = !earlyLocalCommand && !earlyDesktopCommand
+      && blockedSessionModelAtSend(sessionAtSend, deviceId, composerDeviceProviders.retainedCatalog, composerDeviceProviders.pendingCatalog,
+        remoteRetainedCatalog, remotePendingCatalog);
+    if (blockedModel && (blockedModel.reason === 'hidden' || !connectionDispatchBlockedAtSend)) {
+      setError(blockedModel.reason === 'hidden'
+        ? t('session.common.modelHiddenReselect', { model: blockedModel.modelId }) : t('models.picker.loadingDefault'));
       // 与手动打开入口一致：面板按「待切换目标 / 当前任务引擎」浏览，才能把已关闭的
       // 原选模型认作当前选择并显示重选提示（#5580）。
-      setModelSheetAgentKind(hiddenModel.agent);
+      setModelSheetAgentKind(blockedModel.agent);
       setModelSheetOpen(true);
       sendInFlightRef.current = false;
       setSending(false);

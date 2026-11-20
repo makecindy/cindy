@@ -11,7 +11,8 @@ import { i18n } from '@/i18n';
 import { clearAllDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { clearAllProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
 import type { RemoteAgentCatalog } from '@/session/remoteAgentCatalogs';
-import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
+import { useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
+import { blockedSessionModelAtSend, taskModelCatalogRoutes } from '@/session/sessionModelAtSend';
 
 const provider = (id: string, name: string) => ({
   id,
@@ -67,13 +68,16 @@ const receivedShare = {
 let root: Root;
 let host: HTMLDivElement;
 let latest: RemoteAgentCatalog[] = [];
+let pendingCatalog: ReturnType<typeof useRemoteAgentCatalogsWithStatus>['pendingCatalog'];
 
-function Probe(props: Parameters<typeof useRemoteAgentCatalogs>[0]) {
-  latest = useRemoteAgentCatalogs(props);
+function Probe(props: Parameters<typeof useRemoteAgentCatalogsWithStatus>[0]) {
+  const result = useRemoteAgentCatalogsWithStatus(props);
+  latest = result.catalogs;
+  pendingCatalog = result.pendingCatalog;
   return null;
 }
 
-async function render(props: Parameters<typeof useRemoteAgentCatalogs>[0]) {
+async function render(props: Parameters<typeof useRemoteAgentCatalogsWithStatus>[0]) {
   await act(async () => {
     root.render(<Probe {...props} />);
   });
@@ -87,6 +91,7 @@ beforeEach(async () => {
   clearAllDeviceProviders();
   clearAllProviderShareCatalogs();
   latest = [];
+  pendingCatalog = undefined;
   link.presenceVersion = 1;
   link.rosterVersion = 0;
   link.recoveringDeviceIds.clear();
@@ -130,6 +135,23 @@ describe('remote Agent catalogs with provider shares', () => {
     expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: route })]);
     expect(latest[0]).toMatchObject({ deviceId: 'studio', status: 'ready',
       providers: [{ id: 'off', models: { 'claude-code': [{ id: 'off-model' }] } }] });
+  });
+
+  it('reads the pending switch on its execution computer and keeps the hidden result with that route', async () => {
+    const session = { agentKind: 'pi' as const, model: 'running', providerId: 'local',
+      agentSwitchIntent: { targetAgentKind: 'claude-code' as const, model: 'next', providerId: 'off', agentDeviceId: 'studio' } };
+    const { pending } = taskModelCatalogRoutes(session, 'controlled');
+    let finish!: (value: unknown) => void;
+    link.invoke.mockResolvedValueOnce({ providers: [], deferredProviderIds: ['off'] })
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await render({ controlledDeviceId: 'controlled', enabled: true, keepOnly: true, keepDeviceIds: ['studio'], pendingModel: pending });
+    expect(link.invoke).toHaveBeenCalledTimes(2);
+    expect(link.invoke).toHaveBeenNthCalledWith(2, 'studio', 'maker:provider:list', [expect.objectContaining({ retainedModel: pending!.route })]);
+    expect(blockedSessionModelAtSend(session, 'controlled', pendingCatalog)?.reason).toBe('checking');
+    await act(async () => finish({ providers: [], modelVisibilityOverrides: { 'claude-code:off:next': false } }));
+    expect(latest[0].status).toBe('ready');
+    expect(blockedSessionModelAtSend(session, 'controlled', pendingCatalog)).toEqual({ ...pending!.route, reason: 'hidden' });
+    expect(blockedSessionModelAtSend({ ...session, agentSwitchIntent: null }, 'controlled', pendingCatalog)).toBeUndefined();
   });
 
   it('clears same-account device rows on a roster invalidation but keeps share catalogs', async () => {
