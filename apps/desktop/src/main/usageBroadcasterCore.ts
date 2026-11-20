@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageAdmission } from './usage/turnUsageAdmission.js';
 import { createXaiRateLimitPublisher } from './usage/xaiRateLimits.js';
 export { USAGE_XAI_RATE_LIMIT_CHANGED, USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED } from './usage/xaiRateLimits.js';
 /**
@@ -52,7 +53,7 @@ import {
 
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
-import { isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -138,6 +139,7 @@ export async function recordTurnSpend(
 ): Promise<void> {
   try {
     const result = await incrementDailySpend(money, ts);
+    if (!mayRecordTurnUsage()) return;
     broadcastTodaySpend({
       day: result.day,
       money: result.money,
@@ -176,6 +178,7 @@ export async function readTodaySpend(): Promise<TodaySpendPayload> {
 export async function rebroadcastTodaySpend(ownerScope?: DataOwnerBroadcastScope): Promise<void> {
   try {
     const payload = await readTodaySpend();
+    if (!mayRecordTurnUsage()) return;
     if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
     broadcastTodaySpend(payload);
   } catch (err) {
@@ -211,7 +214,7 @@ export async function recordModelTurnUsage(
     // 任务用量是模型用量的细分:模型行没记上时不单独计入任务,排行不会超出总量。
     return;
   }
-  if (!sessionId) return;
+  if (!sessionId || !mayRecordTurnUsage()) return;
   try {
     await incrementDailySessionUsage(
       sessionId,
@@ -1181,18 +1184,22 @@ function notifyUsageObservers(kind: UsageChangeKind): void {
 
 function broadcastTodaySpend(payload: TodaySpendPayload): void {
   notifyUsageObservers('spend');
+  const stamp = turnUsageAdmission.getStore() ? captureDataOwnerBroadcastScope().ownerStamp : undefined;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload);
+      if (stamp) win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload, stamp);
+      else win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload);
     }
   }
 }
 
 function broadcastCodexTokens(payload: CodexTokenSnapshot): void {
   notifyUsageObservers('tokens');
+  const stamp = turnUsageAdmission.getStore() ? captureDataOwnerBroadcastScope().ownerStamp : undefined;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload);
+      if (stamp) win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload, stamp);
+      else win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload);
     }
   }
 }

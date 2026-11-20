@@ -1,3 +1,4 @@
+import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
@@ -6322,7 +6323,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return asyncQuestionInputDispatcher(session, ...answer);
   });
 
-  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
+  const usageAccount = bindSessionUsageAccount(() => {
+    turnModelPromiseBySession.delete(session.id);
+    turnUsageContextBySession.delete(session.id);
+  });
+  registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session, usageAccount));
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
@@ -6359,7 +6364,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       persistAgentPlanModeChangeWith({ ownerDb, sessionBindings, persistSessionFields, log }, session, event);
       return;
     }
-    handleSessionEvent(ownerEventDependencies, session, event);
+    handleSessionEvent(ownerEventDependencies, session, event, usageAccount.forEvent(event.sessionTurnGeneration ?? session.getTurnGeneration()));
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
@@ -6372,7 +6377,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 「远程与分享」页按使用方的用量：本机自己的任务记在当前账号的账本里，换了账号之后的迟到事件不记。
   Object.defineProperty(ownerEventDependencies, 'recordProviderPartyUsage', {
     value: (target: Session, event: AgentEvent) => {
-      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
       try {
         recordSessionProviderPartyUsage({
           providerOf: getSessionProvider,

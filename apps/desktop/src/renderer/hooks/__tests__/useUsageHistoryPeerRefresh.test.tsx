@@ -125,3 +125,33 @@ describe('useUsageHistory peer refresh', () => {
     expect(callsFor(undefined)).toBe(initial + 1);
   });
 });
+
+// L340 renderer tier: a window left at the prior generation must ignore the
+// actual usage subscription, including while the same account's new window updates.
+it('only the window at the settled generation refreshes on the turn receipt', async () => {
+  const { setDataOwnerGeneration } = await import('../../contexts/dataOwnerGeneration');
+  let notify: ((snapshot: unknown, owner?: unknown) => void) | undefined;
+  const usage = window.electronAPI.maker.usage;
+  const subscribe = vi.spyOn(usage, 'onTodayTokensChanged').mockImplementation(fn => {
+    notify = fn as typeof notify;
+    return () => {};
+  });
+  try {
+    setDataOwnerGeneration('account', 7);
+    renderHook(() => useUsageHistory({ userId: 'stamped-turn' }));
+    await act(async () => {});
+    const before = getHistory.mock.calls.length;
+    const settle = async () => {
+      notify!({}, { dataOwnerId: 'account', ownerGeneration: 8 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    };
+    await settle();
+    expect(getHistory).toHaveBeenCalledTimes(before);
+    setDataOwnerGeneration('account', 8);
+    await settle();
+    expect(getHistory).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    subscribe.mockRestore();
+    setDataOwnerGeneration(null, 0);
+  }
+});

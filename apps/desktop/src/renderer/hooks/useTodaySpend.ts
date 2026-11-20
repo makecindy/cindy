@@ -1,3 +1,4 @@
+import { isDataOwnerPushCurrent } from '../contexts/dataOwnerGeneration';
 /**
  * useTodaySpend — 订阅"今日用量"实时数据 (走 maker.usage.* IPC)。
  *
@@ -78,8 +79,8 @@ export function useTodaySpend(): TodaySpendData {
     refreshCodex();
 
     // 2. 订阅 Claude USD 实时变化 (per-turn done 后 main 推)
-    const unsubscribe = window.electronAPI.maker.usage.onTodaySpendChanged((res) => {
-      if (cancelled) return;
+    const unsubscribe = window.electronAPI.maker.usage.onTodaySpendChanged((res, stamp) => {
+      if (cancelled || !isDataOwnerPushCurrent(stamp)) return;
       // 只接受"今天"的更新(防御 main 在跨日缝隙推的延迟数据)
       if (res.day === localDayKey()) {
         currentDay = res.day;
@@ -97,8 +98,8 @@ export function useTodaySpend(): TodaySpendData {
     });
 
     // 2b. 订阅 Codex token 实时变化
-    const unsubscribeCodex = window.electronAPI.maker.usage.onTodayTokensChanged((snapshot) => {
-      if (cancelled) return;
+    const unsubscribeCodex = window.electronAPI.maker.usage.onTodayTokensChanged((snapshot, stamp) => {
+      if (cancelled || !isDataOwnerPushCurrent(stamp)) return;
       setData((prev) => ({ ...prev, codexTokens: snapshot.total }));
     });
 

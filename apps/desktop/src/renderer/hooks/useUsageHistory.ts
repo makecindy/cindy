@@ -665,8 +665,11 @@ export function useUsageHistory(opts?: {
         void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });
       }, REFRESH_DEBOUNCE_MS);
     };
-    const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
-    const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
+    const refreshTurnUsage = (_value: unknown, stamp?: unknown) => {
+      if (isDataOwnerPushCurrent(stamp)) scheduleRefresh();
+    };
+    const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(refreshTurnUsage);
+    const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(refreshTurnUsage);
     const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
     // 任务的标题 / 删除等元数据变化不产生用量:只需重读,Main 在出口按当前库覆盖本机任务
     // 元数据,不强制重聚合。
