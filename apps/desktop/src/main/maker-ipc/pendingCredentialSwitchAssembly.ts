@@ -16,7 +16,7 @@
  */
 import { effectiveSourceIdForModel, findCatalogModel } from '@cindy/model-providers';
 import { eq } from 'drizzle-orm';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { persistableSessionEffort } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
@@ -42,7 +42,7 @@ export interface PendingCredentialSwitchAssemblyPorts {
   broadcastToAllWindows: (channel: string, payload: unknown) => void;
   inputCoordinator: Pick<AgentInputCoordinator, 'wakeSession'>;
   resolveLenientSessionRoute: typeof import('../maker-host/model-route-guard-live.js').resolveLenientSessionRoute;
-  getSessionDbAgentKind: (sessionId: string) => 'cc' | 'codex' | 'pi' | null;
+  getSessionDbAgentKind: (sessionId: string) => DbEngineKind | null;
   getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   resolveConfiguredContextWindow: typeof import('../maker-host/model-context-settings.js').resolveConfiguredContextWindow;
   agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> | null;
@@ -98,6 +98,7 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
       assertPendingOwner();
       const pendingDb = getDbClient();
       const agentKind = getSessionDbAgentKind(sessionId);
+      if (agentKind === 'acp') throw new Error('Plugin engines manage their own credentials');
       const [desiredRow] = await pendingDb
         .drizzle.select({
           model: sessions.model,

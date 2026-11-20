@@ -216,6 +216,12 @@ The grayscale rule is near-absolute. The sanctioned non-gray colors are exactly 
 
 Other registered non-gray colors live where their component is specified: plugin provenance and search matches in §10, the sidebar draft pencil in §15.4.
 
+**Plugin engine task marks (user decision, 2026-11-19).** Desktop and Mobile keep the plugin's
+supplied icon colours while a task is running and use the existing status breathing animation.
+Idle tasks use a neutral grey mark. When the plugin supplies no icon, the generic puzzle mark uses
+the usual task status colours. This exception covers only the image pixels of a plugin engine's
+running task mark.
+
 _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds._
 
 ### Gradient System

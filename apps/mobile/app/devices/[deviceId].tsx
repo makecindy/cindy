@@ -95,6 +95,7 @@ import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/Swipea
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { isPluginEngineSessionKind, prefetchPluginEngineIcons } from '@/session/pluginEngines';
 import {
   RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
@@ -212,6 +213,13 @@ function DeviceDetailScreenContent() {
     () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
     [allSessions, deviceId, projectWorkingDir],
   );
+  const hasPluginTasks = sessions.some((session) => session.deviceLinkDeviceId === deviceId
+    && session.status === 'active' && isPluginEngineSessionKind(session.agentKind));
+  useEffect(() => {
+    if (hasPluginTasks && screenFocused && appStateActive && status === 'online') {
+      void prefetchPluginEngineIcons(deviceId, maker);
+    }
+  }, [hasPluginTasks, screenFocused, appStateActive, status, deviceId, maker]);
   const projectName = useMemo(() => resolveMobileProjectRouteTitle({
     deviceId,
     workingDir: projectWorkingDir,

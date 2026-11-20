@@ -223,7 +223,8 @@ describe('cross-agent committed model projection', () => {
       displays.push(resolveComposerModelSelection({
         current: { ...snapshot, agentKind: dbToMakerAgentKind(snapshot.agentKind) },
         effective: snapshot.runtimeEffective,
-        intent: intent ? { ...intent, target: intent.targetAgentKind, effort: intent.effort as SessionRuntimeProfile['effort'] } : null,
+        // This harness only stages built-in selections.
+        intent: intent ? { ...intent, target: intent.targetAgentKind as SessionRuntimeProfile['agentKind'], effort: intent.effort as SessionRuntimeProfile['effort'] } : null,
       }));
       buffer.acknowledgeCommitted(id, snapshot);
     });

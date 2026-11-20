@@ -83,6 +83,173 @@ describe('useFileTree refresh scheduling', () => {
     mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
+  // PR #11392: two tabs can browse the same tree. Collapse must keep their listings
+  // available without rescanning every previously opened directory (unit, real shared store).
+  it('collapses the shared tree while retaining only directories used by open panes', async () => {
+    const workdir = '/shared-directory-panes';
+    const root = ['docs', 'src', 'other'].map(name => ({
+      name, relPath: name, type: 'directory' as const, size: 0, mtimeMs: 1,
+    }));
+    mocks.listDir.mockImplementation(async ({ relPath }) => relPath
+      ? [{ name: 'a.txt', relPath: relPath + '/a.txt', type: 'file', size: 1, mtimeMs: 1 }]
+      : root);
+    const docs = renderHook(() => useFileTree({ workdir, displayedDirectory: 'docs' }));
+    const src = renderHook(() => useFileTree({ workdir, displayedDirectory: 'src' }));
+    await waitFor(() => expect(docs.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      for (const { relPath } of root) await docs.result.current.expandToPath(relPath, 'directory');
+    });
+    mocks.listDir.mockClear();
+    act(() => src.result.current.collapseAll());
+    expect([...docs.result.current.expanded]).toEqual(['']);
+    expect(docs.result.current.entries.get('docs')?.[0].name).toBe('a.txt');
+    expect(src.result.current.entries.get('src')?.[0].name).toBe('a.txt');
+    expect(src.result.current.entries.has('other')).toBe(false);
+    expect(mocks.listDir).not.toHaveBeenCalled();
+    docs.unmount();
+    act(() => src.result.current.collapseAll());
+    expect(src.result.current.entries.has('docs')).toBe(false);
+    src.unmount();
+  });
+
+  // PR #11392, unit: releasing a hidden consumer must not stop a visible
+  // sibling. The final release must also cancel any queued trailing read.
+  it('lets only visible tabs own a shared remote directory read', async () => {
+    const pending = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementationOnce(() => pending.promise).mockResolvedValue([]);
+    const opts = { workdir: '/shared-visible', remoteHostId: 'ssh' };
+    const first = renderHook(({ enabled }) => useFileTree({ ...opts, enabled }), { initialProps: { enabled: true } });
+    const second = renderHook(({ enabled }) => useFileTree({ ...opts, enabled }), { initialProps: { enabled: true } });
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+    first.rerender({ enabled: false });
+    expect(mocks.stopWatchFor).not.toHaveBeenCalled();
+    let refresh!: Promise<void>;
+    act(() => { refresh = second.result.current.refresh(); });
+    second.rerender({ enabled: false });
+    expect(mocks.stopWatchFor).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve([]); await refresh; });
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+    first.rerender({ enabled: true });
+    await waitFor(() => expect(first.result.current.initialLoading).toBe(false));
+    second.rerender({ enabled: true });
+    expect(mocks.listDir).toHaveBeenCalledTimes(2);
+    first.unmount();
+    second.unmount();
+  });
+
+  // #11392, unit: two retained tabs swap in the same React commit while the root
+  // is loading. Sequential mounts miss the outgoing cleanup disposing the incoming reader.
+  it('hands a pending directory read to the next visible tab in the same commit', async () => {
+    const pending = deferred<readonly DirEntry[]>();
+    const fresh: DirEntry[] = [{ name: 'new.md', relPath: 'new.md', type: 'file', size: 1, mtimeMs: 2 }];
+    mocks.listDir.mockImplementationOnce(() => pending.promise).mockResolvedValue(fresh);
+    const options = { workdir: '/tab-handoff', remoteHostId: 'ssh' };
+    const view = renderHook(({ tab, extra }: { tab: string | null; extra: boolean }) => {
+      useFileTree({ ...options, enabled: tab === 'first' });
+      const second = useFileTree({ ...options, enabled: tab === 'second' });
+      useFileTree({ ...options, enabled: extra });
+      return second;
+    }, { initialProps: { tab: 'first' as string | null, extra: false } });
+    view.rerender({ tab: 'second', extra: false });
+    view.rerender({ tab: 'second', extra: true });
+    expect(mocks.startWatchFor).toHaveBeenCalledTimes(1);
+    expect(mocks.stopWatchFor).not.toHaveBeenCalled();
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+
+    view.rerender({ tab: null, extra: false });
+    expect(mocks.stopWatchFor).toHaveBeenCalledTimes(1);
+    view.rerender({ tab: 'second', extra: false });
+    await waitFor(() => expect(view.result.current.entries.get('')).toEqual(fresh));
+    await act(async () => { pending.resolve([]); });
+    expect(view.result.current.entries.get('')).toEqual(fresh);
+    expect(mocks.listDir).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  // #11392, unit: the old content cache survived the last directory watcher.
+  // No event is delivered for edits made after the last watcher stops.
+  it('revalidates text and sibling cache entries after a gap in workdir watching', async () => {
+    const workdir = '/watch-gap';
+    let version = 'old';
+    mocks.listDir.mockResolvedValue([]);
+    mocks.readFile.mockImplementation(async ({ relPath }) => ({ ok: true,
+      data: { relPath, content: version, size: 3, mtimeMs: 1, truncated: false } }));
+    const view = renderHook(({ file, visible }) => {
+      useFileTree({ workdir, enabled: visible });
+      return useFileContent(workdir, file, null, null, visible);
+    }, { initialProps: { file: 'other.txt', visible: true } });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'old' }));
+    view.rerender({ file: 'open.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'open.txt', content: 'old' }));
+    const otherWatcher = renderHook(() => useFileTree({ workdir }));
+    mocks.readFile.mockClear();
+    view.rerender({ file: 'open.txt', visible: false });
+    view.rerender({ file: 'open.txt', visible: true });
+    expect(mocks.readFile).not.toHaveBeenCalled();
+    otherWatcher.unmount();
+    view.rerender({ file: 'open.txt', visible: false });
+    version = 'new';
+    view.rerender({ file: 'open.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'new' }));
+    expect(mocks.readFile).toHaveBeenCalledTimes(1);
+    view.rerender({ file: 'other.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'other.txt', content: 'new' }));
+    view.unmount();
+  });
+
+  // #11392, unit: a renamed ancestor or a missing-path read must invalidate the
+  // visible directory, including previously cached nested entries.
+  it.each(['parent event', 'missing path'])('drops stale directory listings after a %s', async (signal) => {
+    const workdir = '/directory-removal-' + signal;
+    const folder: DirEntry = { name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 };
+    const nested: DirEntry = { ...folder, name: 'draft', relPath: 'docs/draft' };
+    const item: DirEntry = { ...folder, type: 'file', name: 'a.txt', relPath: 'docs/draft/a.txt' };
+    let deleted = false;
+    mocks.listDir.mockImplementation(async ({ relPath }) => {
+      if (!relPath) return deleted && signal === 'parent event' ? [] : [folder];
+      if (deleted && signal === 'missing path') throw Object.assign(new Error('directory gone'), { code: 'ENOENT' });
+      return relPath === 'docs' ? [nested] : [item];
+    });
+    const view = renderHook(() => useFileTree({ workdir, displayedDirectory: 'docs/draft' }));
+    await waitFor(() => expect(view.result.current.entries.get('docs/draft')).toEqual([item]));
+    deleted = true;
+    if (signal === 'parent event') {
+      act(() => { for (const cb of mocks.eventCallbacks) cb({ workdir, relPath: 'docs', type: 'unlinkDir' }); });
+    } else {
+      await act(async () => { await view.result.current.refresh(); });
+    }
+    await waitFor(() => expect(view.result.current.entries.has('docs/draft')).toBe(false));
+    expect(view.result.current.loadError).toBeNull();
+    view.unmount();
+  });
+
+  // PR #11392: a cached child can finish refreshing after its root failed. Only
+  // a successful root read should clear the error. Existing tests use the opposite order.
+  it('keeps a root error after a child succeeds and reloads both on retry', async () => {
+    const folder: DirEntry = { name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 };
+    const file: DirEntry = { name: 'readme.md', relPath: 'docs/readme.md', type: 'file', size: 1, mtimeMs: 1 };
+    mocks.listDir.mockImplementation(async ({ relPath }) => relPath ? [file] : [folder]);
+    const view = renderHook(() => useFileTree({ workdir: '/retry-visible-folder', displayedDirectory: 'docs' }));
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => { await view.result.current.expandToPath('docs', 'directory'); });
+
+    const child = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation(({ relPath }) => relPath ? child.promise : Promise.reject(new Error('offline')));
+    let refresh!: Promise<void>;
+    act(() => { refresh = view.result.current.refresh(); });
+    await waitFor(() => expect(view.result.current.loadError).toBe('load-failed'));
+    await act(async () => { child.resolve([file]); await refresh; });
+    expect(view.result.current.loadError).toBe('load-failed');
+
+    mocks.listDir.mockClear().mockImplementation(async ({ relPath }) =>
+      relPath ? [{ ...file, size: 2 }] : [folder]);
+    await act(async () => { await view.result.current.refresh(); });
+    expect(mocks.listDir.mock.calls.map(([args]) => args.relPath).sort()).toEqual(['', 'docs']);
+    expect(view.result.current.loadError).toBeNull();
+    expect(view.result.current.entries.get('docs')?.[0].size).toBe(2);
+    view.unmount();
+  });
+
   // #8422: restored folders previously started all directory IPCs at once.
   // Unit through the real hook: bounded outstanding reads, complete final tree,
   // and no queued reads after leaving. Existing tests restore only a few folders.
@@ -285,8 +452,9 @@ describe('useFileTree refresh scheduling', () => {
 
   // #10882 review; unit through production hooks. Existing alias tests only
   // change target contents, never the link identity with identical entry names.
-  it.each(['watcher', 'manual refresh'])('replaces alias mappings and descendant content after retarget via %s', async (source) => {
+  it.each(['watcher', 'manual refresh', 'root event after collapse'])('replaces alias mappings and descendant content after retarget via %s', async (source) => {
     const workdir = '/alias-retarget';
+    const collapsed = source === 'root event after collapse';
     let target = 'a';
     let added = false;
     mocks.loadExpandedSet.mockReturnValue(new Set(['alias']));
@@ -297,18 +465,21 @@ describe('useFileTree refresh scheduling', () => {
       ok: true, data: { relPath, content: target, size: 1, mtimeMs: 1, truncated: false },
     }));
     const view = renderHook(({ file }) => ({
-      tree: useFileTree({ workdir }), content: useFileContent(workdir, file).content,
+      tree: useFileTree({ workdir, displayedDirectory: collapsed ? 'alias' : undefined }),
+      content: useFileContent(workdir, file).content,
     }), { initialProps: { file: 'alias/note.md' } });
     try {
       await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'a' }));
       view.rerender({ file: 'alias/second.md' });
       await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'alias/second.md' }));
+      if (collapsed) act(() => view.result.current.tree.collapseAll());
       target = 'b';
       await act(async () => {
         if (source === 'manual refresh') await view.result.current.tree.refresh();
-        else for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: 'alias', type: 'change' });
+        else for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: collapsed ? 'sibling.md' : 'alias', type: 'change' });
       });
-      expect(view.result.current.content).toMatchObject({ content: 'b' });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'b' }));
+      expect(view.result.current.tree.entries.has('alias')).toBe(true);
       view.rerender({ file: 'alias/note.md' });
       await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'b' }));
       await act(async () => { await view.result.current.tree.refresh(); });
@@ -351,6 +522,64 @@ describe('useFileTree refresh scheduling', () => {
       view.rerender({ file: 'alias/note.md' });
       await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'B' }));
     } finally { view.unmount(); }
+  });
+
+  // #11392, unit: a watch event supersedes the new file's first read while the
+  // previous video's replacement is still downloading, including on a return visit.
+  it('reads the selected file independently of a previous video transfer', async () => {
+    const workdir = '/remote-file-handoff';
+    const video = 'clip.mp4';
+    const note = 'notes.md';
+    const copy = (revision: number) => ({ ok: true, cachePath: `/cache/clip-${revision}.mp4` });
+    const noteResult = (content: string) => ({
+      ok: true, data: { relPath: note, content, size: content.length, mtimeMs: 1, truncated: false },
+    });
+    const previousTransfer = deferred<ReturnType<typeof copy>>();
+    const firstNoteRead = deferred<ReturnType<typeof noteResult>>();
+    const readNote = vi.fn().mockReturnValueOnce(firstNoteRead.promise).mockResolvedValue(noteResult('latest note'));
+    let videoRevision = 1;
+    const fetchRemote = vi.fn(({ mtimeMs }: { mtimeMs: number }) =>
+      mtimeMs === 2 ? previousTransfer.promise : Promise.resolve(copy(mtimeMs)));
+    vi.stubGlobal('electronAPI', { fileBrowser: { fetchRemote, onTransferProgress: () => () => {}, cachePut: vi.fn() } });
+    mocks.readFile.mockImplementation(({ relPath }) => relPath === video ? { ok: false, code: 'BINARY_FILE' } : readNote());
+    mocks.fileBrowserApiFor.mockReturnValue({
+      readFile: mocks.readFile,
+      stat: async () => ({ relPath: video, type: 'file', size: 4096, mtimeMs: videoRevision }),
+    });
+    const notify = (relPath: string) => {
+      for (const cb of mocks.eventCallbacks) cb({ workdir, relPath, type: 'change' });
+    };
+    const view = renderHook(({ file }) => useFileContent(workdir, file, 'ssh'), { initialProps: { file: video } });
+    try {
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ cachePath: copy(1).cachePath }));
+      videoRevision = 2;
+      await act(async () => { notify(video); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(1).cachePath, progress: { kind: 'fetching' } });
+      await act(async () => { notify(video); });
+
+      view.rerender({ file: note });
+      expect(readNote).toHaveBeenCalledTimes(1);
+      await act(async () => { notify(note); notify(note); });
+      expect(view.result.current.content).toMatchObject({ kind: 'text', relPath: note, content: 'latest note' });
+      expect(readNote).toHaveBeenCalledTimes(2);
+      await act(async () => { firstNoteRead.resolve(noteResult('obsolete note')); });
+      expect(view.result.current.content).toMatchObject({ content: 'latest note' });
+
+      videoRevision = 3;
+      view.rerender({ file: video });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ cachePath: copy(3).cachePath }));
+      videoRevision = 4;
+      await act(async () => { notify(video); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(4).cachePath });
+      const reads = mocks.readFile.mock.calls.length;
+      await act(async () => { previousTransfer.resolve(copy(2)); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(4).cachePath });
+      expect(mocks.readFile).toHaveBeenCalledTimes(reads);
+      expect(mocks.onFileTreeEventFor).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
   });
 
   // #10882 review follow-up: superseding an initial binary/error read used to

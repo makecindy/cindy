@@ -28,6 +28,7 @@ import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
   RSB_BROWSER_BRIDGE_REPORT_CHANNEL,
+  RSB_FILE_PREVIEW_OPENER_CHANNEL,
   RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL,
   RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL,
   RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL,
@@ -99,7 +100,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     return getNativePopupOwnerWebContents?.(target.id) ?? null;
   };
 
-  ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload: unknown) => {
+  const reportGuest = (sender: WebContents, payload: unknown, previewOnly: boolean) => {
     const obj = requireObject(payload, 'report payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const tabId = requireString(obj.tabId, 'tabId');
@@ -131,7 +132,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     }
     // hostWebContents is non-standard but exposed; cast for the typing gap.
     const host = resolveOwner(target);
-    if (!host || host.id !== event.sender.id) {
+    if (!host || host.id !== sender.id) {
       throwIpcError(
         'INVALID_PARAMS',
         `webContentsId ${webContentsId} is not hosted by the sender`,
@@ -139,9 +140,12 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     }
 
     const record: RsbBrowserBridgeReportPayload = { sessionId, tabId, webContentsId };
-    registry.report(record);
+    if (previewOnly) registry.reportPreviewOpener(record, target, obj.visible === true);
+    else registry.report(record);
     return { ok: true };
-  });
+  };
+  ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload) => reportGuest(event.sender, payload, false));
+  ipcMain.handle(RSB_FILE_PREVIEW_OPENER_CHANNEL, (event, payload) => reportGuest(event.sender, payload, true));
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_RELEASE_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'release payload');
@@ -321,7 +325,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   // pickResourceEventTarget 注释;review P1:送错 renderer 时 evict 是空操作、
   // cpu-alert 无人消费,还会掩盖问题)。
   const sendResourceEvent = (event: RsbBrowserBridgeResourceEvent) => {
-    const guest = registry.getWebContentsByTabId(event.tabId);
+    const guest = registry.getWebContentsByTabId(event.tabId) ?? registry.getPreviewGuest(event.tabId);
     const owner = guest ? resolveOwner(guest) : null;
     const wc = pickResourceEventTarget(owner);
     if (!wc) return;
@@ -329,13 +333,14 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   };
 
   const watchdog = new BrowserGuestResourceWatchdog({
-    listTabs: () =>
-      registry.listAll().map((r) => ({ tabId: r.tabId, webContentsId: r.webContentsId })),
+    listTabs: () => registry.listResourceTargets(),
     isPinned: (tabId) => registry.isPinned(tabId),
     // 前台判定带归属校验:声明者必须就是 guest 当前的宿主 renderer,防止别的
     // renderer 冒领前台给目标 tab 骗豁免。guest 反查失败(注册竞态)时退回
     // 无归属版本 —— 此时该 tab 也不在 listTabs 里,不会被误处置。
     isForeground: (tabId) => {
+      const previewVisible = registry.previewVisibility(tabId);
+      if (previewVisible !== undefined) return previewVisible;
       const guest = registry.getWebContentsByTabId(tabId);
       const owner = guest ? resolveOwner(guest) : null;
       return owner
@@ -366,7 +371,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     // Pin state belongs to the renderer hosting this tab, not necessarily the
     // currently visible RSB window (the detached window may be hidden or the
     // tab may have migrated between hosts).
-    const target = registry.getWebContentsByTabId(tabId);
+    const target = registry.getWebContentsByTabId(tabId) ?? registry.getPreviewGuest(tabId);
     const wc = target ? resolveOwner(target) : null;
     if (!wc || wc.isDestroyed()) return;
     wc.send(pinned ? RSB_BROWSER_BRIDGE_PIN_CHANNEL : RSB_BROWSER_BRIDGE_UNPIN_CHANNEL, {

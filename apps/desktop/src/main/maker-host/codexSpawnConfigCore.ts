@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { prepareCodexDesktopInputRules } from './codexDesktopInputRules.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import type { ProviderView, Catalog } from '@cindy/model-providers';
 import type { createCodexProxyHost } from './codex-proxy-host.js';
@@ -64,7 +65,15 @@ export function createCodexSpawnConfig(ports: {
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           throw error;
         }
-        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
+        const appHome = getCodexHome();
+        const effectiveCodexHome = ctx.codexHome ?? appHome;
+        if (!isControlPlane && !ctx.nativeStorageOnly && !guestProviderId) {
+          try {
+            await prepareCodexDesktopInputRules(ctx.runtimeCodexHome ?? effectiveCodexHome, appHome);
+          } catch (cause) {
+            throw Object.assign(new Error('Could not prepare Codex desktop input rules', { cause }), { codexSpawnConfigFatal: true });
+          }
+        }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
