@@ -2299,6 +2299,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-headerless', '1. 验证\n2. 交付', ['验证', '交付']],
     ['thinking-separated', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-duplicate', '1. 验证\n\n1. 交付', ['1. 验证\n\n1. 交付']],
+    ['thinking-empty-heading', '1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;
@@ -2314,9 +2315,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       if (String(_name).startsWith('thinking')) {
         response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
           .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
-        if (_name === 'thinking-visible') response = response.replace('event: message_delta', sse([
+        if (_name === 'thinking-visible' || _name === 'thinking-empty-heading') response = response.replace('event: message_delta', sse([
           { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
-          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Here is the plan.' } } },
+          { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: _name === 'thinking-empty-heading' ? 'Plan:' : 'Here is the plan.' } } },
           { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
         ]) + 'event: message_delta');
       }
@@ -2347,7 +2348,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   });
 
-  it.each([false, true])('8933 preserves sparse ids and full details through execution, progress and resume (headerless thinking=%s)', { timeout: 60_000 }, async thinking => {
+  it.each([false, true, 'empty-heading'])('8933 preserves sparse ids and full details through execution, progress and resume (headerless thinking=%s)', { timeout: 60_000 }, async thinking => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-ids-'));
     let handle: AgentSessionHandle | undefined;
     const plan = (thinking ? '' : 'Plan:\n') + '2. **实现**\n\nImplementation details.\n5. **验证**\n9. **交付**\n\nKeep this full acceptance detail exactly.';
@@ -2364,6 +2365,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       let response = anthropicStreamBody(plan);
       if (thinking) response = response.replace('"type":"text","text":""', '"type":"thinking","thinking":""')
         .replace('"type":"text_delta","text":', '"type":"thinking_delta","thinking":');
+      if (thinking === 'empty-heading') response = response.replace('event: message_delta', sse([
+        { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
+        { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '计划：' } } },
+        { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
+      ]) + 'event: message_delta');
       scriptedResponses.push(response, anthropicStreamBody('Verified. [DONE:5]'));
       const before = seenRequests.length;
       await handle.send({ type: 'user', content: 'Prepare the plan.' });

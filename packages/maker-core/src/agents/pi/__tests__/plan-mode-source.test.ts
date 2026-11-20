@@ -26,6 +26,14 @@ describe('Pi plan title extraction', () => {
       .toBe('1. 验证\n2. 交付');
   });
 
+  it.each(['Plan:', '## **计划：**', 'Plan:\n```\n1. Example\n```', 'Plan:\n\n计划：'])('ignores a visible heading without a plan body: %s', visible => {
+    for (const plan of ['Plan:\n1. 验证\n2. 交付', '1. 验证\n\nDetails...\n2. 交付']) {
+      const selected = selectPlan([{ type: 'thinking', thinking: plan }, { type: 'text', text: visible }]);
+      expect(selected.trim()).toBe(plan);
+      expect(extract(selected).map(todo => todo.text)).toEqual(['验证', '交付']);
+    }
+  });
+
   it.each([
     '1. 验证\n\nDetails...\n2. 交付',
     '3. 验证\n   1. 子项\n\n说明\n7. 交付',

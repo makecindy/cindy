@@ -30,9 +30,22 @@ function selectPlanText(content) {
   // A visible plan is authoritative. Native Pi also accepts plans in thinking
   // blocks; preserve that ability without exposing unrelated reasoning before
   // the last actual plan section or a fenced example.
-  if (planLines(visible).some(line => isPlanHeader(line.text)) || extractTodoItems(visible).length) return visible;
-  const native = content.map(block => block.type === 'text' ? block.text
-    : block.type === 'thinking' ? block.thinking ?? '' : '').join('\n');
+  const visibleLines = planLines(visible);
+  const visibleHeader = visibleLines.findLastIndex(line => isPlanHeader(line.text));
+  const hasVisibleBody = visibleLines.slice(visibleHeader + 1).some(line => line.text.trim());
+  if ((visibleHeader >= 0 && hasVisibleBody) || extractTodoItems(visible).length) return visible;
+  // A dangling visible heading is not a plan. Do not let it become the last
+  // header of the combined response and hide the actual thinking steps.
+  let nativeVisible = visible;
+  let linesWithoutEmptyHeaders = visibleLines;
+  while (true) {
+    const header = linesWithoutEmptyHeaders.findLastIndex(line => isPlanHeader(line.text));
+    if (header < 0 || linesWithoutEmptyHeaders.slice(header + 1).some(line => line.text.trim())) break;
+    nativeVisible = nativeVisible.slice(0, linesWithoutEmptyHeaders[header].start);
+    linesWithoutEmptyHeaders = planLines(nativeVisible);
+  }
+  const native = content.filter(block => block.type === 'thinking')
+    .map(block => block.thinking ?? '').concat(nativeVisible ? [nativeVisible] : []).join('\n');
   const header = planLines(native).findLast(line => isPlanHeader(line.text));
   if (header) return native.slice(header.start);
   // Some native providers emit a numbered plan in thinking without a
