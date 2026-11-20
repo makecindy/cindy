@@ -165,6 +165,7 @@ function authAware(error: unknown, init: AcpInitializeResult): unknown {
 class AcpRouter {
   private target: AcpSession | null = null;
   private buffered: AcpRecord[] = [];
+  private replayCutoff = 0;
 
   notification(method: string, params: AcpRecord): void {
     if (this.target) {
@@ -180,13 +181,22 @@ class AcpRouter {
     throw methodNotFound(method);
   }
 
+  /** Marks where the session-open response arrived on the wire; later buffered updates are newer than it. */
+  markSessionOpened(): void {
+    this.replayCutoff = this.buffered.length;
+  }
+
   attach(session: AcpSession, dropConfigUpdates: boolean): void {
     this.target = session;
     const buffered = this.buffered;
+    const cutoff = this.replayCutoff;
     this.buffered = [];
-    for (const params of buffered) {
-      // The handshake response carries the newest configuration; earlier updates are stale.
-      if (dropConfigUpdates && asRecord(params.update).sessionUpdate === 'config_option_update') continue;
+    this.replayCutoff = 0;
+    for (let i = 0; i < buffered.length; i += 1) {
+      const params = buffered[i]!;
+      // The handshake response carries the newest configuration up to cutoff; only earlier updates are stale replay.
+      const kind = asRecord(params.update).sessionUpdate;
+      if (dropConfigUpdates && i < cutoff && (kind === 'config_option_update' || kind === 'current_mode_update')) continue;
       session.handleNotification('session/update', params);
     }
   }
@@ -215,13 +225,18 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
+    const onSessionOpened = (): void => router.markSessionOpened();
     if (opts.resumeSessionId) {
       const method = init.agentCapabilities.sessionCapabilities.resume
         ? 'session/resume'
         : init.agentCapabilities.loadSession ? 'session/load' : null;
       if (!method) throw new AcpResumeUnavailableError(opts.resumeSessionId, 'unsupported');
       try {
-        result = await connection.request(method, { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          method,
+          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         const mapped = authAware(error, init);
         if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
@@ -231,7 +246,11 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = method === 'session/resume' ? 'resumed' : 'loaded';
     } else {
       try {
-        result = await connection.request('session/new', { cwd: opts.cwd, mcpServers: accepted });
+        result = await connection.request(
+          'session/new',
+          { cwd: opts.cwd, mcpServers: accepted },
+          { onResult: onSessionOpened },
+        );
       } catch (error) {
         throw authAware(error, init);
       }
@@ -529,6 +548,11 @@ export class AcpSession {
         if (title) this.title = title;
         return;
       }
+      case 'current_mode_update': {
+        const modeId = asNonEmptyString(update.currentModeId);
+        if (modeId) this.applyCurrentModeUpdate(modeId);
+        return;
+      }
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
@@ -665,19 +689,33 @@ export class AcpSession {
   }
 
   private async setConfigValue(configId: string, value: string): Promise<void> {
-    const result = await this.connection.request('session/set_config_option', { sessionId: this.id, configId, value });
-    if (Array.isArray(result.configOptions)) {
-      this.replaceConfigOptions(result.configOptions);
-      return;
-    }
-    // Agents that omit the response state still applied the change.
-    this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
-    this.refreshCapabilities();
+    await this.connection.request(
+      'session/set_config_option',
+      { sessionId: this.id, configId, value },
+      {
+        onResult: (result) => {
+          if (Array.isArray(result.configOptions)) {
+            this.replaceConfigOptions(result.configOptions);
+            return;
+          }
+          // Agents that omit the response state still applied the change.
+          this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
+          this.refreshCapabilities();
+        },
+      },
+    );
   }
 
   private replaceConfigOptions(raw: unknown[]): void {
     this.configOptions = normalizeConfigOptions(raw);
     this.refreshCapabilities();
+  }
+
+  private applyCurrentModeUpdate(modeId: string): void {
+    const option = findModeOption(this.configOptions);
+    if (!option || option.currentValue === modeId) return;
+    if (!option.options.some((entry) => entry.value === modeId)) return;
+    this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
   }
 
   private refreshCapabilities(): void {

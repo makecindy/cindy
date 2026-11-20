@@ -615,6 +615,118 @@ describe('AcpSession agent modes', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
     expect(seen).toHaveLength(1);
   });
+
+  // Rule: agent-initiated current_mode_update updates the tracked mode (ignoring unknown mode IDs) so switching back still sends set_config_option.
+  // Minimal failing input: session opens in 'default', agent sends current_mode_update('plan'), user switches back to 'default'.
+  it('syncs tracked mode on current_mode_update so switching back is not skipped', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'unknown-mode' });
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual([]);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' });
+    await session.setPermissionMode('plan');
+    expect(modeChanges(agent)).toEqual([]);
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual(['default']);
+  });
+
+  // Rule: on session/load, pre-response current_mode_update is stale replay (dropped), while a post-response
+  // current_mode_update arriving in the same stdout chunk is newer than configOptions and must be preserved.
+  // Minimal failing input: one chunk carrying [replay('plan'), loadResponse('default'), live('accept-edits')] (and [replay('plan'), loadResponse('default')]).
+  it('drops pre-response current_mode_update replay on session/load while keeping post-response updates in the same chunk', async () => {
+    const runChunkedLoad = async (afterResponse?: string) => {
+      const lineListeners = new Set<(line: string) => void>();
+      const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+      const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+      const sent: AcpRecord[] = [];
+      const transport: AcpLineTransport = {
+        write(line) {
+          const msg = JSON.parse(line) as AcpRecord;
+          sent.push(msg);
+          queueMicrotask(() => {
+            if (msg.method === 'initialize') {
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } }) + '\n');
+            } else if (msg.method === 'session/load') {
+              const frames: AcpRecord[] = [
+                { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } } },
+                { jsonrpc: '2.0', id: msg.id, result: { configOptions } },
+              ];
+              if (afterResponse) {
+                frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: afterResponse } } });
+              }
+              decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+            } else if (msg.method === 'session/set_config_option') {
+              const value = (msg.params as AcpRecord).value;
+              const updated = [{ ...configOptions[0], currentValue: value }];
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }) + '\n');
+            }
+          });
+        },
+        onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+        onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+        async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+      };
+      const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' }, resumeSessionId: 'old-1' });
+      const changes = () => sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value);
+      return { session, changes };
+    };
+
+    // Guard for the pre-response replay-drop branch: stale 'plan' before response must not beat 'default'.
+    const replayOnly = await runChunkedLoad();
+    await replayOnly.session.setPermissionMode('default');
+    expect(replayOnly.changes()).toEqual([]);
+    await replayOnly.session.setPermissionMode('plan');
+    expect(replayOnly.changes()).toEqual(['plan']);
+
+    // Post-response update in the same chunk must win over the load response's 'default'.
+    const withPost = await runChunkedLoad('accept-edits');
+    await withPost.session.setPermissionMode('acceptEdits');
+    expect(withPost.changes()).toEqual([]);
+    await withPost.session.setPermissionMode('default');
+    expect(withPost.changes()).toEqual(['default']);
+  });
+
+  // Rule: a session/set_config_option response must be applied in wire order so a subsequent current_mode_update
+  // arriving in the same stdout chunk is not overwritten when the await resumes.
+  // Minimal failing input: one chunk carrying [setConfigResponse('plan'), current_mode_update('default')], then user requests 'plan' again.
+  it('applies set_config_option responses in wire order before same-chunk mode notifications', async () => {
+    const lineListeners = new Set<(line: string) => void>();
+    const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+    const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+    const sent: AcpRecord[] = [];
+    let firstSet = true;
+    const transport: AcpLineTransport = {
+      write(line) {
+        const msg = JSON.parse(line) as AcpRecord;
+        sent.push(msg);
+        queueMicrotask(() => {
+          if (msg.method === 'initialize') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }) + '\n');
+          } else if (msg.method === 'session/new') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'sess-1', configOptions } }) + '\n');
+          } else if (msg.method === 'session/set_config_option') {
+            const value = (msg.params as AcpRecord).value;
+            const updated = [{ ...configOptions[0], currentValue: value }];
+            const frames: AcpRecord[] = [{ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }];
+            if (firstSet) {
+              firstSet = false;
+              frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' } } });
+            }
+            decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+          }
+        });
+      },
+      onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+      onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+      async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+    };
+    const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' } });
+    await session.setPermissionMode('plan');
+    // Same-chunk current_mode_update moved the agent back to 'default'; requesting 'plan' again must send a new RPC.
+    await session.setPermissionMode('plan');
+    expect(sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value)).toEqual(['plan', 'plan']);
+  });
 });
 
 const silentLogger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => silentLogger };
