@@ -92,6 +92,36 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.status).not.toHaveBeenCalled();
   });
 
+  // Unit: the real mounted remote panel must distinguish a missing role from an
+  // explicit end. A promotion push can arrive before the initial metadata read.
+  it('opens the same remote conversation after collaboration ends and restores reveal when it restarts', async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.invoke.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />);
+    const push = (patch: Record<string, unknown>) => mocks.subscribe.mock.calls[0][0]({
+      deviceId: 'host', channel: 'local-db:sessions:patched', payload: { sessionId: 'child', patch },
+    });
+    const openName = 'chat.sideChat.openConversation';
+    const viewName = 'chat.sideChat.viewCollaboration';
+    await act(async () => push({ sideChatPromoted: true }));
+    expect(screen.queryByRole('button', { name: openName })).toBeNull();
+    await act(async () => resolve({ id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true, orcaRole: 'lead' }));
+    expect(screen.getByRole('button', { name: viewName })).toBeTruthy();
+
+    await act(async () => push({ orcaRole: null }));
+    expect(screen.queryByRole('button', { name: viewName })).toBeNull();
+    expect(screen.getByText('chat.sideChat.openFromTaskList')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: openName }));
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/cc-agent/child?device=host');
+
+    await act(async () => push({ orcaRole: 'lead' }));
+    expect(screen.queryByText('chat.sideChat.openFromTaskList')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: viewName }));
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/cc-agent/child?device=host', {
+      state: { orcaWorkersReveal: { leadSessionId: 'child' } },
+    });
+  });
+
   it('opens the editor after retrying a failed metadata read', async () => {
     mocks.invoke.mockRejectedValueOnce(new Error('offline'));
     await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });

@@ -16213,6 +16213,8 @@
       "title": "Conversa paralela",
       "context": "Continue a conversa aqui enquanto a tarefa principal decorre.",
       "viewCollaboration": "Ver colaboração",
+      "openConversation": "Abrir conversa",
+      "openFromTaskList": "Também disponível na lista de tarefas à esquerda.",
       "returnToSideChat": "Voltar à pergunta lateral",
       "opening": "A abrir…",
       "notReady": "Aguarde até a tarefa principal concluir a primeira resposta.",

@@ -16026,6 +16026,8 @@
       "title": "侧边追问",
       "context": "在这里接着问，主任务会继续运行。",
       "viewCollaboration": "查看协同",
+      "openConversation": "打开对话",
+      "openFromTaskList": "也可从左侧任务列表打开。",
       "returnToSideChat": "回到侧边追问",
       "opening": "正在打开…",
       "notReady": "请先等待主任务完成一次回答。",

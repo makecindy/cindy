@@ -16213,6 +16213,8 @@
       "title": "Chat secundario",
       "context": "Haz tu consulta aquí mientras continúa la tarea principal.",
       "viewCollaboration": "Ver colaboración",
+      "openConversation": "Abrir conversación",
+      "openFromTaskList": "También en la lista de tareas de la izquierda.",
       "returnToSideChat": "Volver a la consulta lateral",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",

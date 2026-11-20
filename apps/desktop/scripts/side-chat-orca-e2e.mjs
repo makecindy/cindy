@@ -239,6 +239,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   assert.equal(side.source, 'side-chat');
   assert.ok(side.sdkId, 'The native fork was not created');
   assert.equal(await evaluate(() => location.hash), `#/cc-agent/${parentId}`);
+  assert.doesNotMatch(await ui.snapshot(), /button "(打开对话|Open conversation)"/);
 
   const onRoute = id => evaluate(sessionId => location.hash.split('?')[0] === '#/cc-agent/' + sessionId, id);
   const rowSelector = id => `[data-sidebar-session-row][data-session-id="${id}"]`;
@@ -265,17 +266,23 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
     return { sdkId: row.sdkSessionId, agentKind: row.agentKind };
   }, side.id);
 
-  await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
-  await clickControl('turn on collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
-  await until('dialog uses the loopback model and automatic approval', async () => {
-    const snapshot = await ui.snapshot();
-    return snapshot.includes(`当前：${model}`) || snapshot.includes(`Current: ${model}`)
-      ? /自动审批|Auto/.test(snapshot) : false;
-  });
-  const taskField = await until('worker initial task input', async () =>
-    /textbox "(?:初始任务|Initial task)"[^\n]*\bref=(e\d+)\]/i.exec(await ui.snapshot())?.[1]);
-  await cli('fill', `@${taskField}`, workerRequest);
-  await clickControl('start collaboration', /button "(开启协同|Start Collaboration|Start collab)"/i);
+  const toggleCollaboration = async () => {
+    await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
+    await clickControl('toggle collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
+  };
+  const startCollaboration = async () => {
+    await toggleCollaboration();
+    await until('dialog uses the loopback model and automatic approval', async () => {
+      const snapshot = await ui.snapshot();
+      return (snapshot.includes(`当前：${model}`) || snapshot.includes(`Current: ${model}`))
+        && /自动审批|Auto/.test(snapshot);
+    });
+    const taskField = await until('worker initial task input', async () =>
+      /textbox "(?:初始任务|Initial task)"[^\n]*\bref=(e\d+)\]/i.exec(await ui.snapshot())?.[1]);
+    await cli('fill', `@${taskField}`, workerRequest);
+    await clickControl('start collaboration', /button "(开启协同|Start Collaboration|Start collab)"/i);
+  };
+  await startCollaboration();
   await until('linked task row and view control appear while still on the parent', async () =>
     await readActiveSideChat() === side.tabId
     && await evaluate(selector => Boolean(document.querySelector(selector)), rowSelector(side.id))
@@ -340,7 +347,41 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   await until('reopened editor still has the same draft', () => evaluate((tabId, draft) =>
     document.querySelector(`[data-tab-pill="${tabId}"]`)?.closest('aside')
       ?.querySelector('.tiptap[contenteditable="true"]')?.textContent.includes(draft), reopenedTab, sidebarDraft));
-  return { parentId, sideChatId: side.id, worker, stayedOnParent: true, sharedDraft: true, sidebarRevealedAgain: true, reopenedTab };
+
+  // E2E: use the existing composer action/confirmation. A linked task should
+  // retain an ordinary entry after the active team ends, with the same route.
+  await toggleCollaboration();
+  await clickControl('confirm ending collaboration', /button "(结束协同|Stop collaboration)"/i);
+  await until('the same linked task remains listed after collaboration ends', async () =>
+    await readActiveSideChat() === reopenedTab && await evaluate(async (id, selector) => {
+      const task = await window.electronAPI.localDb.sessions.get(id);
+      return task.sideChatPromoted === true && task.orcaRole === null && task.status === 'active'
+        && Boolean(document.querySelector(selector));
+    }, side.id, rowSelector(side.id)));
+  await until('ordinary conversation action and left task list hint', async () => {
+    // The unfiltered snapshot includes the visible hint as ordinary text.
+    const snapshot = await cli('snapshot');
+    return /button "(打开对话|Open conversation)"/.test(snapshot)
+      && /也可从左侧任务列表打开|Also available in the task list on the left/.test(snapshot)
+      && !/button "(查看协同|View collaboration)"/.test(snapshot);
+  });
+  await captureAppearance(ui, evidenceDir, 'ended-side-chat');
+  await clickControl('open the ordinary conversation', /button "(打开对话|Open conversation)"/);
+  await until('ended conversation opens as the same task without a reveal intent', () => evaluate(id =>
+    location.hash.split('?')[0] === '#/cc-agent/' + id && !history.state?.usr?.orcaWorkersReveal, side.id));
+  await returnToSideChat();
+  await until('return from the ordinary conversation preserves the side chat', async () => await readActiveSideChat() === reopenedTab);
+  await startCollaboration();
+  await openCollaboration();
+  const restartedWorker = await until('re-enabled collaboration reveals a new worker for the same task', async () => {
+    const current = await readCollaboration();
+    return current && current.id !== worker.id ? current : null;
+  }, 40_000);
+  assert.equal(restartedWorker.provider, providerId);
+  await returnToSideChat();
+  await until('final preview remains on the re-enabled follow-up', async () => await readActiveSideChat() === reopenedTab);
+  return { parentId, sideChatId: side.id, worker, restartedWorker, stayedOnParent: true, sharedDraft: true,
+    sidebarRevealedAgain: true, reopenedTab, openedAfterEnding: true };
 }
 
 const evidenceDir = await mkdtemp(path.join(tmpdir(), 'cindy-sidechat-orca-e2e-'));

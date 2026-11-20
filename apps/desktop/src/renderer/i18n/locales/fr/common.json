@@ -16213,6 +16213,8 @@
       "title": "Conversation annexe",
       "context": "Posez votre question ici pendant que la tâche principale se poursuit.",
       "viewCollaboration": "Voir la collaboration",
+      "openConversation": "Ouvrir la conversation",
+      "openFromTaskList": "Aussi accessible dans la liste des tâches à gauche.",
       "returnToSideChat": "Revenir à la question latérale",
       "opening": "Ouverture…",
       "notReady": "Attendez que la tâche principale ait terminé sa première réponse.",

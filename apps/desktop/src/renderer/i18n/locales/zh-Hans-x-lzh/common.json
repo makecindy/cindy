@@ -16018,6 +16018,8 @@
       "title": "旁问",
       "context": "于此续问，主事照行。",
       "viewCollaboration": "观协同",
+      "openConversation": "启此对话",
+      "openFromTaskList": "亦可自左栏任务表开启。",
       "returnToSideChat": "返回侧栏追问",
       "opening": "方启…",
       "notReady": "主差事尚未答一回，且稍安勿躁。",

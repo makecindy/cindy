@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { UsersRound } from 'lucide-react';
+import { MessagesSquare, UsersRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -55,7 +55,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   const linkedChildRef = useRef<string | null>(null);
   const readChildRef = useRef<string | null>(null);
   const [linkedChild, setLinkedChild] = useState<string | null>(null);
-  const [collaborationChild, setCollaborationChild] = useState<string | null>(null);
+  const [collaboration, setCollaboration] = useState<{ childId: string; role: Session['orcaRole'] } | null>(null);
   const [remoteSession, setRemoteSession] = useState<Session | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -94,13 +94,13 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
         linkedChildRef.current = childId;
         setLinkedChild(childId);
       }
-      if (snapshot.orcaRole !== undefined) setCollaborationChild(snapshot.orcaRole === 'lead' ? childId : null);
+      if (snapshot.orcaRole !== undefined) setCollaboration({ childId, role: snapshot.orcaRole });
     };
     const applyPatch = (payload: { sessionId?: string; patch?: Partial<Session> } | null) => {
       if (!valid() || unavailable || payload?.sessionId !== childId || !payload.patch) return;
       bufferedPatch = { ...bufferedPatch, ...payload.patch };
       if (payload.patch.status === 'deleted') { dismiss(); return; }
-      updateCollaboration(bufferedPatch);
+      updateCollaboration(payload.patch);
       if (deviceId) {
         setRemoteSession(previous => previous?.id === childId
           ? { ...previous, ...payload.patch, id: childId, deviceLinkDeviceId: deviceId }
@@ -178,15 +178,24 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   }, [childId, confirm, ctx.sessionId, readChild, state.deviceId, t]);
   useEffect(() => ctx.setCloseInterceptor(close), [ctx, close]);
   if (unavailableChild && unavailableChild === childId) return null;
+  const role = collaboration?.childId === childId ? collaboration?.role : undefined;
+  const collaborationActive = role === 'lead';
+  const collaborationEnded = childId !== null && linkedChild === childId && role === null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
       <div className="mx-4 flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-3">
-        <p className="text-13 leading-5 text-[var(--text-primary)]">{t('chat.sideChat.context')}</p>
-        {childId && linkedChild === childId && collaborationChild === childId && <Button size="sm" variant="secondary" tone="quiet" className="shrink-0"
-          onClick={() => navigate(sideChatTaskRoute(childId, state.deviceId), {
-            state: { orcaWorkersReveal: { leadSessionId: childId } },
-          })}>
-          <UsersRound aria-hidden="true" size={14} />{t('chat.sideChat.viewCollaboration')}
+        <p className="text-13 leading-5 text-[var(--text-primary)]">
+          {t(collaborationEnded ? 'chat.sideChat.openFromTaskList' : 'chat.sideChat.context')}
+        </p>
+        {childId && linkedChild === childId && (collaborationActive || collaborationEnded) && <Button size="sm" variant="secondary" tone="quiet" className="shrink-0"
+          onClick={() => {
+            const route = sideChatTaskRoute(childId, state.deviceId);
+            if (collaborationActive) navigate(route, { state: { orcaWorkersReveal: { leadSessionId: childId } } });
+            else navigate(route);
+          }}>
+          {collaborationActive
+            ? <><UsersRound aria-hidden="true" size={14} />{t('chat.sideChat.viewCollaboration')}</>
+            : <><MessagesSquare aria-hidden="true" size={14} />{t('chat.sideChat.openConversation')}</>}
         </Button>}
       </div>
       <div className="min-h-0 flex-1">

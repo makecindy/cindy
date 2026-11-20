@@ -16100,6 +16100,8 @@
       "title": "Side chat",
       "context": "Ask a follow-up here while the main task continues.",
       "viewCollaboration": "View collaboration",
+      "openConversation": "Open conversation",
+      "openFromTaskList": "Also available in the task list on the left.",
       "returnToSideChat": "Back to side chat",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",

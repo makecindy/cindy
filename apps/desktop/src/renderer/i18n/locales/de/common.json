@@ -16063,6 +16063,8 @@
       "title": "Nebenchat",
       "context": "Hier können Sie nachfragen, während die Hauptaufgabe weiterläuft.",
       "viewCollaboration": "Zusammenarbeit anzeigen",
+      "openConversation": "Unterhaltung öffnen",
+      "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",
       "returnToSideChat": "Zurück zur Rückfrage",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
