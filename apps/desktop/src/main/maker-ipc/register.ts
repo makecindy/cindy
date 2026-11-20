@@ -15733,45 +15733,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     for (const w of workers) {
       orcaWorkerResumeScheduler.cancel(w.sessionId);
     }
-    for (const w of activeWorkers) {
-      await assertCurrent?.();
-      orcaTeamService.clearAutoBridgeState(w.sessionId);
-      await assertCurrent?.();
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
+    const stopWorkers = async () => {
+      for (const w of activeWorkers) {
+        await assertCurrent?.();
+        orcaTeamService.clearAutoBridgeState(w.sessionId);
+        await assertCurrent?.();
+        const sess = maker.getSession(w.sessionId);
+        if (sess) {
+          try {
+            if (sess.isTurnRunning?.()) {
+              await sess.abort();
+            }
+          } catch (err) {
+            log.warn('disableOrca: abort failed (continuing to close)', {
+              sessionId: w.sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
           }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
+          await assertCurrent?.();
+          try {
+            await maker.closeSession(w.sessionId);
+          } catch (err) {
+            if (requireWorkerClosed) throw err;
+            log.warn('disableOrca: closeSession failed', {
+              sessionId: w.sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         await assertCurrent?.();
-        try {
-          await maker.closeSession(w.sessionId);
-        } catch (err) {
-          if (requireWorkerClosed) throw err;
-          log.warn('disableOrca: closeSession failed', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
+        cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
+        forgetKnownOrcaWorkerSession(w.sessionId);
       }
+    };
+    const endTeam = async () => {
       await assertCurrent?.();
-      cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
-      forgetKnownOrcaWorkerSession(w.sessionId);
+      await markTeamEnded(team.id, 'completed');
+      await assertCurrent?.();
+      await markWorkersStatusByTeam(team.id, 'done');
+      await assertCurrent?.();
+    };
+    if (!requireWorkerClosed) {
+      await stopWorkers();
+      await endTeam();
     }
-
-    await assertCurrent?.();
-    await markTeamEnded(team.id, 'completed');
-    await assertCurrent?.();
-    await markWorkersStatusByTeam(team.id, 'done');
-    await assertCurrent?.();
     const workerRecycleScope = captureSessionRecycleScope();
-    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent);
+    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, requireWorkerClosed ? async () => {
+      // Drain deliveries that passed admission before the durable archive.
+      // The Worker locks stay held from closing their handles through the DB write.
+      await stopWorkers();
+      await endTeam();
+    } : assertCurrent);
     // 远端 Worker：停止那台的当前一轮并通知结束协同(任务与文件保留)；不可达的留待重连后补发。
     void orcaRemoteWorkers.releaseEnded(archivedWorkerSessionIds);
     await Promise.all(
@@ -15798,9 +15810,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   setSideChatArchiveCleanup(async (sessionId, assertCurrent) => {
-    await disableOrcaInternal(sessionId, assertCurrent, true);
-    await assertCurrent();
     await maker.closeSession(sessionId);
+    await assertCurrent();
+    await disableOrcaInternal(sessionId, assertCurrent, true);
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId: sessionId });
   });
 
@@ -16307,6 +16319,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .select({
           status: sessions.status,
           clearedAt: sessions.clearedAt,
+          source: sessions.source,
+          sideChatPromoted: sessions.sideChatPromoted,
           permissionMode: sessions.permissionMode,
           planModeEnabled: sessions.planModeEnabled,
         })

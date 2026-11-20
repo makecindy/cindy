@@ -1217,7 +1217,7 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source, side_chat_promoted AS sideChatPromoted, orca_role AS orcaRole FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
     'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
@@ -1236,6 +1236,10 @@ function sessionsSetStatus(readyDb, args) {
         throw Object.assign(new Error('已删除的任务不能恢复或归档: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
+      }
+      if (status === 'active' && existing.status === 'archived' && existing.source === 'side-chat'
+        && existing.sideChatPromoted && existing.orcaRole === 'lead') {
+        throw Object.assign(new Error('Finish closing the follow-up before restoring it'), { code: 'PRECONDITION_FAILED' });
       }
       // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
       if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {

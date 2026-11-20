@@ -88,7 +88,7 @@ export function LinkedSideChatOrigin({ childId, parentId, deviceId, parentAccess
     : t(parentUnavailable ? 'chat.sideChat.originUnavailable' : 'chat.sideChat.origin');
   return (
     <div className="mx-4 flex min-w-0 shrink-0 items-center justify-between gap-2 border-b border-[var(--border-default)] py-2" data-testid="linked-side-chat-origin">
-      <p className="min-w-0 truncate text-13 leading-5 text-[var(--text-primary)]" title={description}>{description}</p>
+      <p className="min-w-0 truncate text-13 leading-[1.54] text-[var(--text-primary)]" title={description}>{description}</p>
       {!archived && parentId && accessibleParent && tabOpen !== null && (
         <Button variant="secondary" tone="quiet" size="sm" className="shrink-0" disabled={opening} onClick={() => {
           setOpening(true);

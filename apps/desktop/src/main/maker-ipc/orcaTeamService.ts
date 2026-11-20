@@ -343,6 +343,8 @@ export interface OrcaDeliveryPermissionBaseline {
 
 export interface OrcaDeliverySessionRowSnapshot {
   status: string;
+  source?: string;
+  sideChatPromoted?: boolean;
   clearedAt: number | null;
   permissionMode: string;
   planModeEnabled: boolean;
@@ -394,9 +396,10 @@ export function evaluateOrcaDeliveryScope(input: {
   live: OrcaDeliveryLiveSnapshot | null;
 }): OrcaDeliveryVerdict {
   const { row, live } = input;
-  // Archived is reversible sidebar storage (it does not end the team), so only deletion and a
-  // new clear boundary revoke a queued dispatch. Pinned by the unit case for `archived`.
-  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
+  // Ordinary archives keep the team. A linked follow-up's archive fences
+  // delivery as soon as the host commits it, including during Worker shutdown.
+  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture
+    || (row.status === 'archived' && row.source === 'side-chat' && row.sideChatPromoted)) return 'task-gone';
   if (live) {
     const permission = live.stablePermissionModeState;
     const plan = live.stablePlanModeState;

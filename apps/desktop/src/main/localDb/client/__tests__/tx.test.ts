@@ -2011,6 +2011,12 @@ describe('db worker tx handlers', () => {
       });
       await createWorker('worker-wins');
       await expect(closeSideChat('worker-wins')).rejects.toThrow('collaboration is being linked');
+      await client.exec("UPDATE sessions SET status = 'archived', side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'worker-wins'");
+      await expect(client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' }))
+        .rejects.toThrow('Finish closing the follow-up');
+      await client.exec("UPDATE sessions SET orca_role = NULL WHERE id = 'worker-wins'");
+      await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
+      await client.exec("UPDATE sessions SET side_chat_promoted = 0 WHERE id = 'worker-wins'");
       await closeSideChat('delete-wins');
       await expect(createWorker('delete-wins')).rejects.toThrow('no longer active');
       await client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'deleted' });

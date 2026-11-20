@@ -451,19 +451,26 @@ afterEach(async () => {
 it('scopes linked archive to the raw source and parent, and retries cleanup on the persisted archive', async () => {
   h.sqlite!.exec(`
     UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
-      side_chat_promoted = 1 WHERE id = 'codex-local';
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
   `);
   const cleanup = vi.fn(async () => {
     const row = h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'codex-local'").get();
     expect(row).toEqual({ status: 'archived' });
+    h.sqlite!.exec("UPDATE sessions SET orca_role = NULL WHERE id = 'codex-local'");
   }).mockRejectedValueOnce(new Error('shutdown interrupted'));
   setSideChatArchiveCleanup(cleanup);
   const patch = (archiveSideChatParentId: string) => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId });
   await expect(patch('wrong-parent')).rejects.toThrow('no longer matches');
   expect(cleanup).not.toHaveBeenCalled();
   await expect(patch('cc-local')).rejects.toThrow('shutdown interrupted');
+  expect(h.tapWindowBroadcast).not.toHaveBeenCalledWith('local-db:sessions:patched',
+    expect.objectContaining({ sessionId: 'codex-local', patch: expect.objectContaining({ status: 'archived' }) }));
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).rejects.toThrow('Finish closing the follow-up');
   await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', parentSessionId: 'cc-local' });
+  expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched',
+    expect.objectContaining({ sessionId: 'codex-local', patch: expect.objectContaining({ status: 'archived', orcaRole: null }) }));
   expect(cleanup).toHaveBeenCalledTimes(2);
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active' });
   expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'cc-local'").get()).toEqual({ status: 'active' });
 });
 

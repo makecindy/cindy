@@ -123,6 +123,10 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0156_promote_orca_side_chat.sql') {
+    ensureColumnSync(db, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0138_talented_blacklash.sql') {
     ensureColumnSync(db, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     ensureColumnSync(db, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
@@ -240,6 +244,10 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0156_promote_orca_side_chat.sql') {
+    await ensureColumn(target, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0138_talented_blacklash.sql') {
     await ensureColumn(target, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     await ensureColumn(target, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');

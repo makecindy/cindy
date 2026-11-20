@@ -129,7 +129,9 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       if (value.id !== childId || value.parentSessionId !== ctx.sessionId) {
         throw new Error('Side chat owner mismatch');
       }
-      if (value.status === 'deleted' || (value.status === 'archived' && value.sideChatPromoted)) {
+      // An archived linked Lead may still be stopping its team. Keep the
+      // original tab available for an explicit retry, including after reload.
+      if (value.status === 'deleted' || (value.status === 'archived' && value.sideChatPromoted && value.orcaRole !== 'lead')) {
         dismiss(value.status); return;
       }
       if (value.source !== 'side-chat' && !value.sideChatPromoted) throw new Error('Side chat owner mismatch');
@@ -161,8 +163,9 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       });
       const canCommit = () => current() && retiredChildRef.current !== childId;
       const warnsAboutWorkers = snapshot.orcaRole !== null;
-      if (!await confirmArchive(warnsAboutWorkers) || !canCommit()) return false;
-      if (!warnsAboutWorkers) {
+      const needsConfirmation = snapshot.status !== 'archived' || warnsAboutWorkers;
+      if (needsConfirmation && (!await confirmArchive(warnsAboutWorkers) || !canCommit())) return false;
+      if (snapshot.status !== 'archived' && !warnsAboutWorkers) {
         const latest = await readChild(childId);
         if (!canCommit() || !matches(latest) || latest.status !== 'active') return false;
         if (latest.orcaRole !== null && (!await confirmArchive(true) || !canCommit())) return false;
@@ -181,7 +184,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       try {
         const latest = await readChild(childId);
         if (!current() || !matches(latest)) return false;
-        if (latest.status === 'deleted' || (latest.status === 'archived' && latest.sideChatPromoted)) return true;
+        if (latest.status === 'deleted') return true;
         if (latest.sideChatPromoted) return await archive(latest);
         try {
           await setStatus(childId, 'deleted', state.deviceId ? { kind: 'device-link', deviceId: state.deviceId } : { kind: 'local' },

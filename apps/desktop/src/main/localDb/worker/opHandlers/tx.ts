@@ -2168,7 +2168,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     throw invalidArgs(`invalid status: ${status}`);
   }
   const selectSession = db.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source, side_chat_promoted AS sideChatPromoted, orca_role AS orcaRole FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
     'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
@@ -2197,6 +2197,11 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         throw Object.assign(new Error(`已删除的任务不能恢复或归档: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',
         });
+      }
+      const restoreState = existing as { status?: string; source?: string; sideChatPromoted?: number; orcaRole?: string };
+      if (status === 'active' && restoreState.status === 'archived' && restoreState.source === 'side-chat'
+        && restoreState.sideChatPromoted && restoreState.orcaRole === 'lead') {
+        throw Object.assign(new Error('Finish closing the follow-up before restoring it'), { code: 'PRECONDITION_FAILED' });
       }
       // 例行/渠道专线与普通任务一起出现在任务列表，生命周期与普通任务一致（同 setTerminalStatus）；
       // 伙伴主对话等其余 bot 会话仍必须走 Bot 生命周期。

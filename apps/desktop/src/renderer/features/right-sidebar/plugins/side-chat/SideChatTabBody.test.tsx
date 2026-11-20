@@ -154,6 +154,21 @@ describe('side chat panel lifecycle', () => {
     expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'local-db:sessions:patch-meta')).toBe(false);
   });
 
+  it('retries the scoped archive when reload sees a persisted archive with a still-active Lead', async () => {
+    const snapshot = {
+      id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true,
+      orcaRole: 'lead', status: 'archived',
+    };
+    mocks.invoke.mockImplementation(async (_device, channel) => channel === 'local-db:sessions:get' ? snapshot : undefined);
+    mocks.confirm.mockResolvedValue(true);
+    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: 'host' }} ctx={ctx} active />); });
+    expect(mocks.closeTab).not.toHaveBeenCalled();
+    await expect(close!()).resolves.toBe(true);
+    expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', [
+      'child', { status: 'archived', archiveSideChatParentId: 'parent' },
+    ]);
+  });
+
   // Unit: explicitly unsupported and unknown outcomes both keep the tab. A later
   // explicit attempt sends the same scoped request, never an unguarded update.
   it.each(['[INVALID_PARAMS] field not allowed in patch-meta: archiveSideChatParentId', 'timed out'])(

@@ -307,6 +307,13 @@ async function withStatusWriteLock<T>(
     const mutate = async () => {
       beforeWrite?.();
       if (status === 'deleted') await assertDeleteTargetInDb(db, sessionId, deleteTarget);
+      if (status === 'active') {
+        const [pending] = await db.select({ id: sessions.id }).from(sessions).where(and(
+          eq(sessions.id, sessionId), eq(sessions.status, 'archived'), eq(sessions.source, 'side-chat'),
+          eq(sessions.sideChatPromoted, true), eq(sessions.orcaRole, 'lead'),
+        )).limit(1);
+        if (pending) throwIpcError('PRECONDITION_FAILED', 'Finish closing the follow-up before restoring it');
+      }
       let discardOnTransition = false;
       if (discardWorktreeChanges) {
         const [current] = await db.select({ status: sessions.status })
@@ -2108,15 +2115,17 @@ async function archiveLinkedSideChatInDb(
       || (row.status !== 'active' && row.status !== 'archived')) {
       throwIpcError('PRECONDITION_FAILED', 'The linked follow-up no longer matches this tab');
     }
-    const archived = row.status === 'archived' ? sessionToCamel(row) : await patchSessionMetaInDb(
-      sessionId, { status: 'archived', pinnedAt: null }, { routeLockHeld: true, beforeWrite: assertCurrent },
-    );
-    // The archived row is durable before runtime cleanup. Startup reconciles
-    // linked Leads whose active team remained after an interruption.
-    assertCurrent();
-    await cleanup(sessionId, async () => assertCurrent());
-    assertCurrent();
-    return { ...archived, orcaRole: null };
+    return patchSessionMetaInDb(sessionId, { status: 'archived', pinnedAt: null }, {
+      routeLockHeld: true,
+      beforeWrite: assertCurrent,
+      // Roll forward after an interrupted request. Until cleanup succeeds,
+      // keep the durable archive as a fence without announcing tab dismissal.
+      finishLinkedArchive: async () => {
+        assertCurrent();
+        await cleanup(sessionId, async () => assertCurrent());
+        assertCurrent();
+      },
+    });
   });
 }
 
@@ -2131,7 +2140,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; finishLinkedArchive?: () => Promise<void> } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, archiveSideChatParentId, ...patch } = rawPatch;
@@ -2244,6 +2253,7 @@ export async function patchSessionMetaInDb(
     }
     return sessionToCamel(row);
   }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget);
+  await options.finishLinkedArchive?.();
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2273,7 +2283,7 @@ export async function patchSessionMetaInDb(
   const broadcastPatch =
     patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch }, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.finishLinkedArchive && { orcaRole: null }) }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2282,7 +2292,7 @@ export async function patchSessionMetaInDb(
   }
   compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
   if (patch.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sessionId, dbClient, ownerScope, deletedSideChats);
-  return updated;
+  return options.finishLinkedArchive ? { ...updated, orcaRole: null } : updated;
 }
 
 /**

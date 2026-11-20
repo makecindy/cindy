@@ -100,7 +100,8 @@ export function restoreSideChatTabs(sessionId: string, isActive: () => boolean =
     for (const { tabId, childId } of unlisted) {
       if (!valid()) return;
       const result = details.get(childId);
-      if (result?.value?.status === 'deleted' || (result?.value?.status === 'archived' && result.value.sideChatPromoted)
+      if (result?.value?.status === 'deleted'
+        || (result?.value?.status === 'archived' && result.value.sideChatPromoted && result.value.orcaRole !== 'lead')
         || result?.errorCode === 'NOT_FOUND') {
         await closeTab(sessionId, tabId, { skipBeforeClose: true });
       }

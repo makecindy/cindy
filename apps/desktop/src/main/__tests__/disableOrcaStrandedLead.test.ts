@@ -46,7 +46,7 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
 
   it('fully cleans Host-owned worker runtimes after normal team archival', () => {
     const archiveIndex = registerSource.indexOf(
-      'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent)',
+      'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id,',
     );
     const recycleIndex = registerSource.indexOf(
       "recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope)",
