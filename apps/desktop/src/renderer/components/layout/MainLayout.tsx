@@ -1168,8 +1168,10 @@ export function MainLayout() {
           userReveal.mark(targetSessionId);
           navigateToSessionRef.current?.(targetSessionId);
         } else if (visibility === 'open') {
-          // 程序动作：只在落档里把面板打开，落地时按被动展示，不占窗口宽度。
-          programReveal.mark(targetSessionId);
+          // 程序动作：只在落档里把面板打开，落地时按被动展示，不占窗口宽度。已经开着的
+          // 幂等请求不记：那格记忆本来就属于之前的开栏，落地时该按它自己的来源恢复
+          // （用户开着的那次是占过宽度的，设置页往返要把它宽回来）。
+          if (readCollapsedFor(targetSessionId)) programReveal.mark(targetSessionId);
         } else {
           // 同一个任务被程序收起：这次后台开栏不再成立。
           programReveal.drop(targetSessionId);
