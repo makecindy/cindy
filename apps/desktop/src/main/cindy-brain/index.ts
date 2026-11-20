@@ -10067,7 +10067,7 @@ export function registerGhostIpc(): void {
       return handlePluginObserveRequest(pluginObserveAdapter, payload, () => {
         if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
           throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
-      });
+      }, () => hasPluginHostToolGroupApproval(findGhostForInstanceId(id), 'history'));
     }
     if (type === 'companions-request') {
       if (findGhostForInstanceId(id)?.manifest.agent?.companions !== true) {
