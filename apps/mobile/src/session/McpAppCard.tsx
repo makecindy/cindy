@@ -1,4 +1,4 @@
-import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
+import { mcpAppInitialHeight, parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
 import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, View, type ViewInstance } from 'react-native';
@@ -13,6 +13,7 @@ import { MCP_APP_DEFAULT_HEIGHT } from './mcpAppView';
 import { getMobileHeights, subscribeMobileHeights } from './mcpAppMeasuredHeights';
 
 interface McpAppCardProps {
+  initialHeight?: unknown;
   plugin?: unknown; customMcp?: unknown;
   deviceId?: string; sessionId: string; clientId: string; title: string; active?: boolean; fallbackText?: string;
 }
@@ -49,13 +50,14 @@ function MeasuredMcpAppCard(props: McpAppCardProps) {
   return <InteractiveMcpAppCard {...props} />;
 }
 
-function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText, plugin, customMcp }: McpAppCardProps) {
+function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = true, fallbackText, plugin, customMcp, initialHeight }: McpAppCardProps) {
   const host = useMcpAppViews();
   const { colors, mode } = useTheme();
   const { t, i18n } = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState<McpAppView>();
-  const [state, setState] = useState<McpAppViewState>({ loading: true, height: MCP_APP_DEFAULT_HEIGHT });
+  const declaredHeight = mcpAppInitialHeight(initialHeight) ?? MCP_APP_DEFAULT_HEIGHT;
+  const [state, setState] = useState<McpAppViewState>({ loading: true, height: declaredHeight });
   const foreground = host?.foreground ?? false;
   // Keyboard resizing can temporarily remove the row from the visible set.
   // Its focused document must survive that transition, including unsaved input.
@@ -107,7 +109,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   useEffect(() => {
     const measuredWidth = frame.current?.getBoundingClientRect?.().width ?? width.current;
     const remembered = deviceId && getMobileHeights()?.get(JSON.stringify([deviceId, sessionId, clientId]), measuredWidth);
-    const placeholder = remembered || MCP_APP_DEFAULT_HEIGHT;
+    const placeholder = remembered || declaredHeight;
     setView(undefined);
     if (!surfaceActive || (hasHost && !foreground)) {
       setState((previous) => ({ height: placeholder, loading: false }));
@@ -131,7 +133,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
       // card/route unmount. Its close() removes that same View only at the bound.
       void current.close();
     };
-  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive]);
+  }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, surfaceActive, declaredHeight]);
   useEffect(() => { if (!view?.closing) void view?.controller.context(context).catch(() => {}); }, [view, context]);
   const { error, loading, height, filesUnavailable } = state;
   return (

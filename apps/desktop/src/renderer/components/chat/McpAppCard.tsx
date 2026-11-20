@@ -1,3 +1,4 @@
+import { mcpAppInitialHeight } from '@cindy/maker-shared/mcp-apps';
 import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
@@ -143,6 +144,7 @@ function hostContext(locale: string, element: HTMLElement, fixed = false): Recor
 }
 
 interface McpAppCardProps {
+  initialHeight?: unknown;
   sessionId: string | null;
   clientId: string;
   title: string;
@@ -192,7 +194,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -566,7 +568,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
   };
   const showSpinner = loading && visible && !revealed;
-  const frameHeight = height ?? MCP_APP_DEFAULT_HEIGHT;
+  const frameHeight = height ?? (rememberLayout ? mcpAppInitialHeight(initialHeight) : undefined) ?? MCP_APP_DEFAULT_HEIGHT;
   const sidebarHeight = height ?? MCP_APP_SIDEBAR_LOADING_HEIGHT;
   const frameMount = (
     <div
