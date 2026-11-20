@@ -25,7 +25,7 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFil
 const log = createLogger('im/owner-scoped-storage');
 const LEGACY_OWNER_MARKER = 'im-legacy-owner.json';
 const SAFE_SECRET_NAME = /^[A-Za-z0-9_-]+$/;
-const SECRET_PAYLOAD_PREFIX = 'cindy-im-secret-v2:';
+const SECRET_REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type ImSecrets = IMHost['secrets'];
 
@@ -154,19 +154,20 @@ function scopedSecretPath(name: string): string | null {
   return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
 }
 
-function encodeSecretPayload(plaintext: string): string {
-  return `${SECRET_PAYLOAD_PREFIX}${crypto.randomUUID()}:${plaintext}`;
+interface SecretFile {
+  version: 2;
+  revision: string;
+  encrypted: string;
 }
 
-function matchSecretPayload(value: string): RegExpExecArray | null {
-  return new RegExp(
-    `^${SECRET_PAYLOAD_PREFIX}([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(.*)$`,
-    's',
-  ).exec(value);
-}
-
-function decodeSecretPayload(value: string): string {
-  return matchSecretPayload(value)?.[2] ?? value;
+function readSecretFile(contents: string): { encrypted: string; versioned: boolean } {
+  // Legacy files are base64 ciphertext: "{" cannot be its first character.
+  // A file-level envelope cannot collide with any arbitrary decrypted secret.
+  if (!contents.startsWith('{')) return { encrypted: contents, versioned: false };
+  const value = JSON.parse(contents) as Partial<SecretFile> | null;
+  if (value?.version !== 2 || typeof value.revision !== 'string' || !SECRET_REVISION.test(value.revision)
+    || typeof value.encrypted !== 'string' || !value.encrypted) throw new Error('IM_SECRET_FILE_INVALID');
+  return { encrypted: value.encrypted, versioned: true };
 }
 
 /** Non-secret binding generation for durable IM output. Never returns credential bytes. */
@@ -175,8 +176,7 @@ export function ownerScopedImSecretRevision(name: string): string {
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
   const encrypted = readAtomicFileSync(target);
   if (encrypted === null) return 'missing';
-  const payload = safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
-  if (!matchSecretPayload(payload)) {
+  if (!readSecretFile(encrypted).versioned) {
     // An unchanged pre-upgrade credential must still match its persisted
     // outbox authorization. Do not rewrite the file or reauthorize entries:
     // the next successful write installs the random revision atomically.
@@ -203,7 +203,7 @@ function readSecretResult(name: string): IMSecretReadResult {
     if (encrypted === null) return { kind: 'missing' };
     return {
       kind: 'value',
-      value: decodeSecretPayload(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))),
+      value: safeStorage.decryptString(Buffer.from(readSecretFile(encrypted).encrypted, 'base64')),
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
@@ -220,7 +220,9 @@ export const ownerScopedImSecrets: ImSecrets = {
       const target = prepareSecretPath(name);
       if (!target) return false;
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      atomicWriteFileSync(target, safeStorage.encryptString(encodeSecretPayload(plaintext)).toString('base64'));
+      const contents: SecretFile = { version: 2, revision: crypto.randomUUID(),
+        encrypted: safeStorage.encryptString(plaintext).toString('base64') };
+      atomicWriteFileSync(target, JSON.stringify(contents));
       return true;
     } catch {
       return false;

@@ -225,14 +225,14 @@ describe('IM owner-scoped storage', () => {
     expect(fs.existsSync(`${target}.bak`)).toBe(false);
     expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
   });
-  it('does not reinterpret a legacy credential that starts with the revision prefix', () => {
+  it.each(['not-a-uuid', '12345678-1234-4123-8123-123456789abc'])('does not reinterpret a legacy credential containing a revision marker (%s)', revision => {
     setSession('local', 'local-v1');
-    const target = __testing.scopedSecretPath('discord-bot-token');
+    const target = __testing.scopedSecretPath('bluebubbles-password');
     expect(target).not.toBeNull();
     fs.mkdirSync(path.dirname(target!), { recursive: true });
-    const legacy = 'cindy-im-secret-v2:not-a-uuid:legacy-value';
+    const legacy = `cindy-im-secret-v2:${revision}:legacy-value`;
     fs.writeFileSync(target!, Buffer.from(`encrypted:${legacy}`).toString('base64'), 'utf-8');
-    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe(legacy);
+    expect(ownerScopedImSecrets.read('bluebubbles-password')).toBe(legacy);
   });
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
@@ -306,9 +306,12 @@ describe('IM owner-scoped storage', () => {
     expect(target).not.toBeNull();
     fs.writeFileSync(target!, Buffer.from('corrupt').toString('base64'), 'utf-8');
     expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
-    expect(() => ownerScopedImSecretRevision('telegram-bot-offline')).toThrow('cannot decrypt');
+
     // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
     expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
+    fs.writeFileSync(target!, JSON.stringify({ version: 2, revision: 'invalid', encrypted: 'invalid' }));
+    expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
+    expect(() => ownerScopedImSecretRevision('telegram-bot-offline')).toThrow('IM_SECRET_FILE_INVALID');
   });
 
   it('claims legacy working directories only for a verified cloud owner', () => {
