@@ -446,6 +446,41 @@ describe('BrowserProxyAuthCoordinator', () => {
     }
   });
 
+  // #11600 review: same-route start must distinguish a closing browser from
+  // one that is merely busy. Unit/integration tier: real loopback probe and
+  // one externally initiated exit, without signals or a real browser profile.
+  it('restarts the same route after a closing browser releases its port', async () => {
+    const server = createServer((_request, response) => response.end('{}'));
+    const port = await listen(server);
+    let running = true;
+    const starts = vi.fn();
+    const backend = new ExternalChromeBackend({
+      call: async request => ({ ok: true, action: request.action, status: 200, data: { running } }),
+    }, { warn: vi.fn() }, {
+      cdpHttpUrl: `http://127.0.0.1:${port}`,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser: async () => true,
+      createRuntime: () => ({
+        call: async request => {
+          if (request.action === 'start') { starts(); running = true; }
+          return { ok: true, action: request.action, status: 200, data: { running } };
+        },
+      }),
+    });
+    expect((await backend.call({ action: 'start' })).ok).toBe(true);
+    running = false;
+    // real-wait: an external browser exit releases the port after readiness fails.
+    const release = setTimeout(() => server.close(), 100);
+    try {
+      const restarted = await backend.call({ action: 'start' });
+      expect(restarted.ok).toBe(true);
+      expect(starts).toHaveBeenCalledTimes(2);
+      expect(server.listening).toBe(false);
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
   // #8992: use the real default liveness probe against the existing loopback
   // fixture, not an immediate injected verdict. HTTP can answer while the
   // runtime's WebSocket readiness is false. Two 10s exit-confirmation probes
@@ -466,6 +501,7 @@ describe('BrowserProxyAuthCoordinator', () => {
       closeAdoptedBrowser,
     });
 
+    backend.beginQuiescence();
     await backend.dispose();
 
     expect(closeAdoptedBrowser).toHaveBeenCalledWith(cdp.cdpUrl, '/managed/browser/Cindy/user-data');

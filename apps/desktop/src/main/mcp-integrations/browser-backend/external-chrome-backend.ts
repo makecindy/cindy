@@ -267,13 +267,22 @@ export class ExternalChromeBackend implements BrowserBackend {
     if (this.quiescing && this.quitDisposal) return this.quitDisposal;
     this.linkHandoff?.dispose();
     const disposal = this.enqueue(async () => {
+      let completed = false;
       try {
         // A previous Cindy instance may have left its managed browser alive.
         // Probe without dispatch: even status can boot the runtime service in
         // a browser-less session. Any survivor still goes through stopBrowser's
         // existing profile/port ownership checks before adopted-process cleanup.
-        if (!this.used && await this.confirmBrowserGone()) return;
+        if (!this.used) {
+          // Backend switches do not own quit-time inherited-process cleanup.
+          if (!this.quiescing) return;
+          if (await this.confirmBrowserGone()) {
+            completed = true;
+            return;
+          }
+        }
         const stopped = await this.stopBrowser({ action: 'stop' });
+        completed = stopped.ok;
         if (!stopped.ok) {
           this.logger.warn('managed browser stop during dispose failed', {
             errorCode: stopped.errorCode,
@@ -283,9 +292,12 @@ export class ExternalChromeBackend implements BrowserBackend {
       } catch (err) {
         this.routeBlocked = true;
         this.logger.warn('managed browser stop during dispose threw', redactBrowserProxyText(err));
+      } finally {
+        // Share an in-flight attempt, but let the quit wrapper retry failures.
+        if (!completed && this.quitDisposal === disposal) this.quitDisposal = undefined;
       }
     });
-    // Ordinary backend switches can reuse this instance and must probe again.
+    // Only verified terminal cleanup can remain cached after the attempt.
     if (this.quiescing) this.quitDisposal = disposal;
     return disposal;
   }
@@ -526,7 +538,7 @@ export class ExternalChromeBackend implements BrowserBackend {
     const hardBlocked = this.routeBlocked && !this.routeBlockedByUnprovenLiveness;
     const sameRouteAlive = sameRoute
       && !hardBlocked
-      && (state === 'running' || (await this.resolveLiveness(currentStatus)) !== 'gone');
+      && (state === 'running' || (await this.resolveLiveness(currentStatus, true)) !== 'gone');
     if (sameRouteAlive) {
       // The process is confirmed alive on the route we still hold, so a block
       // this path was allowed past — transient by definition — has served its

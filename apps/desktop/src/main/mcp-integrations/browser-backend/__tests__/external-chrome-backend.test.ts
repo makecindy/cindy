@@ -1671,6 +1671,7 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
       closeAdoptedBrowser,
     });
 
+    backend.beginQuiescence();
     await backend.dispose();
 
     expect(alive).toBe(false);
@@ -1691,6 +1692,7 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
       terminateManagedPortOwner,
     });
 
+    backend.beginQuiescence();
     await expect(backend.dispose()).resolves.toBeUndefined();
 
     expect(logger.warn).toHaveBeenCalledWith('managed browser stop during dispose failed',
@@ -1699,8 +1701,8 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
   });
 
   // #11600: quit disposes the active external backend and then its reusable
-  // wrapper. Only terminal quiescence may share cleanup; backend switches must
-  // still re-probe because this external instance can be reused afterwards.
+  // wrapper. Terminal quiescence shares successful cleanup; ordinary switches
+  // of an unused backend must not probe or wake its runtime.
   it.each([true, false])('shares repeated disposal only during quit (quiescing=%s)', async quiescing => {
     const runtime = fakeRuntime();
     const isBrowserGone = vi.fn(async () => true);
@@ -1710,14 +1712,40 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     await Promise.all([backend.dispose(), backend.dispose()]);
     await backend.dispose();
 
-    expect(isBrowserGone).toHaveBeenCalledTimes(quiescing ? 1 : 3);
+    expect(isBrowserGone).toHaveBeenCalledTimes(quiescing ? 1 : 0);
     expect(runtime.call).not.toHaveBeenCalled();
+  });
+
+  // #11600 review: quit invokes dispose twice. A failed first stop must not
+  // consume the second attempt; concurrent callers still share the first one.
+  // Unit tier, public lifecycle, minimum input: one transient stop failure.
+  it.each(['error', 'throw'] as const)('retries quit disposal after a stop %s', async failure => {
+    const runtime = fakeRuntime(true);
+    const backend = new ExternalChromeBackend(runtime, fakeLogger(), {
+      isBrowserGone: async () => true,
+      terminateManagedPortOwner: async () => false,
+    });
+    await backend.call({ action: 'status' });
+    const call = runtime.call;
+    call.mockImplementationOnce(async () => {
+      if (failure === 'throw') throw new Error('temporary stop failure');
+      return { ok: false, action: 'stop', errorCode: 'BROWSER_RUNTIME_ACTION_FAILED' };
+    });
+    backend.beginQuiescence();
+
+    await Promise.all([backend.dispose(), backend.dispose()]);
+    expect(call.mock.calls.filter(([request]) => request.action === 'stop')).toHaveLength(1);
+    await backend.dispose();
+    expect(call.mock.calls.filter(([request]) => request.action === 'stop')).toHaveLength(2);
+    await backend.dispose();
+    expect(call.mock.calls.filter(([request]) => request.action === 'stop')).toHaveLength(2);
   });
 
   it('swallows dispose errors and skips a verifiably absent unused browser without dispatch', async () => {
     const unused = fakeRuntime();
     const isBrowserGone = vi.fn(async () => true);
     const unusedBackend = new ExternalChromeBackend(unused, fakeLogger(), { isBrowserGone });
+    unusedBackend.beginQuiescence();
     await expect(unusedBackend.dispose()).resolves.toBeUndefined();
     expect(unused.call).not.toHaveBeenCalled();
     expect(isBrowserGone).toHaveBeenCalledTimes(1);
