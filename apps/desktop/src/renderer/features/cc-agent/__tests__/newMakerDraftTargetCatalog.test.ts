@@ -1713,9 +1713,29 @@ it('applies a replacement for an unavailable saved model only to the current loc
     vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high', fast: false, favoriteUid: null,
   });
   expect(setAlternateModel).toHaveBeenCalledWith({
-    ownerGeneration: 12, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
+    ownerGeneration: 12, agentDevice: null, vendor: 'pi', prefs: { providerId: 'xd', model: 'auto', effort: 'high' },
     fast: false, favoriteUid: null,
   });
   expect(switchVendor).not.toHaveBeenCalled();
   expect(patchVendorPrefs).not.toHaveBeenCalled();
+});
+
+// Minimal input: a missing local engine and an alternate on another computer.
+it('keeps a remote alternate engine outside the persisted local defaults', () => {
+  const setAlternateModel = vi.fn();
+  const switchVendor = vi.fn();
+  const rememberAgentDeviceSelection = vi.fn();
+  const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
+    effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12,
+    switchVendor, rememberAgentDeviceSelection, normalizeDbAgentKind, dbToMakerAgentKind,
+  });
+  const agentDevice = { deviceId: 'other-computer', name: 'Other computer' };
+  select({ vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high',
+    fast: false, favoriteUid: null, agentDevice });
+  expect(setAlternateModel).toHaveBeenCalledWith(expect.objectContaining({ agentDevice, vendor: 'pi' }));
+  expect(rememberAgentDeviceSelection).toHaveBeenCalledWith('other-computer', 'pi', {
+    model: 'auto', providerId: 'xd', effort: 'high', fastMode: false,
+  });
+  expect(switchVendor).not.toHaveBeenCalled();
 });

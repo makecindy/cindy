@@ -1,3 +1,4 @@
+import { useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -785,19 +786,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const { t, i18n } = useTranslation();
   const { dataOwnerId, dataOwnerGeneration } = useAuth();
   const savedDraft = useNewMakerDraft();
-  const [alternateModel, setAlternateModel] = useState<{
-    ownerGeneration: number;
-    vendor: MakerVendor;
-    prefs: Pick<VendorPrefs, 'model' | 'providerId' | 'effort'>;
-    fast: boolean | 'ultrafast';
-    favoriteUid: string | null;
-  } | null>(null);
+  const [alternateModel, setAlternateModel] = useAlternateDraftModel(NEW_MAKER_DRAFT_KEY, dataOwnerGeneration);
   const localAlternate = alternateModel?.ownerGeneration === dataOwnerGeneration &&
     !savedDraft.deviceLinkDeviceId && !savedDraft.remoteHostId && !savedDraft.agentDeviceId
     ? alternateModel : null;
   const draft = localAlternate ? {
     ...savedDraft,
     vendor: localAlternate.vendor,
+    agentDeviceId: localAlternate.agentDevice?.deviceId ?? null,
+    agentDeviceName: localAlternate.agentDevice?.name ?? null,
     lastByVendor: {
       ...savedDraft.lastByVendor,
       [localAlternate.vendor]: { ...savedDraft.lastByVendor[localAlternate.vendor], ...localAlternate.prefs },
@@ -3461,6 +3458,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
           attachmentState.clearFiles();
         }
+        setAlternateModel(null);
         resetDraftWorkspaceAfterSend();
         // F-COLLAB: draft 阶段开了协同模式 → 与 send/goal 路径同口径,
         // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
@@ -3526,11 +3524,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // (优先 cc),避免 tablist 卡在被隐藏段、且防止创建出注定 requireAgent 报错的会话。
   // 只在已加载可用性后收敛;fallback 一定可见,收敛一次即稳定(switchVendor 同值早返,不成环)。
   useEffect(() => {
-    if (!availableAgentsLoaded) return;
+    if (!availableAgentsLoaded || localAlternate) return;
     fallbackUnavailableVendor(availableVendors, {
       differentCatalog: usesDeviceCatalog || !!effectiveRemoteHostId,
     });
-  }, [availableAgentsLoaded, availableVendors, usesDeviceCatalog, effectiveRemoteHostId]);
+  }, [availableAgentsLoaded, availableVendors, usesDeviceCatalog, effectiveRemoteHostId, localAlternate]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
   // 权限 / 计划模式不是默认模型 tuple：按界面 Harness 的槽写，但不改变 storage 中最新
@@ -3757,10 +3755,18 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       /** 远程 Agent:这一行属于哪台电脑(null = 本机);未带 = 面板没有远程 Agent 入口。 */
       agentDevice?: { deviceId: string; name: string } | null;
     }) => {
-      if (!usesDeviceCatalog && !effectiveRemoteHostId && !selection.agentDevice &&
-          (localAlternate || localModelIssue)) {
+      if ((localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
+        if (selection.agentDevice) {
+          rememberAgentDeviceSelection(selection.agentDevice.deviceId,
+            dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)), {
+              model: selection.modelId, providerId: selection.providerId,
+              effort: selection.effort ?? savedDraft.lastByVendor[selection.vendor].effort,
+              fastMode: selection.fast,
+            });
+        }
         setAlternateModel({
           ownerGeneration: dataOwnerGeneration,
+          agentDevice: selection.agentDevice ?? null,
           vendor: selection.vendor,
           prefs: {
             model: selection.modelId,
@@ -4685,6 +4691,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           const handOffAndNavigate = () => {
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
+            setAlternateModel(null);
             resetDraftWorkspaceAfterSend();
             navigate(`/cc-agent/${newSession.id}`, { replace: true, flushSync: true });
           };
@@ -5208,6 +5215,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             if (stillOnSubmittingPage) {
               attachmentState.clearFiles();
+              setAlternateModel(null);
               resetDraftWorkspaceAfterSend();
               navigate(`/cc-agent/${presetSessionId}`, { replace: true });
             }
@@ -5654,6 +5662,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // unmount cleanup would snapshot the stale text back under this key.
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
+            setAlternateModel(null);
             resetDraftWorkspaceAfterSend();
 
             void (async () => {
@@ -6004,6 +6013,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // effect 会把残留文本写回 NEW_MAKER_DRAFT_KEY,撤销这次 clear。
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
+            setAlternateModel(null);
             resetDraftWorkspaceAfterSend();
           };
 
@@ -6707,6 +6717,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
           })();
           clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
+          setAlternateModel(null);
           resetDraftWorkspaceAfterSend();
           // 立刻导航:开协同的等待与协同 tab 的展开都由 SessionView 在消费 pendingGoal 时处理。
           navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
@@ -6867,6 +6878,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // 这里用目标文案补一次,与普通会话同款(立即占位 + 智能标题后台覆盖 + 不覆盖手动改名)。
         makerChatStore.autoNameSession(newSession.id, objective, capabilityAgentKind);
         clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
+        setAlternateModel(null);
         resetDraftWorkspaceAfterSend();
         navigate(`/cc-agent/${newSession.id}`, {
           replace: true,
