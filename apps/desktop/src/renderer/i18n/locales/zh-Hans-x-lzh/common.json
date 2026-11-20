@@ -13031,6 +13031,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
+        "audioInputUnavailable": "今所接模型未能直辨其声。可请 Cindy 先录为文字，再续其事。",
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
           "consecutive": "模型连呼同一工具 {{n}} 次，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
