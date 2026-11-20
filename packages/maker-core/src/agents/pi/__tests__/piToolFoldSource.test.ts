@@ -127,6 +127,32 @@ describe('cindy-tool-fold extension source', () => {
     expect(JSON.stringify(pointer)).not.toContain('run step 0');
   });
 
+  it('leaves a batch alone when none of it would actually disappear', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages: Message[] = [];
+    // Small arguments plus a one-word result: the record line is longer than both, so
+    // folding this batch would grow the context instead of shrinking it.
+    for (let index = 0; index < 40; index += 1) {
+      messages.push(call(`call-${index}`, 'read', { path: `packages/maker-core/src/agents/pi/file-${index}.ts` }));
+      messages.push(result(`call-${index}`, 'read', 'ok'));
+    }
+    // Nothing folded: the handler leaves the transcript untouched.
+    expect(projection(context, messages)).toBe(messages);
+  });
+
+  it('folds a large argument even when its own result is smaller than the record', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages: Message[] = [
+      call('call-big', 'write', { path: 'a.ts', content: 'x'.repeat(400) }),
+      result('call-big', 'write', 'ok'),
+      ...pairs(40),
+    ];
+    const out = projection(context, messages);
+    expect(out![0].content![0].arguments).toEqual({ __folded: true, call: 'call-big' });
+    // The tiny result stays verbatim: replacing it would make the projection longer.
+    expect(out![1]).toBe(messages[1]);
+  });
+
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
@@ -424,7 +450,7 @@ describe('cindy-tool-fold extension source', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '32', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000000000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
     // One assistant message with 32 parallel calls: 32 complete pairs in one trip.
     const blocks = Array.from({ length: 32 }, (_, i) => ({ type: 'toolCall', id: `par-${i}`, name: 'bash', arguments: { command: `parallel step ${i} ${'p'.repeat(420)}` } }));
-    const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(120)}`));
+    const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(800)}`));
     // A newer trailing pair keeps the 32-call trip outside the KEEP=1 resident window.
     const messages: Message[] = [
       { role: 'assistant', content: blocks as Block[] },

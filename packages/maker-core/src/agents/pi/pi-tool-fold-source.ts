@@ -117,6 +117,10 @@ export default function (pi) {
   var LINE = 160;
   var MAX_FOLDED = intEnv('CINDY_PI_TOOL_FOLD_MAX_FOLDED', 4000, 100, 1000000);
   var ARG_FOLD_CHARS = intEnv('CINDY_PI_TOOL_FOLD_ARG_CHARS', 200, 0, 1000000);
+  // A record line (name, counters, head, pointer) is roughly this long. A result shorter
+  // than it would grow the context when folded, so the gate and the projection both
+  // count only payload that actually disappears.
+  var RECORD_ESTIMATE_CHARS = 160;
 
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
@@ -240,10 +244,28 @@ export default function (pi) {
       for (var id in ids) if (ids[id] !== true) complete = false;
       if (!complete) continue;
       var chars = 0;
+      var folds = Object.create(null);
       for (var c2 = 0; c2 < calls.length; c2++) {
-        try { chars += JSON.stringify(calls[c2].arguments || {}).length; } catch (error) { /* ignore */ }
+        var argSize = 0;
+        try { argSize = argChars(calls[c2]); } catch (error) { argSize = 0; }
+        chars += argSize;
+        folds[calls[c2].id] = { args: argSize, result: 0 };
       }
-      for (var r2 = 0; r2 < results.length; r2++) chars += textOf(results[r2].content).length;
+      for (var r2 = 0; r2 < results.length; r2++) {
+        var textSize = textOf(results[r2].content).length;
+        chars += textSize;
+        var sized = folds[String(results[r2].toolCallId)];
+        if (sized) sized.result = textSize;
+      }
+      var removable = 0;
+      var removableCalls = 0;
+      for (var c4 = 0; c4 < calls.length; c4++) {
+        var plan = folds[calls[c4].id];
+        plan.foldArgs = ARG_FOLD_CHARS > 0 && plan.args > ARG_FOLD_CHARS;
+        plan.foldResult = plan.result > RECORD_ESTIMATE_CHARS;
+        removable += (plan.foldArgs ? plan.args : 0) + (plan.foldResult ? plan.result : 0);
+        if (plan.foldArgs || plan.foldResult) removableCalls += 1;
+      }
       var sizes = Object.create(null);
       for (var c3 = 0; c3 < calls.length; c3++) {
         try { sizes[calls[c3].id] = JSON.stringify(calls[c3].arguments || {}).length; } catch (error) { sizes[calls[c3].id] = 0; }
@@ -252,7 +274,7 @@ export default function (pi) {
         var rid = String(results[r3].toolCallId);
         sizes[rid] = (sizes[rid] || 0) + textOf(results[r3].content).length;
       }
-      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, sizes: sizes, hasImage: hasImage, results: results, indexes: indexes });
+      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, removable: removable, removableCalls: removableCalls, folds: folds, sizes: sizes, hasImage: hasImage, results: results, indexes: indexes });
     }
     return trips;
   }
@@ -527,14 +549,14 @@ export default function (pi) {
     var candidateCalls = 0;
     for (var f = 0; f < trips.length; f++) {
       var probe = trips[f];
-      if (probe.end >= boundary || probe.hasImage || probe.chars < 80) continue;
+      if (probe.end >= boundary || probe.hasImage || probe.removable < 80) continue;
       if (allFolded(probe)) continue;
       var already = false;
       for (var pb = 0; pb < probe.calls.length; pb++) if (isFoldedCall(probe.calls[pb])) already = true;
       if (already) continue;
       candidates.push(probe);
-      candidateChars += probe.chars;
-      candidateCalls += probe.callCount;
+      candidateChars += probe.removable;
+      candidateCalls += probe.removableCalls;
     }
     if (candidateCalls >= MIN_PAIRS || candidateChars >= MIN_CHARS) {
       if (foldedSize > MAX_FOLDED) {
@@ -564,7 +586,7 @@ export default function (pi) {
     var out = null;
     for (var g = 0; g < trips.length; g++) {
       var unit = trips[g];
-      if (unit.hasImage || unit.chars < 80) continue;
+      if (unit.hasImage || unit.removable < 80) continue;
       var assistant = messages[unit.start];
       var blocks = assistant.content;
       var nextContent = [];
@@ -575,8 +597,9 @@ export default function (pi) {
         if (block && block.type === 'toolCall' && foldable(String(block.id))) {
           // Fold arguments only past the budget; below it the pointer is larger than the
           // payload and the call block is the shape the model re-sends by accident.
-          var foldArgs = ARG_FOLD_CHARS > 0 && argChars(block) > ARG_FOLD_CHARS;
-          callsById[String(block.id)] = { call: block, argsFolded: foldArgs };
+          var plan = unit.folds[String(block.id)];
+          var foldArgs = Boolean(plan && plan.foldArgs === true);
+          callsById[String(block.id)] = { call: block, argsFolded: foldArgs, foldResult: Boolean(plan && plan.foldResult === true) };
           if (foldArgs) {
             nextContent.push(foldedCall(block));
             argsReplaced = true;
@@ -596,9 +619,12 @@ export default function (pi) {
       for (var r = 0; r < unit.results.length; r++) {
         var result = unit.results[r];
         var entry = callsById[String(result.toolCallId)];
-        if (!entry) continue;
+        if (!entry || !entry.foldResult) continue;
+        var record = foldedResult(result, entry.call, entry.argsFolded);
+        // Never trade content for a longer summary: the estimate above is rough, this is exact.
+        if (textOf(record.content).length >= textOf(result.content).length) continue;
         if (out === null) out = messages.slice();
-        out[unit.indexes[r]] = foldedResult(result, entry.call, entry.argsFolded);
+        out[unit.indexes[r]] = record;
       }
     }
 
