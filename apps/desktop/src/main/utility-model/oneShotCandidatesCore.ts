@@ -235,7 +235,7 @@ async function observedStream(response: Parameters<typeof readUtilityTextStream>
 async function observeRejectedResponse(
   response: Parameters<typeof readUtilityTextStream>[0] & { status: number }, wire: string, model: string,
 ): Promise<boolean> {
-  if (response.status !== 429 && response.status !== 402) {
+  if (![400, 402, 422, 429].includes(response.status)) {
     try { await observedStream(response, wire, model); } catch { /* Preserve the HTTP outcome. */ }
     return false;
   }
@@ -257,7 +257,7 @@ async function observeRejectedResponse(
       const chunk = next.value?.subarray(0, 4096 - bytes);
       bytes += chunk?.byteLength ?? 0;
       raw += decoder.decode(chunk, { stream: !next.done });
-      if (response.status === 429 && matchesDeterministicUsageExhaustionText(raw)) {
+      if (matchesDeterministicUsageExhaustionText(raw)) {
         quotaExhausted = true;
         break;
       }
@@ -2120,6 +2120,13 @@ async function requestProviderHttpText(input: {
     let response = await send(step, body);
     let requests = 1;
     while (!response.ok) {
+      // Gateways also wrap deterministic quota failures in 400/422. Classify
+      // before the compatibility ladder so a billing failure cannot spend its
+      // request budget retrying different parameters against the same account.
+      const quotaExhausted = await observeRejectedResponse(response, step.wire, targetFor(step).model);
+      if (quotaExhausted) {
+        throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status, quotaExhausted: true });
+      }
       // Only parameter-class rejections advance the plan. Steps already tried
       // in this call, and bodies identical to the rejected one (for example a
       // minimal body with nothing to strip), would only be rejected again.
@@ -2153,7 +2160,6 @@ async function requestProviderHttpText(input: {
       }
       if (next === null || !nextBody) break;
       tried.add(next);
-      await observeRejectedResponse(response, step.wire, targetFor(step).model);
       log.debug('utility text request rejected, trying the next reasoning step', {
         status: response.status,
         from: utilityRequestStepKey(step),
@@ -2168,9 +2174,8 @@ async function requestProviderHttpText(input: {
     }
     if (!response.ok) {
       if (response.status === 401) input.onUnauthorized?.();
-      const quotaExhausted = await observeRejectedResponse(response, step.wire, targetFor(step).model);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status,
-        ...(quotaExhausted ? { quotaExhausted: true as const } : {}) });
+      // The rejected response was already observed once at the top of the loop.
+      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
     let raw = await observedStream(response, step.wire, targetFor(step).model, input.onText);
