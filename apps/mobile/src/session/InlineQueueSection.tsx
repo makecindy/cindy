@@ -22,14 +22,15 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import { Text } from '@/components/AppText';
 import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
 import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { describeNonRetryableAgentError, localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { describeNonRetryableAgentError, localizeAgentError, requiresAgentErrorConfigurationChange, unclassifiedAgentErrorI18nKey } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -99,15 +100,23 @@ export function InlineQueueSection({
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
+  const usageLimitResumeAt = projection.error && projection.usageLimitWait
+    ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+    : null;
+  // The computer already confirmed an account usage limit and armed the automatic
+  // continuation, so name the cause even when the upstream text is not recognizable.
+  const unclassifiedErrorKey = projection.error
+    ? unclassifiedAgentErrorI18nKey(projection.error, sessionSource)
+    : null;
   const projectionError = projection.error
     ? localizedAgentError
       ?? (projectionErrorKey
         ? t(projectionErrorKey)
-        : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error, sessionSource)))
-    : null;
-
-  const usageLimitResumeAt = projection.error && projection.usageLimitWait
-    ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+        : (describeAgentAuthError(projection.error) ?? t(
+          usageLimitResumeAt && unclassifiedErrorKey === 'session.tail.replyFailed'
+            ? 'session.tail.usageLimitReached'
+            : unclassifiedErrorKey ?? 'session.tail.replyFailed',
+        )))
     : null;
 
   return (
@@ -151,7 +160,9 @@ export function InlineQueueSection({
             // 额度重置后自动继续(桌面端执行);等待期间重试 / 清除照常可用。
             <View style={styles.errorActions} testID="queue.inline.usageLimitWait">
               <Text style={styles.disabledHint}>
-                {t('message.queue.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
+                {projection.usageLimitWait && parseGeminiInputRateLimit(projection.error) !== null
+                  ? <GeminiRetryCountdown resumeAt={projection.usageLimitWait.resumeAt} />
+                  : t('message.queue.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
               </Text>
               {onCancelUsageLimitWait ? (
                 <ActionPill
@@ -351,3 +362,13 @@ const makeStyles = (colors: ThemeColors) =>
     pressed: { opacity: 0.72 },
     disabled: { opacity: 0.42 },
   });
+
+function GeminiRetryCountdown({ resumeAt }: { resumeAt: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [resumeAt]);
+  return <>{t('chat.geminiRateLimit.retryIn', { seconds: Math.max(0, Math.ceil((resumeAt - now) / 1000)) })}</>;
+}

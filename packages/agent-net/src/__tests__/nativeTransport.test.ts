@@ -156,3 +156,53 @@ it.each(['late-frame', 'late-response', 'revoked', 'rotated', 'abort', 'deadline
       if (mode === 'deadline' || mode === 'abort') expect(closed.has(1)).toBe(true);
     } finally { socket?.close(); await Promise.resolve(); vi.useRealTimers(); }
   });
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 向原生引擎发 poll 的频率。连接空闲时每 50 毫秒一次，不再每 8 毫秒一次；
+ *   空闲时要发数据，写进引擎不等下一次空闲轮询；数据在动时回到每 8 毫秒一次。
+ * - Bug 依据：2026-11-20 真机，开着 Agent-Net 什么都不做时 JS 线程占 51%（关掉 1%）；没有东西要收发时，每 8 毫秒轮询
+ *   一次仍占 22–33%，每 50 毫秒一次 7–18%，不轮询 0–4%。
+ * - 现有覆盖缺口：上面的测试都在数据流动时推进 8 毫秒，没有覆盖空闲时的频率和空闲后第一次发送。
+ * - 最小失败输入：一条已建立、没有数据的连接，空闲两秒，再发一次数据。tier：unit，真实 NativeTransport/NativeChannel，引擎用替身。
+ */
+it('polls the engine slowly while idle and at once when there is something to send', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: string[] = [];
+  let nextStream = 0, unacked = false, sending = false;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push(command.op as string);
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null };
+      if (command.op === 'poll') value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false,
+        unacked, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') { value = Buffer.from(command.data as string, 'base64url').length; unacked = sending; }
+      return value as T;
+    }, async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  const polls = () => ops.filter(op => op === 'poll').length;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(channels).toHaveLength(1);
+    const idleStart = polls();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(polls() - idleStart).toBeLessThanOrEqual(21);
+    const writes = ops.filter(op => op === 'write').length;
+    sending = true;
+    channels[0].send(Uint8Array.of(1, 2, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops.filter(op => op === 'write').length).toBe(writes + 1);
+    // Unacknowledged data: fast again.
+    const busyStart = polls();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(polls() - busyStart).toBeGreaterThanOrEqual(10);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});

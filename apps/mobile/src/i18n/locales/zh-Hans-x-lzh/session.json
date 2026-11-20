@@ -77,6 +77,7 @@
     "back": "归"
   },
   "failedScheduleNotice": {
+    "modelCatalogUnconfirmed": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
     "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
     "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
     "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
@@ -635,6 +636,7 @@
     "readableHistoryRecoveryDescription": "携言谈录续行，原差事仍存。请于新差事重遣方才之讯。",
     "requestFormatError": "应用程序所送请求格式有误，此回复未能完成。",
     "replyFailed": "回复未竟",
+    "usageLimitReached": "模型名籍，耗用已达上限",
     "showErrorDetails": "谬误详情",
     "hideErrorDetails": "敛详情",
     "diagnose": "诊之",
@@ -687,7 +689,9 @@
     "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
     "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持切换 Harness。请择当前 Harness 下之模型，或以所需 Harness 另立新 SSH 差事。",
+    "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型于该供方下已不可用。请于规制中察连接，或另择可用之模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切换毕。请察谬误详情，待 Harness 就绪后再试。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型可用之名籍已达耗用上限。可改用他模型，或待限额重置后再续。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中诸机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可于机上此供方之「远程与分享」页察组内诸机。",
@@ -742,6 +746,7 @@
     "REMOTE_AGENT_RESUME_UNAVAILABLE": "此机不能复差事旧态。请选择他机或供方之模型，交接上下文以续行；旧讯皆存。",
     "REMOTE_AGENT_INVALID": "与行 Agent 之机通信时有谬。请再试；若屡见之，请将两机之 Cindy 皆更新至最新版。",
     "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "法器引擎未能复前话。消息犹存。可择他引擎续之，或新建任务。",
+    "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "此法器引擎不能用差事所在之机之工具，暂不可自他机行此差事。请易他引擎或模型。",
     "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型以续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未允远程调用此供方。请于彼机之「设置 → 模型供应商」中打开「允许远程调用」，或易一模型。",

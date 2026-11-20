@@ -162,7 +162,6 @@ interface CodexModelSnapshot {
   accountKey?: string;
   models: CatalogModel[];
   confirmedAt?: number;
-  pendingMembership?: string;
   failedAt?: number;
   needsSave?: true;
 }
@@ -462,6 +461,34 @@ function directoryFor(provider: SubscriptionProvider, id: string): string {
     : accountDirectory(provider, id);
 }
 
+export async function refreshCodexSubscriptionAccountAfterReset(scope = 'openai'): Promise<void> {
+  const target = pooledCodexResetTarget(scope);
+  if (target) return target.refresh();
+
+  const resolveAccountId = () => scope === 'openai' ? 'default' : readLegacyCodexAccountId(scope);
+  const id = resolveAccountId();
+  if (!id) return;
+  const state = currentRuntime();
+  if (!accountStillPresent(state, 'openai', id)) return;
+  const directory = directoryFor('openai', id);
+  await refreshCodexPoolQuotaAfterReset(state, id, () => {
+    if (!accountStillPresent(state, 'openai', id) || resolveAccountId() !== id
+      || directoryFor('openai', id) !== directory || (id === 'default' && !defaultAccountBound('openai'))
+      || [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id))
+      throw new Error('PRECONDITION_FAILED: Subscription account unavailable');
+  });
+}
+
+async function refreshCodexPoolQuotaAfterReset(state: OwnerRuntime, id: string, assertCurrent: () => void): Promise<void> {
+  assertCurrent();
+  // A forced read already in progress may still have observed the pre-reset quota.
+  await state.flights.get(keyOf('openai', id))?.promise.catch(() => {});
+  assertCurrent();
+  await snapshot(state, 'openai', id, true, true);
+  assertCurrent();
+  changed('openai', id);
+}
+
 /** Resolve only a saved account of this owner. Default/legacy connections retain their adapters. */
 export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServiceDeps & { refresh(): Promise<void> }) | null {
   if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
@@ -517,12 +544,7 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
       // The reset service projects only the default bucket. The pool retains its
       // full model table, refreshed once after redemption rather than on every read.
     },
-    refresh: async () => {
-      assertCurrent();
-      await snapshot(state, 'openai', id, true, true);
-      assertCurrent();
-      changed('openai', id);
-    },
+    refresh: () => refreshCodexPoolQuotaAfterReset(state, id, assertCurrent),
   };
 }
 
@@ -1260,6 +1282,15 @@ export async function refreshSubscriptionPoolCodexModels(
     };
     const readModels = async () => {
       try {
+        // Publish only an owner/workspace-bound successful snapshot while the native
+        // probe is pending. A CLI cache alone cannot establish this account's membership.
+        const restored = await lastVerified();
+        if (!isCurrent()) return;
+        if (restored && (!sameAccount || previous?.confirmedAt === undefined)) {
+          state.codexModels.set(id, { auth, accountKey: info.accountKey, models: restored.models,
+            confirmedAt: restored.confirmedAt, failedAt: startedAt });
+          publishCodexCatalogChange(state, refreshId);
+        }
         const models: CodexModelListItem[] = [];
         const cursors = new Set<string>();
         let pages = 0;
@@ -1300,28 +1331,22 @@ export async function refreshSubscriptionPoolCodexModels(
           };
         });
         const confirmedAt = Date.now();
-        // The CLI can answer model/list from its fallback directory after an upstream
-        // timeout. If models still in the native cache vanished from a verified list,
-        // corroborate a nonempty contraction once. Disk-only ids never grant access.
+        // Repeated fallback RPC replies are not independent proof of removal.
+        // Keep the last account-bound success while the native cache contradicts
+        // a nonempty response; a later consistent response can confirm contraction.
+        // An explicit empty RPC list retains its authoritative empty semantics.
         const reported = new Set(mapped.map(model => model.id));
         const differsFromDisk = mapped.length > 0 && [...cached.keys()].some(model => !reported.has(model));
-        const verified = differsFromDisk ? await lastVerified() : undefined;
-        if (differsFromDisk && !isCurrent()) return;
-        // With no verified list (first launch after upgrade), the native file is only
-        // a reason to recheck. Expose solely what this authenticated RPC actually returned.
-        const needsConfirmation = verified
-          ? verified.models.some(model => cached.has(model.id) && !reported.has(model.id))
-          : differsFromDisk && Number.isFinite(Date.parse(nativeCache?.fetched_at));
+        const needsConfirmation = differsFromDisk && (restored
+          ? restored.models.some(model => cached.has(model.id) && !reported.has(model.id))
+          : Number.isFinite(Date.parse(nativeCache?.fetched_at)));
         if (needsConfirmation) {
-          const membership = JSON.stringify([...reported].sort());
-          if (!sameAccount || previous?.pendingMembership !== membership) {
-            const visible = verified?.models ?? mapped;
-            state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
-              confirmedAt: verified?.confirmedAt, pendingMembership: membership, failedAt: confirmedAt });
-            log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
-              reportedCount: mapped.length, publishedCount: visible.length, confirmedAt: verified?.confirmedAt });
-            return;
-          }
+          const visible = restored?.models ?? mapped;
+          state.codexModels.set(id, { auth, accountKey: info.accountKey, models: visible,
+            confirmedAt: restored?.confirmedAt, failedAt: confirmedAt });
+          log.info('Codex model list differs from cached membership; awaiting confirmation', { refreshId,
+            reportedCount: mapped.length, publishedCount: visible.length, confirmedAt: restored?.confirmedAt });
+          return;
         }
         const snapshot: CodexModelSnapshot = { auth, accountKey: info.accountKey, models: mapped, confirmedAt };
         state.codexModels.set(id, snapshot);

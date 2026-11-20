@@ -7,7 +7,7 @@
  *
  * 运行（仓库根目录）：
  *   pnpm --filter @cindy/agent-net run prepare-core
- *   node --import tsx packages/agent-net/bench/session-latency.ts [--runs 2] [--profiles fast,slow,very-slow] [--out results.json] [--log]
+ *   ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx packages/agent-net/bench/session-latency.ts [--runs 2] [--profiles fast,slow,very-slow] [--out results.json] [--log]
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';

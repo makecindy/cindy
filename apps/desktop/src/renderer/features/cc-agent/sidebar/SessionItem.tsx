@@ -27,9 +27,6 @@ import { Button } from '@/components/ui/button';
  *     用户走右键菜单（Unarchive / Delete，仍保留原 ConfirmDialog 弹窗）。
  *   - 选中态 bg-sidebar-item-active + font-semibold
  *
- * 关于 indented prop（缩进控制）：
- *   - indented=true（分组内子 session）：`pl-5`，在普通行 12px 内边距上增加 8px 层级缩进。
- *   - indented=false（Pinned / Unclassified / Dialogue 顶层 session）：`pl-3`。
  *   2026-07 用户定稿的文字列对齐:状态图标包在 15px 定宽槽内;普通会话行使用
  *   gap-2.5(10px),与顶部导航行 / 项目行同构。自动任务行因中间还有 Timer,
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
@@ -282,8 +279,6 @@ export interface SessionItemProps {
   onTogglePin: (sessionId: string, currentlyPinned: boolean) => void;
   onMoveSession?: (sessionId: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
-  /** 在 ProjectNode 内部渲染时为 true，行不再额外缩进（缩进由父容器 padding 承担）。 */
-  indented?: boolean;
   /**
    * 模糊搜索命中字符在 title 中的下标数组(严格升序)。
    * 来自 useSessionSearch.matchMap;不传 / undefined → 走原 `<span>` 渲染路径,零成本。
@@ -346,7 +341,6 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   onTogglePin,
   onMoveSession,
   projectOptions = [],
-  indented = false,
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
@@ -854,7 +848,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
-  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked;
+  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked && !!snoozeAction;
   const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
     !inboxMode &&
@@ -1011,11 +1005,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         'group relative flex h-8 w-full items-center rounded-full',
         !isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5',
         'select-none',
-        // 缩进 + padding(见文件头注释的文字列对齐口径):
-        //   indented=true → 左 20px（普通行 12px + 子层级缩进 8px）
-        //   indented=false → 左 12px（Pinned / Unclassified / Dialogue 段）
         // 右侧信息槽按内容收缩；hover 时 archive 快捷按钮覆盖同一槽位。
-        indented ? 'pl-5 pr-2' : 'pl-3 pr-2',
+        'pl-3 pr-2',
         // 注意:不加 transition-colors —— 行 bg 的 hover/active 变化要瞬时,
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。

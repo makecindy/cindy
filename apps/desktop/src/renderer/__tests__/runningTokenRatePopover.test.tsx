@@ -104,7 +104,18 @@ it('keeps pinned history while its trigger falls back to tokens or elapsed-only'
   expect(screen.getByRole('dialog')).toBe(dialog);
   expect(trigger.textContent).toContain('1.2k tok');
   expect(trigger.getAttribute('aria-label')).not.toContain('currentRate');
-  expect(screen.getByRole('img').querySelector('circle')).toBeTruthy();
+  // The retained sample is visible only when the user inspects the chart.
+  const image = screen.getByRole('img');
+  const chart = image.parentElement!;
+  const rect = vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 120, 48));
+  try {
+    expect(image.querySelector('circle')).toBeNull();
+    fireEvent.pointerMove(chart, { clientX: 110, clientY: 12 });
+    expect(screen.getByTestId('trace-readout').textContent).toContain('0:01');
+    expect(image.querySelectorAll('circle')).toHaveLength(1);
+    fireEvent.pointerLeave(chart);
+    expect(image.querySelector('circle')).toBeNull();
+  } finally { rect.mockRestore(); }
   rerender(<RunningTokenRatePopover {...props} rateText={null} />);
   expect(trigger.textContent).toBe('10s');
   expect(screen.getByRole('dialog')).toBe(dialog);

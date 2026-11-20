@@ -24,7 +24,7 @@ const card = (
   cardId: string,
   overrides: Partial<BillingPurchasedGiftCard> = {},
 ): BillingPurchasedGiftCard => ({
-  cardId, orderId: 'order_new', faceCode: 'cat', amount: '20', currency: 'usd', senderName: 'Yu',
+  cardId, orderId: 'order_new', faceCode: 'cat', face: null, amount: '20', currency: 'usd', senderName: 'Yu',
   message: 'Happy birthday! Use Cindy more, work late less.', codeTail: '7KQ2', status: 'UNCLAIMED',
   claimedAt: null, claimedByName: null, purchasedAt: now, email: null, ...overrides,
 });
@@ -63,8 +63,25 @@ function order(status: BillingPaymentOrder['status']): BillingPaymentOrder {
   };
 }
 
+// 服务端新加的卡面（本版本没有内置图）：fixture 用本地画的底图代替服务端图片，不访问网络。
+const snowArt = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="757" viewBox="0 0 1200 757">'
+  + '<rect width="1200" height="757" fill="#1D3557"/>'
+  + '<circle cx="930" cy="250" r="150" fill="#F3EDE2" opacity=".92"/>'
+  + '<circle cx="1060" cy="520" r="70" fill="#F3EDE2" opacity=".55"/>'
+  + '<circle cx="780" cy="560" r="36" fill="#F3EDE2" opacity=".4"/>'
+  + '</svg>',
+)}`;
+const snowFace = {
+  code: 'snow',
+  names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色', 'zh-TW': '雪 · 夜色' },
+  imageUrl: snowArt,
+  amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+};
+const snowCard = card('card_snow', { orderId: 'order_snow', faceCode: 'snow', face: snowFace, amount: '50', codeTail: 'S9NW' });
+
 const purchasedPreview = {
-  status: 'AVAILABLE' as const, amount: '20', faceCode: 'cat', senderName: 'Yu',
+  status: 'AVAILABLE' as const, amount: '20', faceCode: 'cat', face: null, senderName: 'Yu',
   message: 'Happy birthday! Use Cindy more, work late less.', destination: 'PURCHASED' as const,
   claimDeadline: null, validityDays: null, claimedAt: null,
 };
@@ -103,10 +120,14 @@ void mountPage({
       getGiftCardPurchasePolicy: async () => ({
         currency: 'usd', dailyLimit: 5, windowHours: 24, remaining: ctx.case === 'limit' ? 0 : 5,
         maxQuantityPerOrder: 5, maxOrderAmount: null, minFaceValue: '20', maxFaceValue: '500',
-        faces: ['cindy', 'cat', 'bell', 'leap'],
+        ...(ctx.case === 'server-face'
+          ? { faces: ['snow', 'cindy', 'cat', 'bell', 'leap'], faceCatalog: [snowFace] }
+          : { faces: ['cindy', 'cat', 'bell', 'leap'], faceCatalog: [] }),
         maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: 60,
       }),
-      listPurchasedGiftCards: async () => ({ cards, nextCursor: null, emailSupported: true }),
+      listPurchasedGiftCards: async () => ({
+        cards: ctx.case === 'server-face' ? [snowCard, ...cards] : cards, nextCursor: null, emailSupported: true,
+      }),
       // 发到邮箱：记在内存列表里，状态刷新读回同一份。
       sendPurchasedGiftCardEmail: async ({ cardId, email }: { cardId: string; email: string }) => {
         const index = cards.findIndex((item) => item.cardId === cardId);

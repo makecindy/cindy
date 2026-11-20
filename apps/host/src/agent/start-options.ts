@@ -181,6 +181,8 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     resolveConfiguredContextWindow: budget.resolveConfiguredContextWindow,
     /** The task's window budget the user set (null: the route's default). */
     readStoredSessionContextWindowBudget: budget.readStoredSessionContextWindowBudget,
+    /** Whether a budget change changes a route's effective window (the budget core, as the desktop's). */
+    contextWindowBudgetChangesEffectiveWindow: budget.contextWindowBudgetChangesEffectiveWindow,
     prepareStartOptions,
     onBeforeStart,
     async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {

@@ -1416,6 +1416,8 @@ if (typeof window !== 'undefined') {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
+      // A follow-up may have been absent from every loaded task list until its first worker committed.
+      if (patch.sideChatPromoted) refreshAfterNotification();
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;

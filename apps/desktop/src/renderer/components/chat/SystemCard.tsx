@@ -1049,6 +1049,8 @@ function AutoResumeActionRow({
       : t('chat.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('chat.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live

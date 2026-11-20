@@ -5,6 +5,7 @@ import type {
   RemoteScheduleStatus,
   RemoteTimestamp,
 } from './scheduleTypes';
+import { parseAgentErrorCode } from './errorRedaction.js';
 import {
   presentationDate,
   presentationText,
@@ -704,6 +705,10 @@ export function scheduleFailureDetails(run: FailedScheduleRunSnapshot): string {
 
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  if ((!run.failureKind || run.failureKind === 'execution') &&
+    parseAgentErrorCode(run.errorMsg ?? '')?.code === 'MODEL_CATALOG_UNCONFIRMED') {
+    return 'modelCatalogUnconfirmed';
+  }
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;

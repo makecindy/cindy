@@ -1,11 +1,15 @@
 import { renderHistoryView, type HistoryViewController, type HistoryViewSnapshot, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
 import type { AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
 import { insertMobileForkOriginItem, type MobileForkOrigin, type MobileMessageRenderItem, type MobileWorkChildItem } from './messageRenderModel';
-import type { RemoteMessage } from './types';
+import type { RemoteMessage, RemoteSession } from './types';
 import { buildMobileStreamingRenderWindow, committedMobileStreamingPrefixItemCount,
   type MobileStreamingRenderPrefixCache } from './messageRenderStreamingCache';
 import { reconcileMobileMessageRenderItems } from './messageRenderReconcile';
 import { countMobileRenderItemDiffs } from './messagePresentation';
+
+export function mobileSessionHistoryBoundary(session: Pick<RemoteSession, 'source' | 'sideChatPromoted' | 'createdAt'> | null): number | undefined {
+  return session?.source === 'side-chat' || session?.sideChatPromoted ? Date.parse(session.createdAt) : undefined;
+}
 
 // One derived prefix per history owner; it cannot outlive the controller. The raw
 // fallback has a separate cache because its sequence is not the history sequence.

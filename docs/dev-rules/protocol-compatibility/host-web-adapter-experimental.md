@@ -27,6 +27,8 @@ Host SSE v2 由 `protocol=2` 和 `x-cindy-event-protocol: 2` 双向确认，新�
 
 客户端模式追加可信窗口专用的 `maker:runtime-plugins`，映射到 `POST /api/runtime-plugins`，并转发插件拦截、改写、熔断三种既有窗口事件。旧窗口对新 Host 保持原调用和原事件处理，新窗口连旧 Host 时仅这条新通道收到沿用的 `404 not_found`，无需改动 Device Link 或中转。
 
+`GET /health` 对无浏览器 Origin 且具有本机 profile bearer 的请求追加可选的 `legacyPluginApprovals` 诊断，供 `cindy-host status` 使用。旧 Host 省略字段，旧客户端忽略字段，浏览器配对会话及 Device Link 仍无这项诊断。
+
 同机原生客户端新增 `/control/platform/socket`，复用 profile bearer，并要求
 `x-cindy-host-instance` 与 Host 当前实例一致。拒绝浏览器 Origin 连接，窗口身份绑定
 账号、客户端 ID 和 PID。HTTP/SSE 的实例头为可选增量；旧显式客户端不带头时继续原协议，

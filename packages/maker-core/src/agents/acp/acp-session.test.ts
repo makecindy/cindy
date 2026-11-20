@@ -368,6 +368,109 @@ describe('AcpSession turns', () => {
       ['tool_use', 'background'], ['tool_result_full', 'background'], ['tool_result', 'background'],
     ]);
   });
+
+  // Regression (Antigravity, 2026-11-20): the agent answered the prompt while its `git commit`
+  // was still running and reported the result 21 s later. The call used to be marked done at
+  // the end of the answer, and the real result arrived as a second card nobody saw as running.
+  it('keeps a call the agent is still running open past its answer and settles it with the later result', async () => {
+    let now = 1_000;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { now: () => now });
+    await session.send({ type: 'user', content: 'commit and open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'commit', title: 'git commit', status: 'in_progress' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Committing, then pushing.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'commit',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: '[fix 79a580a] fix' } }],
+    });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('tool_result'));
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.slice(-2).map((event) => [event.type, event.turnScope, (event.data as AcpRecord).summary]))
+      .toEqual([['tool_result_full', 'background', undefined], ['tool_result', 'background', 'done']]);
+    // Background output keeps the runtime busy for the quiet window, then it is idle.
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+    now += 30_001;
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(false);
+  });
+
+  // Live check against Antigravity (2026-11-20): after its command finished it wrote
+  // "The content of done.txt is: finished" between turns. Nothing ever closed that text, so it
+  // streamed forever and was never saved (no between-turn reply of the agent was in local history).
+  it('closes a reply the agent writes between turns once it pauses, so it is kept like any reply', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { events } = await open(agent);
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'The content is: ' } });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '`finished`' } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.map((event) => [event.type, (event.data as AcpRecord).isFinal])).toEqual([['text', false], ['text', false]]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.at(-1)).toMatchObject({
+      type: 'text',
+      turnScope: 'background',
+      data: { text: 'The content is: `finished`', isFinal: true, isFullText: true },
+    });
+  });
+
+  // PR #11776 review: progress on a running call changes nothing on screen, so it produced no
+  // event, never restarted the quiet bound, and a command still reporting progress was marked done.
+  it('treats progress on a call left running as activity, so the quiet bound restarts', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { openToolQuietCapMs: 60_000 });
+    await session.send({ type: 'user', content: 'build it' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'build', title: 'Build', status: 'in_progress' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(40_000);
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'build', status: 'in_progress' });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+  });
+
+  it('bounds calls left open between turns: settled after the quiet cap, interrupted when the agent exits', async () => {
+    vi.useFakeTimers();
+    const quiet = createFakeAgent();
+    const capped = await open(quiet, { openToolQuietCapMs: 60_000 });
+    await capped.session.send({ type: 'user', content: 'wait for CI' });
+    await vi.waitFor(() => expect(quiet.prompts).toHaveLength(1));
+    quiet.update({ sessionUpdate: 'tool_call', toolCallId: 'wait', title: 'Run schedule', status: 'in_progress' });
+    quiet.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(capped.events.at(-1)?.type).toBe('done'));
+    // Stopping while the agent works between turns cancels that work (agents without a prompt in flight ignore it).
+    await capped.session.abort();
+    expect(quiet.methods()).toContain('session/cancel');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(capped.events.at(-1)?.type).toBe('done');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(capped.events.at(-1)).toMatchObject({ type: 'tool_result', turnScope: 'background', data: { summary: 'done' } });
+
+    const exiting = createFakeAgent();
+    const live = await open(exiting);
+    await live.session.send({ type: 'user', content: 'deploy' });
+    await vi.waitFor(() => expect(exiting.prompts).toHaveLength(1));
+    exiting.update({ sessionUpdate: 'tool_call', toolCallId: 'deploy', title: 'Deploy', status: 'in_progress' });
+    exiting.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(live.events.at(-1)?.type).toBe('done'));
+    exiting.exit();
+    await live.ended;
+    expect(live.events.slice(-2)).toMatchObject([
+      { type: 'tool_result_full', turnScope: 'background', data: { isError: true } },
+      { type: 'tool_result', turnScope: 'background', data: { summary: 'failed' } },
+    ]);
+  });
 });
 
 describe('AcpSession permissions', () => {
@@ -615,6 +718,118 @@ describe('AcpSession agent modes', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
     expect(seen).toHaveLength(1);
   });
+
+  // Rule: agent-initiated current_mode_update updates the tracked mode (ignoring unknown mode IDs) so switching back still sends set_config_option.
+  // Minimal failing input: session opens in 'default', agent sends current_mode_update('plan'), user switches back to 'default'.
+  it('syncs tracked mode on current_mode_update so switching back is not skipped', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'unknown-mode' });
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual([]);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' });
+    await session.setPermissionMode('plan');
+    expect(modeChanges(agent)).toEqual([]);
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual(['default']);
+  });
+
+  // Rule: on session/load, pre-response current_mode_update is stale replay (dropped), while a post-response
+  // current_mode_update arriving in the same stdout chunk is newer than configOptions and must be preserved.
+  // Minimal failing input: one chunk carrying [replay('plan'), loadResponse('default'), live('accept-edits')] (and [replay('plan'), loadResponse('default')]).
+  it('drops pre-response current_mode_update replay on session/load while keeping post-response updates in the same chunk', async () => {
+    const runChunkedLoad = async (afterResponse?: string) => {
+      const lineListeners = new Set<(line: string) => void>();
+      const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+      const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+      const sent: AcpRecord[] = [];
+      const transport: AcpLineTransport = {
+        write(line) {
+          const msg = JSON.parse(line) as AcpRecord;
+          sent.push(msg);
+          queueMicrotask(() => {
+            if (msg.method === 'initialize') {
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } }) + '\n');
+            } else if (msg.method === 'session/load') {
+              const frames: AcpRecord[] = [
+                { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } } },
+                { jsonrpc: '2.0', id: msg.id, result: { configOptions } },
+              ];
+              if (afterResponse) {
+                frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: afterResponse } } });
+              }
+              decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+            } else if (msg.method === 'session/set_config_option') {
+              const value = (msg.params as AcpRecord).value;
+              const updated = [{ ...configOptions[0], currentValue: value }];
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }) + '\n');
+            }
+          });
+        },
+        onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+        onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+        async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+      };
+      const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' }, resumeSessionId: 'old-1' });
+      const changes = () => sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value);
+      return { session, changes };
+    };
+
+    // Guard for the pre-response replay-drop branch: stale 'plan' before response must not beat 'default'.
+    const replayOnly = await runChunkedLoad();
+    await replayOnly.session.setPermissionMode('default');
+    expect(replayOnly.changes()).toEqual([]);
+    await replayOnly.session.setPermissionMode('plan');
+    expect(replayOnly.changes()).toEqual(['plan']);
+
+    // Post-response update in the same chunk must win over the load response's 'default'.
+    const withPost = await runChunkedLoad('accept-edits');
+    await withPost.session.setPermissionMode('acceptEdits');
+    expect(withPost.changes()).toEqual([]);
+    await withPost.session.setPermissionMode('default');
+    expect(withPost.changes()).toEqual(['default']);
+  });
+
+  // Rule: a session/set_config_option response must be applied in wire order so a subsequent current_mode_update
+  // arriving in the same stdout chunk is not overwritten when the await resumes.
+  // Minimal failing input: one chunk carrying [setConfigResponse('plan'), current_mode_update('default')], then user requests 'plan' again.
+  it('applies set_config_option responses in wire order before same-chunk mode notifications', async () => {
+    const lineListeners = new Set<(line: string) => void>();
+    const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+    const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+    const sent: AcpRecord[] = [];
+    let firstSet = true;
+    const transport: AcpLineTransport = {
+      write(line) {
+        const msg = JSON.parse(line) as AcpRecord;
+        sent.push(msg);
+        queueMicrotask(() => {
+          if (msg.method === 'initialize') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }) + '\n');
+          } else if (msg.method === 'session/new') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'sess-1', configOptions } }) + '\n');
+          } else if (msg.method === 'session/set_config_option') {
+            const value = (msg.params as AcpRecord).value;
+            const updated = [{ ...configOptions[0], currentValue: value }];
+            const frames: AcpRecord[] = [{ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }];
+            if (firstSet) {
+              firstSet = false;
+              frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' } } });
+            }
+            decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+          }
+        });
+      },
+      onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+      onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+      async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+    };
+    const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' } });
+    await session.setPermissionMode('plan');
+    // Same-chunk current_mode_update moved the agent back to 'default'; requesting 'plan' again must send a new RPC.
+    await session.setPermissionMode('plan');
+    expect(sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value)).toEqual(['plan', 'plan']);
+  });
 });
 
 const silentLogger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => silentLogger };
@@ -670,6 +885,60 @@ describe('AcpAgent (the acp engine)', () => {
     await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
     expect(contexts).toHaveLength(1);
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
+  });
+
+  // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
+  // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
+  // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
+  // 最小失败输入：带 deviceHosted 的启动；对端不支持 HTTP MCP；deviceHosted.guest。
+  const hosted = {
+    workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'win32' as const, shell: 'bash', isGitRepo: true,
+    tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 'tunnel-token', mcpServers: ['cindy', 'cindy_memory'],
+  };
+
+  it('runs a task of another computer with its own tools off and every tool coming through the task tunnel', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const connected: unknown[] = [];
+    const prepared = vi.fn(async () => ({ mcpBridge: { token: 'local', servers: [{ name: 'local_tools', url: 'http://127.0.0.1:1/mcp/local_tools' }] } }));
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      preparePiExtraSpawnConfig: prepared,
+      endpoints: { connect: async (_key, options) => { connected.push(options); return agent.transport; } },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: hosted, pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(connected).toEqual([{ remoteWorkspace: true }]);
+    // This computer's own Cindy tools, plugins and memory stay out of a task that lives elsewhere.
+    expect(prepared).not.toHaveBeenCalled();
+    const bearer = [{ name: 'Authorization', value: 'Bearer tunnel-token' }];
+    expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).mcpServers).toEqual([
+      { type: 'http', name: 'cindy_exec', url: 'http://127.0.0.1:4711/mcp/cindy_exec', headers: bearer },
+      { type: 'http', name: 'cindy', url: 'http://127.0.0.1:4711/mcp/cindy', headers: bearer },
+      { type: 'http', name: 'cindy_memory', url: 'http://127.0.0.1:4711/mcp/cindy_memory', headers: bearer },
+    ]);
+    await handle.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const [note, message, more] = agent.prompts[0]!.params.prompt as Array<{ text: string }>;
+    // The agent gets no Cindy system prompt: the first message tells it where the project is and which tools reach it.
+    expect(note!.text).toContain('/shadow/p');
+    expect(note!.text).toContain('cindy_exec');
+    expect(note!.text).toContain('You are a Worker.');
+    expect(message).toEqual({ type: 'text', text: 'hi' });
+    expect(more).toBeUndefined();
+  });
+
+  it.each([
+    ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, {}, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
+    ['the task belongs to a shared user', { agentCapabilities: { mcpCapabilities: { http: true } } }, { guest: true }, "'remoteSession' not supported"],
+  ])('refuses a task of another computer when %s', async (_name, agentOptions, extra, message) => {
+    const agent = createFakeAgent(agentOptions);
+    await expect(createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: { ...hosted, ...extra },
+    })).rejects.toThrow(message);
+    // Refused before any session exists on the agent's side.
+    expect(agent.methods()).not.toContain('session/new');
   });
 
   // Unit regressions for PR #11549. Simulate a failed resume with and without

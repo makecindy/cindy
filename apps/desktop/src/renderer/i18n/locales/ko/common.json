@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+    "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
     "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_PARAMS": "입력값이 올바르지 않습니다. 확인 후 다시 시도하세요.",
@@ -6783,6 +6784,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "이 컴퓨터의 통신량",
+          "range": "집계 기간",
+          "last5m": "최근 5분",
+          "lastHour": "최근 1시간",
+          "lastDay": "최근 24시간",
+          "sent": "송신",
+          "received": "수신",
+          "total": "합계",
+          "scope": "파일 직접 전송을 포함한 직접 연결 및 릴레이 연결의 예상 통신량입니다. 기기 검색용 브로드캐스트와 별도 경로의 오디오·비디오 스트림 및 HTTP 전송은 제외됩니다."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8255,7 +8267,7 @@
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
         "agentErrandDetail": "생성된 작업은 Cindy 작업 목록에 표시되며 진행 상황을 확인하고 대화를 이어갈 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
-        "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다.",
+        "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다. 기기 동기화를 지원하는 플러그인은 자동화를 실행할 컴퓨터를 확인해 달라고 요청할 수도 있습니다.",
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험: 사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
@@ -8499,6 +8511,13 @@
         "openInSidebar": "사이드바에서 열기",
         "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: 원격 사용 허용",
+          "description": "켜면 내 다른 컴퓨터에서 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
+          "unsupported": "이 플러그인은 아직 다른 컴퓨터에서 엔진을 사용하는 것을 지원하지 않습니다.",
+          "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
+          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용"
+        },
         "githubRelease": {
           "title": "플러그인 업데이트",
           "installed": "설치된 버전 {{version}}",
@@ -8567,6 +8586,8 @@
         "browserUse": "이 브라우저 확장 사용",
         "browserActivated": "브라우저 확장을 선택했습니다",
         "browserActivationFailed": "확장을 선택하지 못했습니다. 플러그인을 활성화하고 연결 전환을 확인하세요.",
+        "automationHostSelect": "이 컴퓨터를 {{name}} 자동 작업의 기본 기기로 지정할까요?",
+        "automationHostClear": "이 컴퓨터의 {{name}} 자동 작업 기본 기기 지정을 해제할까요?",
         "browserSwitchTitle": "브라우저 확장 연결을 전환할까요?",
         "browserSwitchMessage": "이 연결에 “{{name}}”을(를) 사용할까요?",
         "browserSwitchDetail": "인스턴스: {{instance}}\n등록 이름: {{host}}\n현재 등록을 바꾸고 확장을 이 플러그인에 연결합니다.",
@@ -15041,6 +15062,9 @@
       "usageLimitAutoContinueTitle": "사용량 한도가 재설정될 때까지 별도 조치가 없으면 이 작업을 자동으로 계속합니다",
       "usageLimitAutoContinueCancel": "취소",
       "usageLimitAutoContinueCancelTitle": "자동 계속 취소(오류와 다시 시도는 유지됩니다)",
+      "usageLimitReached": "모델 계정이 사용량 한도에 도달했습니다",
+      "usageLimitReachedWithReset": "모델 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
+      "usageLimitReachedNoReset": "모델 계정이 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 다른 모델로 전환한 후 다시 시도하세요.",
       "codexOrganizationUsageLimitWithReset": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
       "codexOrganizationUsageLimit": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
       "codexUsageLimitWithReset": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
@@ -15112,6 +15136,7 @@
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
+      "pluginEngineStatus": "백그라운드에서 계속 작업 중…",
       "bashWorkStatus_one": "백그라운드에서 작업 중(명령 {{count}}개)…",
       "bashServiceStatus_one": "백그라운드 서비스 실행 중({{count}}개)",
       "bashWorkStatus_other": "백그라운드에서 작업 중(명령 {{count}}개)…",
@@ -15146,6 +15171,7 @@
       "continueFailed_other": "세션 {{count}}개를 이어서 진행하지 못했습니다. 세션을 열어 다시 시도하세요."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
@@ -15816,7 +15842,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "현재 연결에서 이전 모델을 사용할 수 없어 모델을 전환하는 동안 컨텍스트를 압축하지 못했습니다.",
       "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+      "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 턴은 종료되었으니 메시지를 다시 보내 주세요.",
@@ -15866,6 +15894,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "이 컴퓨터에서는 세션의 이전 실행 상태를 복원할 수 없습니다. 다른 컴퓨터 또는 제공자의 모델을 선택해 컨텍스트를 전달하고 계속하세요. 기존 메시지는 유지됩니다.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "플러그인 엔진이 이전 대화를 복원하지 못했습니다. 메시지는 보존됩니다. 다른 엔진을 선택하거나 새 작업을 시작하세요.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "이 플러그인 엔진은 작업이 있는 컴퓨터의 도구를 사용할 수 없어, 지금은 다른 컴퓨터에서 이 작업을 실행할 수 없습니다. 다른 엔진이나 모델을 선택하세요.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "이 플러그인 엔진은 이 컴퓨터의 작업만 실행할 수 있으며, 아직 다른 컴퓨터에서 사용할 수 없습니다.",
       "REMOTE_AGENT_RESUME_REJECTED": "모델을 실행하는 컴퓨터에서 이 세션을 재개할 수 없습니다. 세션 목록에서 새 세션을 만들고 계속하는 데 필요한 내용을 복사하세요. 기존 세션과 전송 대기 중인 메시지는 유지됩니다.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 사용을 허용하지 않았습니다. 내 컴퓨터라면 그 컴퓨터에서 이 제공자의 '원격 사용 허용'을 켜세요. 공유받은 것이라면 소유자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하세요. 다른 모델을 선택할 수도 있습니다.",
@@ -16034,7 +16064,6 @@
       "opened": "미리보기 페이지를 열었습니다"
     },
     "sideChat": {
-      "openPage": "전체 작업 페이지 열기",
       "returnMain": "기본 작업으로 돌아가기",
       "new": "새 사이드 채팅",
       "mainWindowDescription": "사이드 채팅은 현재 메인 창에서 사용할 수 있습니다. 대화 내용은 저장되어 있습니다.",
@@ -16042,6 +16071,14 @@
       "commandDescription": "메인 작업의 맥락으로 사이드 채팅을 엽니다. 명령 뒤의 질문은 초안으로 입력됩니다.",
       "title": "사이드 채팅",
       "context": "사이드 채팅을 연 시점까지 완료된 컨텍스트를 사용합니다. 메인 작업은 계속 실행되며, 이 탭을 닫을 때까지 기록이 유지됩니다.",
+      "viewCollaboration": "협업 보기",
+      "openConversation": "대화 열기",
+      "openFromTaskList": "왼쪽 작업 목록에서도 열 수 있습니다.",
+      "returnToSideChat": "사이드바의 추가 질문으로 돌아가기",
+      "reopenSideChat": "사이드바의 추가 질문 다시 열기",
+      "origin": "이 대화는 사이드바의 추가 질문에서 시작되었습니다.",
+      "originNamed": "이 대화는 「{{title}}」의 사이드바 추가 질문에서 시작되었습니다.",
+      "originUnavailable": "이 대화는 사이드바의 추가 질문에서 시작되었습니다. 원래 작업은 열 수 없습니다.",
       "opening": "여는 중…",
       "notReady": "메인 작업의 첫 답변이 완료될 때까지 기다려 주세요.",
       "unsupported": "이 작업의 Agent는 다른 실행 환경에서 실행됩니다. 여기서는 아직 사이드 채팅을 사용할 수 없습니다.",
@@ -16050,9 +16087,10 @@
       "mainTaskOnly": "메인 작업에서 사이드 채팅을 열어 주세요.",
       "sharedTaskUnavailable": "공유 작업에서는 사이드 채팅을 사용할 수 없습니다.",
       "archivedTask": "이 작업의 보관을 취소한 후 사이드 채팅을 열어 주세요.",
-      "closeTitle": "사이드 채팅을 닫을까요?",
-      "closeDescription": "이 채팅을 중지하고 삭제합니다. 메인 작업에는 영향을 주지 않습니다.",
-      "closeConfirm": "닫고 삭제",
+      "closeTitle": "이 후속 질문을 닫고 보관할까요?",
+      "closeDescription": "왼쪽 작업 목록의 해당 작업도 보관됩니다.",
+      "closeDescriptionRunning": "왼쪽 작업 목록의 해당 작업도 보관되며 협업 Worker가 중지됩니다.",
+      "closeConfirm": "닫고 보관",
       "closeFailed": "사이드 채팅을 닫지 못했습니다. 다시 시도해 주세요."
     },
     "botStartedTasks": {
@@ -16068,9 +16106,15 @@
       "toggle": "“{{title}}” 회신 펼치기/접기",
       "openTask": "작업 열기"
     },
+    "geminiRateLimit": {
+      "retried": "Gemini의 권장 대기 시간 후 자동으로 재시도했습니다",
+      "title": "Gemini의 분당 입력 한도에 도달했습니다.",
+      "exhausted": "한 번 자동으로 재시도했지만 여전히 제한됩니다. 잠시 후 직접 재시도할 수 있습니다.",
+      "retryIn": "{{seconds}}초 후 자동 재시도"
+    },
     "subscriptionAccountError": {
-      "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
-      "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+      "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
+      "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
       "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
       "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
@@ -16305,6 +16349,14 @@
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
       "remoteNativeOauthUnavailable": "원격 작업에서는 Claude 구독을 사용할 수 없습니다. 게이트웨이 또는 API 키 모델을 선택하세요",
       "claudeSubscriptionWorkspaceOverride": "이 폴더의 .claude 설정이 Claude의 연결 대상이나 인증 방식을 변경하므로 여기서는 Claude 구독을 사용할 수 없습니다. 해당 설정을 제거하거나 게이트웨이 또는 API 키 모델을 선택하세요",
+      "savedModel": {
+        "loading": "선택한 모델에 연결하는 중…",
+        "checkFailed": "선택한 모델을 확인할 수 없습니다",
+        "engine": "선택한 엔진을 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "source": "선택한 소스를 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "model": "선택한 모델을 사용할 수 없습니다. 이 작업에 사용할 모델을 선택하세요.",
+        "thisTaskOnly": "선택한 모델은 이 작업에만 적용됩니다"
+      },
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
       "branchChanged": "프로젝트의 현재 브랜치가 {{branch}}로 바뀌었어요. 확인한 후 다시 보내세요.",
@@ -22079,7 +22131,8 @@
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
-      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다."
+      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",

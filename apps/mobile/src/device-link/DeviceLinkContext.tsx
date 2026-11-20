@@ -25,6 +25,7 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
@@ -1473,7 +1474,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
-        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+        providerPickerListArgs(),
       ),
       readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
         client, deviceId, 'maker:get-capabilities', [agent],
@@ -1495,12 +1496,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const recoverNetwork = (urgent: boolean) => {
       const replaceOldPath = networkPathChanged;
       networkPathChanged = false;
-      // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same).
-      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged();
+      // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same);
+      // on a route change its relay connection is replaced too, as Device Link's below.
+      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged({ routeChanged: replaceOldPath });
       // Only this phone's established connection used the lost route. Keep
       // handshakes and congestion backoff on their existing recovery path.
       if (replaceOldPath && client.getStatus() === 'online') {
-        client.restartConnections('network-path-changed');
+        // An Agent-Net primary moves to the new address by itself and replaced only its relay connection (above). Rebuilding it
+        // closed every session and connected from scratch: 2026-11-20 on a phone, about 12 s after Wi-Fi/5G switches against
+        // 1.8 s on Device Link.
+        client.restartConnections('network-path-changed', { keepPrimary: primaryEncrypted });
       } else {
         client.notifyNetworkChanged({ urgent });
       }

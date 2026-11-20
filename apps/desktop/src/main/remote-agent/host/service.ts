@@ -15,7 +15,8 @@ import { nativeHistoryStorage } from '../nativeHistoryStorage';
 import fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, type RemoteAgentRequest } from '@cindy/device-link';
+import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND, type RemoteAgentRequest } from '@cindy/device-link';
+import { isPluginEngineOfferedRemotely } from '../../maker-host/pluginEngineRemoteUse.js';
 import type { Maker, StartSessionOptions } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 
@@ -67,7 +68,7 @@ import { captureGeneratedImageStorage, generatedImageErrorCode, handleGeneratedI
 const log = createLogger('remote-agent:host');
 
 /** 对方任务的启动选项 → 本机 Agent 的启动选项(工作目录是影子目录，工具经隧道回到对方)。 */
-export function hostedStartOptions(input: HostedStartInput): StartSessionOptions {
+export function hostedStartOptions(input: Omit<HostedStartInput, 'kind'>): StartSessionOptions {
   const { options, workspace } = input;
   const client = options.localApplication;
   if (client && (!input.localApplicationStorage || !input.mcpServers.includes(client.mcpName))) {
@@ -1006,6 +1007,14 @@ export function installRemoteAgentHost(options: {
       } catch {
         return false;
       }
+    },
+    // 插件提供的引擎：只给同账号的电脑(分享的受邀者一律不提供)，用引擎自己的登录直连厂商，
+    // 没有 Cindy 的供应商路由、模型范围与速度策略。
+    pluginEngines: {
+      isOffered: (providerId, controller) => !isProviderSharePeer(controller) && isControllerAuthorized(controller)
+        && isPluginEngineOfferedRemotely(providerId),
+      start: (input) => options.getMaker().startHostedAgentSession(REMOTE_AGENT_PLUGIN_ENGINE_KIND,
+        hostedStartOptions(input)),
     },
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     startHosted: async (input) => {
