@@ -194,7 +194,13 @@ export function recordSessionCodexTurnUsage(
           model: isRemoteCodexSession ? normalizeModelIdForPricing(row.model)
             : isSubscriptionValue ? codexSubscriptionUsageModelKey(normalizeModelIdForPricing(row.model))
               : codexApiUsageModelKey(normalizeModelIdForPricing(row.model)),
-          recordedAt, attribution: isRemoteCodexSession ? undefined : tokenAttribution(row, turnContext),
+          recordedAt, attribution: isRemoteCodexSession ? undefined : {
+            ...tokenAttribution(row, turnContext),
+            ...(!(execution && codexSegmentsReliable && codexUsageSegments
+              .filter(segment => (segment.model ?? turnModel) === row.model)
+              .every(segment => segment.model && segment.modelConfirmed === true))
+              ? { modelUnconfirmed: true } : {}),
+          },
           money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
           inputTokensDelta: row.inputTokens, outputTokensDelta: row.outputTokens,
           cacheReadTokensDelta: row.cacheReadTokens, cacheCreateTokensDelta: row.cacheCreateTokens,

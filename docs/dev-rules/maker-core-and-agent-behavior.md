@@ -576,8 +576,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `packages/maker-core/src/agents/shared/desktop-input-shell.ts` 一份判定覆盖：Claude PreToolUse
   守卫直接拒绝（完全访问档同样生效，仅本地运行时：SSH 远端的本地钩子不会跨 RPC 生效，远端桌面
   工具不受影响）；Ask／Auto 档由共用审阅策略（`continuation-policy.ts`，写明只针对运行 Cindy 的这台
-  电脑）让 reviewer 拦下。Codex 完全访问档（`approvalPolicy: never`，宿主没有拦截点）与 Pi 完全访问档
-  （非退化红线）不加拦截。
+  电脑）让 reviewer 拦下。对于直接调用 `cua-driver` 的路径，本地 Codex 普通任务在 Cindy 专用的实际
+  运行目录加载原生执行规则，包括恢复旧账号会话和完全访问档。规则在进程启动前拒绝匹配的驱动
+  子命令，版本和状态查询仍可执行。共用用户原生配置目录、远程执行及其他脚本输入未由这条规则覆盖。
+  Pi 完全访问档沿用原有策略。
 - Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
   使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
   第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户

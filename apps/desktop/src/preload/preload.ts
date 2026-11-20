@@ -2596,8 +2596,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
   getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-get'),
-  setProductTokensEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
-    ipcRenderer.invoke('analytics:product-tokens-set', enabled === true),
   setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
   /** 恢复默认:删掉开关 override,同意事实保留。 */
@@ -6804,6 +6802,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
     /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
     refreshPluginEngines: (): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines'),
+    /** Opens or closes one engine of this computer for the owner's other computers. */
+    setPluginEngineRemoteUse: (key: string, enabled: boolean): Promise<{ supported: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('maker:set-plugin-engine-remote-use', { key, enabled }),
     onPluginEnginesChanged: fanOutPluginEnginesChanged,
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>

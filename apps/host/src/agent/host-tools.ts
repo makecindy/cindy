@@ -24,13 +24,20 @@ import type { HostStorageService } from '../../../desktop/src/main/cindy-brain/s
 import { createStorageToolExecutor } from '../../../desktop/src/main/cindy-brain/storageToolAccess.js';
 import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desktop/src/main/cindy-brain/hostServiceCatalog.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
+import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
+import { parseTypedError } from '../typed-error.mjs';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
+
+const PROJECT_WRITE_TOOLS = new Set(['create_project', 'update_project_info', 'rename_project', 'remove_project']);
 
 interface Options {
   profileDir: string;
   ownerId: string;
   owner(): DataOwnerPushStamp;
   current(): boolean;
+  profileHold?(): string | null;
   deviceId?(): string;
   onProjectsChanged?(catalogChanged: boolean): void;
   getGhost(id: string): InstalledGhost | null;
@@ -59,16 +66,31 @@ export function createHostToolService(options: Options) {
     }) : async () => ({ ok: false, errorCode: 'HOST_NOT_READY', message: 'Task input authority is unavailable.' }),
   });
   const authorizeCall: ToolCallAuthorizer = async call => {
+    const projectWrite = call.server === 'cindy_helper' && PROJECT_WRITE_TOOLS.has(call.tool);
+    const projectHold = () => projectWrite ? options.profileHold?.() : null;
+    let held = projectHold();
+    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
+
     const database = getCurrentDbClientSnapshot();
     const decision = await authorizeTaskCall(call);
     if (!decision.ok) return decision;
+    // Task authorization can wait for a confirmation while the desktop takes the profile.
+    held = projectHold();
+    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
     const assertCurrent = () => {
       if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
     };
     try { assertCurrent(); }
     catch { return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: 'Host account changed.' }; }
     return { ok: true, run: operation => {
-      const run = async () => { assertCurrent(); const result = await operation(); assertCurrent(); return result; };
+      const run = async () => {
+        assertCurrent();
+        const occupied = projectHold();
+        if (occupied) throwIpcError('PRECONDITION_FAILED', occupied);
+        const result = await operation();
+        assertCurrent();
+        return result;
+      };
       return decision.run ? decision.run(run) : run();
     } };
   };
@@ -101,7 +123,14 @@ export function createHostToolService(options: Options) {
         return result;
       },
       updateProjectInfo: async (input, authorization) => {
-        const result = await updateProjectInfo(input, authorization);
+        const result = await updateProjectInfo(input, authorization && {
+          ...authorization,
+          assertCurrent() {
+            authorization.assertCurrent?.();
+            const held = options.profileHold?.();
+            if (held) throwIpcError('PRECONDITION_FAILED', held);
+          },
+        });
         if (current()) options.onProjectsChanged?.(false);
         return result;
       },
@@ -117,12 +146,24 @@ export function createHostToolService(options: Options) {
       },
     },
   });
+  const updateProjectTool = projectTools.projectManagement!.updateInfo!;
+  projectTools.projectManagement!.updateInfo = async request => {
+    try {
+      return await updateProjectTool(request);
+    } catch (error) {
+      const refusal = parseTypedError(error);
+      if (refusal?.code !== 'PRECONDITION_FAILED' || !refusal.message.startsWith(HOST_PROFILE_IN_USE_BY_DESKTOP)) throw error;
+      return { ok: false, errorCode: refusal.code, message: refusal.message };
+    }
+  };
   // Node plugin installation and connection lifecycles are not connected yet.
   // Agent providers remain unchanged; plugins fail before setup.
   const supportsPluginServer = (server: string) => server !== 'cindy_computer';
   const providers = createLiziMcpProviders({
     xdtHelper: { authorizeCall, ...projectTools,
       hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost, supportsPluginServer }),
+      // The product help the desktop gives get_capabilities({ scope: 'help' }) (mcp-providers.ts productHelpDocs).
+      productHelpDocs: HELP_KNOWLEDGE,
       resolveSurface: async ({ sessionId }) => {
         const db = current() ? tryGetDbClient() : null;
         return db ? resolveHelperSurface(db, sessionId) : 'restricted';
@@ -140,6 +181,15 @@ export function createHostToolService(options: Options) {
   services.replace(providers);
   return {
     providers, terminal, services,
+    /**
+     * Whether a task's history reads may cover every task: the cindy_helper history decision
+     * (historyToolCallbacks.ts resolveSessionScope, through the same authorizer), which the desktop's
+     * session_search shares (mcp-providers.ts botReadsAccountHistory).
+     */
+    async readsAccountHistory(sessionId: string | undefined): Promise<boolean> {
+      if (!sessionId && getPluginHostToolCaller()) return true;
+      return (await authorizeCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} })).ok;
+    },
     request(id: string, payload: unknown, pageCurrent: () => boolean) {
       return handlePluginHostToolRequest(id, payload, () => current() && pageCurrent(), {
         owner: options.owner, getGhost: options.getGhost,

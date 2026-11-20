@@ -2776,9 +2776,7 @@
       "autoUpdateDisabledToast": "已關閉空閒時自動安裝更新",
       "autoUpdateSaveFailed": "儲存自動更新設定失敗",
       "analyticsLabel": "使用統計",
-      "analyticsDescription": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用程式版本、裝置識別碼等裝置與使用環境資訊，登入後還包含你的帳號 ID；不包含任何對話內容、檔案或提示詞。關閉後立即停止上報。",
-      "productTokenUsage": "參與模型用量統計",
-      "productTokenUsageHint": "開啟後，本機上此帳號新增的 token 數按接入來源和模型計數。所屬區域彙總後傳送至 TapDB。",
+      "analyticsDescription": "開啟後，我們會用匿名代號取代你的帳號和裝置 ID，了解回訪情形和各模型的用量彙總，幫助我們改善產品。你的對話、檔案和提示詞都不在統計範圍內。",
       "analyticsEnabledToast": "已開啟使用統計",
       "analyticsDisabledToast": "已關閉使用統計",
       "analyticsSaveFailed": "儲存使用統計設定失敗",
@@ -6785,6 +6783,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "本機連線流量",
+          "range": "統計期間",
+          "last5m": "近 5 分鐘",
+          "lastHour": "近 1 小時",
+          "lastDay": "近 24 小時",
+          "sent": "傳送",
+          "received": "接收",
+          "total": "合計",
+          "scope": "估算直連與中繼的收發量，含檔案直傳。裝置探索廣播、獨立影音串流與 HTTP 傳輸除外。"
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -8257,7 +8266,7 @@
         "agentErrand": "可建立任務、執行工作並讀取結果",
         "agentErrandDetail": "建立的任務會顯示在 Cindy 任務列表中，可查看過程並繼續交流。",
         "agentSchedule": "可以請你新建自動化",
-        "agentScheduleDetail": "它只能為你開啟新建自動化的面板並把內容填好，是否建立由你在面板上選好模型後親手儲存決定。建立後由 Cindy 按你設定的時間執行，可能產生模型費用。",
+        "agentScheduleDetail": "它只能為你開啟新建自動化的面板並把內容填好，是否建立由你在面板上選好模型後親手儲存決定。建立後由 Cindy 按你設定的時間執行，可能產生模型費用。支援裝置同步的插件還可以請你確認由哪台電腦執行自動化。",
         "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
         "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能存取的本機檔案、存取網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",
@@ -8501,6 +8510,13 @@
         "openInSidebar": "在側邊欄中開啟",
         "panelPageHosted": "從插件頁開啟 · 離開插件頁自動關閉",
         "panelNone": "這個插件不含面板",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}：允許遠端呼叫",
+          "description": "開啟後，你的其他電腦可以用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
+          "unsupported": "這個插件還不支援讓其他電腦使用它的引擎。",
+          "remoteControlOff": "這台電腦還沒有允許同帳號裝置遠端控制，其他電腦不能使用這個引擎。",
+          "ariaLabel": "允許你的其他電腦使用 {{engine}}"
+        },
         "githubRelease": {
           "title": "插件更新",
           "installed": "目前版本 {{version}}",
@@ -8569,6 +8585,8 @@
         "browserUse": "使用此瀏覽器擴充功能",
         "browserActivated": "已選擇此瀏覽器擴充功能",
         "browserActivationFailed": "無法選擇此擴充功能，請確認擴充功能已啟用，並完成連線切換確認。",
+        "automationHostSelect": "要將這台電腦設為「{{name}}」的自動化主機嗎？",
+        "automationHostClear": "要取消這台電腦作為「{{name}}」的自動化主機嗎？",
         "browserSwitchTitle": "切換瀏覽器擴充功能連線？",
         "browserSwitchMessage": "將此瀏覽器連線交給「{{name}}」？",
         "browserSwitchDetail": "實例：{{instance}}\n註冊名稱：{{host}}\n這會取代目前的註冊，擴充功能將連線到此插件。",
@@ -13033,6 +13051,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，正在自動重試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫時沒有可用容量。請直接在這裡重發這則訊息重試，或在 Cindy 裡換一個模型。（在桌面端點「重試」也能繼續任務，但結果不會回到這則訊息裡。）"
         },
+        "audioInputUnavailable": "目前的模型連線無法直接讀取音訊。可以請 Cindy 先將音訊轉成文字，再繼續處理。",
         "toolLoop": {
           "generic": "模型重複呼叫工具次數過多，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
           "consecutive": "模型重複呼叫同一個工具 {{n}} 次，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
@@ -14070,6 +14089,8 @@
         "fastBadge": "快速"
       },
       "source": {
+        "lastConfirmed": "上次重新整理：{{time}}",
+        "unconfirmed": "模型清單尚未更新",
         "unavailable": "模型無法使用",
         "reconnect": "重新連線",
         "manage": "管理來源",
@@ -14997,6 +15018,8 @@
     },
     "runningStatus": {
       "currentRate": "最近速度",
+      "lastRequestRate": "上次請求均速",
+      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "取樣中",
       "averageRate": "本輪平均",
       "rateHistory": "生成速度歷史",
@@ -15862,6 +15885,8 @@
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "這臺電腦無法恢復任務原來的執行狀態。請選擇其他電腦或供應商的模型，透過上下文交接繼續；原訊息會保留。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
       "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢復先前的對話。訊息已保留。請選擇其他引擎繼續，或建立新任務。",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "這個插件引擎用不了任務所在電腦的工具，暫時不能從另一台電腦執行這個任務。請換一個引擎或模型。",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "這個插件引擎只能執行本機的任務，還不能讓其他電腦使用。",
       "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦上為這個供應商開啟「允許遠端呼叫」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",

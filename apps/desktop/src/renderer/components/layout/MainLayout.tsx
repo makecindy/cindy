@@ -715,7 +715,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -733,6 +733,7 @@ export function MainLayout() {
       navigate('/cc-agent/scheduled', {
         state: pluginScheduleNavigationState({
           kind: 'plugin-schedule-draft',
+          ...(typeof primaryHostKey === 'string' ? { primaryHostKey } : {}),
           requestId,
           ghostId,
           ghostName,

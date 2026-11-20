@@ -329,6 +329,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     ...(options.module ? { module: options.module } : {}),
     bind: { address: options.bindAddress ?? '0.0.0.0' },
     udp,
+    udpTraffic: options.udpTraffic,
     accept: { admit },
     intercept: (datagram) => relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false),
     ...(options.tap

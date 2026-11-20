@@ -1,10 +1,11 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
 /** A model-specific rate limit leaves other models on the connection available. */
 export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorSignals): boolean {
-  return signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
+  return signals.errorStatus === 402 || isBillingDepletionError(signals) ||
     /\binsufficient_quota\b|insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(signals.message ?? '');
 }
 
@@ -27,7 +28,7 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || isBillingDepletionError(signals)
       || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
   if (reason && reason !== 'turn-failed') return true;
   const tag = signals.sdkError ?? '';

@@ -27,6 +27,7 @@ import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
+  railItemDeviceId,
   railItemKey,
   type PluginEngineRailTab,
   type UnifiedRailFilter,
@@ -55,7 +56,7 @@ export function UnifiedModelRail({
   remoteSources,
   pluginEngineTabs,
 }: {
-  /** 插件引擎格的名字与图标，按 providerId 对应 `plugin-engine` 格。 */
+  /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
@@ -99,10 +100,14 @@ export function UnifiedModelRail({
         // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线;
         // 远程供应商每台电脑一段,段首同样一条细线。
         const previous = index > 0 ? items[index - 1] : undefined;
+        // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
+        const itemDeviceId = railItemDeviceId(item);
         const separatorBefore =
           item.kind === 'all' ||
-          (item.kind === 'remote-provider' &&
-            (previous?.kind !== 'remote-provider' || previous.deviceId !== item.deviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+        const engineTab = item.kind === 'plugin-engine'
+          ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
+          : undefined;
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
         const railProviders =
@@ -160,8 +165,7 @@ export function UnifiedModelRail({
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
                   : item.kind === 'plugin-engine'
-                    ? (pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.name
-                      ?? t('newChat.pluginEngines.genericName'))
+                    ? (engineTab?.name ?? t('newChat.pluginEngines.genericName'))
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -210,11 +214,16 @@ export function UnifiedModelRail({
                 <LayoutGrid size={16} />
               ) : item.kind === 'model-groups' ? (
                 <Waypoints size={16} />
+              ) : item.kind === 'plugin-engine' && item.deviceId ? (
+                // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RemoteSourceMark>
               ) : item.kind === 'plugin-engine' ? (
                 // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
                 <PluginEngineIcon
                   size={16}
-                  iconDataUrl={pluginEngineTabs?.find((tab) => tab.providerId === item.providerId)?.iconDataUrl}
+                  iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
               ) : item.kind === 'provider' ? (

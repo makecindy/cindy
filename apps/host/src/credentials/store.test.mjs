@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { createSourceElectronTree } from '../test-support/source-electron-tree.mjs';
 
 import { createCredentialStore, createPreparedLinuxCredentialStore, SafeStorageUnavailableError } from './store.mjs';
 import { decryptOsCryptPayload, deriveLinuxOsCryptKey, encryptOsCryptPayload } from './oscrypt.mjs';
@@ -139,4 +141,38 @@ test('native codec rejects an incomplete identity and does not replace a record 
   assert.throws(() => store.write('synthetic', 'replacement'), /^Error: CREDENTIAL_STORE_UNAVAILABLE$/);
   assert.equal(fs.readFileSync(path.join(storageDir, 'synthetic.enc'), 'utf8'), 'existing ciphertext');
   assert.deepEqual(fs.readdirSync(storageDir), ['synthetic.enc']);
+});
+
+// Source Host integration: the previous injected binary always existed. An
+// empty profile must not even read path.txt; real credential reads and writes
+// must fail closed until an executable is installed in that dependency tree.
+test('native credentials resolve Electron only for encryption or decryption and report a missing binary', async t => {
+  const tree = createSourceElectronTree(tempProfile(t));
+  const { createCredentialStore } = await import(pathToFileURL(path.join(tree.host, 'src/credentials/store.mjs')));
+  const userDataDir = tempProfile(t);
+  // Node resolves the package directory through symlinks in the temporary path.
+  const electron = fs.realpathSync(tree.electron);
+  const marker = path.join(electron, 'path.txt');
+  const binary = path.join(electron, 'dist', 'nested', 'electron');
+  fs.writeFileSync(marker, 'nested/electron\n');
+  const read = t.mock.method(fs, 'readFileSync');
+  const store = await createCredentialStore({ platform: 'darwin', userDataDir, run(executable) {
+    assert.equal(executable, binary);
+    return { status: 0, stdout: '{"value":"synthetic-ciphertext"}' };
+  } });
+  assert.equal(store.read('absent'), null);
+  assert.ok(!read.mock.calls.some(call => call.arguments[0] === marker));
+  read.mock.restore();
+  const dir = path.join(userDataDir, 'safe-storage');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'existing.enc'), 'synthetic-record');
+  const unavailable = { code: 'CREDENTIAL_STORE_UNAVAILABLE', message: 'CREDENTIAL_STORE_UNAVAILABLE' };
+  assert.throws(() => store.read('existing'), unavailable);
+  assert.throws(() => store.write('existing', 'synthetic-replacement'), unavailable);
+  assert.equal(fs.readFileSync(path.join(dir, 'existing.enc'), 'utf8'), 'synthetic-record');
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.writeFileSync(binary, '');
+  store.write('existing', 'synthetic-replacement');
+  assert.equal(fs.readFileSync(path.join(dir, 'existing.enc'), 'utf8'), 'synthetic-ciphertext');
+  assert.equal(fs.existsSync(path.join(electron, 'entry-ran')), false);
 });

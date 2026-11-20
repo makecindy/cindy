@@ -27,6 +27,9 @@ const h = vi.hoisted(() => ({
   tokens: vi.fn(),
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
+  savedModelFiles: new Map<string, string>(),
+  onSnapshotStage: undefined as (() => void) | undefined,
+  rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -125,6 +128,7 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
 vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: (...parts: string[]) => [h.owner, ...parts].join('/'),
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
 }));
@@ -154,7 +158,27 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
     if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
   },
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead, readdir: h.directoryEntries,
+vi.mock('node:fs/promises', () => ({
+  mkdir: vi.fn(),
+  readFile: async (file: string) => {
+    if (!file.includes('/model-discovery/')) return h.modelCacheRead(file, 'utf8');
+    const saved = h.savedModelFiles.get(file);
+    if (saved === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return saved;
+  },
+  readdir: h.directoryEntries,
+  writeFile: async (file: string, body: string) => {
+    h.savedModelFiles.set(file, body);
+    h.onSnapshotStage?.();
+  },
+  rename: async (source: string, destination: string) => {
+    if (h.rejectSnapshotRename) throw Object.assign(new Error('locked snapshot'), { code: 'EACCES' });
+    const staged = h.savedModelFiles.get(source);
+    if (staged === undefined) throw new Error('missing staged snapshot');
+    h.savedModelFiles.set(destination, staged);
+    h.savedModelFiles.delete(source);
+  },
+  rm: async (file: string) => { h.savedModelFiles.delete(file); },
   default: { mkdir: vi.fn(), writeFile: vi.fn(), rename: vi.fn(), rm: vi.fn(), readdir: h.directoryEntries,
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
@@ -236,6 +260,7 @@ import {
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
+  refreshCodexSubscriptionAccountAfterReset,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
 import { AccountServiceUnreachableError } from '../accountServiceError.js';
@@ -286,6 +311,9 @@ beforeEach(() => {
     chatgptAccountId: directory, canDispatch: () => true,
   }));
   h.usage.mockReset().mockResolvedValue({});
+  h.savedModelFiles.clear();
+  h.onSnapshotStage = undefined;
+  h.rejectSnapshotRename = false;
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
@@ -780,6 +808,115 @@ it.each(['anthropic', 'openai'].flatMap(provider => ['remove', 'remove-provider'
   expect(h.storedUsage.get(`${provider}:default`)).toEqual(sentinel);
 });
 describe('owner-only subscription identity', () => {
+  // Unit: workspace B cannot retain A's model list after its own first refresh times out.
+  it('does not reuse models across same-email workspace changes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-a', canDispatch: () => true });
+    h.rpc.mockResolvedValue({ data: [{ id: 'workspace-a-model' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      await refreshSubscriptionPool('openai');
+      h.rpc.mockRejectedValue(new Error('timed out'));
+      await refreshSubscriptionPoolCodexModels();
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  // Unit: the first launch after an upgrade may have only the CLI cache as evidence.
+  // A disk-only id must not become selectable, even while we recheck a shorter response.
+  it('rechecks conflicting first discovery without publishing disk-only models', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ fetched_at: new Date().toISOString(),
+      models: ['sol', 'astra'].map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    h.rpc.mockRejectedValueOnce(new Error('retry timeout'));
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+  });
+
+  // Unit: a staged write from the previous owner must be discarded after an account switch.
+  it('discards the staged model list when the owner changes before publication', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    h.onSnapshotStage = () => {
+      h.owner = 'another-owner';
+      readSubscriptionPoolCodexModels();
+    };
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(h.savedModelFiles.size).toBe(0);
+  });
+
+  // Unit: reopening the owner's runtime discards memory; transient failure must still
+  // retain Astra, and two complete matching responses can confirm a real contraction.
+  it('recovers persisted membership and corroborates a conflicting smaller model list once', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }, { id: 'sol', supportedReasoningEfforts: [] }] });
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol'].map(slug => ({
+      slug, supported_in_api: true, visibility: 'list',
+    })) }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    // An omitted effort list permits registry fallback, while an explicit empty list overrides it.
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.discoveredMetadata?.efforts)).toEqual([undefined, []]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
+  // Unit: a confirmed empty list can fail to replace an older snapshot. The next
+  // identical refresh must repair disk so cold recovery cannot revive the removed model.
+  it('repairs an older disk snapshot on the next unchanged successful refresh', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.rpc.mockResolvedValue({ data: [{ id: 'astra' }] });
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+
+    h.rejectSnapshotRename = true;
+    h.rpc.mockResolvedValue({ data: [] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+
+    h.rejectSnapshotRename = false;
+    await refreshSubscriptionPoolCodexModels(true);
+    const owner = h.owner;
+    h.owner = 'another-owner';
+    readSubscriptionPoolCodexModels();
+    h.owner = owner;
+    h.rpc.mockRejectedValueOnce(new Error('timeout'));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+  });
+
   it('does not carry quota across same-email workspace changes', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
@@ -1554,6 +1691,97 @@ describe('pooled Codex model discovery', () => {
 // redemption path. Unit/in-process integration through the real service and engine;
 // the native CLI transport is the only replacement, so no real credit is consumed.
 describe('pooled Codex resets', () => {
+  // Unit regression: a completed reset on the original connection must bypass
+  // the warm quota and notify observers, including the implicit default slot.
+  it.each([
+    { scope: 'openai', accountId: 'default', configured: true },
+    { scope: 'openai-old', accountId: 'second', configured: true },
+    { scope: 'openai', accountId: 'default', configured: false },
+  ])('publishes fresh quota after resetting $scope (configured pool: $configured)', async ({ scope, accountId, configured }) => {
+    if (configured) h.pools.openai = {
+      strategy: 'least',
+      accounts: [account('default'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'second' },
+    };
+    let redeemed = false;
+    const resetsAt = Math.floor(Date.now() / 1000) + 86_400;
+    h.usage.mockImplementation(async (_provider, directory: string) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent: redeemed && directory.endsWith(accountId) ? 0 : 100,
+            windowDurationMins: 10_080,
+            resetsAt,
+          },
+        },
+      }, Date.now()),
+    }));
+    const weeklyUsage = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      Object.fromEntries(view.accounts.map(entry =>
+        [entry.id, entry.usage?.codex?.buckets.codex.secondary?.usedPercent]));
+    const initialUsage = configured ? { default: 100, second: 100 } : { default: 100 };
+    expect(weeklyUsage(await readSubscriptionPool('openai'))).toEqual(initialUsage);
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+      if (provider === 'openai' && resetAccountId === accountId) updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      redeemed = true;
+      await refreshCodexSubscriptionAccountAfterReset(scope);
+      expect((await Promise.all(updates)).map(weeklyUsage)).toEqual([{ ...initialUsage, [accountId]: 0 }]);
+      expect(h.usage.mock.calls).toHaveLength(configured ? 3 : 2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // Unit regression: a manual refresh started before redemption can return the old
+  // window. The reset notification must let observers read the renewed window.
+  it('publishes renewed default Codex quota after a pre-reset refresh finishes', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    const now = Date.now();
+    const quota = (usedPercent: number, remainingDays: number) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent,
+            windowDurationMins: 10_080,
+            resetsAt: Math.floor(now / 1000) + remainingDays * 86_400,
+          },
+        },
+      }, now),
+    });
+    const exhausted = quota(100, 2);
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: (value: typeof exhausted) => void;
+    const pending = new Promise<typeof exhausted>(resolve => { finish = resolve; });
+    h.usage.mockImplementationOnce(() => {
+      started();
+      return pending;
+    });
+    h.usage.mockResolvedValue(quota(0, 7));
+    const weeklyUsed = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      view.accounts[0]?.usage?.codex?.buckets.codex.secondary?.usedPercent;
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, accountId) => {
+      if (provider === 'openai' && accountId === 'default') updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      const preResetRefresh = refreshSubscriptionPool('openai', true);
+      await reading;
+      const resetRefresh = refreshCodexSubscriptionAccountAfterReset('openai');
+      finish(exhausted);
+      expect(weeklyUsed(await preResetRefresh)).toBe(100);
+      await resetRefresh;
+      expect((await Promise.all(updates)).map(weeklyUsed)).toEqual([0]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('reads, automatically redeems and refreshes only the selected account', async () => {
     h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second'), account('third')] };
     const redeemed = new Set<string>();

@@ -14,6 +14,9 @@
  * - 2026-11-19 补：插件引擎的思考深度(行尾档位、配置浮层滑杆、建任务带档、任务内换档)；最小失败输入：
  *   行尾不显示档位、滑杆改档不回调、建任务丢档或带上模型不提供的档。
  * - PR #11549：同名引擎装在不同电脑，各自使用各自的模型目录；退出账号后旧回包不更新当前选择器。
+ * - 2026-11-20 补(第三期：自己其他电脑上开了「允许被远程调用」的引擎)：同一个插件装在两台电脑时引擎标识相同，
+ *   靠所在电脑区分。最小失败输入：选了另一台的引擎却点亮／解析成本机同名引擎；建任务时丢了那台电脑；
+ *   那台没开开关或报告不可用的引擎仍被列出。
  * - tier：unit(jsdom，渲染真实组件，外部 hook 用内存替身)。
  */
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
@@ -36,6 +39,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.modelListAria': 'Models',
         'newChat.modelSelector.search.placeholderAll': 'Search models',
         'newChat.modelSelector.unified.railAll': 'All',
+        'newChat.modelSelector.unified.railRemoteProvider': `${o.provider} · ${o.device}`,
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${o.model}`,
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.unresolved': 'Model details unavailable',
@@ -102,6 +106,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
+  remotePluginEngineChoices,
   resolveActivePluginEngine,
 } from '@/lib/pluginEngineSelection';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
@@ -280,6 +285,64 @@ describe('plugin engines in the new-task picker', () => {
     expect(dshGroup.querySelector('[role="option"] img')?.getAttribute('src')).toBe(DSH_ICON);
     fireEvent.click(within(dshGroup).getByRole('option', { name: /Default model/ }));
     expect(onSelect).toHaveBeenCalledWith({ providerId: 'acp-plugin:dsh-plugin:dsh', modelId: PLUGIN_ENGINE_DEFAULT_MODEL });
+  });
+
+  // 第三期(2026-11-20)：自己另一台电脑上的引擎。同一个插件两台都装时 providerId 相同，只有所在电脑不同。
+  it('lists an engine of another computer under that computer and keeps it apart from this computer’s engine of the same plugin', () => {
+    const onSelect = vi.fn();
+    const onStudio = { ...dsh, deviceId: 'computer-b', deviceName: 'Studio Mac', remoteUse: { supported: true, enabled: true } };
+    renderDraftPicker({
+      engines: [dsh, onStudio],
+      active: { providerId: dsh.providerId, deviceId: 'computer-b', modelId: PLUGIN_ENGINE_DEFAULT_MODEL },
+      onSelect,
+    });
+    const list = screen.getByRole('listbox', { name: 'Models' });
+    const here = within(list).getByRole('group', { name: 'DeepSeek Harness' });
+    const there = within(list).getByRole('group', { name: 'DeepSeek Harness · Studio Mac' });
+    // Only the engine on the other computer is the current choice.
+    expect(within(there).getByRole('option').getAttribute('aria-selected')).toBe('true');
+    expect(within(here).getByRole('option').getAttribute('aria-selected')).not.toBe('true');
+    // Each has its own rail tab; the other computer's one is marked as remote.
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness' }).querySelector('[data-remote-source-mark]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness · Studio Mac' }).querySelector('[data-remote-source-mark]')).not.toBeNull();
+
+    fireEvent.click(within(here).getByRole('option'));
+    expect(onSelect).toHaveBeenLastCalledWith({ providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL });
+    fireEvent.click(within(there).getByRole('option'));
+    expect(onSelect).toHaveBeenLastCalledWith({ providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL, deviceId: 'computer-b' });
+  });
+
+  it('starts a task on another computer’s engine with that computer, and never falls back to this computer’s engine', () => {
+    const offered = { supported: true, enabled: true };
+    const choices = remotePluginEngineChoices(
+      [{ deviceId: 'computer-b', name: 'Studio Mac' }, { deviceId: 'computer-c', name: null }],
+      new Map<string, readonly PluginEngineView[] | null>([
+        ['computer-b', [
+          { ...dsh, remoteUse: offered },
+          // Not opened for remote use, plugin without the mode, reported unavailable, an older Cindy: none is offered.
+          { ...known, remoteUse: { supported: true, enabled: false } },
+          { ...agy, remoteUse: { supported: false, enabled: false } },
+          { ...gemini, remoteUse: offered },
+          engine('old-plugin:old', 'Older Cindy'),
+        ]],
+        // Not answered yet: offers nothing for now.
+        ['computer-c', null],
+      ]),
+      (deviceId, name) => name ?? deviceId,
+    );
+    expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName])).toEqual([
+      [dsh.providerId, 'computer-b', 'Studio Mac'],
+    ]);
+
+    const remote = resolveActivePluginEngine([dsh, ...choices], { providerId: dsh.providerId, deviceId: 'computer-b', modelId: 'default' });
+    expect(pluginEngineSessionCreateFields(remote!)).toEqual({
+      agentKind: 'acp', providerId: dsh.providerId, model: 'default', effort: '', agentDeviceId: 'computer-b',
+    });
+    // The computer stopped offering it: the draft reads as "no engine chosen", not as this computer's engine.
+    expect(resolveActivePluginEngine([dsh], { providerId: dsh.providerId, deviceId: 'computer-b', modelId: 'default' })).toBeNull();
+    // This computer's engine carries no computer.
+    expect(pluginEngineSessionCreateFields(resolveActivePluginEngine([dsh, ...choices], { providerId: dsh.providerId, modelId: 'default' })!))
+      .not.toHaveProperty('agentDeviceId');
   });
 
   // 2026-11-19 用户要求插件引擎可选思考深度，展示与内置模型一致，且插件基座通用。

@@ -7,6 +7,8 @@ export const socialProviderSchema = z.enum(["apple", "google", "wechat"]);
 export type SocialProvider = z.infer<typeof socialProviderSchema>;
 
 export const membershipSchema = z.object({
+  tapdbChargeAlias: z.string().optional(),
+  tapdbUsageAlias: z.string().optional(),
   id: z.string().min(1),
   passportId: z.string().min(1).optional(),
   kind: z.enum(["personal", "org"]),

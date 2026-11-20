@@ -3289,6 +3289,19 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     } finally { broker.destroyAll(); }
   });
 
+  // 对外协议(plugin-harnesses.md「自己的其他电脑使用插件引擎」)：任务的文件在另一台电脑时，入口进程收到的
+  // 唯一参数是宿主固定给的 --cindy-remote-workspace，插件据此关掉 Agent 自带的文件与命令工具。字面量就是
+  // 插件作者依赖的约定，改了它已发布的插件就认不出这种启动；平常启动必须仍然没有任何参数。
+  it('passes only the host-authored remote-workspace argument to an engine started for another computer', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true });
+      expect(spawned[0].args).toEqual(['--cindy-remote-workspace']);
+      await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned[1].args).toEqual([]);
+    } finally { broker.destroyAll(); }
+  });
+
   it.each([
     ['disabled', (g: InstalledGhost) => { g.enabled = false; }],
     ['not approved', (g: InstalledGhost) => { g.approval = { state: 'legacy-unapproved' }; }],

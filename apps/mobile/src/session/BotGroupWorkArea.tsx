@@ -40,7 +40,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       ? [{ executionId: speaker.executionId, deviceId: member.homeDeviceId }] : [];
   });
   const scope = JSON.stringify([accountGeneration, group.id, deviceId, candidates]);
-  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, { deviceId: string; sessionId: string; botId: string }> }>();
+  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, { deviceId: string; sessionId: string; botId: string; inputClientId?: string }> }>();
   useFocusEffect(useCallback(() => {
     if (!online || !candidates.length) return;
     let cancelled = false;
@@ -51,7 +51,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       if (cancelled) return;
       if (reading) { again = true; return; }
       reading = true;
-      const targets = new Map<string, { deviceId: string; sessionId: string; botId: string }>();
+      const targets = new Map<string, { deviceId: string; sessionId: string; botId: string; inputClientId?: string }>();
       await Promise.all(hosts.map(async host => {
         if (getPresenceAvailability(host) === false) return;
         try {
@@ -62,7 +62,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           if (remote?.id !== group.id) return;
           for (const candidate of candidates.filter(candidate => candidate.deviceId === host)) {
             const speaker = remote.round.speakers.find(speaker => speaker.executionId === candidate.executionId);
-            if (speaker?.sessionId) targets.set(candidate.executionId, { deviceId: host, sessionId: speaker.sessionId, botId: speaker.botId });
+            if (speaker?.sessionId) targets.set(candidate.executionId, { deviceId: host, sessionId: speaker.sessionId, botId: speaker.botId, inputClientId: speaker.inputClientId });
           }
         } catch { /* Generic server status remains available while the computer cannot be reached. */ }
       }));
@@ -110,7 +110,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
         return [{ key, executionId: speaker.executionId, sourceMessageId: speaker.sourceMessageId, startedAt: speaker.startedAt, timelineAt: speaker.timelineAt, node: <BotGroupSpeakerRow key={key}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
           identity={{ ...identity, name: displayName, ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
-          executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
+          executionId={speaker.executionId} inputClientId={target ? target.inputClientId : speaker.inputClientId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
           revealWaiting={speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId} footer={speaker === controlSpeaker ? stopControl : undefined}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} /> }];

@@ -84,6 +84,7 @@ import {
   resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
+  withRemotePluginEngineRailItems,
   type ForeignFavoriteRow,
   type UnifiedAnchor,
   type UnifiedListRow,
@@ -133,10 +134,11 @@ export interface UnifiedModelPanelProps {
   modelGroupsView?: ReactNode;
   /**
    * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
-   * `renderPluginEngine(providerId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * `renderPluginEngine(providerId, deviceId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * 带 `deviceId` 的是自己另一台电脑上的引擎，格位排进那台电脑那一段。
    */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
-  renderPluginEngine?: (providerId: string) => ReactNode;
+  renderPluginEngine?: (providerId: string, deviceId?: string) => ReactNode;
   /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
   favoritesPinned?: ReactNode;
   /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
@@ -612,7 +614,8 @@ export function UnifiedModelPanel({
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
   const hasModelGroupsView = modelGroupsView !== undefined;
-  const pluginEngineTabsKey = (pluginEngineTabs ?? []).map((tab) => tab.providerId).join('\n');
+  // 本机的引擎格与另一台电脑上的引擎格分开排：一个字符串键表达两组的身份，目录没变就不重排。
+  const pluginEngineTabsKey = JSON.stringify((pluginEngineTabs ?? []).map((tab) => [tab.providerId, tab.deviceId ?? '']));
   const railItems = useMemo<UnifiedRailItem[]>(() => {
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
@@ -628,15 +631,18 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-    const engineProviderIds = pluginEngineTabsKey ? pluginEngineTabsKey.split('\n') : [];
-    if (!hasModelGroupsView && engineProviderIds.length === 0) return items;
-    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；插件引擎各占一格排在它后面、各供应商格之前。
+    const engineTabs = (JSON.parse(pluginEngineTabsKey) as Array<[string, string]>)
+      .map(([providerId, deviceId]) => ({ providerId, ...(deviceId ? { deviceId } : {}) }));
+    if (!hasModelGroupsView && engineTabs.length === 0) return items;
+    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；本机的插件引擎各占一格排在它后面、各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
     const inserted: UnifiedRailItem[] = [
       ...(hasModelGroupsView ? [{ kind: 'model-groups' as const }] : []),
-      ...engineProviderIds.map((providerId) => ({ kind: 'plugin-engine' as const, providerId })),
+      ...engineTabs.filter((tab) => !tab.deviceId).map((tab) => ({ kind: 'plugin-engine' as const, providerId: tab.providerId })),
     ];
-    return [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)];
+    // 另一台电脑上的引擎排进那台电脑那一段(它的供应商格之后)。
+    return withRemotePluginEngineRailItems(
+      [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)], engineTabs);
   }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, listHiddenProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
@@ -1560,7 +1566,7 @@ export function UnifiedModelPanel({
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : effectiveRail.kind === 'plugin-engine' ? (
-            renderPluginEngine?.(effectiveRail.providerId) ?? null
+            renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
           ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div

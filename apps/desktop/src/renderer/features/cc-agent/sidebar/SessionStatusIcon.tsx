@@ -42,6 +42,7 @@ import {
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
+import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
 
 /**
@@ -54,7 +55,10 @@ function PluginEngineVendorIcon({
   ...iconProps
 }: {
   providerId: string | null | undefined;
+  /** 引擎所在的电脑(被控电脑，或 Agent 所在的自己另一台电脑)；缺省 = 本机。 */
   deviceId?: string;
+  /** 引擎在任务所在电脑之外的另一台电脑上：与远程 Agent 同一个信号波纹。 */
+  remote?: boolean;
   size: number;
   running: boolean;
   colorClassName?: string;
@@ -238,7 +242,11 @@ export function SessionStatusIcon({
       ) : vendor === 'acp' ? (
         <PluginEngineVendorIcon
           providerId={session.providerId}
-          deviceId={session.deviceLinkDeviceId ?? undefined}
+          // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的
+          // 来源不提供插件引擎，不当作引擎所在的电脑。
+          deviceId={(agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId) ? agentDeviceId : null)
+            ?? session.deviceLinkDeviceId ?? undefined}
+          remote={!!agentDeviceId && !(showAttentionDot && hasAttentionDot)}
           size={size ?? 12}
           running={isRunning}
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
