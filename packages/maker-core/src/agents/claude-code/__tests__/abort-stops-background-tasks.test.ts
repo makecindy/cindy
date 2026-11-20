@@ -3479,6 +3479,100 @@ it('applies an explicit model window to Claude runtime and compression accountin
 // follow-up. Existing wake tests only cover Agent/Workflow claims, not this gap.
 // Unit: synthetic SDK stream; no real Claude, DB, IM or App acceptance claim.
 describe('completed Bash runtime retention', () => {
+  it('bounds Bash retention if rejected Stop leaves no provider terminal', async () => {
+    const { handle, stream, events, collected, fakeQuery } = await startSessionWithStream();
+    const interrupt = createDeferred<void>();
+    let now = 100;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      await handle.send({ type: 'user', content: 'background command' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 1, 'Bash started');
+      fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+      const stop = handle.abort();
+      await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'Stop requested');
+      stream.emit(taskNotification('bash', 'completed'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 0, 'Bash completed');
+      interrupt.reject(new Error('control rejected'));
+      await stop;
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      now += WAKE_CONTRACT_GRACE_MS;
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      await handle.send({ type: 'user', content: 'new user turn after expired retention' });
+      stream.emit(assistantText('new user answer'));
+      stream.emit(turnResult('done'));
+      await waitFor(() => events.some((e) => e.type === 'done'), 'new user turn completed');
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+    } finally { vi.restoreAllMocks(); stream.end(); await handle.close(); await collected; }
+  });
+
+  it.each(['foreground', 'native follow-up', 'user send'] as const)('starts Bash startup grace after a long %s settles', async (segment) => {
+    const { handle, stream, events, collected } = await startSessionWithStream();
+    let now = 100;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      await handle.send({ type: 'user', content: 'two background commands' });
+      if (segment === 'native follow-up') stream.emit(taskStarted('a', 'local_bash'));
+      stream.emit(taskStarted('b', 'local_bash'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === (segment === 'native follow-up' ? 2 : 1), 'tasks started');
+      if (segment !== 'foreground') {
+        stream.emit(turnResult('waiting'));
+        await waitFor(() => events.some((e) => e.type === 'done'), 'foreground done');
+      }
+      if (segment === 'native follow-up') {
+        stream.emit(taskNotification('a', 'completed'));
+        stream.emit(assistantText('first native follow-up'));
+        await waitFor(() => handle.isTurnRunning?.() === true, 'native segment started');
+      }
+      stream.emit(taskNotification('b', 'completed'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 0, 'all Bash tasks completed');
+      if (segment === 'user send') await handle.send({ type: 'user', content: 'new input before native follow-up' });
+      now += WAKE_CONTRACT_GRACE_MS + 1;
+      const doneCount = events.filter((e) => e.type === 'done').length;
+      stream.emit(turnResult('long segment done'));
+      await waitFor(() => events.filter((e) => e.type === 'done').length === doneCount + 1, 'long segment settled');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      now += WAKE_CONTRACT_GRACE_MS - 1;
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      if (segment !== 'native follow-up') {
+        now += 1;
+        expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      } else {
+        stream.emit(assistantText('queued Bash follow-up'));
+        stream.emit(turnResult('queued follow-up done'));
+        await waitFor(() => events.filter((e) => e.type === 'done').length === doneCount + 2, 'queued follow-up delivered');
+        expect(events.some((e) => e.type === 'text' && JSON.stringify(e.data).includes('queued Bash follow-up'))).toBe(true);
+        expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      }
+    } finally { vi.restoreAllMocks(); stream.end(); await handle.close(); await collected; }
+  });
+
+  it.each(['hard', 'graceful'] as const)('retains a Bash completion arriving before rejected %s Stop', async (mode) => {
+    const { handle, stream, events, collected, fakeQuery } = await startSessionWithStream();
+    const interrupt = createDeferred<void>();
+    try {
+      await handle.send({ type: 'user', content: 'background command' });
+      stream.emit(taskStarted('bash', 'local_bash'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 1, 'Bash started');
+      fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+      const stop = mode === 'hard' ? handle.abort() : handle.requestGracefulStop!();
+      await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'Stop requested');
+      stream.emit(taskNotification('bash', 'completed'));
+      await waitFor(() => handle.listBackgroundTasks?.().length === 0, 'Bash completed before control response');
+      interrupt.reject(new Error('control rejected'));
+      if (mode === 'hard') await stop;
+      else await expect(stop).rejects.toThrow('control rejected');
+      stream.emit(turnResult('foreground settled after rejected Stop'));
+      await waitFor(() => events.some((e) => e.type === 'done'), 'foreground terminal');
+      expect(handle.countPendingWakeContinuations?.()).toBeGreaterThan(0);
+      stream.emit(assistantText('follow-up after rejected Stop'));
+      stream.emit(turnResult('done'));
+      await waitFor(() => events.filter((e) => e.type === 'done').length === 2, 'follow-up delivered');
+      expect(handle.countPendingWakeContinuations?.()).toBe(0);
+    } finally { stream.end(); await handle.close(); await collected; }
+  });
+
   it.each(['completed', 'failed'] as const)('keeps the runtime through %s notification until native follow-up', async (status) => {
     const { agent, handle, stream } = await startSessionWithStream(undefined, { autoCollect: false });
     const session = new Session({ id: 'bash-retention', agentKind: 'claude-code', workDir: 'synthetic-workspace',

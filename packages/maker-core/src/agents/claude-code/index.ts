@@ -4978,8 +4978,24 @@ export class ClaudeCodeAgent extends BaseAgent {
     // No polling, synthetic turn or replay: absent provider activity expires at
     // the existing native continuation grace budget, queried on the next gate.
     let pendingBashContinuationUntil = 0;
-    const hasPendingBashContinuation = (): boolean =>
-      pendingBashContinuationUntil > performance.now();
+    let pendingBashContinuationBehindTurn = false;
+    function startPendingBashContinuationGrace(): void {
+      if (pendingBashContinuationBehindTurn && !turnInFlight) {
+        pendingBashContinuationBehindTurn = false;
+        pendingBashContinuationUntil = performance.now() + WAKE_CONTRACT_GRACE_MS;
+      }
+    }
+    const hasPendingBashContinuation = (): boolean => {
+      // Natural terminals start grace at turn end. A synthetic/failed-control
+      // idle transition gets a bounded fallback on first observation, but its
+      // outstanding provider terminal must not consume the queued Bash reply.
+      const now = performance.now();
+      if (pendingBashContinuationBehindTurn && !turnInFlight) {
+        if (pendingBashContinuationUntil === 0) pendingBashContinuationUntil = now + WAKE_CONTRACT_GRACE_MS;
+        else if (pendingBashContinuationUntil <= now) pendingBashContinuationBehindTurn = false;
+      }
+      return (pendingBashContinuationBehindTurn && turnInFlight) || pendingBashContinuationUntil > now;
+    };
     let bashContinuationInFlight = false;
     // Native continuations advance turnState.generation too. Only an explicit
     // send transfers Bash retention beyond an already pending Stop's authority.
@@ -4987,6 +5003,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bashContinuationBoundaries = new Set<AgentEvent>();
     function clearPendingBashContinuations(): void {
       pendingBashContinuationUntil = 0;
+      pendingBashContinuationBehindTurn = false;
       bashContinuationInFlight = false;
       bashContinuationBoundaries.clear();
     }
@@ -5354,9 +5371,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         const prev = runningBackgroundTasks.get(taskId);
         if (
           prev?.taskType === 'local_bash' && status !== 'stopped' &&
-          !closed && !turnState.interruptRequested && continuationCancellationGeneration === null
+          !closed && continuationCancellationGeneration === null
         ) {
-          pendingBashContinuationUntil = performance.now() + WAKE_CONTRACT_GRACE_MS;
+          // Completion during an active segment queues a later native reply.
+          // Its startup budget must not run while that segment is still busy.
+          // An in-flight Stop is not cancellation proof; its confirmed path
+          // clears this state, while rejected controls preserve the follow-up.
+          pendingBashContinuationBehindTurn = turnInFlight;
+          pendingBashContinuationUntil = turnInFlight ? 0 : performance.now() + WAKE_CONTRACT_GRACE_MS;
         }
         runningBackgroundTasks.delete(taskId);
         terminalBackgroundTaskIds.add(taskId);
@@ -5829,6 +5851,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
       }
       turnInFlight = false;
+      startPendingBashContinuationGrace();
       clearUpstreamResponseIdle();
       // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
       // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
@@ -6036,11 +6059,15 @@ export class ClaudeCodeAgent extends BaseAgent {
               (
                 ((rawType === 'assistant' || rawType === 'stream_event') &&
                   isTopLevelProviderActivity) ||
-                ((activeContinuationClaim()?.state === 'awaiting' || hasPendingBashContinuation()) && rawType === 'result')
+                ((activeContinuationClaim()?.state === 'awaiting' ||
+                  (!pendingBashContinuationBehindTurn && hasPendingBashContinuation())) && rawType === 'result')
               )
             ) {
-              if (hasPendingBashContinuation()) bashContinuationInFlight = true;
-              pendingBashContinuationUntil = 0;
+              const hasPendingBash = hasPendingBashContinuation();
+              if (!pendingBashContinuationBehindTurn) {
+                if (hasPendingBash) bashContinuationInFlight = true;
+                pendingBashContinuationUntil = 0;
+              }
               const claim = activeContinuationClaim();
               if (claim?.state === 'awaiting') {
                 // Each task notification queues one SDK continuation segment.
@@ -7130,6 +7157,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn(mutableFastMode ? 'priority' : 'standard');
         lastExplicitSendGeneration = turnState.generation;
+        if (hasPendingBashContinuation()) {
+          pendingBashContinuationBehindTurn = true;
+          pendingBashContinuationUntil = 0;
+        }
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
