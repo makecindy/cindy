@@ -1,3 +1,5 @@
+export { parseGeminiInputRateLimit } from './geminiInputRateLimit.js';
+
 export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
 
 /**
