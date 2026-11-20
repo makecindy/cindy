@@ -15082,7 +15082,7 @@
       "switchClaudeSubscriptionTitle": "把當前任務切換到 Claude.ai 訂閱並重試",
       "switchingClaudeSubscription": "正在切換到 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
-      "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
+      "codexAppServerRetired": "與 Codex 的連線已中斷，本次請求也已中斷。你可以在目前的任務中繼續。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入狀態（401 Unauthorized）。點選右側「同步登入狀態」把本機 Codex 憑證推送到遠端 Cindy Codex home，然後重試傳送。",
       "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此任務繼續。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會讓系統 Codex CLI 登出，也不會要求你重新連線其他模型來源。",
