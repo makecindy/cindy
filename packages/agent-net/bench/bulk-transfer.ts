@@ -8,7 +8,7 @@
  *
  * 运行（仓库根目录）：
  *   pnpm --filter @cindy/agent-net run prepare-core
- *   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron --import tsx packages/agent-net/bench/bulk-transfer.ts [--profiles fast,wide,far] [--modes v1,worker,udp-relay]
+ *   ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx packages/agent-net/bench/bulk-transfer.ts [--profiles fast,wide,far] [--modes v1,worker,udp-relay]
  *     [--runs 1] [--total-mib 20] [--chunk-kib 512] [--concurrency 4] [--out bulk.json]
  *     [--raw]     绕过 Device Link，同样大小的块直接写进 Agent-Net 连接，区分瓶颈在 Device Link 还是在它下面
  *     [--sample]  每 200 毫秒打印发送方的 socket 缓冲、Device Link 待确认队列（portable 方式还有核心统计）和主线程事件循环延迟

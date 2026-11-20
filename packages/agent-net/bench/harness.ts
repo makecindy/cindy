@@ -6,7 +6,7 @@
  * 让发送方的 socket 缓冲真实地堵住（中转和 Main 的排队上限因此会生效）。不模拟丢包。
  * DeviceLinkClient 用生产默认计时，不覆盖重发和超时参数。
  *
- * 用产品的运行时跑：`ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron --import tsx <脚本>`。同一个 Node 版本，
+ * 用产品的运行时跑：`ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx <脚本>`。同一个 Node 版本，
  * Electron 的加密库（BoringSSL）和独立 Node（OpenSSL）每个包的开销不一样：2026-11-21 独立 Node 24.19 上用原始字节作密钥的
  * HMAC 一次 13 微秒、Electron 里 3.4 微秒，不限速线路上 Agent-Net 在独立 Node 里只跑到 Electron 里的一半（10 对 21 MB/s），
  * 每 MiB 的 CPU 高一倍。2026-11-20 的对比报告就是用独立 Node 跑的，把这个差距写成了产品的差距。不在 Electron 里时启动会提示。
@@ -306,7 +306,7 @@ export async function setup(profile: LinkProfile, module: WebAssembly.Module, mo
   if (!runtimeNoted && !process.versions.electron) {
     runtimeNoted = true;
     console.error('note: not running under Electron. CPU per MiB and speed on unlimited lines differ from the product; '
-      + 'run with ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron --import tsx <script> (see harness.ts).');
+      + 'run with ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx <script> (see harness.ts).');
   }
   const cleanup: Array<() => Promise<unknown> | unknown> = [];
   const prefix = path.join(tmpdir(), 'cindy-agent-net-bench-');
