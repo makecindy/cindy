@@ -143,6 +143,7 @@ it('宿主中断遗言：flushTerminationReports 投「宿主中断」报告，�
   expect(report.persistedContent).toContain('后台命令观察中断');
   // dispose 纯杀树：退出流程在遗言之后调用它，不会产生第二份报告。
   service.dispose();
+  // real-wait: 断言「不再产生第二份报告」是负向观察，杀树到 exit 回调的间隔只能真实等待。
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(capture).toHaveBeenCalledTimes(1);
 });
@@ -212,6 +213,7 @@ it('暂停队列时退出：遗言没进队列就不删 meta，留给下次启�
   await expect(access(metaPath)).resolves.toBeUndefined();
   expect(capture).not.toHaveBeenCalled();
   service.dispose(); // 杀树触发的 exit 也不删 meta
+  // real-wait: 断言 meta 未被删除是负向观察，需等杀树引发的 exit 回调走完。
   await new Promise((resolve) => setTimeout(resolve, 400));
   await expect(access(metaPath)).resolves.toBeUndefined();
   // 重启（新实例，同一 logDir）+队列恢复：对账补投，一次性。
