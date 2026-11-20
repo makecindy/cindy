@@ -322,9 +322,11 @@ it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等�
   const warn = vi.fn();
   const capture = vi.fn();
   const service = buildService(capture, undefined, { logger: { info: () => {}, warn } });
+  // 子进程立即退出：硬顶只留“命令已退出”的留痕分支，不把机器负载（首次扫描
+  // 重启后的 node_modules 可能喷发百毫秒）掺进用例成败。
   await service.start({
     sessionId: 'sess-1',
-    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 500)"`,
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
     timeoutMs: 1_000,
   });
