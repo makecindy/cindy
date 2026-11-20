@@ -49,9 +49,6 @@ const CACHE_TTL_MS = 30_000;
 const CACHE_MAX_ENTRIES = 16;
 /** frontmatter 只在文件头，读够解析出 name 就停，不整篇读进内存。 */
 const FRONTMATTER_HEAD_BYTES = 2048;
-/** 引擎自己的发现会一路走到 git 根；这里同样向上找，但不越过文件系统根。 */
-const MAX_PROJECT_ANCESTORS = 16;
-
 type CacheEntry = { at: number; names: Set<string> };
 const cache = new Map<string, CacheEntry>();
 
@@ -140,8 +137,10 @@ async function addSkillNames(skillsRoot: string, depth: number, out: Set<string>
       if (declared) out.add(declared.toLowerCase());
       continue;
     }
-    // 命名空间一层：<root>/<namespace>/<skill>。
-    if (depth < 2) await addSkillNames(full, depth + 1, out);
+    // Direct linked Skills are supported. Descend only into real namespace directories.
+    if (depth < 2 && entry.isDirectory() && (await fsp.lstat(full).catch(() => null))?.isDirectory()) {
+      await addSkillNames(full, depth + 1, out);
+    }
   }
 }
 
@@ -164,7 +163,7 @@ function resolveGlobalConfigDir(configDir?: string): string {
 async function resolveProjectDirs(workingDir: string): Promise<string[]> {
   const dirs: string[] = [];
   let current = workingDir;
-  for (let depth = 0; depth < MAX_PROJECT_ANCESTORS; depth += 1) {
+  while (true) {
     dirs.push(current);
     if (await pathExists(path.join(current, '.git'))) break;
     const parent = path.dirname(current);

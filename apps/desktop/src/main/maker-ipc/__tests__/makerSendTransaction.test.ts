@@ -52,6 +52,8 @@ import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { resetClaudeUserInvocableCommandCache } from '../claudeSlashCommandGuard';
+import { createMakerSteerTransaction } from '../makerSteerTransaction';
+import { registerSessionSubscriptionAccount } from '../../subscription-accounts/session';
 import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
 import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
@@ -3794,6 +3796,89 @@ describe('mobile client prompt note', () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
+  });
+
+  // Unit / #11777: steer uses the live session's account-specific roster, even
+  // with a warm cache and a command installed only in the host config.
+  it('steers a command from the active Claude subscription profile verbatim', async () => {
+    const workDir = path.join(isolatedClaudeHome, 'project');
+    const accountConfig = path.join(isolatedClaudeHome, 'account');
+    for (const [config, name] of [[accountConfig, 'account-skill'], [path.join(isolatedClaudeHome, 'config'), 'host-skill']]) {
+      const skillDir = path.join(config, 'skills', name);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(path.join(skillDir, 'SKILL.md'), '---\ndisable-model-invocation: true\n---\n');
+    }
+    mkdirSync(workDir);
+    const steer = vi.fn(async () => {});
+    const session = {
+      id: 'session-1', agentKind: 'claude-code', workDir, steer,
+      capabilities: { sameTurnSteer: { supported: true } },
+      isTurnRunning: () => true, getTurnGeneration: () => 1,
+    };
+    const steerAccepted = createMakerSteerTransaction({
+      maker: { getSession: () => session as unknown as Session, getSessionMeta: async () => null },
+      assertInputAllowed: async () => {}, assertInputCurrent: () => {},
+      prepareUserMessageForAgent: async (_id, message) => String(message),
+      readReplyQuoteNote: async () => null, readAutoReviewHistory: async () => [],
+      readSessionSource: async () => null, getHostSourceDevice: () => undefined,
+      getResolvedMainLocale: () => null, getMainClassicalStyle,
+      wireNoteMemory: createWireNoteMemory(), inputHandoffSteerNote: () => null,
+      inputHandoffNoteDelivered: () => {},
+      mcpAppModelContext: async () => ({ text: '', assertCurrent: async () => {}, consume() {} }),
+      publishUiSessionIntervention: () => {}, log: { info() {}, warn() {}, debug() {} },
+    });
+    const unregister = registerSessionSubscriptionAccount(session.id, {
+      id: 'fixture-account', configDir: accountConfig, assertCurrent() {},
+      readState: async () => ({ authenticated: true }),
+    });
+    try {
+      await steerAccepted(session.id, '/account-skill ping', { fromMobileClient: true });
+      expect(steer).toHaveBeenLastCalledWith('/account-skill ping', expect.anything());
+
+      await steerAccepted(session.id, '/host-skill ping', { fromMobileClient: true });
+      expect(steer).toHaveBeenLastCalledWith(
+        buildMobileClientPromptNote() + '\n\n/host-skill ping',
+        expect.anything(),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
+  // Unit / #11637: empty queue range metadata leaves a hand-typed Skill looking
+  // like an ordinary turn. A pending sealed plan note belongs on the next ordinary send.
+  it('defers plan reconciliation across a hand-typed Claude Code Skill', async () => {
+    const workDir = path.join(isolatedClaudeHome, 'project');
+    const skillDir = path.join(workDir, '.claude', 'skills', 'subtask-fork');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: subtask-fork\ndisable-model-invocation: true\n---\n');
+    const session = createSession({ agentKind: 'claude-code', workDir });
+    const sealedPlan = { note: 'COMPLETED-GUARD', sealedTurnId: 'turn-sealed' };
+    let pending: typeof sealedPlan | null = sealedPlan;
+    const consumeSealedPlanReconcileNote = vi.fn(async () => { pending = null; });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      peekPlanReconcileNote: async () => pending,
+      consumeSealedPlanReconcileNote,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const command = '/subtask-fork ping';
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      fromMobileClient: true,
+      persistUserMessage: {
+        clientId: 'queued-command',
+        content: JSON.stringify({ text: command, slashCommandRanges: [] }),
+      },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(command, expect.anything());
+    expect(consumeSealedPlanReconcileNote).not.toHaveBeenCalled();
+
+    await transaction.sendToAgentAccepted('session-1', 'continue the plan', undefined, {
+      persistUserMessage: { clientId: 'next-turn', content: 'continue the plan' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith('COMPLETED-GUARD\n\ncontinue the plan', expect.anything());
+    expect(consumeSealedPlanReconcileNote).toHaveBeenCalledExactlyOnceWith('session-1', 'turn-sealed');
   });
 
   it('keeps the mobile note for /compact text sent to Codex', async () => {

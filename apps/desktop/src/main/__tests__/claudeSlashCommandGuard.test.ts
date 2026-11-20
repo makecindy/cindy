@@ -130,6 +130,43 @@ describe('resolveClaudeUserInvocableCommandNames', () => {
     expect(names.has('wrong-command')).toBe(false);
   });
 
+  // Unit / #11637: the runtime walks to the nearest Git root even if a linked
+  // working directory points more than 16 levels into the project.
+  it('finds the nearest Git root from a deeply nested linked workdir', async () => {
+    const outerRepo = path.join(fixtureRoot, 'outer-repo');
+    const repo = path.join(outerRepo, 'worktree');
+    const nested = path.join(repo, ...Array<string>(16).fill('sub'));
+    fs.mkdirSync(nested, { recursive: true });
+    fs.mkdirSync(path.join(outerRepo, '.git'));
+    fs.writeFileSync(path.join(repo, '.git'), 'gitdir: fixture\n');
+    writeSkill('worktree-command', '', path.join(repo, '.claude'));
+    writeSkill('outer-command', '', path.join(outerRepo, '.claude'));
+    const link = path.join(fixtureRoot, 'link');
+    fs.symlinkSync(nested, link, 'junction');
+
+    const names = await resolveClaudeUserInvocableCommandNames(link, '/worktree-command');
+
+    expect(names.has('worktree-command')).toBe(true);
+    expect(names.has('outer-command')).toBe(false);
+  });
+
+  // Unit / #11637: a linked Skill is discoverable, but linked namespace folders
+  // are not traversed by the runtime scanner.
+  it('accepts a linked Skill without scanning a linked namespace', async () => {
+    const external = path.join(fixtureRoot, 'external');
+    const skills = path.join(workDir, '.claude', 'skills');
+    fs.mkdirSync(skills, { recursive: true });
+    writeSkill('linked-skill', '', external);
+    fs.symlinkSync(path.join(external, 'skills', 'linked-skill'), path.join(skills, 'linked-skill'), 'junction');
+    writeSkill('outside-command', '', path.join(external, 'namespace'));
+    fs.symlinkSync(path.join(external, 'namespace', 'skills'), path.join(skills, 'linked-namespace'), 'junction');
+
+    const names = await resolveClaudeUserInvocableCommandNames(workDir, '/linked-skill');
+
+    expect(names.has('linked-skill')).toBe(true);
+    expect(names.has('outside-command')).toBe(false);
+  });
+
   // Unit / #11777 review: an explicit CLI config root is a replacement, not another
   // source to union with ~/.claude. Otherwise another profile can authorize a bare command.
   it('CLAUDE_CONFIG_DIR 是独立配置根,不合并默认 ~/.claude', async () => {
@@ -154,6 +191,7 @@ describe('isUserInvocableClaudeCommand', () => {
     const local = { id: 'session-1', agentKind: 'claude-code', workDir, remoteHostId: null };
     useSessionAccount('current', currentConfigDir);
     expect(await isUserInvocableClaudeCommand('/current-command', local)).toBe(true);
+    expect(await isUserInvocableClaudeCommand('/other-command', local)).toBe(false);
 
     useSessionAccount('other', otherConfigDir);
     expect(await isUserInvocableClaudeCommand('/current-command', local)).toBe(false);

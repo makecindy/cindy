@@ -1511,8 +1511,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 原生命令必须留在消息最前面:环境说明一插到前面,用户自己敲的 /<command>
       // 就不再被引擎当命令解析,装好的 Skill 会整段变成普通文本(#11637)。
       // 判定按"当前工作目录里实际装着的命令"来,不做「所有 / 开头都放行」的宽匹配。
-      const allowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        && !(await isUserInvocableClaudeCommand(normalized, sess));
+      const allowsDefaultNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind);
+      const isInstalledClaudeCommand = allowsDefaultNotes && await isUserInvocableClaudeCommand(normalized, sess);
+      const allowsEnvironmentNotes = allowsDefaultNotes && !isInstalledClaudeCommand;
       // session-agent-switch:切换后首条可附带上下文的消息注入交接。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const workdirRecoveryNote = allowsEnvironmentNotes
@@ -1595,7 +1596,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
         !startsWithSlashCommand &&
         !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
-      const planReconcile = isOrdinaryUserTurn
+      const planReconcile = isOrdinaryUserTurn && !isInstalledClaudeCommand
         ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
         : null;
       const withPlanReconcile = planReconcile
