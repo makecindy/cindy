@@ -2641,7 +2641,7 @@ export async function remoteBackgroundInvoke(
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   const peer = parseProviderSharePeer(deviceId);
-  const share = peer?.role === 'host' ? getReceivedShares().find(row =>
+  const share = peer?.role === 'host' ? getReceivedShares({ retainUnavailable: true }).find(row =>
     row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId) : undefined;
   const accessEpoch = share ? providerShareAccessEpoch(share.shareId) : undefined;
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2659,7 +2659,7 @@ export async function remoteBackgroundInvoke(
         throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during catalog read');
       }
       if (providerShareAccessEpoch(share.shareId) !== accessEpoch
-        || !getReceivedShares().some(row => row.shareId === share.shareId
+        || !getReceivedShares({ retainUnavailable: true }).some(row => row.shareId === share.shareId
           && row.hostDeviceId === share.hostDeviceId && row.status === 'active')) {
         throw new DeviceLinkError('ACCESS_REVOKED', PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
       }
@@ -2689,7 +2689,7 @@ export async function remoteBackgroundInvoke(
       ?? { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
   }
 
-  const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
+  const refusedOwnerShare = peer?.role === 'host' && getReceivedShares({ retainUnavailable: true }).some(share =>
     share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。

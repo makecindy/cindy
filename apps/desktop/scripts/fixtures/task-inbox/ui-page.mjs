@@ -123,7 +123,14 @@ export default {
       // The toggle at the right end of the top chrome row switches modes and shows pressed in the inbox.
       const toggle = page.locator('[data-task-list-mode-toggle]');
       assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      assert.ok(await toggle.getAttribute('aria-description'), 'Unread inbox result in task list mode');
       await ui.capture('mode-toggle');
+      await toggle.click();
+      await inbox.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Entering the inbox hides the unread indicator');
+      await toggle.click();
+      await project.waitFor();
+      assert.ok(await toggle.getAttribute('aria-description'), 'Leaving with unread results restores the indicator');
       await toggle.click();
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
@@ -155,6 +162,7 @@ export default {
       await report.waitFor({ state: 'detached' });
       assert.equal(await hide.getAttribute('aria-checked'), 'true');
       assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
       await ui.capture('inbox-filter');
       await page.keyboard.press('Escape');
       await page.keyboard.press('Escape');
@@ -163,6 +171,7 @@ export default {
       await report.waitFor();
       const teammate = page.locator('[data-session-id="teammate"]');
       await teammate.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
       await openFilters(false);
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
@@ -182,6 +191,26 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+
+      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
+      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
+      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
+      await settings.press('Enter');
+      await display.press('ArrowRight');
+      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await project.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await pending.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
       return;
     }
 

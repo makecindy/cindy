@@ -4323,6 +4323,26 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
   // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  // #11607 review: importer rejection must not trigger a second network
+  // access from the official hook's size diagnostic (unit, real finalization).
+  it('does not stat a rejected hostless network image while finalizing the reply', async () => {
+    const source = 'xdt-image:////attacker/share/100%.png';
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(async (_id, text) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const stat = vi.spyOn(fs, 'stat').mockRejectedValue(new Error('NETWORK_ACCESS_FORBIDDEN'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `Result: ![network](<${source}>)`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      expect(stat.mock.calls.filter(([file]) => String(file).includes('attacker'))).toEqual([]);
+      expect(onEnd.mock.calls[0]![0].attachments ?? []).toEqual([]);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
+  });
+
   it('says why a local image over the import limit was not sent', async () => {
     const source = '/private/task/huge.png';
     const materialize = vi.fn(async (_id: string, text: string) =>

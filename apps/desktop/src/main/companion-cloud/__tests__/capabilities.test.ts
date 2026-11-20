@@ -29,6 +29,9 @@ describe('portable companion capabilities', () => {
   it('carries only the model chain the owner chose, without routes that run on another computer', () => {
     const chosen = [route('m1'), route('m2', { agentDeviceId: 'phone-1' })];
     expect(portableCompanionCapabilities({}, chosen).modelChain).toEqual([route('m1')]);
+    // A model group exists only on the computer that made it (model-groups.md §6.2): its saved model travels, the group does not.
+    expect(portableCompanionCapabilities({}, [route('m1', { modelGroup: 'night' })]).modelChain).toEqual([route('m1')]);
+    expect(parseCompanionCapabilities({ modelChain: [route('m1', { modelGroup: 'night' })] })?.modelChain).toEqual([route('m1')]);
     // Following the default is not a choice to carry: the new computer follows its own default.
     expect(portableCompanionCapabilities({}, null)).toEqual({});
     expect(portableCompanionCapabilities({ taskModelOverride: route('t1') }, null).taskModel).toEqual(route('t1'));

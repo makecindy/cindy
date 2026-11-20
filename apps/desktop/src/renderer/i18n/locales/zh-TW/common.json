@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "輸入無效，請檢查後重試。",
@@ -15061,6 +15062,9 @@
       "usageLimitAutoContinueTitle": "用量上限重置後，如果你還沒處理，這個任務會自動繼續",
       "usageLimitAutoContinueCancel": "取消",
       "usageLimitAutoContinueCancelTitle": "取消自動繼續，錯誤與重試仍保留",
+      "usageLimitReached": "模型帳號已達到用量上限",
+      "usageLimitReachedWithReset": "模型帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "usageLimitReachedNoReset": "模型帳號已達到用量上限。請等待用量上限重置，或切換其他模型後再重試。",
       "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
@@ -15132,6 +15136,7 @@
     },
     "backgroundActivity": {
       "status": "背景子任務執行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在背景繼續工作…",
       "bashWorkStatus_one": "正在背景工作（{{count}} 個命令）…",
       "bashServiceStatus_one": "背景服務執行中（{{count}} 個）",
       "bashWorkStatus_other": "正在背景工作（{{count}} 個命令）…",
@@ -15166,6 +15171,7 @@
       "continueFailed_other": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
@@ -15836,7 +15842,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
@@ -16058,7 +16066,6 @@
     },
     "sessionLoading": "載入任務中",
     "sideChat": {
-      "openPage": "開啟完整任務頁",
       "returnMain": "返回主任務",
       "new": "新增側邊追問",
       "mainWindowDescription": "側邊追問目前在主視窗中使用。追問記錄仍然保留。",
@@ -16066,6 +16073,14 @@
       "commandDescription": "基於主任務開啟側邊追問。可在命令後附上問題，作為追問草稿。",
       "title": "側邊追問",
       "context": "使用開啟時主任務已完成的上下文。主任務會繼續執行，關閉此分頁前追問記錄都會保留。",
+      "viewCollaboration": "查看協同",
+      "openConversation": "開啟對話",
+      "openFromTaskList": "也可從左側任務列表開啟。",
+      "returnToSideChat": "回到側邊追問",
+      "reopenSideChat": "重新開啟側邊追問",
+      "origin": "這段對話來自側邊追問。",
+      "originNamed": "這段對話來自「{{title}}」的側邊追問。",
+      "originUnavailable": "這段對話來自側邊追問，原任務目前無法開啟。",
       "opening": "正在開啟…",
       "notReady": "請先等待主任務完成一次回答。",
       "unsupported": "此 Agent 的遠端任務暫不支援側邊追問。",
@@ -16074,9 +16089,10 @@
       "mainTaskOnly": "請從主任務開啟側邊追問。",
       "sharedTaskUnavailable": "共享任務不支援側邊追問",
       "archivedTask": "請先取消歸檔，再開啟側邊追問",
-      "closeTitle": "關閉側邊追問？",
-      "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
-      "closeConfirm": "關閉並刪除",
+      "closeTitle": "關閉並封存這則追問？",
+      "closeDescription": "左側任務清單中的這則追問也會封存。",
+      "closeDescriptionRunning": "左側任務清單中的這則追問也會封存，協作 Worker 將停止。",
+      "closeConfirm": "關閉並封存",
       "closeFailed": "刪除追問失敗，請稍後重試。"
     },
     "botStartedTasks": {
@@ -16092,9 +16108,15 @@
       "toggle": "展開或收起「{{title}}」的回信",
       "openTask": "開啟任務"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建議的時間自動重試",
+      "title": "Gemini 每分鐘輸入量已達上限",
+      "exhausted": "已自動重試一次，Gemini 仍受限。稍後可手動重試。",
+      "retryIn": "{{seconds}} 秒後自動重試"
+    },
     "subscriptionAccountError": {
-      "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
-      "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+      "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。",
+      "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。",
       "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
       "signingIn": "此任務使用的訂閱帳號正在登入，請完成登入後重試。",
       "unavailable": "此任務繫結的訂閱帳號無法用於本次請求。請在執行任務的電腦上檢查模型供應商中的帳號設定，或選擇其他模型來源。",
@@ -16328,6 +16350,14 @@
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
+      "savedModel": {
+        "loading": "正在連線至所選模型…",
+        "checkFailed": "無法檢查所選模型",
+        "engine": "所選引擎無法使用，請為本次任務選擇模型",
+        "source": "所選來源無法使用，請為本次任務選擇模型",
+        "model": "所選模型無法使用，請為本次任務選擇模型",
+        "thisTaskOnly": "所選模型僅用於本次任務"
+      },
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
       "branchChanged": "專案目前分支已變成 {{branch}}，請確認後再傳送",
@@ -22102,7 +22132,8 @@
       "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
       "manage": "管理模型組",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
-      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。"
+      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",

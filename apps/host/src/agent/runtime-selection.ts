@@ -274,6 +274,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const sessionRuntimeProjector = createSessionRuntimeProjector(explicitPorts<Parameters<typeof createSessionRuntimeProjector>[0]>({
     projectScheduledPreferences,
     runtimePluginsSelected: id => !!readRuntimePluginSettings(id),
+    pendingWorkerQuestion: undefined, // Worker execution is owned by the desktop.
   }));
   // The cleanup at a task's archive or delete (register.ts setSessionRuntimeCleanup), which
   // bindHostSessionRuntimeHooks installs: the task's runtime override and axes do not outlive it.
@@ -376,6 +377,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     describeAgentDevice: undefined,
     // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
     admitPluginEngineTarget: undefined,
+    admitRemotePluginEngineTarget: undefined,
     describePluginEngine: undefined,
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;

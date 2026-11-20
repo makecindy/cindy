@@ -142,6 +142,23 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
+  // An account usage limit showed only "reply failed" on the phone, so the cause was hidden
+  // behind the details toggle. Entries: history projection and the live queue section.
+  // Minimal inputs: explicit limit text; an armed wait whose upstream text is not recognizable.
+  it('names an account usage limit instead of a generic reply failure', async () => {
+    await i18n.changeLanguage(locale);
+    const summary = i18n.t('session.tail.usageLimitReached');
+    expect(summary).not.toBe(i18n.t('session.tail.replyFailed'));
+    const [history] = normalizeRemoteMessages([row("You've hit your session limit · resets 1:20am (Asia/Shanghai)")]);
+    expect(history.body).toBe(summary);
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: 'rate_limit', errorRetryText: 'original', usageLimitWait: { resumeAt: Date.now() + 3_600_000 } } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(summary);
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
+    expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
+  });
+
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {
     await i18n.changeLanguage(locale);
     const [lite, unknown] = normalizeRemoteMessages([row(raw), { ...row('Provider exploded; api_key=private-test-value'), id: 'unknown', clientId: 'unknown' }]);
@@ -283,7 +300,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -425,7 +442,7 @@ it('localizes bound-account exhaustion and old ambiguous startup errors', async 
   const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
   const text = localizeUnclassifiedAgentError(error);
   expect(text).toContain('用量已达上限');
-  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('不会自动换号');
   expect(text).not.toContain('需要重新登录');
   expect(text).not.toContain('resetAtMs=');
   const [normalized] = normalizeRemoteMessages([row(error)]);

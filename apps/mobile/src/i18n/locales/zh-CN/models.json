@@ -110,6 +110,16 @@
     "quotaAverageHint": "周配额 · 按账号等权平均",
     "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
   },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_other": "{{count}} 个来源",
+    "strategy": {
+      "expiring": "快作废的先用",
+      "order": "按顺序",
+      "rotate": "轮流",
+      "cheapest": "最省钱"
+    }
+  },
   "pluginEngines": {
     "genericName": "插件引擎",
     "defaultModel": "默认模型",

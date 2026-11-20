@@ -110,6 +110,16 @@
     "quotaAverageHint": "每週配額 · 各帳號等權平均",
     "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   },
+  "modelGroups": {
+    "title": "模型組",
+    "sourceCount_other": "{{count}} 個來源",
+    "strategy": {
+      "expiring": "快作廢的先用",
+      "order": "按順序",
+      "rotate": "輪流",
+      "cheapest": "最省錢"
+    }
+  },
   "pluginEngines": {
     "genericName": "插件引擎",
     "defaultModel": "預設模型",

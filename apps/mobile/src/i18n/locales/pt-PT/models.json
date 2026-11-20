@@ -113,6 +113,18 @@
     "quotaAverageHint": "Quota semanal · Peso igual por conta",
     "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": "Primeiro o que expira",
+      "order": "Por ordem",
+      "rotate": "À vez",
+      "cheapest": "O mais barato"
+    }
+  },
   "pluginEngines": {
     "genericName": "Motor de plugin",
     "defaultModel": "Modelo predefinido",

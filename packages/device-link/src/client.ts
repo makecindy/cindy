@@ -1243,9 +1243,12 @@ export class DeviceLinkClient {
     void this.connect(reason);
   }
 
-  /** host 的整体恢复入口(系统唤醒等):作用于本机全部连接。 */
-  restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * host 的整体恢复入口(系统唤醒、换网等):作用于本机全部连接。`keepPrimary` 时不重建主连接
+   * (见 RoutedDeviceLinkClient);这里只有这一条。
+   */
+  restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
   }
 
   /** host 的整体睡眠入口:作用于本机全部连接(与 restartConnections 对称)。 */
