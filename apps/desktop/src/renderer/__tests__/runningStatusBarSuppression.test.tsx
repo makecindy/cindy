@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { RunningTokenCount } from '@/features/cc-agent/RunningTokenCount';
@@ -86,15 +87,7 @@ const RunningStatusBar = new Function(
   outputTokens: number;
   generationDurationMs: number;
   generationReliable?: boolean;
-  tokenSpeed?: {
-    rate: number;
-    average: number;
-    tokens: number;
-    elapsedMs: number;
-    streaming: boolean;
-    peak?: number;
-    totalOutputTokens?: number;
-  };
+  tokenSpeed?: TokenSpeedSnapshot;
 }>;
 
 afterEach(cleanup);
