@@ -191,6 +191,26 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+
+      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
+      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
+      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
+      await settings.press('Enter');
+      await display.press('ArrowRight');
+      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await project.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await pending.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
       return;
     }
 
