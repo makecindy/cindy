@@ -11365,6 +11365,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}
+                          onDiscardBlockedQueueHead={removeQueueItem}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
                           onRetryError={retryQueueError}

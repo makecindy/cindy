@@ -52,6 +52,7 @@ export interface InlineQueueSectionProps {
   /** 无重发记录时，沿用隐藏续跑指令；有记录仍优先按原记录重试。 */
   onContinueAfterError?(): void;
   onClearError(): void;
+  onDiscardBlockedQueueHead?(clientId: string): void;
   /** 取消账号限额重置后的自动继续(只在投影带 usageLimitWait 时出现)。 */
   onCancelUsageLimitWait?(): void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
@@ -68,6 +69,7 @@ export function InlineQueueSection({
   onRetryError,
   onContinueAfterError,
   onClearError,
+  onDiscardBlockedQueueHead,
   onCancelUsageLimitWait,
   onDiagnose,
 }: InlineQueueSectionProps) {
@@ -106,6 +108,8 @@ export function InlineQueueSection({
         : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error, sessionSource)))
     : null;
 
+  const blockedQueueHeadClientId = getBlockedQueueHeadClientId(projection);
+
   const usageLimitResumeAt = projection.error && projection.usageLimitWait
     ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
     : null;
@@ -139,6 +143,14 @@ export function InlineQueueSection({
               label={t('message.queue.retrySend')}
               onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
+            /> : null}
+            {blockedQueueHeadClientId && onDiscardBlockedQueueHead ? <ActionPill
+              busy={busy}
+              disabled={controlsDisabled}
+              disabledReason={errorDisabledReason}
+              label={t('message.queue.cancelSend')}
+              onPress={() => onDiscardBlockedQueueHead(blockedQueueHeadClientId)}
+              testID="queue.inline.discardBlockedQueueHeadButton"
             /> : null}
             {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={busy} disabled={controlsDisabled} /> : null}
           </>} />
@@ -200,6 +212,14 @@ export function InlineQueueSection({
       ) : null}
     </View>
   );
+}
+
+function getBlockedQueueHeadClientId(projection: InputProjection): string | null {
+  const recovery = projection.recovery;
+  if (!recovery || typeof recovery !== 'object') return null;
+  const candidate = recovery as { kind?: unknown; clientId?: unknown };
+  if (candidate.kind !== 'queue-head' || typeof candidate.clientId !== 'string') return null;
+  return projection.pendingQueue[0]?.clientId === candidate.clientId ? candidate.clientId : null;
 }
 
 /** 同一天只显示时刻,跨天带日期(与桌面横幅同口径)。 */
