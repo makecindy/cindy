@@ -33,6 +33,9 @@ void mountPage({
       for (let index = 0; index < 24; index++) {
         addModelFavorite({ providerId, modelId: `offline-model-${index}`, agent: 'codex' });
       }
+      if (ctx.data.removeFavorite) {
+        addModelFavorite({ providerId: 'openai', modelId: 'openai-model-0', agent: 'codex' });
+      }
     }
     return {
       maker: {

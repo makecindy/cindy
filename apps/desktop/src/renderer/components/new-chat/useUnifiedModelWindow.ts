@@ -77,8 +77,9 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
     const row = items[index]?.row;
     return row && start < viewportEnd && end > scrollOffset && !isRowDisabled(row);
   });
+  const visibleEntryKey = items[visibleTabItem?.index ?? -1]?.key;
   const entryKey = focusedIndex === undefined
-    ? items[visibleTabItem?.index ?? firstSelectableIndex]?.key
+    ? visibleEntryKey ?? items[firstSelectableIndex]?.key
     : focusedKey;
 
   useLayoutEffect(() => {
@@ -113,7 +114,7 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
     if (focusedKey !== null && focusedIndex === undefined) {
       setFocusedKey(null);
       if (document.activeElement === document.body) {
-        const replacement = entryKey ? rowElement(entryKey) : listRef.current;
+        const replacement = (visibleEntryKey ? rowElement(visibleEntryKey) : undefined) ?? listRef.current;
         replacement?.focus({ preventScroll: true });
       }
     }

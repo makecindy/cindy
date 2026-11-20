@@ -19,6 +19,7 @@ export default {
     threshold: { about: 'Favoriting from an open configuration keeps the anchor when crossing the virtualization threshold', data: { count: 79 } },
     'offline-favorites': { about: 'Tab reaches a selectable model below a viewport of unavailable remote favorites', data: { count: 200, offlineFavorites: true } },
     'offline-favorites-readable': { about: 'The readable field picker retains keyboard access below unavailable remote favorites', data: { count: 200, offlineFavorites: true, readable: true } },
+    'offline-favorites-removal': { about: 'Removing a focused favorite leaves focus at the visible list', data: { count: 200, offlineFavorites: true, removeFavorite: true } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -49,6 +50,19 @@ export default {
       await page.keyboard.press('Tab');
       const activeModel = () => page.evaluate(() => document.activeElement?.getAttribute('data-unified-anchor'));
       const first = await activeModel();
+      if (ui.data.removeFavorite) {
+        assert.ok(first?.startsWith('fav::'), 'Tab did not focus the available favorite');
+        const favorite = list.locator(`[data-unified-anchor="${first}"]`);
+        await list.evaluate(el => { el.scrollTop = 0; });
+        await list.locator('[data-unified-anchor^="fav::"][aria-disabled="true"]').first().waitFor();
+        // Invoke the real remove action without moving focus away, as when another window removes the same item.
+        await favorite.getByRole('button', { name: await ui.t('newChat.modelSelector.unified.removeFavorite'), exact: true }).evaluate(button => button.click());
+        await favorite.waitFor({ state: 'detached' });
+        assert.equal(await list.evaluate(el => el === document.activeElement), true, 'Focus moved to an offscreen model after removal');
+        await page.keyboard.press('Tab');
+        assert.ok((await activeModel())?.startsWith('model::'), 'Tab could not move from the recovered list focus to a selectable model');
+        return;
+      }
       assert.ok(first?.startsWith('model::'), 'Tab skipped all selectable model rows');
       const entryScroll = await list.evaluate(el => {
         const viewport = el.getBoundingClientRect();
@@ -103,12 +117,14 @@ export default {
         return;
       }
       await row(78).waitFor();
-      const alignment = await row(78).evaluate(el => {
-        const list = el.closest('[role="listbox"]').getBoundingClientRect();
-        const row = el.getBoundingClientRect();
-        return ((row.top + row.bottom) / 2 - list.top) / list.height;
-      });
-      assert.ok(Math.abs(alignment - 0.35) < 0.06, `Selected row aligned at ${alignment}`);
+      await page.waitForFunction(() => {
+        const selected = document.querySelector('[data-unified-anchor="model::openai::openai-model-78"]');
+        const viewport = selected?.closest('[role="listbox"]')?.getBoundingClientRect();
+        if (!selected || !viewport?.height) return false;
+        const row = selected.getBoundingClientRect();
+        const alignment = ((row.top + row.bottom) / 2 - viewport.top) / viewport.height;
+        return Math.abs(alignment - 0.35) < 0.06;
+      }, undefined, { timeout: 2_000 });
       const openAI = page.getByRole('button', { name: 'OpenAI', exact: true });
       await openAI.click();
       const focusedInList = () => list.evaluate(el => el.contains(document.activeElement));
