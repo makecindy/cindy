@@ -106,6 +106,8 @@
 
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
+复古键帽的主、副印字使用 `retroKeyboardMaterials` 中与机身配套的 `ink` 和 `secondaryInk`，范围仅限实体键面，见下文「复古键盘的实体按压」。
+
 ### 字号 `typeScale`(按角色选,2026-09-27 用户定稿收拢为 11 档)
 
 | token | px | 角色 |
@@ -402,7 +404,7 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 顶行是无键帽的图标条：esc、桌面级快捷键、撤销、重做、fn 和手机输入法入口。图标条高度取一行按键的 0.74 倍，不高于按键行（2026-11-07 用户决定）；触控板固定占下半屏可用高度的 32%（不低于 96pt），其余给按键。桌面级快捷键按被控电脑系统变化，按住图标时显示名称。
 顶行右端是剪贴板和控制面板。触控板按 1.9:1 居中，两侧留白；可见面板之外的掌托区域同样移动指针。
 修饰键点一次作用于下一个键，点两次锁定，再点一次取消；按住则与同时按下的键组合。单独点按不发给电脑。
-按键圆角 8pt，字号用 `body` 与 `micro`。
+默认键盘使用 8pt 圆角、3pt 键缝和跟随主题的浅键帽，行程 1.25pt。字号用 `body` 与 `micro`，数字主字和 Shift 副字分开排印。
 顶部保留与复古外观相同的 44pt 左右滑动切换栏（2026-11-06 用户决定），从折痕处开始、覆盖折痕下的安全边距，按键紧接在它下面；「控制」面板里也能切换外观。
 
 所有远程键盘共用一套布局和输入逻辑（`RemoteKeySurface`）：
@@ -439,3 +441,35 @@ There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separat
   - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
   - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
   - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the §14.4 Motion tokens. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+
+### 复古键盘的实体按压（2026-11-07）
+
+参考 [Tiny Computers 官方键盘近照](https://www.fountaininteractive.com/TinyComputers/press/)，
+学习键帽厚度、键缝、印字和材质的统一关系；不打包第三方素材。
+
+复古键的键帽与印字作为整体下沉，触摸命中框保持原位；不通过整键半透明表达按压。
+厚键帽键程 4pt，PowerBook／ThinkPad／Ice Blue 为 2.5pt，MacBook 为 1.5pt，
+小尺寸按键不超过键高的 12%。实体按键反馈使用 45ms 下压、110ms 回位的 ease-out，
+这是硬件模拟的短反馈，不影响普通按钮动效。减弱动态效果开启或状态未知时直接切换。
+锁定修饰键保留原有材质、下沉状态和小指示灯；F/J 带定位横条。
+皮肤材质在亮暗模式保持物理颜色，键字与状态仍取对应皮肤的语义色。
+声音与触觉继续沿用已有本机反馈，不等待远程响应。
+
+2026-11-07 视觉复核：新皮肤独立命名「冰蓝 / Ice Blue」，不使用参考应用的
+产品名或图形标志。材质采用低对比细磨砂、窄倒角、浅凹键面；冷白、米白和深灰
+分别对应机身材质。位图本身已包含形状与光照，不额外倾斜形成重复透视。
+字母印字采用 footnote，功能键采用 micro；底部接触投影随按压减弱，避免仅移动
+整块图片。最终质感需按实际组件组合与手机实机判断，生成素材不能代替验收。
+
+同日材质方向修正：冰蓝外壳以 iMac G3 的厚实有色半透明注塑为参考，不能做成
+淡蓝玻璃细边。厚边与转角颜色更浓，薄处更透；内层乳白带青色映色，筋位和卡扣
+隔着壳朦胧可见。高光随圆润曲面宽窄变化，不做均匀发光描边；保留独立命名。
+
+全部实体键帽按键宽绘制连续侧壁。键高决定倒角和前缘厚度，按下时前缘与接触阴影一起收短。
+经典原版、窄边经典、极简大屏共用暖象牙键盘；Macintosh II 用白金灰，四者均为 2.5pt 键缝，
+功能键比字母键略深。PowerBook 用石墨灰配暖白字，ThinkPad 用炭黑配左上角直立字母，
+冰蓝用冷白配蓝灰丝印，三者均为 2pt 键缝。MacBook 的薄型炭灰键帽采用居中字母与 3pt 键缝。
+各套功能键沿外侧排字、方向箭头居中，窄键面优先显示主字。F/J 定位凸筋随键面移动。
+
+前三款经典外观和 Macintosh II 的可见触摸板以键盘槽宽的三分之一为目标，在掌托中居中。
+掌托较矮时，板面最宽为 2:1，上下各留至少 4pt；两端的圆角和凹边随高度等比缩放。

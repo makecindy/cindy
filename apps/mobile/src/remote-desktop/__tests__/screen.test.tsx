@@ -189,6 +189,7 @@ vi.mock("react-native", async () => {
     Alert: { alert: fixture.alert },
     View: view("div"),
     Image: view("div"),
+    PixelRatio: { get: () => 3, roundToNearestPixel: (value: number) => Math.round(value * 3) / 3 },
     Modal: (p: any) =>
       p.visible ? createElement("div", {}, p.children) : null,
     Pressable: view("button"),
@@ -418,10 +419,11 @@ vi.mock("../retroMacArtwork", () => {
       compact: 2,
       edge: 3,
       keycap: 4,
+      iceKeycap: 11,
       darkKeycap: 5,
       trackpoint: 6,
-      displays: { macii: 7, powerbook: 8, thinkpad: 9 },
-      decks: { classic: deck, macii: deck, powerbook: deck, thinkpad: deck },
+      displays: { macii: 7, powerbook: 8, thinkpad: 9, iceblue: 10 },
+      decks: { classic: deck, macii: deck, powerbook: deck, thinkpad: deck, iceblue: deck },
     },
   };
 });
@@ -6020,7 +6022,11 @@ describe("remote desktop controls", () => {
     await leave();
     storage.items.set(key, "thinkpad");
     await enter();
-    swipe(); // ThinkPad -> MacBook.
+    swipe(); // ThinkPad -> Ice Blue.
+    await leave();
+    expect(storage.items.get(key)).toBe("iceblue");
+    await enter();
+    swipe(); // Restored Ice Blue -> MacBook.
     expect(
       host.querySelector('[data-testid="remoteDesktop.macbookBezel"]'),
     ).not.toBeNull();
@@ -6608,6 +6614,14 @@ describe("remote desktop controls", () => {
       type: "events",
       events: [{ kind: "key", code: "KeyA", down: true }],
     });
+    // Unit: the physical face travels with its legend while its hit box stays
+    // fixed (2026-11-07 tactile keyboard request). Previously only opacity changed.
+    const faceStyle = () => Object.assign({}, ...fixture.views["remoteDesktop.keyFace.KeyA"].style.flat(Infinity).filter(Boolean));
+    expect(faceStyle().transform[0].translateY).toBeGreaterThan(0);
+    expect(Object.assign({}, ...fixture.views["remoteDesktop.key.KeyA"].style.flat(Infinity).filter(Boolean))).toEqual(letterStyle);
+    act(() => retroKeys.onTouchEnd({nativeEvent: {identifier: 1}}));
+    expect(faceStyle().transform).toEqual([{translateY: 0}]);
+    expect(sent()).toContainEqual({type: "events", events: [{kind: "key", code: "KeyA", down: false}]});
     const initialFrame = fixture.views["remoteDesktop.media"].style;
     // Unit: a physical skin must fit the host's actual aspect, not the Duo
     // half-screen aspect; switching hardware must not stretch the desktop.
@@ -6638,7 +6652,12 @@ describe("remote desktop controls", () => {
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
-    swipe(-100); // ThinkPad → MacBook: same viewer and keyboard input.
+    swipe(-100); // ThinkPad → Ice Blue: retain the live viewport and keyboard.
+    expectHostAspect();
+    act(() => fixture.views["remoteDesktop.retroKeys"].onLayout({nativeEvent: {layout: {width: 600, height: 300}}}));
+    act(() => fixture.views["remoteDesktop.key.KeyZ"].onAccessibilityAction());
+    expect(fixture.keyFeedbackForSkin).toHaveBeenLastCalledWith("iceblue", "KeyZ");
+    swipe(-100); // Ice Blue → MacBook: same viewer and keyboard input.
     // MacBook keeps its own opening regardless of the host aspect. Shorter
     // panels cap the height at the physical fold, and the viewer adds fill.
     expect(
@@ -6668,7 +6687,7 @@ describe("remote desktop controls", () => {
     swipe(100);
     act(() => fixture.views["remoteDesktop.retroKeys"].onLayout({nativeEvent: {layout: {width: 600, height: 300}}}));
     act(() => fixture.views["remoteDesktop.key.KeyZ"].onAccessibilityAction());
-    expect(fixture.keyFeedbackForSkin).toHaveBeenLastCalledWith("thinkpad", "KeyZ");
+    expect(fixture.keyFeedbackForSkin).toHaveBeenLastCalledWith("iceblue", "KeyZ");
     swipe(-100);
     swipe(-100); // MacBook → plain modern controls.
     expect(
@@ -6704,7 +6723,8 @@ describe("remote desktop controls", () => {
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
-    swipe(100); // MacBook → ThinkPad.
+    swipe(100); // MacBook → Ice Blue.
+    swipe(100); // Ice Blue → ThinkPad.
     swipe(100); // ThinkPad → PowerBook.
     swipe(100); // PowerBook → Macintosh II restores the same viewport.
     expect(fixture.views["remoteDesktop.media"].style).toEqual(initialFrame);

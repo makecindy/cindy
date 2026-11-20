@@ -1,5 +1,9 @@
 import { deviceDisplayName } from "@/device-link/deviceName";
-import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
+import {
+  foldDesktopHardware,
+  foldDesktopLayout,
+  foldDesktopRegion,
+} from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
 import { FoldDesktopKeyboard } from "./FoldDesktopKeyboard";
@@ -642,17 +646,8 @@ export function RemoteDesktopSession({
   const viewerColors = retroDesktop ? darkColors : colors;
   // Artwork covers both physical halves, including the division and system
   // reservations. Only interactive content is constrained to the safe regions.
-  const foldSeam = tableRegion
-    ? (tableRegion.first.y + tableRegion.first.height + tableRegion.second.y) /
-      2
-    : 0;
-  const hardwareMedia = { x: 0, y: 0, width: geometry.width, height: foldSeam };
-  const hardwareControls = {
-    x: 0,
-    y: foldSeam,
-    width: geometry.width,
-    height: geometry.height - foldSeam,
-  };
+  const { media: hardwareMedia, controls: hardwareControls } =
+    foldDesktopHardware(geometry);
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
