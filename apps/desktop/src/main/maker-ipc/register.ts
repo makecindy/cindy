@@ -7340,14 +7340,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
-    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
+    listProviders: (opts) => getDesktopProviderService(opts?.picker ? { allowSideEffects: false } : undefined).listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
         (provider) => provider.id === providerId && isOrganizationManagedProvider(provider),
       ),
-    getModelVisibilityOverrides: async (providers, trusted) => {
+    getModelVisibilityOverrides: async (providers, trusted, pickerScope) => {
       if (!trusted) await waitForModelVisibilityMirror();
-      return getModelVisibilityMirrorSnapshot(providers, trusted);
+      return getModelVisibilityMirrorSnapshot(providers, trusted, pickerScope);
     },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
