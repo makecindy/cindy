@@ -155,6 +155,10 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
  * 旧判定针对的是另一条路 —— 直连化之后还挂着中继的代理提示,是条自信的假提示;反过来
  * 从直连回到中继时也拿不到该有的提示(Codex review P1)。路径变化由 main 的
  * STATUS_CHANGED(dataPathChangedDeviceId)告知,这里用代数把它并进探测的依赖。
+ *
+ * 主连接本身重建(relay↔relay 重连)不发 dataPathChangedDeviceId,只发
+ * PEER_LINK_REOPENED(index.ts 建链/受流时广播):新 socket 可能落在另一条出站
+ * 通路上,旧判定同样作废,一并计入 pathEpoch(Codex review P1)。
  */
 export function useOutboundProxyVerdict(
   active: boolean,
@@ -167,14 +171,21 @@ export function useOutboundProxyVerdict(
   useEffect(() => {
     if (!active || !deviceId) return;
     let cancelled = false;
+    const bump = () => setPathEpoch((e) => e + 1);
     const off = window.electronAPI.deviceLink.onStatusChanged((p) => {
       if (cancelled) return;
       if (p.dataPathChangedDeviceId !== deviceId) return;
-      setPathEpoch((e) => e + 1);
+      bump();
+    });
+    const offReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.((p) => {
+      if (cancelled) return;
+      if (p.deviceId !== deviceId) return;
+      bump();
     });
     return () => {
       cancelled = true;
       off();
+      offReopened?.();
     };
   }, [active, deviceId]);
 
