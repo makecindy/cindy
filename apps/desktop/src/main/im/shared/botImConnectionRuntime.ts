@@ -630,6 +630,10 @@ export async function updateBotIMessageConfig(id: string, input: unknown): Promi
       let config: ReturnType<typeof parseBlueBubblesConfig>;
       try {
         config = parseBlueBubblesConfig({ ...p, groupAliases: previous.groupAliases });
+        if (p.mentionAddress === undefined && previous.mentionAddress &&
+          config.serverUrl === previous.serverUrl && config.ownerAddress === previous.ownerAddress) {
+          config.mentionAddress = previous.mentionAddress;
+        }
         if (p.selfAccountAddresses === undefined && previous.selfAccountAddresses &&
           config.serverUrl === previous.serverUrl && config.ownerAddress === previous.ownerAddress) {
           config.selfAccountAddresses = Object.fromEntries(Object.entries(previous.selfAccountAddresses)
