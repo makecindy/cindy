@@ -5,6 +5,7 @@
  * reaches it. Local mode never scans or moves legacy data.
  */
 import { app, safeStorage } from 'electron';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -19,10 +20,12 @@ import {
 } from '../appSessionState.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 import { createLogger } from '../logger.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 
 const log = createLogger('im/owner-scoped-storage');
 const LEGACY_OWNER_MARKER = 'im-legacy-owner.json';
 const SAFE_SECRET_NAME = /^[A-Za-z0-9_-]+$/;
+const SECRET_PAYLOAD_PREFIX = 'cindy-im-secret-v2:';
 
 type ImSecrets = IMHost['secrets'];
 
@@ -151,13 +154,29 @@ function scopedSecretPath(name: string): string | null {
   return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
 }
 
-/** Non-secret binding generation for durable IM output. Never reads or returns credential bytes. */
+function encodeSecretPayload(plaintext: string): string {
+  return `${SECRET_PAYLOAD_PREFIX}${crypto.randomUUID()}:${plaintext}`;
+}
+
+function decodeSecretPayload(value: string): string {
+  if (!value.startsWith(SECRET_PAYLOAD_PREFIX)) return value;
+  const separator = value.indexOf(':', SECRET_PAYLOAD_PREFIX.length);
+  return separator === -1 ? value : value.slice(separator + 1);
+}
+
+/**
+ * Non-secret binding generation for durable IM output.
+ *
+ * The digest is over the already-encrypted file representation, never plaintext.
+ * It is content-derived rather than timestamp-derived so a successful replacement
+ * cannot reuse a Windows filesystem timestamp and accidentally retain old output.
+ */
 export function ownerScopedImSecretRevision(name: string): string {
   const target = scopedSecretPath(name);
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
   try {
-    const stat = fs.statSync(target, { bigint: true });
-    return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    const encrypted = fs.readFileSync(target);
+    return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
     throw error;
@@ -180,7 +199,7 @@ function readSecretResult(name: string): IMSecretReadResult {
     const encrypted = fs.readFileSync(target, 'utf-8');
     return {
       kind: 'value',
-      value: safeStorage.decryptString(Buffer.from(encrypted, 'base64')),
+      value: decodeSecretPayload(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))),
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
@@ -197,7 +216,7 @@ export const ownerScopedImSecrets: ImSecrets = {
       const target = prepareSecretPath(name);
       if (!target) return false;
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, safeStorage.encryptString(plaintext).toString('base64'), 'utf-8');
+      atomicWriteFileSync(target, safeStorage.encryptString(encodeSecretPayload(plaintext)).toString('base64'));
       return true;
     } catch {
       return false;

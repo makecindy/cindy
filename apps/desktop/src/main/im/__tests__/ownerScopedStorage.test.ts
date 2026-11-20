@@ -152,6 +152,8 @@ describe('IM owner-scoped storage', () => {
     expect(discordFinalTextStorage('personal', true).read()).toBe('{"version":1,"entries":[]}');
     expect(revision).not.toContain('invalid-test-token');
     ownerScopedImSecrets.write('discord-bot-token', 'another-invalid-test-token');
+    const replacementRevision = ownerScopedImSecretRevision('discord-bot-token');
+    expect(replacementRevision).not.toBe(revision);
     expect(storage.authorizationStamp('g/1/20')).not.toBe(authorization);
     mocks.ownerScopeKey = 'owner-2'; setSession('cloud', 'cloud-b');
     expect(() => storage.read()).toThrow('DISCORD_ACCOUNT_CHANGED');
