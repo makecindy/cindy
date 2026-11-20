@@ -113,6 +113,28 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
   return DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS.some((pattern) => pattern.test(input));
 }
 
+const ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS = [
+  // Claude: "You've hit your session limit · resets 1:20am (TZ)"; ChatGPT: "You've hit
+  // your usage limit"; Pi: "You have hit your ChatGPT usage limit (plus plan)".
+  /\byou(?:(?:'|’)ve|\s+have)\s+hit\s+your\s+(?:(?:(?:claude\s+)?session|(?:chatgpt\s+)?usage|daily|weekly|monthly|\d+-hour)\s+)?limit\b/i,
+  // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`.
+  /\busage[\s_-]?limit[\s_-]?(?:reached|exceeded)\b/i,
+];
+
+/** Balance, budget and spend caps need a top-up or an owner, not a reset. */
+const USAGE_LIMIT_NOT_PERIODIC_PATTERN = /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|余额不足|欠费/i;
+
+/**
+ * UI-only: the upstream text plainly says the account used up its periodic
+ * allowance. Desktop and Mobile use it to replace the generic "reply failed"
+ * summary with a readable one. It never decides waiting or auto-continue, and
+ * excludes transient rate limiting (`429`, `rate limit`) and balance depletion.
+ */
+export function isAccountUsageLimitReachedText(input: string): boolean {
+  if (!input || USAGE_LIMIT_NOT_PERIODIC_PATTERN.test(input)) return false;
+  return ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS.some((pattern) => pattern.test(input));
+}
+
 /**
  * Preserve explicit, non-secret routing signals before the surrounding error
  * text is redacted. Requiring a field/phrase boundary avoids interpreting

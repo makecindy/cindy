@@ -638,6 +638,7 @@
     "readableHistoryRecoveryDescription": "Conserve votre historique de conversation et la session d'origine. Renvoyez votre dernier message dans la nouvelle session.",
     "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
     "replyFailed": "Impossible de terminer la réponse",
+    "usageLimitReached": "Le compte du modèle a atteint sa limite d'utilisation",
     "showErrorDetails": "Détails de l'erreur",
     "hideErrorDetails": "Masquer les détails",
     "diagnose": "Diagnostiquer",

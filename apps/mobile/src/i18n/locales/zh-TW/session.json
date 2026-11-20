@@ -635,6 +635,7 @@
     "readableHistoryRecoveryDescription": "帶上對話記錄繼續，原任務保留。請在新任務中重新傳送剛才的訊息。",
     "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
     "replyFailed": "回覆未完成",
+    "usageLimitReached": "模型帳號已達到用量上限",
     "showErrorDetails": "錯誤詳情",
     "hideErrorDetails": "收起詳情",
     "diagnose": "診斷",

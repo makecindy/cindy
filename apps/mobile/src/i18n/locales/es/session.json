@@ -638,6 +638,7 @@
     "readableHistoryRecoveryDescription": "Conserva tu historial de conversación y la sesión original. Reenvía tu último mensaje en la nueva sesión.",
     "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
     "replyFailed": "No se pudo completar la respuesta",
+    "usageLimitReached": "La cuenta del modelo alcanzó su límite de uso",
     "showErrorDetails": "Detalles del error",
     "hideErrorDetails": "Ocultar detalles",
     "diagnose": "Diagnosticar",

@@ -635,6 +635,7 @@
     "readableHistoryRecoveryDescription": "Behalte deinen Chatverlauf und die ursprüngliche Sitzung. Sende deine letzte Nachricht in der neuen Sitzung erneut.",
     "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
     "replyFailed": "Antwort konnte nicht abgeschlossen werden",
+    "usageLimitReached": "Das Modellkonto hat sein Nutzungslimit erreicht",
     "showErrorDetails": "Fehlerdetails",
     "hideErrorDetails": "Details ausblenden",
     "diagnose": "Diagnostizieren",

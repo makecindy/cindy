@@ -635,6 +635,7 @@
     "readableHistoryRecoveryDescription": "Keep your chat history and original session. Resend your last message in the new session.",
     "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
     "replyFailed": "Could not complete the reply",
+    "usageLimitReached": "This model account has reached its usage limit",
     "showErrorDetails": "Error Details",
     "hideErrorDetails": "Hide Details",
     "diagnose": "Diagnose",

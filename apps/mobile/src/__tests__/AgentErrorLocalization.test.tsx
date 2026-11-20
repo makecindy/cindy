@@ -142,6 +142,23 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
+  // An account usage limit showed only "reply failed" on the phone, so the cause was hidden
+  // behind the details toggle. Entries: history projection and the live queue section.
+  // Minimal inputs: explicit limit text; an armed wait whose upstream text is not recognizable.
+  it('names an account usage limit instead of a generic reply failure', async () => {
+    await i18n.changeLanguage(locale);
+    const summary = i18n.t('session.tail.usageLimitReached');
+    expect(summary).not.toBe(i18n.t('session.tail.replyFailed'));
+    const [history] = normalizeRemoteMessages([row("You've hit your session limit · resets 1:20am (Asia/Shanghai)")]);
+    expect(history.body).toBe(summary);
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: 'rate_limit', errorRetryText: 'original', usageLimitWait: { resumeAt: Date.now() + 3_600_000 } } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(summary);
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
+    expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
+  });
+
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {
     await i18n.changeLanguage(locale);
     const [lite, unknown] = normalizeRemoteMessages([row(raw), { ...row('Provider exploded; api_key=private-test-value'), id: 'unknown', clientId: 'unknown' }]);

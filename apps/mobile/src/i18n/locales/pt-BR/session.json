@@ -638,6 +638,7 @@
     "readableHistoryRecoveryDescription": "Mantenha seu histórico de conversa e a sessão original. Reenvie sua última mensagem na nova sessão.",
     "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
     "replyFailed": "Não foi possível concluir a resposta",
+    "usageLimitReached": "A conta do modelo atingiu o limite de uso",
     "showErrorDetails": "Detalhes do erro",
     "hideErrorDetails": "Ocultar detalhes",
     "diagnose": "Diagnosticar",
