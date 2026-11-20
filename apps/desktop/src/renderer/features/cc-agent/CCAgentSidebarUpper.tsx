@@ -2,7 +2,7 @@ import { projectKeyForDeepLink } from '../../../shared/projectKeys';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
-import { useTaskListMode } from '@/hooks/useTaskListMode';
+import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
   matchesTaskCreators,
   useTaskCreatorIndex,
@@ -30,6 +30,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -262,6 +263,8 @@ import {
   railPanelStore,
 } from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
+import { useInboxUnread } from './sidebar/useInboxUnread';
+import { useTeammateInboxEntries } from '@/features/bots/useTeammateInboxEntries';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
@@ -275,6 +278,7 @@ import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
 import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
+  sidebarContentFilterCount,
   DIALOGUE_FILTER_KEY,
   projectFilterIncludes,
   buildManualPinnedReorder,
@@ -428,6 +432,8 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 }
 
 /* ============================== Root ============================== */
+
+const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
@@ -888,7 +894,7 @@ interface ExpandedProps {
   /** 通知与未读的「注视中」会话:viewedSessionId 之外再包含主区域正在看的伙伴会话。
    *  只用于 useSessionRunningStatus,不参与归档重定向与选中高亮。 */
   attentionSessionId: string | undefined;
-  filter: UseSidebarFilterReturn;
+  filter: ReturnType<typeof useSidebarFilter>;
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
   scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
@@ -1636,8 +1642,10 @@ function ExpandedView({
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
     return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
+  const inboxFilter = filter.inbox;
   const inboxSourceSessions = useMemo(
-    () => filterTaskSessions(statusIndependentSidebarSessions), [filterTaskSessions, statusIndependentSidebarSessions],
+    () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
+    [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
@@ -2063,12 +2071,13 @@ function ExpandedView({
     for (const [sessionId, kind] of attentionKinds) {
       if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
     }
+    const base = {
+      runningSessionIds: displayRunningSessionIds,
+      attentionSessionIds: sidebarNotifications,
+      waitingSessionIds: waiting,
+    };
     const natural = sidebarPriorityContext(
-      {
-        runningSessionIds: displayRunningSessionIds,
-        attentionSessionIds: sidebarNotifications,
-        waitingSessionIds: waiting,
-      },
+      base,
       [
         ...allProjectGroups.projects.flatMap((project) => project.sessions),
         ...visibleDialogues,
@@ -2087,6 +2096,7 @@ function ExpandedView({
       Date.now(),
     );
     return {
+      base,
       context: {
         ...natural,
         heldPriorityRanks: hold.heldPriorityRanks,
@@ -2167,16 +2177,27 @@ function ExpandedView({
       withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
       hiddenProjectKeys, localPlatform,
     ).filter(project =>
-      (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
-        || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
+      (inboxFilter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
+        || projectFilterIncludes(inboxFilter.projectsAsSet, project.projectKey, localPlatform)));
     const scoped = [
       ...projects.flatMap(project => project.sessions),
-      ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
-      ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
+      ...(inboxFilter.projectsAsSet === null || inboxFilter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
+      ...(inboxFilter.projects === 'all' ? inboxGroups.unclassified : []),
     ];
-    return vendorPredicate ? scoped.filter(vendorPredicate) : scoped;
+    return inboxFilter.vendor === 'all' ? scoped : scoped.filter(session => (session.agentKind ?? 'cc') === inboxFilter.vendor);
   }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
-    filter.projectsAsSet, filter.projects, vendorPredicate]);
+    inboxFilter]);
+
+  const teammateEntries = useTeammateInboxEntries();
+  const inboxTeammates = sidebarContentFilterCount(inboxFilter) ? EMPTY_INBOX_TEAMMATES : teammateEntries;
+  const { now: inboxNow, hasUnread } = useInboxUnread(
+    inboxSessions, inboxTeammates, projectPriorityProjection.base, isInboxTeammateTask,
+  );
+  const reportUnread = useContext(InboxUnreadReporter);
+  useLayoutEffect(() => {
+    reportUnread?.(hasUnread);
+    return () => reportUnread?.(false);
+  }, [reportUnread, hasUnread]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
@@ -3859,6 +3880,8 @@ function ExpandedView({
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
                   inboxSessions={inboxSessions}
+                  inboxNow={inboxNow}
+                  inboxTeammates={inboxTeammates}
                   isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}

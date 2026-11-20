@@ -31,6 +31,7 @@ import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 
 export type TaskInboxProps = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
+  now?: number;
   contentFiltered?: boolean;
   priorityContext: MainListPriorityContext;
   /** A teammate's task is listed only while it needs the user or runs. */
@@ -51,7 +52,7 @@ const itemSnoozedUntil = (item: InboxItem) =>
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 const NO_TEAMMATES: readonly TeammateInboxEntry[] = [];
 
-export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeammateTask, teammates = NO_TEAMMATES, ...rows }: TaskInboxProps) {
+export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorityContext, isTeammateTask, teammates = NO_TEAMMATES, ...rows }: TaskInboxProps) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
@@ -91,25 +92,10 @@ export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeamma
     }
     return result;
   }, []);
-  const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
   );
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  // Only the nearest expiry needs a timer; a focus reconciles time after sleep.
-  useEffect(() => {
-    const refresh = () => setNow(Date.now());
-    const next = Math.min(...[...sessions.map(taskSnoozeUntil),
-      ...teammates.map((entry) => taskSnoozeUntil(entry.snooze ?? {}))].filter((at) => at > now));
-    const timer = Number.isFinite(next)
-      ? setTimeout(refresh, Math.min(2_147_483_647, Math.max(1, next - Date.now())))
-      : undefined;
-    window.addEventListener('focus', refresh);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('focus', refresh);
-    };
-  }, [sessions, teammates, now]);
   const groups = useMemo(() => {
     const result = new Map<TaskInboxSection, InboxItem[]>(SECTIONS.map((key) => [key, []]));
     // Teammates lead their section, latest activity first (the order they arrive in).
