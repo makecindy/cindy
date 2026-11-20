@@ -511,13 +511,34 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   networkChanged(): void {
     if (this.closed) return;
     this.transport?.networkChanged?.();
-    if (this.uplink) return;
-    this.resendWhenRelayBack = true;
-    if (!this.reconnect) return;
-    clearTimeout(this.reconnect); this.reconnect = null;
-    void this.connectRelay().catch(() => this.scheduleReconnect());
+    if (!this.uplink) this.reconnectRelayNow(false);
+  }
+  /**
+   * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
+   * connection is replaced: it may sit half-open on the old route without ever erroring (React Native's WebSocket cannot
+   * ping, and this socket answers Device Link's pings itself), while the encrypted connections and their sessions move by
+   * themselves and stay. Device Link replaces its own connections on the same evidence. An attempt in flight is kept.
+   */
+  replaceRelayConnection(): void {
+    if (this.closed) return;
+    this.transport?.networkChanged?.();
+    const old = this.uplink;
+    if (old) {
+      this.uplink = null; old.close();
+      if (this.ready) this.acknowledgeHello();
+    }
+    this.reconnectRelayNow(!!old);
   }
   private resendWhenRelayBack = false;
+  /** Connects the relay now instead of after the backoff; without `force` an attempt already in flight is kept. */
+  private reconnectRelayNow(force: boolean): void {
+    this.resendWhenRelayBack = true;
+    if (!force && !this.reconnect) return;
+    if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
+    const attempt = this.connectRelay(), generation = this.generation;
+    // A newer attempt (another network change) takes over from this one, failures included.
+    void attempt.catch(() => { if (generation === this.generation && !this.uplink) this.scheduleReconnect(); });
+  }
   /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /**
@@ -580,9 +601,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     } });
   }
   private scheduleReconnect(): void {
-    if (this.closed || this.reconnect) return;
+    if (this.closed || this.reconnect || this.uplink) return;
     this.reconnect = setTimeout(() => {
       this.reconnect = null;
+      // Another attempt (a network change) may have connected meanwhile.
+      if (this.uplink) return;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
     unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);

@@ -28,11 +28,13 @@ const peerSession = vi.hoisted(() => ({ current: null as null | {
 } }));
 // A native Agent-Net socket for the Provider's main connection (the network-change case below); null keeps the real runtime.
 const agentNetPrimary = vi.hoisted(() => ({ socket: null as null | object }));
+const agentNetNetworkChanged = vi.hoisted(() => vi.fn());
 vi.mock('../device-link/agentNetRuntime', async original => {
   const actual = await original<typeof import('../device-link/agentNetRuntime')>();
   return {
     ...actual,
     mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
+    notifyMobileAgentNetNetworkChanged: agentNetNetworkChanged,
     isMobileAgentNetActive: () => agentNetPrimary.socket !== null || actual.isMobileAgentNetActive(),
     openMobileAgentNetSocket: (...args: Parameters<typeof actual.openMobileAgentNetSocket>) =>
       agentNetPrimary.socket ? Promise.resolve(agentNetPrimary.socket) : actual.openMobileAgentNetSocket(...args),
@@ -1518,6 +1520,7 @@ describe('Provider network recovery priority', () => {
   it.each([true, false])('keeps an Agent-Net main connection on a physical route change (Agent-Net=%s)', async (agentNet) => {
     auth.deviceId = 'phone';
     agentNetPrimary.socket = agentNet ? {} : null;
+    agentNetNetworkChanged.mockClear();
     try {
       await act(async () => { await setMobileAgentNetPreferences({ enabled: agentNet }); });
       const client = transport.clients.at(-1)!;
@@ -1529,6 +1532,9 @@ describe('Provider network recovery priority', () => {
         networkEvents.network(wifi);
       });
       expect(client.restartConnections).toHaveBeenCalledExactlyOnceWith('network-path-changed', { keepPrimary: agentNet });
+      // Its relay connection, which may sit half-open on the old route, is replaced instead (portableSocket.test.ts).
+      if (agentNet) expect(agentNetNetworkChanged).toHaveBeenLastCalledWith({ routeChanged: true });
+      else expect(agentNetNetworkChanged).not.toHaveBeenCalled();
     } finally {
       agentNetPrimary.socket = null;
       auth.deviceId = undefined;
