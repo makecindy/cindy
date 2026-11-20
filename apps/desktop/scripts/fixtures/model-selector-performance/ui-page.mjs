@@ -43,6 +43,7 @@ export default {
       const sizer = document.querySelector('[data-width-sizer]');
       return { width: panel.getBoundingClientRect().width, height: panel.getBoundingClientRect().height,
         nodes: panel.querySelectorAll('*').length, sizingNodes: sizer?.querySelectorAll('*').length ?? 0,
+        sizingRows: sizer?.querySelectorAll('[data-unified-triple]').length ?? 0,
         sizingButtons: sizer?.querySelectorAll('button').length ?? 0 };
     });
     try {
@@ -76,7 +77,6 @@ export default {
         await page.waitForTimeout(280);
         const filterAfter = await metrics();
         shape = await readShape();
-        assert.ok(shape.sizingNodes > 0, 'Filter did not exercise the width probe');
         samples.push({ ...timing, layoutMs: (after.LayoutDuration - before.LayoutDuration) * 1000,
           layoutCount: after.LayoutCount - before.LayoutCount,
           scriptMs: (after.ScriptDuration - before.ScriptDuration) * 1000,
@@ -93,6 +93,9 @@ export default {
         appendFileSync(process.env.CINDY_MODEL_PERF_OUTPUT, JSON.stringify({ case: ui.case, theme: ui.theme,
           count: ui.data.count, allShape, shape, cold: samples[0], samples: samples.slice(2) }) + '\n');
       }
+      assert.ok(shape.sizingRows <= 1 && shape.sizingNodes < 40,
+        `Filtering mounted ${shape.sizingRows} width-probe rows (${shape.sizingNodes} nodes)`);
+      assert.equal(shape.sizingButtons, 0, 'Width measurement exposed interactive buttons');
       await ui.capture('provider-filter');
       const width = shape.width;
       await page.getByRole('button', { name: await ui.t('newChat.modelSelector.unified.railAll'), exact: true }).click();

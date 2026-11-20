@@ -16,8 +16,9 @@ import {
   requestProviderShareFavoriteRegions,
 } from '@/features/provider-share/providerShareStore';
 import { toast } from '@/lib/toast';
-import { matchesModelName } from '@/lib/modelDisplayNames';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
+import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
 import { Check, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -106,6 +107,23 @@ const noop = (): void => {};
 const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
 const NO_RECENT: readonly RecentModelItem[] = [];
 const NO_PROVIDERS: readonly ProviderView[] = [];
+
+function createWidthMeasure(fontFamily: string) {
+  const context = typeof CanvasRenderingContext2D === 'undefined'
+    ? null
+    : document.createElement('canvas').getContext('2d');
+  const cache = new Map<string, number>();
+  return (label: string, size: number, weight: number) => {
+    const font = `${weight} ${size}px ${fontFamily}`;
+    const key = `${font}\n${label}`;
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+    if (context && context.font !== font) context.font = font;
+    const width = context?.measureText(label).width ?? label.length * size;
+    cache.set(key, width);
+    return width;
+  };
+}
 
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
@@ -723,10 +741,10 @@ export function UnifiedModelPanel({
     (
       entry: UnifiedModelEntry,
       /** 配置副本条目(收藏 / 最近)—— 只读它自存的引擎 / 深度 / Fast。 */
-      copy?: ModelConfigCopy,
+      copy: ModelConfigCopy | undefined,
       // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
       // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
-      railForConfig: UnifiedRailFilter = effectiveRail,
+      railForConfig: UnifiedRailFilter,
     ): UnifiedRowConfig => {
       // 收藏 / 最近条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
       if (copy) {
@@ -802,7 +820,6 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       agentFastModeCapable,
-      effectiveRail,
       enginePrefsVersion,
       getEngineOverride,
       fastMode,
@@ -1223,7 +1240,7 @@ export function UnifiedModelPanel({
    * 小节标题:收藏 / 最近 / 推荐 / 供应商分组(Chris 2026-08-13 裁决:按供应商,
    * 不按模型家族;组名与模型设置页同一套 providerLabel)。
    */
-  const sectionLabel = (section: (typeof sections)[number]): string =>
+  const sectionLabel = useCallback((section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
       : section.kind === 'recent'
@@ -1232,7 +1249,7 @@ export function UnifiedModelPanel({
         ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerHeading(section.group.providerId)
-        : '';
+        : '', [providerHeading, t]);
 
   const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
     if (section.group?.type === 'provider') return section.group.providerId;
@@ -1261,8 +1278,7 @@ export function UnifiedModelPanel({
    * 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
    * 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
    *
-   * 抽成函数是因为定宽 sizer 也要画一份**逐像素等价**的行(见 widthSizerSections):价格
-   * 节点参与行宽,两边各算一遍必然漂成「量出来的宽度不是真视图的宽度」。
+   * The width probe and visible rows use the same effective quote.
    */
   const priceDisplayOf = useCallback(
     (
@@ -1414,11 +1430,8 @@ export function UnifiedModelPanel({
    * 会话内默认停在「同引擎」视图 —— 那是**最窄**的一份内容;用户切到「全部 / 供应商」时
    * 多出跨引擎警示行与更宽的行集,面板于是在一次打开内二次撑宽。
    *
-   * 修法:打开的第一帧就渲染一份**不可见**的全量视图交给 `w-max` 量宽,面板从此按最宽视图
-   * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是过滤视图多渲染一份测宽行
-   * (无交互、无 hover、不进 listbox),换来宽度稳定。
-   *
-   * field 形态宽度绑 trigger；当前已是全量视图时无需重复量宽。
+   * Rank the full catalog with text metrics and give `w-max` one actual row
+   * and group label. Field panels follow the trigger; All has its own rows.
    */
   const widthSizerActive =
     !panelWidthFluid && (effectiveRail.kind !== 'all' || query.trim() !== '');
@@ -1438,6 +1451,80 @@ export function UnifiedModelPanel({
         : [],
     [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder],
   );
+  const widthSizerRef = useRef<HTMLDivElement>(null);
+  const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
+  useLayoutEffect(() => {
+    const probe = widthSizerRef.current;
+    if (!probe) return;
+    let family = '';
+    const update = (fontsChanged = false) => {
+      const next = getComputedStyle(probe).fontFamily || 'sans-serif';
+      if (family === next && !fontsChanged) return;
+      family = next;
+      setWidthMeasure(() => createWidthMeasure(family));
+    };
+    const onFontsLoaded = () => update(true);
+    const onResize = () => update();
+    update();
+    document.fonts?.addEventListener('loadingdone', onFontsLoaded);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.fonts?.removeEventListener('loadingdone', onFontsLoaded);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [widthSizerActive]);
+  const widthCandidates = useMemo(() => {
+    if (!widthMeasure) return null;
+    let widestLabel = '';
+    let labelWidth = -1;
+    let widestRow: UnifiedListRow | undefined;
+    let rowWidth = -1;
+    for (const section of widthSizerSections) {
+      const label = sectionLabel(section);
+      const width = widthMeasure(label, 12, 500);
+      if (width > labelWidth) {
+        widestLabel = label;
+        labelWidth = width;
+      }
+      for (const row of section.rows) {
+        const { entry } = row;
+        const config = row.agentDeviceId && row.favorite
+          ? resolveFavoriteRowConfig({ entry, item: row.favorite })
+          : configOf(entry, row.favorite ?? row.recent, RAIL_ALL);
+        const price = row.agentDeviceId ? null : priceDisplayOf(entry, config);
+        const name = widthMeasure(localizedModelName(entry.displayName, t), 14, 500);
+        const effort = configurationEnabled && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
+        const fast = configurationEnabled && config.fast ? 15 : 0;
+        const star = selectionPolicy === 'personalized' ? 28 : 0;
+        const customize = configurationEnabled && !row.agentDeviceId && !row.recent ? 28 : 0;
+        const badge = price?.kind === 'free'
+          ? 24 + widthMeasure(t('newChat.modelSelector.pricing.free'), 10, 500)
+          : price?.tier
+            ? 8 + widthMeasure((price.symbol ?? '$').repeat(price.tier), 11, 600) + 0.5 * price.tier
+              + (price.discountPct !== undefined ? 20 + widthMeasure(`↓${price.discountPct}%`, 10, 500) : 0)
+            : 0;
+        const payment = entry.availability === 'requires_payment'
+          ? (paymentRequiredLabel ? 38 + widthMeasure(paymentRequiredLabel, 10, 400) : 0)
+            + (paymentRequiredUnlockLabel ? 8 + widthMeasure(paymentRequiredUnlockLabel, 11, 500) : 0)
+          : 0;
+        // Rank by the first line's flex slots. The winning row still uses the
+        // real CSS to size the panel, including the native scrollbar gutter.
+        const primary = 58 + name + Math.min(118, 12 + effort + fast) + star + customize + badge + payment;
+        const description = !row.agentDeviceId && ownCatalog && entry.providerId === 'xd'
+          && localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
+        const secondary = description
+          ? 50 + Math.min(widthMeasure(providerHeading(entry.providerId), 12, 400), widthMeasure('0', 12, 400) * 30)
+          : 0;
+        const width = Math.max(primary, secondary);
+        if (width > rowWidth) {
+          widestRow = row;
+          rowWidth = width;
+        }
+      }
+    }
+    return { label: widestLabel, row: widestRow };
+  }, [widthMeasure, widthSizerSections, sectionLabel, configOf, priceDisplayOf, configurationEnabled,
+    effortLabelOf, selectionPolicy, paymentRequiredLabel, paymentRequiredUnlockLabel, ownCatalog, providerHeading, t]);
 
   const panelContent = (
     <div
@@ -1608,7 +1695,7 @@ export function UnifiedModelPanel({
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
                   const config = withOptimisticConfig(
                     row.anchor,
-                    configOf(row.entry, row.favorite ?? row.recent),
+                    configOf(row.entry, row.favorite ?? row.recent, effectiveRail),
                     optimisticConfig,
                   );
                   const key = anchorKey(row.anchor);
@@ -1727,18 +1814,18 @@ export function UnifiedModelPanel({
           把「切视图宽度抖」换成「切视图高度抖」。纵向本来就与量宽无关。 */}
         {widthSizerActive && (
           <div
+            ref={widthSizerRef}
             aria-hidden
             role="presentation"
             data-width-sizer
             className="morph-panel-list-scroll invisible h-0 overflow-hidden px-2 [scrollbar-gutter:stable]"
           >
-            {widthSizerSections.map((section) => (
-              <div key={section.key}>
-                {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
+            {widthCandidates && (
+              <>
                 <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33]">
-                  <span className="truncate">{sectionLabel(section)}</span>
+                  <span className="truncate">{widthCandidates.label}</span>
                 </div>
-                {section.rows.map((row) => {
+                {widthCandidates.row && ((row) => {
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, true);
                   const config = configOf(row.entry, row.favorite ?? row.recent, RAIL_ALL);
                   const priceDisplay = priceDisplayOf(row.entry, config);
@@ -1757,6 +1844,7 @@ export function UnifiedModelPanel({
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
+                      customizable={configurationEnabled && !row.recent}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -1766,12 +1854,12 @@ export function UnifiedModelPanel({
                       onReveal={noop}
                       onRevealForKeyboard={noop}
                       onSelect={noop}
-                      onStar={noop}
+                      onStar={selectionPolicy === 'personalized' ? noop : undefined}
                     />
                   );
-                })}
-              </div>
-            ))}
+                })(widthCandidates.row)}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1792,7 +1880,7 @@ export function UnifiedModelPanel({
             // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
             const config = withOptimisticConfig(
               target.anchor,
-              configOf(target.entry, target.favorite ?? target.recent),
+               configOf(target.entry, target.favorite ?? target.recent, effectiveRail),
               optimisticConfig,
             );
             const state: ModelConfigFlyoutState = target.favorite
