@@ -21,6 +21,8 @@ interface BotRouteState {
   scheduledModelBaseline?: string | null;
   followsCindyDefault?: boolean;
   next?: RuntimeRoute;
+  /** The model groups this chain uses, as configured; editing them re-picks like a profile change. */
+  modelGroupsSignature?: string;
 }
 
 interface RouteApplyOptions {
@@ -29,7 +31,10 @@ interface RouteApplyOptions {
 
 function configuredKey(state: BotRouteState, chain = state.chain): string {
   // Restore defaults is a configuration change even when its routes are equal.
-  return JSON.stringify([chain, state.followsCindyDefault === true]);
+  // Without model groups the key stays exactly as before, so upgrading does not re-apply.
+  return JSON.stringify(state.modelGroupsSignature === undefined
+    ? [chain, state.followsCindyDefault === true]
+    : [chain, state.followsCindyDefault === true, state.modelGroupsSignature]);
 }
 
 function configuredRoute(

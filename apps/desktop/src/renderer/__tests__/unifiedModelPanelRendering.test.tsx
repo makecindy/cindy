@@ -28,6 +28,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
+import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -4899,6 +4900,49 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
+  // PR #11683 review (model-groups.md §6.2), unit, real editor + picker: choosing a model group
+  // waits for a preview from main; a plain pick made meanwhile must win over the late preview.
+  // Minimal input: pick a group, change the chain, then resolve the preview.
+  it('applies a model group preview, but drops one that returns after the chain changed', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const previews: Array<(value: unknown) => void> = [];
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'Late group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(() => new Promise((resolve) => { previews.push(resolve); })),
+    } });
+    // The client caches the config per account: leave it empty for the following tests.
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' },
+      modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    const chooseGroup = async () => {
+      fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+      const rail = await waitFor(() => {
+        const item = document.querySelector('[data-rail-item="model-groups"]');
+        if (!item) throw new Error('model groups rail not shown');
+        return item;
+      });
+      await act(async () => fireEvent.click(rail));
+      await act(async () => fireEvent.click(screen.getByText('Late group')));
+    };
+
+    await chooseGroup();
+    await act(async () => previews.shift()!(routed));
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', modelGroup: 'grp' })]);
+
+    change.mockClear();
+    await chooseGroup();
+    // A plain model is chosen (and saved) before the preview returns.
+    view.rerender(<BotModelChainEditor value={[{ ...route, model: 'gpt-5.4' }]} onChange={change} />);
+    await act(async () => previews.shift()!(routed));
+    expect(change).not.toHaveBeenCalled();
+  });
+
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
   // snapshot must show loading, then update the open picker without rewriting the
   // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector

@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
 import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideControls';
@@ -103,20 +103,27 @@ export function BotModelChainEditor({
       : [{ harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false }];
     onChange(editable.map((route, at) => (at === index ? merge(route, patch) : route)));
   };
+  // 预览要等主进程(可能读别处的目录与额度)：用最新的链落结果，等待期间有过别的修改或又选了组就作废。
+  const latest = useRef({ snapshot: '', replace });
+  latest.current = { snapshot: JSON.stringify([routes, pendingRoute]), replace };
+  const pickSeq = useRef(0);
   /**
    * 选中一个模型组：按组的规则预览一次(不推进轮流)，把那个来源存成这一项的具体模型，旧版本和
    * 组被删掉时都按它运行；真正用谁在伙伴开始用这个设置时由组的规则决定。
    */
   const pickGroup = async (index: number, selection: ModelGroupSelection) => {
+    const seq = ++pickSeq.current;
+    const before = latest.current.snapshot;
     const name = groupsConfig.routes.find((route) => route.id === selection.id)?.name ?? '';
     const result = await previewModelGroup(selection);
+    if (seq !== pickSeq.current || latest.current.snapshot !== before) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
     if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
       return;
     }
     const { route } = result;
-    replace(index, {
+    latest.current.replace(index, {
       harness: harnessFor(route.agentKind),
       model: route.model,
       providerId: route.providerId,

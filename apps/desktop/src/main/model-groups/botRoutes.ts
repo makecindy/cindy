@@ -1,12 +1,14 @@
 /**
- * 伙伴模型链里的模型组(model-groups.md §6.2)。存下来的一项带 `modelGroup`(组 id)和一个具体模型；
- * 运行时把它展开成这个组里没停用的来源(每项带同一个组 id，按组里的顺序)，伙伴的故障接替按展开后的链走：
- * 组内换完(从当前往后，再绕回前面的)才轮到备用链。组已删除或里面没有可用的来源时按存下的具体模型运行。
- * 只在应用首选与故障接替两处展开；保存、云同步与设置界面看到的始终是存下来的那一项。
+ * 伙伴模型链里的模型组(model-groups.md §6.2)。存下来的一项带 `modelGroup`(组 id)和一个具体模型。
+ * 应用首选时链保持原样(组用不了就按存下的具体模型)，由组的规则另行挑一个来源；
+ * 故障接替时才把这一项展开成候选：此刻生效的组(时段例外改走的那条)的来源、原组的来源、存下的具体模型，
+ * 每项带同一个组 id，接替先在这一段里往后、再绕回前面的，都试过才轮到备用链。
+ * 保存、云同步与设置界面看到的始终是存下来的那一项。
  */
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
-import type { ModelGroupCandidate, ModelGroupsConfig } from '../../shared/modelGroups.js';
+import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig } from '../../shared/modelGroups.js';
+import { modelGroupRouteFor } from './routeFor.js';
 
 const harnessOf = (kind: ModelGroupCandidate['agentKind']): BotModelRoute['harness'] => (kind === 'cc' ? 'claude' : kind);
 
@@ -30,8 +32,15 @@ export function modelGroupCandidateRoute(
   };
 }
 
-/** 展开链里的模型组；同一个来源只留第一次出现的位置(重试同一个端点救不回来)。 */
-export function expandBotModelGroups(chain: readonly BotModelRoute[], config: ModelGroupsConfig): BotModelRoute[] {
+const members = (route: ModelGroupRoute | undefined, groupId: string) =>
+  (route?.candidates ?? []).filter((candidate) => !candidate.off)
+    .map((candidate) => modelGroupCandidateRoute(candidate, groupId, route?.effort));
+
+/**
+ * 故障接替用的候选链。时段例外按 `now` 取此刻生效的组放在最前；同一个来源只留第一次出现的位置
+ * (重试同一个端点救不回来)。组已删除且没有别的候选时，这一项就是存下的具体模型。
+ */
+export function expandBotModelGroups(chain: readonly BotModelRoute[], config: ModelGroupsConfig, now: number): BotModelRoute[] {
   const seen = new Set<string>();
   const out: BotModelRoute[] = [];
   const push = (route: BotModelRoute) => {
@@ -42,13 +51,38 @@ export function expandBotModelGroups(chain: readonly BotModelRoute[], config: Mo
   };
   for (const entry of chain) {
     const { modelGroup, ...plain } = entry;
-    const group = modelGroup ? config.routes.find((route) => route.id === modelGroup) : undefined;
-    const members = group?.candidates.filter((candidate) => !candidate.off) ?? [];
-    if (!group || members.length === 0) {
+    const target = modelGroup ? modelGroupRouteFor(config, { type: 'route', id: modelGroup }, now) : null;
+    if (!modelGroup || !target || target.outcome === 'missing') {
       push(plain);
       continue;
     }
-    for (const candidate of members) push(modelGroupCandidateRoute(candidate, group.id, group.effort));
+    const base = config.routes.find((route) => route.id === modelGroup);
+    const segment = [
+      ...members(target.route, modelGroup),
+      ...(base && base.id !== target.route.id ? members(base, modelGroup) : []),
+      { ...plain, modelGroup },
+    ];
+    for (const route of segment) push(route);
   }
   return out;
+}
+
+/**
+ * 影响伙伴选路的组配置：链里每个组，以及经时段例外能走到的组的完整定义(来源、选法、例外、推理强度)。
+ * 进套用判断的配置键：改了这些，伙伴下一轮重新按组的规则选。链里没有组时为 undefined，配置键与原来一致。
+ * 只看配置不看时间：到了时段边界不会自己换。
+ */
+export function botModelGroupsSignature(chain: readonly BotModelRoute[], config: ModelGroupsConfig): string | undefined {
+  const ids = new Set<string>();
+  const queue = chain.flatMap((route) => (route.modelGroup ? [route.modelGroup] : []));
+  if (queue.length === 0) return undefined;
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    for (const item of config.routes.find((route) => route.id === id)?.exceptions ?? []) {
+      if (item.use !== 'vision') queue.push(item.use.routeId);
+    }
+  }
+  return JSON.stringify([...ids].sort().map((id) => config.routes.find((route) => route.id === id) ?? { id, missing: true }));
 }
