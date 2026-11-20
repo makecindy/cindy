@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+// 不能并入 ChatVideoView.test.tsx：那个文件在每个用例前把
+// HTMLMediaElement.prototype.pause/load 换成空实现，用来数预览组件的调用次数。
+// 本文件要让 pause() 真正把 paused 翻成 true，并区分脱离页面后的 load()。
+// 放进同一文件会要么拆掉组件桩，要么让总线回归看不到暂停是否生效。
 // 测试价值
 // - 生产入口与可观察结果：registerMedia 的清理函数；播放中的元素会停下，脱离页面的元素会丢掉源。
 // - Bug／规则依据：#11715。注销后 stopAllMedia 找不到播放器，Chromium 会继续出声。
