@@ -118,6 +118,13 @@ describe('terminal appearance overrides', () => {
     expect(readAppearanceSettingsState().value.liquidGlassClarity).toBeUndefined();
   });
 
+  // Unit: a profile that has never customized glass must accept both incoming
+  // fields through the same portable settings entry point as device setup.
+  it('imports liquid glass preferences into a fresh profile', async () => {
+    await appearancePortableSettings.applyPatch(() => ({ liquidGlass: false, liquidGlassClarity: 73 }));
+    expect(readAppearanceSettingsState().value).toMatchObject({ liquidGlass: false, liquidGlassClarity: 73 });
+  });
+
   it('does not persist a defaults snapshot when restoring the only terminal override', async () => {
     const file = path.join(fixture.userData, 'appearance-settings.json');
     await writeAppearanceSettingsPatch({ terminalSize: 20 });

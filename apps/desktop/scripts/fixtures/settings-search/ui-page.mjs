@@ -89,6 +89,66 @@ export default {
       await slider.press('ArrowRight');
       await expectClarity(76);
       await page.waitForFunction(() => window.glassWrites.at(-1)?.liquidGlassClarity === 76);
+      const restore = await ui.t('settings.defaults.restore');
+      const mark = page.getByRole('button', { name: restore + ' (50%)', exact: true });
+      const settingsField = page.locator('#settings-search-target-personalization-liquid-glass-clarity');
+      await ui.capture('default-tick', { locator: settingsField });
+      await mark.click();
+      await expectClarity(50);
+      assert.equal(await page.evaluate(() => window.glassResets.at(-1)?.[0]), 'liquidGlassClarity');
+      assert.equal(await control.getAttribute('aria-checked'), 'true');
+      if (initial === 'true') {
+        await control.click();
+        await control.and(page.locator('[aria-checked="false"]')).waitFor();
+      }
+      await page.getByRole('button', { name: restore, exact: true }).click();
+      await control.and(page.locator('[aria-checked="' + initial + '"]')).waitFor();
+      assert.equal(await page.evaluate(() => window.glassResets.at(-1)?.[0]), 'liquidGlass');
+
+      // Exercise the actual stylesheet cascade against both app background modes.
+      const paints = await page.evaluate(() => {
+        const root = document.documentElement;
+        const state = ['data-liquid-glass', 'data-wallpaper-active', 'data-desktop-background']
+          .map(name => [name, root.getAttribute(name)]);
+        const saved = root.style.getPropertyValue('--glass-clarity-preview');
+        const aside = document.createElement('aside');
+        aside.className = 'bg-sidebar';
+        const tint = document.createElement('div');
+        tint.className = 'sidebar-frost';
+        aside.append(tint);
+        const menu = document.createElement('div');
+        menu.className = 'bg-[var(--cmd-palette-bg)]';
+        document.body.append(aside, menu);
+        root.dataset.liquidGlass = 'on';
+        try {
+          return [['true', null], [null, 'true']].map(([wallpaper, desktop]) => {
+            if (wallpaper) root.setAttribute('data-wallpaper-active', wallpaper);
+            else root.removeAttribute('data-wallpaper-active');
+            if (desktop) root.setAttribute('data-desktop-background', desktop);
+            else root.removeAttribute('data-desktop-background');
+            return [0, 1].map(clarity => {
+              root.style.setProperty('--glass-clarity-preview', String(clarity));
+              const { backgroundColor, backgroundImage } = getComputedStyle(menu);
+              return [getComputedStyle(tint).backgroundImage, backgroundColor, backgroundImage,
+                getComputedStyle(root).getPropertyValue('--menu-panel-surface')];
+            });
+          });
+        } finally {
+          aside.remove();
+          menu.remove();
+          for (const [name, value] of state) value === null ? root.removeAttribute(name) : root.setAttribute(name, value);
+          if (saved) root.style.setProperty('--glass-clarity-preview', saved);
+          else root.style.removeProperty('--glass-clarity-preview');
+        }
+      });
+      for (const [low, high] of paints) {
+        assert.notEqual(low[0], 'none');
+        assert.notEqual(high[0], 'none');
+        assert.notEqual(low[0], high[0]);
+        assert.notEqual(low[1], high[1]);
+        assert.notEqual(high[2], 'none');
+        assert.notEqual(low[3], high[3]);
+      }
     }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.

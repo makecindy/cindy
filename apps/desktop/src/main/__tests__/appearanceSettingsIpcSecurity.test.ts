@@ -134,10 +134,16 @@ describe('appearance settings IPC authorization', () => {
     expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
       terminalFamily: undefined, terminalFontResource: undefined,
     });
+    await expect(handler({}, ['liquidGlassClarity'])).resolves.toEqual(persisted);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenLastCalledWith({ liquidGlassClarity: undefined });
+    await expect(handler({}, ['interfaceMaterial'])).resolves.toEqual(persisted);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenLastCalledWith({
+      liquidGlass: undefined, liquidGlassClarity: undefined,
+    });
     for (const field of ['themeSelection', 'customWallpaperUrl', 'unknown']) {
       await expect(handler({}, [field])).rejects.toThrow('Invalid appearance reset');
     }
-    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(1);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(3);
   });
   it.each(['select-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
     mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
