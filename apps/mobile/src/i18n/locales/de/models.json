@@ -111,6 +111,17 @@
     "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
     "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   },
+  "modelGroups": {
+    "title": "Modellgruppen",
+    "sourceCount_one": "{{count}} Quelle",
+    "sourceCount_other": "{{count}} Quellen",
+    "strategy": {
+      "expiring": "Bald Verfallendes zuerst",
+      "order": "Der Reihe nach",
+      "rotate": "Abwechselnd",
+      "cheapest": "Am günstigsten"
+    }
+  },
   "pluginEngines": {
     "genericName": "Plugin-Engine",
     "defaultModel": "Standardmodell",

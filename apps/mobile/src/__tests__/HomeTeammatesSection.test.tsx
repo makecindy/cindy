@@ -84,7 +84,7 @@ beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const render = (refreshKey: number, overrides: Partial<Parameters<typeof HomeTeammatesSection>[0]> = {}) => act(async () => root.render(el(HomeTeammatesSection, {
   context: { navigation: null, route: null, shared: { roster, groups } } as any, active: true, refreshKey,
-  visible: true, query: '', showFooter: false, runDisclosure: (apply: () => void) => apply(), prepareDisclosure: () => {},
+  visible: true, query: '', showCollapsedAvatars: h.showAvatars, showFooter: false, runDisclosure: (apply: () => void) => apply(), prepareDisclosure: () => {},
   ...overrides,
 })));
 const byId = (id: string) => node.querySelector<HTMLElement>(`[data-testid="${id}"]`);

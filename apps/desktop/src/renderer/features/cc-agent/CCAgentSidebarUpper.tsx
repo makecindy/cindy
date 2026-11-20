@@ -2,7 +2,7 @@ import { projectKeyForDeepLink } from '../../../shared/projectKeys';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
-import { useTaskListMode } from '@/hooks/useTaskListMode';
+import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
   matchesTaskCreators,
   useTaskCreatorIndex,
@@ -30,6 +30,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -137,6 +138,7 @@ import {
 import {
   findOrcaLeadSessionIdForWorker,
   formatOrcaWorkerNotificationTitle,
+  pendingOrcaWorkerQuestion,
   mergeOrcaLeadNotifications,
   shouldNotifyOrcaWorkerEvent,
   useOrcaLeadWorkerAttention,
@@ -158,6 +160,7 @@ import { useCollapsedProjects } from './hooks/useCollapsedProjects';
 import { useSessionDisplayRunningState } from './hooks/useSessionDisplayRunningState';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
 import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { readRemoteScheduleIndex } from '../device-link/refreshRemoteSessions';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, useSidebarFilterGc, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
@@ -190,7 +193,7 @@ import {
   useLocalHostProjectOrder,
   useRemoteHostProjectOrders,
 } from './hooks/useRemoteHostProjectOrders';
-import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { isOrcaWorkerSession, orcaWorkerSessionRoute, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
   findProjectRepresentativeKey,
@@ -262,6 +265,8 @@ import {
   railPanelStore,
 } from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
+import { useInboxUnread } from './sidebar/useInboxUnread';
+import { useTeammateInboxEntries } from '@/features/bots/useTeammateInboxEntries';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
@@ -275,6 +280,7 @@ import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
 import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
+  sidebarContentFilterCount,
   DIALOGUE_FILTER_KEY,
   projectFilterIncludes,
   buildManualPinnedReorder,
@@ -428,6 +434,8 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 }
 
 /* ============================== Root ============================== */
+
+const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
@@ -888,7 +896,7 @@ interface ExpandedProps {
   /** 通知与未读的「注视中」会话:viewedSessionId 之外再包含主区域正在看的伙伴会话。
    *  只用于 useSessionRunningStatus,不参与归档重定向与选中高亮。 */
   attentionSessionId: string | undefined;
-  filter: UseSidebarFilterReturn;
+  filter: ReturnType<typeof useSidebarFilter>;
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
   scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
@@ -1028,28 +1036,30 @@ function ExpandedView({
         }
         void refreshPendingAlerts();
       }
-      const unreadRunIds = sessionIds.flatMap(
-        (sessionId) =>
-          (deviceId
-            ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
-            : scheduleSessionIndex.get(sessionId)
-          )?.unreadRunIds ?? [],
-      );
-      if (unreadRunIds.length === 0) return;
-      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
-        unreadRunIds,
-        deviceId,
-      );
-      if (announce && processed.length > 0) {
+      let index = scheduleSessionIndex;
+      if (deviceId) {
+        try {
+          index = await readRemoteScheduleIndex(deviceId);
+        } catch (error) {
+          toast.error(t('ccAgent.layout.markAllReadFailed', { error: String(error) }));
+          return false;
+        }
+      }
+      const unreadRunIds = sessionIds.flatMap(id => index.get(id)?.unreadRunIds ?? []);
+      if (!deviceId && unreadRunIds.length === 0) return true;
+      // Refresh the remote mirror even on a no-op: another device may already have read the run.
+      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds, deviceId);
+      if (announce && processed.length > 0 && firstError === undefined) {
         toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
       }
-      if (failed.length > 0) {
+      if (failed.length > 0 || firstError !== undefined) {
         toast.error(
           t('ccAgent.layout.markAllReadFailed', {
             error: firstError ?? String(failed.length),
           }),
         );
       }
+      return failed.length === 0 && firstError === undefined;
     },
     [scheduleSessionIndex, t],
   );
@@ -1636,8 +1646,10 @@ function ExpandedView({
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
     return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
+  const inboxFilter = filter.inbox;
   const inboxSourceSessions = useMemo(
-    () => filterTaskSessions(statusIndependentSidebarSessions), [filterTaskSessions, statusIndependentSidebarSessions],
+    () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
+    [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
@@ -2063,12 +2075,13 @@ function ExpandedView({
     for (const [sessionId, kind] of attentionKinds) {
       if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
     }
+    const base = {
+      runningSessionIds: displayRunningSessionIds,
+      attentionSessionIds: sidebarNotifications,
+      waitingSessionIds: waiting,
+    };
     const natural = sidebarPriorityContext(
-      {
-        runningSessionIds: displayRunningSessionIds,
-        attentionSessionIds: sidebarNotifications,
-        waitingSessionIds: waiting,
-      },
+      base,
       [
         ...allProjectGroups.projects.flatMap((project) => project.sessions),
         ...visibleDialogues,
@@ -2087,6 +2100,7 @@ function ExpandedView({
       Date.now(),
     );
     return {
+      base,
       context: {
         ...natural,
         heldPriorityRanks: hold.heldPriorityRanks,
@@ -2167,16 +2181,27 @@ function ExpandedView({
       withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
       hiddenProjectKeys, localPlatform,
     ).filter(project =>
-      (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
-        || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
+      (inboxFilter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
+        || projectFilterIncludes(inboxFilter.projectsAsSet, project.projectKey, localPlatform)));
     const scoped = [
       ...projects.flatMap(project => project.sessions),
-      ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
-      ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
+      ...(inboxFilter.projectsAsSet === null || inboxFilter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
+      ...(inboxFilter.projects === 'all' ? inboxGroups.unclassified : []),
     ];
-    return vendorPredicate ? scoped.filter(vendorPredicate) : scoped;
+    return inboxFilter.vendor === 'all' ? scoped : scoped.filter(session => (session.agentKind ?? 'cc') === inboxFilter.vendor);
   }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
-    filter.projectsAsSet, filter.projects, vendorPredicate]);
+    inboxFilter]);
+
+  const teammateEntries = useTeammateInboxEntries();
+  const inboxTeammates = sidebarContentFilterCount(inboxFilter) ? EMPTY_INBOX_TEAMMATES : teammateEntries;
+  const { now: inboxNow, hasUnread } = useInboxUnread(
+    inboxSessions, inboxTeammates, projectPriorityProjection.base, isInboxTeammateTask,
+  );
+  const reportUnread = useContext(InboxUnreadReporter);
+  useLayoutEffect(() => {
+    reportUnread?.(hasUnread);
+    return () => reportUnread?.(false);
+  }, [reportUnread, hasUnread]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
@@ -2650,6 +2675,18 @@ function ExpandedView({
       clearNotification(id);
       markAutomationSessionRunsRead(id);
       clearSystemSessionAttention(id);
+      if (target?.orcaRole === 'lead') {
+        const worker = pendingOrcaWorkerQuestion(id);
+        if (worker) {
+          makerChatStore.setAskUserViewerState(worker.chatSessionId, 'expanded');
+          const search = target.deviceLinkDeviceId ? new URLSearchParams({ device: target.deviceLinkDeviceId }).toString() : '';
+          navigate(orcaWorkerSessionRoute(id, worker.workerSessionId, search));
+          return;
+        }
+        if (makerChatStore.getRunningSnapshot().get(id)?.hasPendingAskUser) {
+          makerChatStore.setAskUserViewerState(id, 'expanded');
+        }
+      }
       if (id === activeSessionIdRef.current) return; // No duplicate navigate.
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
       navigate(await resolveSessionRoute(id, target));
@@ -3213,7 +3250,8 @@ function ExpandedView({
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
-          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          if (!read) return;
           // The inbox owns the reactive placement of this explicit successful action.
           return 'marked-read' as const;
         }
@@ -3323,6 +3361,7 @@ function ExpandedView({
     await runSessionAction(sessionId, action, {
       activeSessionId: viewedSessionId,
       deleteRedirectRoute,
+      deleteTarget: action === 'delete' && session?.sideChatPromoted ? 'task' : undefined,
     });
     setConfirm(CONFIRM_INITIAL);
   }, [closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
@@ -3373,7 +3412,8 @@ function ExpandedView({
           // 先固定本次状态写目标:关闭远端控制后,复制库里与 sticky origin 同 ID 的任务
           // 必须按本地任务删除；真正远端任务仍固定经隧道写被控端。
           const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
-          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget);
+          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget, undefined,
+            session.sideChatPromoted ? 'task' : undefined);
           makerChatStore.purgeSession(session.id);
           discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
@@ -3859,6 +3899,8 @@ function ExpandedView({
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
                   inboxSessions={inboxSessions}
+                  inboxNow={inboxNow}
+                  inboxTeammates={inboxTeammates}
                   isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}

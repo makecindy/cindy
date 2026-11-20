@@ -22,6 +22,7 @@ import {
   Search,
   SlidersHorizontal,
   Star,
+  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";
@@ -57,6 +58,7 @@ import {
 } from "./contextSheetModel";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
 import type {
+  UnifiedMobileModelGroupRow,
   UnifiedMobilePickerViewProps,
   UnifiedMobilePluginEngineRow,
   UnifiedMobileRow,
@@ -200,8 +202,21 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const searchRef = useRef<TextInputInstance>(null);
   const modelListRef = useRef<FlatList>(null);
   const pluginEngineGroupList = p.pluginEngines?.groups;
+  const modelGroupList = p.modelGroups;
   const modelItems = useMemo(
     () => [
+      // 模型组(被控电脑上的)列在最前。
+      ...(modelGroupList?.rows.length
+        ? [
+            { kind: "modelGroupHeader" as const, key: "header:model-groups", title: modelGroupList.title },
+            ...modelGroupList.rows.map((row, index) => ({
+              kind: "modelGroup" as const,
+              key: `model-group:${row.id}`,
+              row,
+              separator: index > 0,
+            })),
+          ]
+        : []),
       // 插件引擎分组列在内置模型之前。
       ...(pluginEngineGroupList ?? []).flatMap((group) => [
         { kind: "pluginHeader" as const, key: `header:${group.key}`, title: group.title, groupKey: group.key },
@@ -222,7 +237,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         })),
       ]),
     ],
-    [p.groups, pluginEngineGroupList],
+    [p.groups, pluginEngineGroupList, modelGroupList],
   );
   useEffect(() => {
     modelListRef.current?.scrollToOffset({ offset: 0, animated: false });
@@ -690,6 +705,31 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </>
     ) : null;
 
+  // 模型组行：组图标 + 组名，下方是来源数 · 选法；选中的打勾。点了由被控电脑按组的规则选来源。
+  const modelGroupRow = (row: UnifiedMobileModelGroupRow) => (
+    <Pressable
+      key={row.id}
+      accessibilityLabel={[row.title, row.subtitle].filter(Boolean).join(", ")}
+      accessibilityRole="button"
+      accessibilityState={{ selected: row.selected, disabled: p.busy }}
+      disabled={p.busy}
+      onPress={() => p.modelGroups?.onSelect(row.id)}
+      style={({ pressed }) => [styles.modelMain, pressed && styles.pressed]}
+      testID={`${p.testID}.modelGroup.${row.id}`}
+    >
+      <View style={styles.leading}>
+        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      </View>
+      <View style={styles.rowMain}>
+        <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
+        {row.subtitle ? <Text numberOfLines={1} style={styles.rowSubtitle}>{row.subtitle}</Text> : null}
+      </View>
+      {row.selected ? (
+        <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
+      ) : null}
+    </Pressable>
+  );
+
   // 插件引擎的模型行：引擎图标 + 模型名(+ 思考深度)；不可用的引擎可见但不能选，下方是插件给的说明。
   // 选中且该模型有档位时，下面多一行思考深度选择(只改档位，不关闭选择器)。
   const pluginEngineRow = (row: UnifiedMobilePluginEngineRow) => {
@@ -895,6 +935,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const listPage =
     Platform.OS === "android" ? null : (
       <>
+        {p.modelGroups?.rows.length ? (
+          <Group testID={`${p.testID}.group.model-groups`} title={p.modelGroups.title}>
+            {p.modelGroups.rows.map(modelGroupRow)}
+          </Group>
+        ) : null}
         {pluginEngineGroups.map((group) => (
           <Group key={group.key} testID={`${p.testID}.group.${group.key}`} title={group.title}>
             {group.rows.map(pluginEngineRow)}
@@ -909,7 +954,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             {group.rows.map(modelRow)}
           </Group>
         ))}
-        {!p.groups.length && !pluginEngineGroups.length ? (
+        {!p.groups.length && !pluginEngineGroups.length && !p.modelGroups?.rows.length ? (
           <Text style={styles.empty} testID={`${p.testID}.empty`}>
             {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
           </Text>
@@ -977,7 +1022,16 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       </Text>
                     }
                     renderItem={({ item }) =>
-                      item.kind === "pluginHeader" ? (
+                      item.kind === "modelGroupHeader" ? (
+                        <View style={styles.group} testID={`${p.testID}.group.model-groups`}>
+                          <Text style={styles.groupLabel}>{item.title}</Text>
+                        </View>
+                      ) : item.kind === "modelGroup" ? (
+                        <View>
+                          {item.separator ? <View style={styles.separator} /> : null}
+                          {modelGroupRow(item.row)}
+                        </View>
+                      ) : item.kind === "pluginHeader" ? (
                         <View style={styles.group} testID={`${p.testID}.group.${item.groupKey}`}>
                           <Text style={styles.groupLabel}>{item.title}</Text>
                         </View>

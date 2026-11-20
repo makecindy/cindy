@@ -1349,6 +1349,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "入力内容が無効です。確認して再試行してください。",
@@ -15061,6 +15062,9 @@
       "usageLimitAutoContinueTitle": "使用量の上限がリセットされるまでに操作がなければ、このタスクを自動で続行します",
       "usageLimitAutoContinueCancel": "キャンセル",
       "usageLimitAutoContinueCancelTitle": "自動続行をキャンセル（エラーと再試行は残ります）",
+      "usageLimitReached": "モデルのアカウントは利用上限に達しました",
+      "usageLimitReachedWithReset": "モデルのアカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
+      "usageLimitReachedNoReset": "モデルのアカウントは利用上限に達しました。上限のリセットを待つか、別のモデルに切り替えてから再試行してください。",
       "codexOrganizationUsageLimitWithReset": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
@@ -15132,6 +15136,7 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
+      "pluginEngineStatus": "バックグラウンドで作業を続けています…",
       "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
       "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
       "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",
@@ -15166,6 +15171,7 @@
       "continueFailed_other": "{{count}} 件のセッションを再開できませんでした。セッションを開いて再試行してください。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "actionScheduled": "この操作に対するセッションの許可が失効しました。次の実行は予定されています。",
       "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
       "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
@@ -15836,7 +15842,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "この接続では以前のモデルを使用できないため、モデル切り替え時にコンテキストを圧縮できませんでした。",
       "MODEL_SELECTION_UNAVAILABLE": "選択したモデルはプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+      "MODEL_CATALOG_UNCONFIRMED": "モデル一覧を確認できませんでした。選択したモデルは保持されています。モデル一覧を更新して再試行してください。",
       "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
       "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
       "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
@@ -16056,7 +16064,6 @@
       "opened": "プレビューページを開きました"
     },
     "sideChat": {
-      "openPage": "タスクページを開く",
       "returnMain": "メインタスクに戻る",
       "new": "新しいサイドチャット",
       "mainWindowDescription": "サイドチャットは現在メインウィンドウで利用できます。内容は保存されています。",
@@ -16064,6 +16071,14 @@
       "commandDescription": "メインタスクをもとにサイドチャットを開きます。コマンドの後の質問は下書きになります。",
       "title": "サイドチャット",
       "context": "開いた時点までの完了済みコンテキストを使います。メインタスクは実行を続けます。履歴はこのタブを閉じるまで保持されます。",
+      "viewCollaboration": "協同を表示",
+      "openConversation": "会話を開く",
+      "openFromTaskList": "左側のタスク一覧からも開けます。",
+      "returnToSideChat": "サイドの追加質問に戻る",
+      "reopenSideChat": "サイドの追加質問を開き直す",
+      "origin": "この会話はサイドの追加質問から始まりました。",
+      "originNamed": "この会話は「{{title}}」のサイドの追加質問から始まりました。",
+      "originUnavailable": "この会話はサイドの追加質問から始まりました。元のタスクは開けません。",
       "opening": "開いています…",
       "notReady": "メインタスクの最初の回答が完了するまでお待ちください。",
       "unsupported": "この Agent のリモートタスクはサイドチャットに未対応です。",
@@ -16072,9 +16087,10 @@
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
       "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
       "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
-      "closeTitle": "サイドチャットを閉じますか？",
-      "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
-      "closeConfirm": "閉じて削除",
+      "closeTitle": "この追加質問を閉じてアーカイブしますか？",
+      "closeDescription": "左側のタスクリストにある対応タスクもアーカイブされます。",
+      "closeDescriptionRunning": "左側のタスクリストにある対応タスクもアーカイブされ、Worker は停止します。",
+      "closeConfirm": "閉じてアーカイブ",
       "closeFailed": "サイドチャットを閉じられませんでした。もう一度お試しください。"
     },
     "botStartedTasks": {
@@ -16090,9 +16106,15 @@
       "toggle": "「{{title}}」からの返信を開閉",
       "openTask": "タスクを開く"
     },
+    "geminiRateLimit": {
+      "retried": "Gemini の指定時間後に自動で再試行しました",
+      "title": "Gemini の 1 分あたりの入力上限に達しました。",
+      "exhausted": "自動で一度再試行しましたが、Gemini の制限が続いています。後で手動で再試行できます。",
+      "retryIn": "{{seconds}} 秒後に自動で再試行"
+    },
     "subscriptionAccountError": {
-      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
-      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。",
+      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。",
       "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
       "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
       "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
@@ -16326,6 +16348,14 @@
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
       "remoteNativeOauthUnavailable": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
       "claudeSubscriptionWorkspaceOverride": "このフォルダーの .claude 設定が Claude の接続先または認証方法を変更しているため、ここでは Claude サブスクリプションを使用できません。該当する設定を削除するか、ゲートウェイまたは API キーのモデルを選択してください",
+      "savedModel": {
+        "loading": "選択したモデルに接続中…",
+        "checkFailed": "選択したモデルを確認できませんでした",
+        "engine": "選択したエンジンは利用できません。このタスクで使うモデルを選択してください。",
+        "source": "選択した接続先は利用できません。このタスクで使うモデルを選択してください。",
+        "model": "選択したモデルは利用できません。このタスクで使うモデルを選択してください。",
+        "thisTaskOnly": "選択したモデルはこのタスクにのみ適用されます"
+      },
       "deviceStillLoading": "リモートデバイスの読み込み中です。しばらくお待ちください",
       "remoteDefaultsLoadFailed": "リモートデバイスの設定を読み込めませんでした。接続を確認してください。Cindy が再試行しています。",
       "branchChanged": "プロジェクトの現在のブランチは {{branch}} になりました。確認してから再送信してください。",
@@ -22100,7 +22130,8 @@
       "empty": "モデルグループはまだありません。設定で複数のソースをモードにまとめると、ここで選べます。",
       "manage": "モデルグループを管理",
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
-      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。"
+      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",

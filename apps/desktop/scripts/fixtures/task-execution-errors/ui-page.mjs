@@ -7,6 +7,7 @@ export default {
   real: 'Live ErrorBanner, failed automation banner, historical error card, subagent error notice, ErrorNotice, localized details and redaction',
   notCovered: 'Live scheduler execution, host transport and new-task navigation; covered separately by targeted tests',
   cases: {
+    'catalog-unconfirmed': { about: 'Unconfirmed model catalog retains the saved selection at 320 px', viewport: { width: 320, height: 440 } },
     'pr-dns': { about: 'Remote PR check DNS failure and actual probe time', viewport: { width: 320, height: 300 } },
     default: { about: 'Historical automatic execution failure' },
     narrow: { about: 'Automatic execution failure at 320 px', viewport: { width: 320, height: 540 } },
@@ -43,6 +44,9 @@ export default {
     assert.equal(await diagnose.count(), 0);
     const resume = ui.case.startsWith('resume-');
     const timeout = ui.case.startsWith('timeout-');
+    if (ui.case === 'catalog-unconfirmed') {
+      assert.ok(await page.getByText(await ui.t('chat.unreadFailedScheduleBanner.modelCatalogUnconfirmed'), { exact: true }).isVisible());
+    }
     if (resume) {
       assert.ok(await page.getByText(await ui.t('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'), { exact: true }).isVisible());
       assert.equal(await page.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).count(), 0);
@@ -53,7 +57,9 @@ export default {
       assert.equal(await page.locator('[data-retry-count]').getAttribute('data-retry-count'), '0');
     }
     await show.click();
-    if (timeout) {
+    if (ui.case === 'catalog-unconfirmed') {
+      assert.ok(await page.getByText(/\[MODEL_CATALOG_UNCONFIRMED\]/).isVisible());
+    } else if (timeout) {
       assert.ok(await page.getByText(/\[INVOKE_TIMEOUT\] no invoke-result within 30000ms/).isVisible());
     } else if (resume) {
       assert.ok(await page.getByText(/this conversation cannot be resumed on this computer/).isVisible());

@@ -1362,6 +1362,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+    "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
     "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
     "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
@@ -15089,6 +15090,9 @@
       "usageLimitAutoContinueTitle": "Wenn du bis zum Zurücksetzen des Nutzungslimits nichts unternommen hast, wird diese Aufgabe automatisch fortgesetzt",
       "usageLimitAutoContinueCancel": "Abbrechen",
       "usageLimitAutoContinueCancelTitle": "Automatische Fortsetzung abbrechen. Der Fehler und „Erneut versuchen“ bleiben verfügbar.",
+      "usageLimitReached": "Das Modellkonto hat sein Nutzungslimit erreicht",
+      "usageLimitReachedWithReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
+      "usageLimitReachedNoReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen Modell.",
       "codexOrganizationUsageLimitWithReset": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
       "codexOrganizationUsageLimit": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "codexUsageLimitWithReset": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
@@ -15160,6 +15164,7 @@
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen, Modellnutzung fällt weiterhin an…",
+      "pluginEngineStatus": "Arbeitet im Hintergrund weiter…",
       "bashWorkStatus_one": "Arbeitet im Hintergrund ({{count}} Befehl)…",
       "bashServiceStatus_one": "{{count}} Hintergrunddienst läuft",
       "bashWorkStatus_other": "Arbeitet im Hintergrund ({{count}} Befehle)…",
@@ -15194,6 +15199,7 @@
       "continueFailed_other": "{{count}} Sitzungen konnten nicht fortgesetzt werden. Öffne sie, um es erneut zu versuchen."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
@@ -15864,7 +15870,9 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+      "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
@@ -16093,7 +16101,6 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
-      "openPage": "Vollständige Aufgabenseite öffnen",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",
@@ -16101,6 +16108,14 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
+      "viewCollaboration": "Zusammenarbeit anzeigen",
+      "openConversation": "Unterhaltung öffnen",
+      "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",
+      "returnToSideChat": "Zurück zur Rückfrage",
+      "reopenSideChat": "Rückfrage erneut öffnen",
+      "origin": "Dieses Gespräch begann als Rückfrage.",
+      "originNamed": "Dieses Gespräch begann als Rückfrage zu „{{title}}“.",
+      "originUnavailable": "Dieses Gespräch begann als Rückfrage. Die ursprüngliche Aufgabe ist nicht verfügbar.",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",
@@ -16109,9 +16124,10 @@
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
-      "closeTitle": "Nebenchat schließen?",
-      "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
-      "closeConfirm": "Schließen und löschen",
+      "closeTitle": "Diese Nachfrage schließen und archivieren?",
+      "closeDescription": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert.",
+      "closeDescriptionRunning": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert und ihre Worker werden angehalten.",
+      "closeConfirm": "Schließen und archivieren",
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
@@ -16164,9 +16180,15 @@
       "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
       "openTask": "Aufgabe öffnen"
     },
+    "geminiRateLimit": {
+      "retried": "Nach der Gemini-Wartezeit automatisch erneut versucht",
+      "title": "Das Eingabelimit pro Minute für Gemini ist erreicht.",
+      "exhausted": "Gemini ist nach einem erneuten Versuch weiterhin begrenzt. Versuche es später manuell.",
+      "retryIn": "Automatischer Versuch in {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
-      "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
+      "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
       "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
       "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
       "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
@@ -16400,6 +16422,14 @@
       "remoteProviderUnsupported": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
       "remoteNativeOauthUnavailable": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
       "claudeSubscriptionWorkspaceOverride": "Die .claude-Einstellungen dieses Ordners ändern, wohin Claude Anfragen sendet oder wie die Anmeldung erfolgt. Daher kann das Claude-Abo hier nicht genutzt werden. Entferne diese Einstellungen oder wähle ein Gateway oder ein Modell mit API-Schlüssel",
+      "savedModel": {
+        "loading": "Verbindung zum ausgewählten Modell wird hergestellt…",
+        "checkFailed": "Das ausgewählte Modell konnte nicht überprüft werden",
+        "engine": "Die ausgewählte Laufzeit ist nicht verfügbar. Wähle ein Modell für diese Aufgabe.",
+        "source": "Die ausgewählte Quelle ist nicht verfügbar. Wähle ein Modell für diese Aufgabe.",
+        "model": "Das ausgewählte Modell ist nicht verfügbar. Wähle ein Modell für diese Aufgabe.",
+        "thisTaskOnly": "Das ausgewählte Modell gilt nur für diese Aufgabe"
+      },
       "deviceStillLoading": "Remotegerät wird noch geladen. Bitte warte",
       "remoteDefaultsLoadFailed": "Die Einstellungen des Remotegeräts konnten nicht geladen werden. Prüfe die Verbindung; Cindy versucht es erneut.",
       "branchChanged": "Das Projekt ist jetzt auf {{branch}}. Prüfe den Branch und sende dann erneut.",
@@ -22189,7 +22219,8 @@
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
-      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert."
+      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
