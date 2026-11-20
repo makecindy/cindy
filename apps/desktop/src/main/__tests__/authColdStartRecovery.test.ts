@@ -98,6 +98,7 @@ let refreshPromise = null, sessionInvalidationPromise = null;
 let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const uncertainResourceRefreshTokens = new Map();
+const pendingResourcePassportRecoveries = new Map();
 const passportAccountRefreshFlights = new Map();
 const pendingPassportAccountRotations = new Map();
 let passiveLocalSignOut = false;
@@ -1092,6 +1093,61 @@ describe('active Passport recovery after an uncertain Resource rotation', () => 
     await vi.advanceTimersByTimeAsync(500_000);
     expect(h.request).toHaveBeenCalledTimes(count);
     expect(h.saved.session?.refreshToken).toBe('test-refresh');
+  });
+
+  it.each(['runtime', 'cold-start'] as const)('resumes pending Passport recovery without replaying a dead Resource (%s)', async phase => {
+    const { h } = recoverySetup();
+    const fresh = phase === 'runtime' ? h : setup();
+    if (phase === 'cold-start') {
+      fresh.vault.resources[ORIGINAL_KEY].metadata = h.vault.resources[ORIGINAL_KEY].metadata;
+      fresh.vault.passports = h.vault.passports;
+    }
+    fresh.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(
+      new AuthApiError('AUTH_REQUEST_FAILED', 503, 'busy', Date.now() + 180_000),
+    );
+    if (phase === 'runtime') await rejectAfterLoss(fresh);
+    else {
+      void fresh.start();
+      await vi.advanceTimersByTimeAsync(1);
+      fresh.request.mockResolvedValue({ ok: false, status: 401,
+        data: { error: { code: 'INVALID_REFRESH_TOKEN' } } });
+      await vi.advanceTimersByTimeAsync(61_250);
+    }
+    expect(fresh.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledTimes(1);
+    const resourceRequests = fresh.request.mock.calls.length;
+    // A redundant refresh would now hit a transport outage and postpone Passport.
+    fresh.request.mockResolvedValue({ ok: false, status: 0, data: null });
+    await vi.advanceTimersByTimeAsync(122_500);
+    expect(fresh.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledTimes(2);
+    expect(fresh.request).toHaveBeenCalledTimes(resourceRequests);
+    expect(fresh.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(fresh.saved.session?.refreshToken).toBe('test-rotated');
+  });
+
+  it.each(['newer', 'cleared'] as const)('checks the current Resource before resuming Passport (%s)', async state => {
+    const { h } = recoverySetup();
+    h.deps.refreshPassportSessionSingleFlight.mockRejectedValueOnce(
+      new AuthApiError('AUTH_REQUEST_FAILED', 429, 'busy', Date.now() + 180_000),
+    );
+    await rejectAfterLoss(h);
+    const count = h.request.mock.calls.length;
+    if (state === 'newer') {
+      h.saved.session.refreshToken = 'test-newer-resource';
+      h.request.mockResolvedValue(h.ok);
+    } else {
+      h.clearRuntimeAuth();
+      h.request.mockResolvedValue({ ok: false, status: 0, data: null });
+    }
+    await vi.advanceTimersByTimeAsync(122_500);
+    expect(h.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledTimes(1);
+    if (state === 'newer') {
+      expect(h.request).toHaveBeenCalledTimes(count + 1);
+      expect(h.request).toHaveBeenLastCalledWith('test-newer-resource', 'global');
+      expect(h.state().isAuthenticated).toBe(true);
+    } else {
+      expect(h.request).toHaveBeenCalledTimes(count);
+      expect(h.state().isAuthenticated).toBe(false);
+    }
   });
 
   it.each([['passport', 503], ['exchange', 429]] as const)(
