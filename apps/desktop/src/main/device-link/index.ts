@@ -1501,11 +1501,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   startBusyReporting();
 
   client.onPeerLinkAccepted((peer, _accepted, inboundContinuation) => {
-    // An inbound acceptance already projected this confirmation's recovery.
-    // Keep ordinary non-stream Hosts covered without duplicating loop recovery.
-    if (!isScopedPeer(peer) && !inboundContinuation && !transportTimeoutReopen.isActive(peer)) {
-      broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
-    }
+    if (isScopedPeer(peer)) return;
+    // A verified final accept completes recovery even during retry backoff.
+    // Cancelling fences the old loop promise and its later duplicate projection.
+    transportTimeoutReopen.cancel(peer);
+    if (!inboundContinuation) broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
   });
 
   client.onPeerStreamAccepted((peer, streamId) => {

@@ -248,6 +248,56 @@ describe('RoutedDeviceLinkClient', () => {
     expect(legacy.sent.some((f) => f.kind === 'invoke')).toBe(!newer);
     client.stop();
   });
+  it.each([
+    { probe: false, interrupt: 'none' }, { probe: true, interrupt: 'none' },
+    { probe: true, interrupt: 'reset' }, { probe: true, interrupt: 'new-inbound' },
+    { probe: true, interrupt: 'disconnect' },
+  ])('carries exact inbound recovery across legacy→primary ($probe/$interrupt)', async ({ probe, interrupt }) => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: () => false, probeForPeer: () => probe,
+      primaryCapability: 'agent-net-node-v2', options: options('ws://v1-relay'),
+    });
+    const seen: boolean[] = [], second: boolean[] = [];
+    client.onPeerLinkAccepted((_peer, _accepted, continuation) => second.push(continuation === true));
+    client.onPeerLinkAccepted((_peer, _accepted, continuation) => seen.push(continuation === true));
+    client.onFrame(env => { if (env.kind === 'link-open') client.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'unit' }); });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find(s => s.url === 'ws://v2-node')!, legacy = sockets.find(s => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    const caps = ['agent-net-node-v2', DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM];
+    const incoming = (id: string, stream: string) => legacy.push({ v: PROTOCOL_VERSION, kind: 'link-open', id, src: 'peer',
+      payload: { controllerName: 'peer', appVersion: '1', protocolVersion: 1, capabilities: caps, transportStreamId: stream, transportBaseSeq: 1 } });
+    const accept = (socket: FakeWs, stream: string) => {
+      const frame = socket.sent.filter(f => f.kind === 'link-open').at(-1)!;
+      socket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: frame.id, src: 'peer',
+        payload: { appVersion: '1', allowlistHash: 'unit', capabilities: caps, transportStreamId: stream, transportBaseSeq: 1 } });
+    };
+    try {
+      incoming('inbound-1', 'legacy-stream'); await vi.advanceTimersByTimeAsync(1);
+      const opened = client.openLink('peer', {}); await vi.advanceTimersByTimeAsync(1);
+      if (probe) { accept(legacy, 'legacy-stream'); await vi.advanceTimersByTimeAsync(1); }
+      if (interrupt === 'reset') legacy.push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'peer', payload: { reason: 'transport-timeout' } });
+      if (interrupt === 'new-inbound') incoming('inbound-2', 'replacement-stream');
+      if (interrupt === 'disconnect') legacy.close(1006);
+      accept(primary, 'primary-stream'); await opened;
+      expect(seen).toEqual([interrupt === 'none']);
+      expect(second).toEqual(seen);
+      if (interrupt === 'none') {
+        const later = client.openLink('peer', {}); await vi.advanceTimersByTimeAsync(1);
+        if (probe) { accept(legacy, 'legacy-stream'); await vi.advanceTimersByTimeAsync(1); }
+        accept(primary, 'primary-stream'); await later;
+        expect(seen).toEqual([true, false]);
+        expect(second).toEqual(seen);
+      }
+    } finally { client.stop(); }
+  });
+
   // 2026-11-17: a peer probed during its restart attests the newer transport before it is reachable there; the host opens the link
   // on its own channel to that peer (Agent-Net sessions) instead of queueing a link-open frame on the main connection.
   it('lets the host re-open a peer that prefers the main connection on its own channel, or fall back to the main connection', async () => {

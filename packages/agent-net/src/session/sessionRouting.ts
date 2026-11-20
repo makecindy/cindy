@@ -75,16 +75,22 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     return () => { for (const unsubscribe of off) unsubscribe(); };
   };
   const perPeer: Routed = {
-    openLink: (dst, payload, timeoutMs) => routed(dst, (useSession) => {
-      // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
-      if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
-        + ` available=${links.available(dst)} deviceLinkReady=${target.isLinkReady(dst)} deviceLinkRecovery=${target.needsLinkRecovery(dst)}`
-        + ` deviceLinkQueue=${target.getReliableSendQueueDepth(dst)}`);
-      if (useSession) return links.openLink(dst, payload, timeoutMs);
-      links.noteDeviceLinkLink(dst, 'outbound');
-      return target.openLink(dst, payload, timeoutMs);
-    }),
+    openLink: (dst, payload, timeoutMs, options) => {
+      const local = { ...options, inboundAcceptance: options?.inboundAcceptance
+        ?? links.captureInboundAcceptance(dst) ?? target.captureInboundAcceptance(dst) };
+      return routed(dst, (useSession) => {
+        // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
+        if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
+          + ` available=${links.available(dst)} deviceLinkReady=${target.isLinkReady(dst)} deviceLinkRecovery=${target.needsLinkRecovery(dst)}`
+          + ` deviceLinkQueue=${target.getReliableSendQueueDepth(dst)}`);
+        if (useSession) return links.openLink(dst, payload, timeoutMs, local);
+        links.noteDeviceLinkLink(dst, 'outbound');
+        return target.openLink(dst, payload, timeoutMs, local);
+      });
+    },
     closeLink: (dst: string, reason: LinkClosePayload['reason'], direction: 'outbound' | 'inbound' = 'outbound') => {
+      links.captureInboundAcceptance(dst)?.consume();
+      target.captureInboundAcceptance(dst)?.consume();
       const session = direction === 'inbound' ? links.ownsInbound(dst) : links.ownsOutbound(dst) || links.needsLinkRecovery(dst);
       if (session) links.closeLink(dst, reason, direction); else target.closeLink(dst, reason, direction);
     },
@@ -100,8 +106,9 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     canSendPush: (dst) => (links.ownsInbound(dst) ? links.canSendPush(dst) : target.canSendPush(dst)),
     sendLinkAccept: (dst, requestId, payload) => {
       if (links.ownsLinkOpen(dst, requestId)) return links.sendLinkAccept(dst, requestId, payload);
-      links.noteDeviceLinkLink(dst, 'inbound');
-      return target.sendLinkAccept(dst, requestId, payload);
+      const acceptance = target.sendLinkAccept(dst, requestId, payload);
+      links.noteDeviceLinkLink(dst, 'inbound', acceptance);
+      return acceptance;
     },
     sendInvokeResult: (dst, requestId, payload) =>
       (links.ownsRequest(dst, requestId) ? links.sendInvokeResult(dst, requestId, payload) : target.sendInvokeResult(dst, requestId, payload)),

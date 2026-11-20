@@ -71,6 +71,7 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
 function idleDeviceLink(calls: string[], deviceLinkGeneration = 0): DeviceLinkClient {
   return {
     onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
     onPeerStreamAccepted: () => () => {},
     onPeerLinkAccepted: () => () => {},
     onPeerRouteStateChanged: () => () => {},
@@ -385,6 +386,7 @@ describe('AgentNetSessionLinks', () => {
     let deviceLinkRecovering = true;
     const deviceLink = {
       onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
       isLinkReady: () => false,
       needsLinkRecovery: () => deviceLinkRecovering,
       // 列表这类不需要链路的请求还在途：不挡会话。
@@ -597,6 +599,23 @@ describe('AgentNetSessionLinks', () => {
     expect(calls).toEqual([]);
   });
 
+  it('retires captured inbound proof when the user closes before a later Session open', async () => {
+    const { links } = pair();
+    answerOnSession(links.host);
+    links.controller.onFrame(env => { if (env.kind === 'link-open') links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' }); });
+    const accepted: boolean[] = [];
+    links.controller.onPeerLinkAccepted((_peer, _accepted, continuation) => accepted.push(continuation === true));
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      const proof = links.controller.captureInboundAcceptance('a-host');
+      expect(proof?.current()).toBe(true);
+      links.controller.closeLink('a-host', 'user');
+      await links.controller.openLink('a-host', openPayload, undefined, { inboundAcceptance: proof });
+      expect(accepted).toEqual([false]);
+      expect(proof?.current()).toBe(false);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
   it('pairs a Session reverse open with its fresh inbound acceptance, preserving later recovery notifications', async () => {
     const { links } = pair();
     answerOnSession(links.host);
@@ -710,6 +729,7 @@ describe('AgentNetSessionLinks', () => {
       isLinkReady: () => false, needsLinkRecovery: () => false, getReliableSendQueueDepth: () => 0 } as unknown as DeviceLinkClient;
     const deviceLink = {
       onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
       isLinkReady: () => false, needsLinkRecovery: () => false, hasPendingRequestsTo: () => false, getReliableSendQueueDepth: () => 0,
       openLink: async () => { calls.push('device-link:openLink'); return { appVersion: 'dl', allowlistHash: 'dl' }; },
       invoke: async () => { calls.push('device-link:invoke'); return { ok: true, result: 'device-link' }; },

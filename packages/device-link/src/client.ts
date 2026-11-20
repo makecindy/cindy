@@ -652,7 +652,21 @@ export function classifyConnectionIssue(
 /** 入站隧道帧(由 host 处理:被控端 dispatch invoke;控制端消费 push 等) */
 export type InboundFrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
+/** Request-local recovery evidence; never serialized into a protocol payload. */
+export interface PeerLinkAcceptanceProof {
+  readonly deviceId: string;
+  current(): boolean;
+  consume(): boolean;
+}
+export interface LinkOpenOptions {
+  inboundAcceptance?: PeerLinkAcceptanceProof;
+  /** Only the routing layer's verified compatibility probe may carry the same evidence onward. */
+  continueOnAnotherRoute?(accepted: LinkAcceptPayload | undefined): boolean;
+}
+
 interface PendingRequest {
+  linkOpenOptions?: LinkOpenOptions;
+  inboundAcceptanceMarker?: { generation: number };
   /** Local-only evidence: this outbound open continues a freshly accepted inbound link. */
   inboundContinuation?: { streamId: string | null; connectionEpoch: number; linkGeneration: number };
   /** Timers may be suspended; retire an overdue request before replaying its payload. */
@@ -780,7 +794,7 @@ interface PeerTransportState {
    */
   linkAcceptedInbound: boolean;
   /** Exact accepted inbound generation, including peers without reliable confirmation. */
-  lastInboundGeneration?: number;
+  inboundAcceptance?: { generation: number };
   supportsGithubRead?: boolean;
   /**
    * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
@@ -2071,7 +2085,7 @@ export class DeviceLinkClient {
   }
 
   /** 控制端:向目标设备发起 link-open,等待 link-accept */
-  async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
+  async openLink(dst: string, payload: unknown, timeoutMs?: number, options?: LinkOpenOptions): Promise<LinkAcceptPayload> {
     // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
     this.getPeerTransport(dst).outboundExplicitlyClosed = false;
     if (this.opts.backoffOfflineLinkOpen) this.admitPeerRequest(dst);
@@ -2082,6 +2096,9 @@ export class DeviceLinkClient {
       { v: PROTOCOL_VERSION, kind: 'link-open', id, dst, payload: attestation && isRecord(linkPayload) ? { ...linkPayload, transportAttestation: attestation } : linkPayload },
       'link-accept',
       timeoutMs,
+      true,
+      undefined,
+      options,
     );
     // link-accept 在 dispatchEnvelope 中已经原子提交收发方向并只重放一次；
     // 这里不要重复 replay，否则每次重开都会立刻把全部 pending 再发第二遍并消耗重试预算。
@@ -2319,7 +2336,7 @@ export class DeviceLinkClient {
   }
 
   /** 被控端:回 link-accept */
-  sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): void {
+  sendLinkAccept(dst: string, requestId: string, payload: LinkAcceptPayload): PeerLinkAcceptanceProof | undefined {
     // 只有控制端在 link-open 明确声明过能力时才回显；否则新被控端若
     // 单方面包 transport，旧控制端会把 wrapper 当成普通 InvokeResult/Push。
     const offer = this.pendingInboundLinkOffers.get(dst);
@@ -2406,7 +2423,22 @@ export class DeviceLinkClient {
         this.commitReliableSendResume(dst, peer, resume);
       }
     }
-    if (matchingOffer) peer.lastInboundGeneration = peer.linkGeneration;
+    if (matchingOffer) peer.inboundAcceptance = { generation: peer.linkGeneration };
+    return this.captureInboundAcceptance(dst);
+  }
+
+  /** Capture only the currently accepted inbound direction; all captures share one consume. */
+  captureInboundAcceptance(dst: string): PeerLinkAcceptanceProof | undefined {
+    const peer = this.peerTransport.get(dst), marker = peer?.inboundAcceptance;
+    if (isScopedPeer(dst) || !peer || !marker || !peer.linkAcceptedInbound || marker.generation !== peer.linkGeneration) return;
+    const epoch = this.connEpoch;
+    const current = () => !this.stopped && this.connEpoch === epoch && this.peerTransport.get(dst) === peer
+      && peer.linkAcceptedInbound && peer.inboundAcceptance === marker && peer.linkGeneration === marker.generation;
+    return { deviceId: dst, current, consume: () => {
+      if (!current()) return false;
+      peer.inboundAcceptance = undefined;
+      return true;
+    } };
   }
 
   /** 被控端:广播转发 push 帧(fire-and-forget;失败由上层缓冲策略兜底) */
@@ -2486,6 +2518,7 @@ export class DeviceLinkClient {
     timeoutMs?: number,
     allowPeerResetRetry = true,
     diagnostic?: { id: string; admissionMs: number; source: string; operation: string },
+    linkOpenOptions?: LinkOpenOptions,
   ): Promise<Envelope> {
     if (env.dst && this.remoteControlDisabled.has(env.dst)) {
       return Promise.reject(new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target'));
@@ -2567,8 +2600,10 @@ export class DeviceLinkClient {
       const inboundPeer = env.kind === 'link-open' && env.dst ? this.peerTransport.get(env.dst) : undefined;
       const continuesInbound = inboundPeer && (inboundPeer.pendingLinkConfirmation && inboundPeer.remoteStreamId
         || !inboundPeer.reliable && inboundPeer.linkAcceptedInbound
-          && inboundPeer.lastInboundGeneration === inboundPeer.linkGeneration);
+          && inboundPeer.inboundAcceptance?.generation === inboundPeer.linkGeneration);
       const pendingRequest: PendingRequest = {
+        linkOpenOptions: linkOpenOptions ? { ...linkOpenOptions } : undefined,
+        inboundAcceptanceMarker: continuesInbound ? inboundPeer.inboundAcceptance : undefined,
         inboundContinuation: continuesInbound
           ? { streamId: inboundPeer.remoteStreamId, connectionEpoch: this.connEpoch,
               linkGeneration: inboundPeer.linkGeneration } : undefined,
@@ -3514,25 +3549,39 @@ export class DeviceLinkClient {
             const accepted = env.payload as LinkAcceptPayload | undefined;
             const priorPeer = this.getPeerTransport(env.src);
             const continuation = p.inboundContinuation;
-            const inboundContinuation = !!continuation && priorPeer.linkAcceptedInbound
+            const localContinuation = !!continuation && priorPeer.linkAcceptedInbound
               && continuation.connectionEpoch === this.connEpoch
               && continuation.linkGeneration === priorPeer.linkGeneration
               && (continuation.streamId === null
                 ? !priorPeer.reliable && !accepted?.transportStreamId
                   && !(Array.isArray(accepted?.capabilities)
                     && accepted.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT))
-                  && priorPeer.lastInboundGeneration === priorPeer.linkGeneration
+                  && priorPeer.inboundAcceptance?.generation === priorPeer.linkGeneration
                 : priorPeer.receiveReady && continuation.streamId === accepted?.transportStreamId);
+            const inherited = p.linkOpenOptions?.inboundAcceptance;
+            const externalContinuation = inherited?.deviceId === env.src && inherited.current();
+            let handoff = false;
+            try { handoff = p.linkOpenOptions?.continueOnAnotherRoute?.(accepted) === true; }
+            catch { /* The routing layer owns a failed classifier; never strand the matched accept. */ }
+            const inboundContinuation = (externalContinuation && (handoff || inherited!.consume())) || localContinuation;
+            const marker = handoff && localContinuation && p.inboundAcceptanceMarker === priorPeer.inboundAcceptance
+              ? p.inboundAcceptanceMarker : undefined;
+            const acceptEpoch = this.connEpoch;
             this.setPeerCapabilities(
               env.src,
               accepted?.capabilities,
               accepted?.transportStreamId,
               accepted?.transportBaseSeq,
               'outbound-accept',
+              marker,
             );
             this.issueProviderShareDirectLease(env.src);
             const peer = this.getPeerTransport(env.src);
             const acceptedLinkGeneration = this.markPeerRouteOnline(env.src);
+            if (marker && peer.inboundAcceptance === marker && this.peerTransport.get(env.src) === priorPeer
+              && acceptEpoch === this.connEpoch && peer.linkAcceptedInbound && !this.stopped) {
+              marker.generation = acceptedLinkGeneration;
+            }
             this.logRecoveryStage(env.src, 'link-accept-received', ` baseSeq=${peer.remoteBaseSeq}`);
             // 这是本机先发送 link-open、对端收到后才可能返回的 accept。relay 对同一
             // 来源连接严格按发送顺序处理，因此任何更早物理发送若会产生 route error，
@@ -5296,7 +5345,7 @@ export class DeviceLinkClient {
     return this.isPeerSendReady(peer) && peer.receiveReady;
   }
 
-  private markPeerLinkDown(peer: PeerTransportState): void {
+  private markPeerLinkDown(peer: PeerTransportState, preserveAcceptance?: { generation: number }): void {
     for (const [id, state] of this.peerTransport) if (state === peer) {
       this.clearSameAccountDirectGrace(id);
       this.detachDirectPath(id, 'link-closed');
@@ -5312,7 +5361,7 @@ export class DeviceLinkClient {
     if (peer.outboundLinkConfirmationAck?.timer) {
       clearTimeout(peer.outboundLinkConfirmationAck.timer);
     }
-    peer.lastInboundGeneration = undefined;
+    if (peer.inboundAcceptance !== preserveAcceptance) peer.inboundAcceptance = undefined;
     peer.sendPhase = 'down';
     peer.receiveReady = false;
     peer.pendingLinkConfirmation = null;
@@ -5446,6 +5495,7 @@ export class DeviceLinkClient {
     remoteStreamId?: string,
     remoteBaseSeq?: number,
     source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
+    preserveAcceptance?: { generation: number },
   ): void {
     const peer = this.getPeerTransport(dst);
     this.clearSameAccountDirectGrace(dst);
@@ -5505,7 +5555,7 @@ export class DeviceLinkClient {
       this.abandonReliablePending(dst, 'peer no longer supports reliable transport');
     }
     if (!reliable) {
-      this.markPeerLinkDown(peer);
+      this.markPeerLinkDown(peer, preserveAcceptance);
     } else {
       // capability 只描述提议/accept；真正接收 ready 由对应握手提交点置位。
       peer.receiveReady = false;

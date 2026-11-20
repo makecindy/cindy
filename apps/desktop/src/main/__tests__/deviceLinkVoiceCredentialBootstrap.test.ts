@@ -13,6 +13,7 @@ import { createContext, Script } from 'node:vm';
 
 import {
   DeviceLinkClient,
+  RoutedDeviceLinkClient,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
@@ -31,13 +32,16 @@ import {
   sharedTaskHostPeer,
   sharedTaskTopics,
   shortDeviceRef,
+  type DeviceLinkClientOptions,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
   type LinkOpenPayload,
+  type LegacyPeerConnectionOptions,
   type WsLike,
 } from '@cindy/device-link';
 import * as deviceLink from '@cindy/device-link';
+import { AgentNetSessionLinks, SessionPeer, agentNetSessionLane, routeSessionPeers, type PeerLinks, type SessionLane } from '@cindy/agent-net';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
@@ -195,17 +199,22 @@ class RecoverySocket implements WsLike {
   }
 }
 
-function recoveryDesktop(relay: RecoveryRelay, id: string) {
+function recoveryDesktop(relay: RecoveryRelay, id: string, wrap?: (client: DeviceLinkClient) => PeerLinks, primaryRelay?: RecoveryRelay,
+  openOnPrimary?: LegacyPeerConnectionOptions['openOnPrimary']) {
   const exports = {} as typeof SubscriptionRegistry;
   subscriptionRegistry.runInNewContext({ exports, require: subscriptionRegistryRequire });
   const registry = exports;
   const diagnostic = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const client = new DeviceLinkClient({
+  const options: DeviceLinkClientOptions = {
     getWsUrl: () => 'ws://memory.invalid/device-link', getToken: async () => 'test-token',
     getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: true, busy: false }),
     createWebSocket: () => relay.connect(id), logger: diagnostic,
     timing: { reconnectBaseMs: 1, reconnectMaxMs: 1, pingIntervalMs: 60_000, requestTimeoutMs: 2_000 },
-  });
+  };
+  const rawClient = primaryRelay ? new RoutedDeviceLinkClient({ ...options, createWebSocket: () => primaryRelay.connect(id) }, undefined, {
+    active: () => true, useForPeer: () => false, probeForPeer: () => true, primaryCapability: 'agent-net-node-v2', openOnPrimary, options,
+  }) : new DeviceLinkClient(options);
+  const client = wrap ? wrap(rawClient) : rawClient;
   const noOp = () => {};
   const context = createContext({
     client, ports: {}, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
@@ -228,7 +237,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     log: diagnostic, shortId: shortDeviceRef, shortDeviceRef,
   });
   const accept = inboundDispatch.runInContext(context) as
-    (client: DeviceLinkClient, src: string, requestId: string, payload: LinkOpenPayload) => void;
+    (client: PeerLinks, src: string, requestId: string, payload: LinkOpenPayload) => void;
   const subscribed = vi.fn();
   const pushes: unknown[] = [];
   client.onFrame((frame) => {
@@ -246,7 +255,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
   client.onStatusChange((status) => {
     if (status !== 'online') for (const peer of registry.getControllerIds()) registry.clearController(peer);
   });
-  return { client, context, registry, subscribed, pushes, diagnostic };
+  return { client, rawClient, context, registry, subscribed, pushes, diagnostic };
 }
 
 describe('mobile voice credential sync desktop bootstrap path', () => {
@@ -327,7 +336,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       },
       isProviderSharePeer,
       isScopedPeer,
-      transportTimeoutReopen: { isActive: () => false },
+      transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
       parseSharedTaskPeer,
       shortDeviceRef,
       replayActiveSubscriptions,
@@ -392,6 +401,36 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     } finally { loop.dispose(); }
   });
 
+  it.each(['backoff', 'inflight'])('projects an external verified accept while timeout recovery is %s', async phase => {
+    vi.useFakeTimers();
+    let resolveOpen!: () => void;
+    let intent = true;
+    const pending = new Promise<void>(resolve => { resolveOpen = resolve; });
+    const broadcast = vi.fn();
+    const reopen = vi.fn(() => phase === 'backoff' ? Promise.reject(new Error('busy')) : pending);
+    const loop = createTransportTimeoutReopenLoop({ reopen, shouldAbort: () => !intent,
+      onReopened: peer => broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer }), baseDelayMs: 10 });
+    let accepted!: (peer: string) => void;
+    acceptedRegistration.runInNewContext({
+      client: { onPeerLinkAccepted: (cb: typeof accepted) => { accepted = cb; }, onPeerStreamAccepted: () => {} },
+      isProviderSharePeer, isScopedPeer, parseSharedTaskPeer, shortDeviceRef,
+      replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+      transportTimeoutReopen: loop, broadcast, DEVICE_LINK_PUSH,
+    });
+    try {
+      loop.trigger('remote-device');
+      await Promise.resolve(); await Promise.resolve();
+      expect(loop.isActive('remote-device')).toBe(true);
+      accepted('remote-device');
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'remote-device' }]]);
+      expect(loop.isActive('remote-device')).toBe(false);
+      intent = false; resolveOpen(); await pending;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(reopen).toHaveBeenCalledTimes(1);
+      expect(broadcast).toHaveBeenCalledTimes(1);
+    } finally { loop.dispose(); vi.useRealTimers(); }
+  });
+
   // #8962: duplicate wire replies are consumed by the production client's
   // pending-request pairing, rather than suppressing later real same-stream gaps.
   it.each([false, true])('duplicate link-accept does not repeat renderer invalidation (confirmation=%s)', async confirm => {
@@ -401,7 +440,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const b = recoveryDesktop(relay, 'desktop-b');
     const broadcast = vi.fn();
     Object.assign(a.context, {
-      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false },
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
       replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       broadcast, DEVICE_LINK_PUSH,
     });
@@ -431,7 +470,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const a = recoveryDesktop(relay, 'desktop-a'), b = recoveryDesktop(relay, 'desktop-b');
     const broadcast = vi.fn();
     Object.assign(a.context, {
-      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false },
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
       replayActiveSubscriptions: vi.fn(), sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       broadcast, DEVICE_LINK_PUSH,
     });
@@ -444,6 +483,58 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     } finally {
       for (const desktop of [a, b]) { desktop.client.stop(); desktop.registry.clearAll(); }
       vi.useRealTimers();
+    }
+  });
+
+  it.each(['direct', 'probe', 'closed'])('coalesces a legacy inbound acceptance with its real reciprocal Session open (%s)', async mode => {
+    vi.useFakeTimers();
+    const relay = new RecoveryRelay(true);
+    let sessionA: SessionPeer | null = null, sessionB: SessionPeer | null = null;
+    const receivers: Array<((lane: SessionLane, data: Uint8Array) => void) | undefined> = [];
+    const wire = (side: number) => ({
+      write: (lane: SessionLane, data: Uint8Array) => { const copy = data.slice(); queueMicrotask(() => receivers[1 - side]?.(lane, copy)); },
+      bufferedAmount: 0,
+      onData: (callback: (lane: SessionLane, data: Uint8Array) => void) => { receivers[side] = callback; },
+    });
+    const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+    const linksA = new AgentNetSessionLinks({ session: () => sessionA, connectionEpoch: () => 1, selfDeviceId: () => 'desktop-a', log: quiet });
+    const linksB = new AgentNetSessionLinks({ session: () => sessionB, connectionEpoch: () => 1, selfDeviceId: () => 'desktop-b', log: quiet });
+    const connectSessions = () => {
+      sessionA = new SessionPeer({ wire: wire(0), laneFor: agentNetSessionLane, ...linksA.handlers('desktop-b') });
+      sessionB = new SessionPeer({ wire: wire(1), laneFor: agentNetSessionLane, ...linksB.handlers('desktop-a') });
+    };
+    const a = recoveryDesktop(relay, 'desktop-a', raw => routeSessionPeers(raw, linksA), new RecoveryRelay(true),
+      (peer, payload, timeoutMs, primary) => { connectSessions(); return linksA.openAttested(peer, payload, timeoutMs, primary); });
+    const b = recoveryDesktop(relay, 'desktop-b', raw => routeSessionPeers(raw, linksB));
+    b.context.ports.sameAccountCapabilities = () => ['agent-net-node-v2'];
+    if (mode !== 'probe') connectSessions();
+    let reciprocal: Promise<unknown> | undefined;
+    const broadcast = vi.fn();
+    Object.assign(a.context, {
+      isScopedPeer, parseSharedTaskPeer, transportTimeoutReopen: { cancel: () => {} },
+      replayActiveSubscriptions: (_why: string, peer: string) => {
+        if (!a.client.isLinkReady(peer) && !reciprocal) {
+          if (mode === 'closed') a.client.closeLink(peer, 'user');
+          reciprocal = a.client.openLink(peer, { controllerName: 'A', protocolVersion: 1, appVersion: 'test' });
+        }
+      },
+      sharedHostStreams: new Map(), sharedHostSourceEpoch: 0, broadcast, DEVICE_LINK_PUSH,
+    });
+    inboundAcceptedRegistration.runInContext(a.context);
+    acceptedRegistration.runInContext(a.context);
+    try {
+      a.client.start(); b.client.start(); await relay.flush(); relay.holdConfirmations = true;
+      const incoming = b.rawClient.openLink('desktop-a', { controllerName: 'B', protocolVersion: 1, appVersion: 'test', capabilities: ['agent-net-node-v2'] });
+      await relay.flush(); await incoming; await reciprocal;
+      expect(linksA.isLinkReady('desktop-b')).toBe(true);
+      expect(broadcast.mock.calls).toEqual(Array(mode === 'closed' ? 2 : 1)
+        .fill([DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]));
+      broadcast.mockClear();
+      await a.client.openLink('desktop-b', { controllerName: 'A later', protocolVersion: 1, appVersion: 'test' });
+      expect(broadcast.mock.calls).toEqual([[DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: 'desktop-b' }]]);
+    } finally {
+      relay.releaseConfirmations();
+      a.client.stop(); b.client.stop(); a.registry.clearAll(); b.registry.clearAll(); vi.useRealTimers();
     }
   });
 
@@ -468,7 +559,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       { deviceId: 'desktop-b', topics: ['session:remote-b'] },
       { deviceId: 'desktop-c', topics: ['session:healthy-c'] },
     ];
-    const open = (client: DeviceLinkClient, peer: string) => client.openLink(peer, {
+    const open = (client: Pick<DeviceLinkClient, 'openLink'>, peer: string) => client.openLink(peer, {
       controllerName: 'Test desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
       capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
     });
@@ -508,7 +599,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
 
       Object.assign(a.context, {
         replayActiveSubscriptions: scheduler.replay, DEVICE_LINK_PUSH, broadcast: vi.fn(),
-        parseSharedTaskPeer, isScopedPeer, transportTimeoutReopen: { isActive: () => false },
+        parseSharedTaskPeer, isScopedPeer, transportTimeoutReopen: { isActive: () => false, cancel: () => {} },
         sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
       });
       inboundAcceptedRegistration.runInContext(a.context);
