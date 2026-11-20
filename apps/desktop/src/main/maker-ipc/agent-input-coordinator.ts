@@ -1353,6 +1353,11 @@ function requiresOrcaReportPersistence(item: AgentInputQueuedMessage): boolean {
     || item.mergedDeliveryClientIds?.length);
 }
 
+/** A trusted desktop Pi command is still the user's own UI send; every other origin is automatic or channel-owned. */
+function isManualUiOrigin(origin: AgentInputQueuedMessage['origin']): boolean {
+  return !origin || (origin as { kind?: unknown }).kind === 'desktop';
+}
+
 export class AgentInputCoordinator {
   // A direct Lead assignment bypasses the queue. Keep its receipt off the active input
   // boundary so ordinary sends, steering and successful terminals retain their semantics.
@@ -2212,7 +2217,7 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
-    if (opts?.manualUiSend && !item.origin && !item.autoResume && !item.originalSyntheticTrigger) {
+    if (opts?.manualUiSend && isManualUiOrigin(item.origin) && !item.autoResume && !item.originalSyntheticTrigger) {
       this.manualUiInputs.add(item);
     }
     // Fresh host reports have already passed the dispatcher's relationship
@@ -4157,7 +4162,7 @@ export class AgentInputCoordinator {
     if (deliveryIds.length) replacement.mergedDeliveryClientIds = deliveryIds;
     if (current.clientId === replacement.clientId) {
       if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
-      if (this.manualUiInputs.has(current) && !replacement.origin && !syntheticTriggerKind(replacement.text)) {
+      if (this.manualUiInputs.has(current) && isManualUiOrigin(replacement.origin) && !syntheticTriggerKind(replacement.text)) {
         this.manualUiInputs.add(replacement);
       }
       // Editing content cannot erase or forge the host's stable retry lineage.
