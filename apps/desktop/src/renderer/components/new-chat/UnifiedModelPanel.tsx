@@ -18,7 +18,7 @@ import {
 import { toast } from '@/lib/toast';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
 import { Check, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +55,7 @@ import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
+import { useUnifiedModelWindow } from './useUnifiedModelWindow';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -107,6 +108,7 @@ const noop = (): void => {};
 const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
 const NO_RECENT: readonly RecentModelItem[] = [];
 const NO_PROVIDERS: readonly ProviderView[] = [];
+const VIRTUAL_MODEL_LIST_MIN_ROWS = 80;
 
 function createWidthMeasure(fontFamily: string) {
   const context = typeof CanvasRenderingContext2D === 'undefined'
@@ -945,120 +947,6 @@ export function UnifiedModelPanel({
     [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, listHiddenProviderIds],
   );
 
-  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
-  // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
-  // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
-  // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
-  // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
-  const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
-  /**
-   * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
-   * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
-   * 就停在可视区外(Chris 2026-08-14 实测:「当前模型必须可见」)。置位后由
-   * ResizeObserver 在每次尺寸变化时重新对齐,直到选中行真正可见;用户手动滚动
-   * 立即放弃(不跟用户抢滚动条)。
-   */
-  const needsEnsureVisibleRef = useRef(false);
-  const ensureSelectedVisible = useCallback(() => {
-    const el = listRef.current;
-    if (!el || !needsEnsureVisibleRef.current) return;
-    if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
-    const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
-    if (!row) {
-      el.scrollTop = 0;
-      needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
-      return;
-    }
-    const listRect = el.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
-    // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
-    const alignment = computeSelectedRowScrollTop({
-      scrollTop: el.scrollTop,
-      clientHeight: el.clientHeight,
-      scrollHeight: el.scrollHeight,
-      headerInset: 0,
-      rowTop: rowRect.top - listRect.top + el.scrollTop,
-      rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
-    });
-    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
-    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
-    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
-    if (alignment.oversized) {
-      // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
-      // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
-      // 选中行就钉在顶部、上方收藏被顶出,正是要修的原症状。不会振荡:顶对齐目标随尺寸
-      // 单调稳定、写入有 >1 阈值,长开后自然改走下面的居中并按其条件收工;真正的极矮
-      // 面板不再有尺寸回调,标记挂着也没有下一次工作。
-      if (Math.abs(alignment.scrollTop - el.scrollTop) > 1) {
-        suppressScrollDismissRef.current = true;
-        el.scrollTop = alignment.scrollTop;
-      }
-      return;
-    }
-    if (Math.abs(alignment.scrollTop - el.scrollTop) <= 1) {
-      // 已经居中(容器也有真实高度)→ 收工。
-      needsEnsureVisibleRef.current = false;
-      return;
-    }
-    const before = el.scrollTop;
-    suppressScrollDismissRef.current = true;
-    el.scrollTop = alignment.scrollTop;
-    // 夹紧后位置基本不动(已经贴着列表头 / 尾,没得再滚)→ 收工。少了这一条,短列表里
-    // 目标与实际永远差一截,ResizeObserver 每次回调都会重试一遍。判据带 1px 容差
-    // (2026-08-19 预审 P2-9):HiDPI 下 scrollTop 是小数,写整数读回小数,严格相等永远
-    // 不成立,在途标记就摘不下来,还会一直占用 suppressScrollDismiss 吞掉用户滚动。
-    if (Math.abs(el.scrollTop - before) <= 1) {
-      suppressScrollDismissRef.current = false;
-      needsEnsureVisibleRef.current = false;
-      return;
-    }
-    // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
-  }, []);
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    // 内容集合变了(切视图 / 搜索 / 数据刷新)→ 通知 morph 宿主重量一次面板尺寸:
-    // 增长方向被 min-h-0 钳制链挡住,宿主的 ResizeObserver 看不到(收缩才看得到),
-    // 不吱声的话切回大视图面板永远卡在小尺寸(2026-08-14 实机自查)。
-    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
-    const raf = requestAnimationFrame(() => {
-      const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
-      const previous = previousSelectionRef.current;
-      previousSelectionRef.current = selectionKey;
-      const previousView = previousViewRef.current;
-      previousViewRef.current = viewKey;
-      if (previous !== null && previous !== selectionKey) {
-        needsEnsureVisibleRef.current = false;
-        flashScrollbar(el);
-        return;
-      }
-      if (previousView !== null && previousView === viewKey) return;
-      needsEnsureVisibleRef.current = true;
-      ensureSelectedVisible();
-      flashScrollbar(el);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [
-    ensureSelectedVisible,
-    sections,
-    viewKey,
-    selected.modelId,
-    selected.providerId,
-    selectedFavoriteUid,
-  ]);
-  // morph 生长 / 窗口变化期间尺寸每变一次就复核一次对齐(仅在途标记置位时做事)。
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (!needsEnsureVisibleRef.current) return;
-      requestAnimationFrame(ensureSelectedVisible);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ensureSelectedVisible]);
-
   const closeFlyout = useCallback(() => {
     setFlyAnchor(null);
     setFlyAnchorEl(null);
@@ -1260,8 +1148,171 @@ export function UnifiedModelPanel({
       !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
     return firstSourceSection === section ? first.entry.providerId : null;
   };
-  const rows = sections.flatMap((section) => section.rows);
-  const hasRows = rows.length > 0;
+  const hasRows = sections.some((section) => section.rows.length > 0);
+  // Search must not switch renderers, and growing a live list must not replace
+  // a focused row or an open flyout's anchor. Keep the window once it is active.
+  const hasLargeCatalog = entries.length + favorites.length + recentModels.length >= VIRTUAL_MODEL_LIST_MIN_ROWS;
+  const [windowed, setWindowed] = useState(hasLargeCatalog);
+  const waitingForWindow = hasLargeCatalog && !windowed && !flyAnchor;
+  useLayoutEffect(() => {
+    if (waitingForWindow && !listRef.current?.contains(document.activeElement)) setWindowed(true);
+  }, [waitingForWindow]);
+  const windowEnabled = windowed && hasRows && !remoteListPending && !catalogNotice && effectiveRail.kind !== 'model-groups';
+  const rowIsDisabled = (row: UnifiedListRow, knownConfig?: UnifiedRowConfig) => {
+    if (interactionDisabled || actionPending || row.unavailable) return true;
+    if (!isRouteDisabled || row.agentDeviceId) return false;
+    const config = knownConfig ?? withOptimisticConfig(
+      row.anchor, configOf(row.entry, row.favorite ?? row.recent, effectiveRail), optimisticConfig,
+    );
+    return isRouteDisabled(row.entry.providerId, config.wireModelId ?? row.entry.modelId, config.agent);
+  };
+  const modelWindow = useUnifiedModelWindow({
+    enabled: windowEnabled,
+    sections,
+    listRef,
+    flyAnchor,
+    isRowDisabled: rowIsDisabled,
+    onNavigate: () => { needsEnsureVisibleRef.current = false; },
+  });
+
+  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
+  // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
+  // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
+  // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
+  // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
+  const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
+  /**
+   * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
+   * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
+   * 就停在可视区外(Chris 2026-08-14 实测:「当前模型必须可见」)。置位后由
+   * ResizeObserver 在每次尺寸变化时重新对齐,直到选中行真正可见;用户手动滚动
+   * 立即放弃(不跟用户抢滚动条)。
+   */
+  const needsEnsureVisibleRef = useRef(false);
+  const ensureSelectedVisible = useCallback(() => {
+    const el = listRef.current;
+    if (!el || !needsEnsureVisibleRef.current) return;
+    if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
+    let rowTop: number;
+    let rowBottom: number;
+    if (windowEnabled) {
+      const selectedIndex = modelWindow.items.findIndex((item) => item.row && isSelectedRow(item.row.anchor, item.row.entry));
+      const geometry = modelWindow.virtualizer.measurementsCache[selectedIndex];
+      if (!geometry) {
+        if (selectedIndex < 0) {
+          el.scrollTop = 0;
+          needsEnsureVisibleRef.current = false;
+        }
+        return;
+      }
+      const item = modelWindow.items[selectedIndex];
+      rowTop = geometry.start + (item?.row && item.rowIndex > 0 ? 4 : 0);
+      rowBottom = geometry.end;
+    } else {
+      const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
+      if (!row) {
+        el.scrollTop = 0;
+        needsEnsureVisibleRef.current = false;
+        return;
+      }
+      const listRect = el.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      rowTop = rowRect.top - listRect.top + el.scrollTop;
+      rowBottom = rowRect.bottom - listRect.top + el.scrollTop;
+    }
+    // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
+    // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
+    const alignment = computeSelectedRowScrollTop({
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+      headerInset: 0,
+      rowTop,
+      rowBottom,
+    });
+    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
+    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
+    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
+    if (alignment.oversized) {
+      // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
+      // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
+      // 选中行就钉在顶部、上方收藏被顶出,正是要修的原症状。不会振荡:顶对齐目标随尺寸
+      // 单调稳定、写入有 >1 阈值,长开后自然改走下面的居中并按其条件收工;真正的极矮
+      // 面板不再有尺寸回调,标记挂着也没有下一次工作。
+      if (Math.abs(alignment.scrollTop - el.scrollTop) > 1) {
+        suppressScrollDismissRef.current = true;
+        el.scrollTop = alignment.scrollTop;
+      }
+      return;
+    }
+    if (Math.abs(alignment.scrollTop - el.scrollTop) <= 1) {
+      // 已经居中(容器也有真实高度)→ 收工。
+      needsEnsureVisibleRef.current = false;
+      return;
+    }
+    const before = el.scrollTop;
+    suppressScrollDismissRef.current = true;
+    el.scrollTop = alignment.scrollTop;
+    // 夹紧后位置基本不动(已经贴着列表头 / 尾,没得再滚)→ 收工。少了这一条,短列表里
+    // 目标与实际永远差一截,ResizeObserver 每次回调都会重试一遍。判据带 1px 容差
+    // (2026-08-19 预审 P2-9):HiDPI 下 scrollTop 是小数,写整数读回小数,严格相等永远
+    // 不成立,在途标记就摘不下来,还会一直占用 suppressScrollDismiss 吞掉用户滚动。
+    if (Math.abs(el.scrollTop - before) <= 1) {
+      suppressScrollDismissRef.current = false;
+      needsEnsureVisibleRef.current = false;
+      return;
+    }
+    // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
+  }, [windowEnabled, modelWindow.items, modelWindow.virtualizer, isSelectedRow]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    // 内容集合变了(切视图 / 搜索 / 数据刷新)→ 通知 morph 宿主重量一次面板尺寸:
+    // 增长方向被 min-h-0 钳制链挡住,宿主的 ResizeObserver 看不到(收缩才看得到),
+    // 不吱声的话切回大视图面板永远卡在小尺寸(2026-08-14 实机自查)。
+    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    const raf = requestAnimationFrame(() => {
+      const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
+      const previous = previousSelectionRef.current;
+      previousSelectionRef.current = selectionKey;
+      const previousView = previousViewRef.current;
+      previousViewRef.current = viewKey;
+      if (previous !== null && previous !== selectionKey) {
+        needsEnsureVisibleRef.current = false;
+        flashScrollbar(el);
+        return;
+      }
+      if (previousView !== null && previousView === viewKey) return;
+      needsEnsureVisibleRef.current = true;
+      ensureSelectedVisible();
+      flashScrollbar(el);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [
+    ensureSelectedVisible,
+    sections,
+    viewKey,
+    selected.modelId,
+    selected.providerId,
+    selectedFavoriteUid,
+  ]);
+  // Recheck the estimated offscreen position when its DOM measurements arrive.
+  useEffect(() => {
+    if (!windowEnabled || !needsEnsureVisibleRef.current) return;
+    const raf = requestAnimationFrame(ensureSelectedVisible);
+    return () => cancelAnimationFrame(raf);
+  }, [windowEnabled, modelWindow.virtualItems, ensureSelectedVisible]);
+  // morph 生长 / 窗口变化期间尺寸每变一次就复核一次对齐(仅在途标记置位时做事)。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (!needsEnsureVisibleRef.current) return;
+      requestAnimationFrame(ensureSelectedVisible);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ensureSelectedVisible]);
 
   /**
    * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
@@ -1339,7 +1390,8 @@ export function UnifiedModelPanel({
    *   - 选中交给调用方的 onSelectDeviceFavorite(Agent 在那台运行),不经本目录的选中 / 跨引擎链路。
    * `sizer` = 定宽 sizer 里的那一份:只量宽,不接交互、不读用量。
    */
-  const renderDeviceFavoriteRow = (row: UnifiedListRow, sizer: boolean): ReactNode => {
+  type RowNavigationProps = Pick<ComponentProps<typeof UnifiedModelRow>, 'tabIndex' | 'position'>;
+  const renderDeviceFavoriteRow = (row: UnifiedListRow, sizer: boolean, navigation?: RowNavigationProps): ReactNode => {
     const rowDeviceId = row.agentDeviceId!;
     const favorite = row.favorite!;
     const group = remoteSources?.groups.find((candidate) => candidate.deviceId === rowDeviceId);
@@ -1353,6 +1405,7 @@ export function UnifiedModelPanel({
       <UnifiedModelRow
         key={key}
         readable={readableRows}
+        {...navigation}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1431,10 +1484,11 @@ export function UnifiedModelPanel({
    * 多出跨引擎警示行与更宽的行集,面板于是在一次打开内二次撑宽。
    *
    * Rank the full catalog with text metrics and give `w-max` one actual row
-   * and group label. Field panels follow the trigger; All has its own rows.
+   * and group label. A windowed All view needs the probe as well because most
+   * of its rows have no DOM. Field panels follow the trigger.
    */
   const widthSizerActive =
-    !panelWidthFluid && (effectiveRail.kind !== 'all' || query.trim() !== '');
+    !panelWidthFluid && (windowed || effectiveRail.kind !== 'all' || query.trim() !== '');
   const widthSizerSections = useMemo(
     () =>
       widthSizerActive
@@ -1447,9 +1501,10 @@ export function UnifiedModelPanel({
             rail: RAIL_ALL,
             effectiveEngineOf,
             providerOrder,
+            ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
           })
         : [],
-    [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder],
+    [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
   );
   const widthSizerRef = useRef<HTMLDivElement>(null);
   const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
@@ -1526,6 +1581,191 @@ export function UnifiedModelPanel({
   }, [widthMeasure, widthSizerSections, sectionLabel, configOf, priceDisplayOf, configurationEnabled,
     effortLabelOf, selectionPolicy, paymentRequiredLabel, paymentRequiredUnlockLabel, ownCatalog, providerHeading, t]);
 
+  const renderSectionLabel = (section: (typeof sections)[number]) => {
+    const label = sectionLabel(section);
+    const quotaProvider = quotaProviderOf(section);
+    return (
+      <div
+        data-group-label={label}
+        {...(section.group?.type === 'provider'
+          ? { 'data-group-provider': section.group.providerId }
+          : {})}
+        // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
+        className="flex flex-wrap items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]"
+      >
+        <span className="truncate">{label}</span>
+        {quotaProvider && <ModelPoolQuotaSummary providerId={quotaProvider} />}
+      </div>
+    );
+  };
+  const renderOption = (row: UnifiedListRow, navigation?: RowNavigationProps) => {
+    if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false, navigation);
+    const config = withOptimisticConfig(
+      row.anchor,
+      configOf(row.entry, row.favorite ?? row.recent, effectiveRail),
+      optimisticConfig,
+    );
+    const key = anchorKey(row.anchor);
+    const priceDisplay = priceDisplayOf(row.entry, config);
+    /**
+     * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
+     * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
+     * 点星把它存进收藏 / 从收藏里移除。
+     * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
+     * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
+     * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
+     * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
+     */
+    const matchingFavorite = row.recent
+      ? favorites.find((favorite) => {
+          if (favorite.providerId !== row.entry.providerId) return false;
+          if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+          const favoriteConfig = resolveFavoriteRowConfig({
+            entry: row.entry,
+            item: favorite,
+            agentFastModeCapable,
+          });
+          return (
+            favoriteConfig.engine === config.engine &&
+            favoriteConfig.effort === config.effort &&
+            favoriteConfig.fast === config.fast
+          );
+        })
+      : undefined;
+    const recentRow = !!row.recent;
+    // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
+    // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
+    const starredFavorite = row.favorite ?? matchingFavorite;
+    return (
+      <UnifiedModelRow
+        key={key}
+        readable={readableRows}
+        {...navigation}
+        entry={row.entry}
+        anchor={row.anchor}
+        config={config}
+        {...(showsSourceRow
+          ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
+          : {})}
+        sourceNotice={remoteActiveDeviceId
+          ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+          : undefined}
+        selected={isSelectedRow(row.anchor, row.entry)}
+        active={sameAnchor(flyAnchor, row.anchor)}
+        isFavoriteRow={!!starredFavorite}
+        justFavorited={justFavorited === key}
+        {...(priceDisplay ? { priceDisplay } : {})}
+
+        configurationEnabled={configurationEnabled}
+        // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
+        // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
+        // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
+        // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
+        customizable={configurationEnabled && !recentRow}
+        interactionDisabled={rowIsDisabled(row, config)}
+        paymentRequired={row.entry.availability === 'requires_payment'}
+        {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
+        {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
+        {...(onPaymentRequired ? { onPaymentRequired } : {})}
+        effortLabelOf={effortLabelOf}
+        providers={providers}
+        onReveal={recentRow ? noop : revealFlyout}
+        onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
+        onSelect={() =>
+          // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
+          selectRow(row.anchor, config, starredFavorite, row.entry)
+        }
+        onStar={
+          selectionPolicy === 'personalized'
+            ? recentRow
+              ? () =>
+                  matchingFavorite
+                    ? removeFavorite(
+                        {
+                          kind: 'fav',
+                          uid: matchingFavorite.uid,
+                          providerId: matchingFavorite.providerId,
+                          modelId: matchingFavorite.modelId,
+                        },
+                        row.entry,
+                      )
+                    : addFavorite(row.anchor, config)
+              : () =>
+                  row.favorite
+                    ? removeFavorite(row.anchor, row.entry)
+                    : addFavorite(row.anchor, config)
+            : undefined
+        }
+      />
+    );
+  };
+
+  const visibleGroups = new Map<number, typeof modelWindow.virtualItems>();
+  for (const measurement of modelWindow.virtualItems) {
+    const index = modelWindow.items[measurement.index]!.sectionIndex;
+    const group = visibleGroups.get(index);
+    if (group) group.push(measurement);
+    else visibleGroups.set(index, [measurement]);
+  }
+
+  const listPrefix = (
+    <>
+      {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
+      {followSession && (
+        <>
+          <button
+            type="button"
+            disabled={interactionDisabled || actionPending}
+            onClick={() => void runExternal(followSession.onFollow)}
+            role="option"
+            aria-selected={followSession.active}
+            data-follow-session-row
+            {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
+            className={cn(
+              COMPOSER_MENU_ROW,
+              'flex w-full items-center justify-between px-3 py-2',
+              // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
+              followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
+              interactionDisabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
+            {followSession.active && (
+              <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+            )}
+          </button>
+          <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
+        </>
+      )}
+      {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
+      {sessionEngineFilter?.pendingTarget && (
+        <div
+          role="note"
+          data-cross-engine-warning
+          title={t('newChat.modelSelector.unified.crossEngineWarning')}
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]',
+            // 警示行**不参与撑宽**(Chris 2026-08-19:切到「全部」时面板又弹开一截)。
+            // `truncate` 只管画的时候截断,`max-content` 布局(面板是 w-max)算的却是
+            // 全文宽度 —— 这一行因此成了整块面板里最宽的内容。`w-0 min-w-full` 是经典
+            // 手法:宽度基数取 0(对 max-content 贡献 0),再用 min-width:100% 在终局
+            // 吃满已经定下来的可用宽,视觉上仍是整行。
+            'w-0 min-w-full',
+          )}
+        >
+          <TriangleAlert size={12} className="shrink-0" />
+          <span className="min-w-0 break-words">
+            {t('newChat.modelSelector.unified.crossEngineWarning')}
+          </span>
+        </div>
+      )}
+      {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+      {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
+      {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+      {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
+    </>
+  );
+
   const panelContent = (
     <div
       className="flex min-h-0 min-w-0 shrink"
@@ -1560,6 +1800,12 @@ export function UnifiedModelPanel({
           ref={highlightListRef}
           role="listbox"
           aria-label={t('newChat.modelSelector.modelListAria')}
+          tabIndex={windowed ? -1 : undefined}
+          onKeyDown={windowEnabled ? modelWindow.onKeyDown : undefined}
+          onFocusCapture={windowEnabled ? modelWindow.onFocus : undefined}
+          onBlurCapture={windowEnabled ? modelWindow.onBlur : waitingForWindow ? (event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setWindowed(true);
+          } : undefined}
           {...menuPanelAttrs}
           className={cn(
             'relative',
@@ -1573,6 +1819,7 @@ export function UnifiedModelPanel({
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
             // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
             'min-h-0',
+            windowEnabled && '[overflow-anchor:none]',
           )}
           // Body height is independent of filtered results; min-h-0 still permits
           // the popover's viewport constraint to shrink this scroll area.
@@ -1591,59 +1838,7 @@ export function UnifiedModelPanel({
           }}
         >
           <MenuHighlightLayer />
-          {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
-          {followSession && (
-            <>
-              <button
-                type="button"
-                disabled={interactionDisabled || actionPending}
-                onClick={() => void runExternal(followSession.onFollow)}
-                role="option"
-                aria-selected={followSession.active}
-                data-follow-session-row
-                {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
-                className={cn(
-                  COMPOSER_MENU_ROW,
-                  'flex w-full items-center justify-between px-3 py-2',
-                  // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
-                  followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
-                {followSession.active && (
-                  <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
-                )}
-              </button>
-              <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
-            </>
-          )}
-          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
-          {sessionEngineFilter?.pendingTarget && (
-            <div
-              role="note"
-              data-cross-engine-warning
-              title={t('newChat.modelSelector.unified.crossEngineWarning')}
-              className={cn(
-                'flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]',
-                // 警示行**不参与撑宽**(Chris 2026-08-19:切到「全部」时面板又弹开一截)。
-                // `truncate` 只管画的时候截断,`max-content` 布局(面板是 w-max)算的却是
-                // 全文宽度 —— 这一行因此成了整块面板里最宽的内容。`w-0 min-w-full` 是经典
-                // 手法:宽度基数取 0(对 max-content 贡献 0),再用 min-width:100% 在终局
-                // 吃满已经定下来的可用宽,视觉上仍是整行。
-                'w-0 min-w-full',
-              )}
-            >
-              <TriangleAlert size={12} className="shrink-0" />
-              <span className="min-w-0 break-words">
-                {t('newChat.modelSelector.unified.crossEngineWarning')}
-              </span>
-            </div>
-          )}
-          {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
-          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
-          {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
-          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
+          {windowEnabled ? <div ref={modelWindow.prefixRef} className="shrink-0">{listPrefix}</div> : listPrefix}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : effectiveRail.kind === 'plugin-engine' ? (
@@ -1674,131 +1869,45 @@ export function UnifiedModelPanel({
               </div>
             )
           ) : (
-            sections.map((section) => (
-              <div key={section.key} role="group" aria-label={sectionLabel(section)}>
-                <div
-                  data-group-label={sectionLabel(section)}
-                  {...(section.group?.type === 'provider'
-                    ? { 'data-group-provider': section.group.providerId }
-                    : {})}
-                  // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
-                  className={cn(
-                    'flex flex-wrap items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
-                    'pb-1 pt-2',
-                  )}
-                >
-                  <span className="truncate">{sectionLabel(section)}</span>
-                  {quotaProviderOf(section) && <ModelPoolQuotaSummary providerId={quotaProviderOf(section)!}/>}
-
-                </div>
-                {section.rows.map((row) => {
-                  if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
-                  const config = withOptimisticConfig(
-                    row.anchor,
-                    configOf(row.entry, row.favorite ?? row.recent, effectiveRail),
-                    optimisticConfig,
-                  );
-                  const key = anchorKey(row.anchor);
-                  const priceDisplay = priceDisplayOf(row.entry, config);
-                  /**
-                   * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
-                   * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
-                   * 点星把它存进收藏 / 从收藏里移除。
-                   * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
-                   * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
-                   * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
-                   * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
-                   */
-                  const matchingFavorite = row.recent
-                    ? favorites.find((favorite) => {
-                        if (favorite.providerId !== row.entry.providerId) return false;
-                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
-                        const favoriteConfig = resolveFavoriteRowConfig({
-                          entry: row.entry,
-                          item: favorite,
-                          agentFastModeCapable,
-                        });
-                        return (
-                          favoriteConfig.engine === config.engine &&
-                          favoriteConfig.effort === config.effort &&
-                          favoriteConfig.fast === config.fast
-                        );
-                      })
-                    : undefined;
-                  const recentRow = !!row.recent;
-                  // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
-                  // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
-                  const starredFavorite = row.favorite ?? matchingFavorite;
+            windowEnabled ? (
+              <div
+                ref={modelWindow.canvasRef}
+                className="relative w-full shrink-0"
+                style={{ height: modelWindow.virtualizer.getTotalSize() }}
+              >
+                {Array.from(visibleGroups, ([index, items]) => {
+                  const section = sections[index]!;
                   return (
-                    <UnifiedModelRow
-                      key={key}
-                      readable={readableRows}
-                      entry={row.entry}
-                      anchor={row.anchor}
-                      config={config}
-                      {...(showsSourceRow
-                        ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
-                        : {})}
-                      sourceNotice={remoteActiveDeviceId
-                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
-                        : undefined}
-                      selected={isSelectedRow(row.anchor, row.entry)}
-                      active={sameAnchor(flyAnchor, row.anchor)}
-                      isFavoriteRow={!!starredFavorite}
-                      justFavorited={justFavorited === key}
-                      {...(priceDisplay ? { priceDisplay } : {})}
-
-                      configurationEnabled={configurationEnabled}
-                      // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
-                      // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
-                      // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
-                      // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
-                      customizable={configurationEnabled && !recentRow}
-                      interactionDisabled={
-                        interactionDisabled ||
-                        actionPending ||
-                        !!isRouteDisabled?.(
-                          row.entry.providerId,
-                          config.wireModelId ?? row.entry.modelId,
-                          config.agent,
-                        )
-                      }
-                      paymentRequired={row.entry.availability === 'requires_payment'}
-                      {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
-                      {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
-                      {...(onPaymentRequired ? { onPaymentRequired } : {})}
-                      effortLabelOf={effortLabelOf}
-                      providers={providers}
-                      onReveal={recentRow ? noop : revealFlyout}
-                      onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
-                      onSelect={() =>
-                        // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
-                        selectRow(row.anchor, config, starredFavorite, row.entry)
-                      }
-                      onStar={
-                        selectionPolicy === 'personalized'
-                          ? recentRow
-                            ? () =>
-                                matchingFavorite
-                                  ? removeFavorite(
-                                      {
-                                        kind: 'fav',
-                                        uid: matchingFavorite.uid,
-                                        providerId: matchingFavorite.providerId,
-                                        modelId: matchingFavorite.modelId,
-                                      },
-                                      row.entry,
-                                    )
-                                  : addFavorite(row.anchor, config)
-                            : () =>
-                                row.favorite
-                                  ? removeFavorite(row.anchor, row.entry)
-                                  : addFavorite(row.anchor, config)
-                          : undefined
-                      }
-                    />
+                    <div key={section.key} role="group" aria-label={sectionLabel(section)} className="absolute inset-x-0 top-0">
+                      {items.map((measurement) => {
+                        const item = modelWindow.items[measurement.index]!;
+                        return (
+                          <div
+                            key={item.key}
+                            ref={modelWindow.virtualizer.measureElement}
+                            className="absolute inset-x-0"
+                            style={{
+                              top: measurement.start - modelWindow.scrollMargin,
+                              paddingTop: item.row && item.rowIndex > 0 ? 4 : undefined,
+                            }}
+                            data-index={measurement.index}
+                            data-window-key={item.row ? item.key : undefined}
+                          >
+                            {item.row ? renderOption(item.row, {
+                              tabIndex: modelWindow.entryKey === item.key ? 0 : -1,
+                              position: { index: item.rowIndex + 1, total: section.rows.length },
+                            }) : renderSectionLabel(section)}
+                          </div>
+                        );
+                      })}
+                    </div>
                   );
                 })}
+              </div>
+            ) : sections.map((section) => (
+              <div key={section.key} role="group" aria-label={sectionLabel(section)}>
+                {renderSectionLabel(section)}
+                {section.rows.map((row) => renderOption(row))}
               </div>
             ))
           )}

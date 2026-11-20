@@ -14,11 +14,88 @@ export default {
     default: { about: '20 models; open All, then filter OpenAI with the hidden width probe', data: { count: 20 } },
     large: { about: '200 models across two engines', data: { count: 200 } },
     stress: { about: '600 models across two engines', data: { count: 600 } },
+    scale: { about: '2,000 models across two engines', data: { count: 2000 } },
+    keyboard: { about: 'A selected model deep in a long list, keyboard traversal and Chinese search', data: { count: 200, keyboard: true } },
+    threshold: { about: 'Favoriting from an open configuration keeps the anchor when crossing the virtualization threshold', data: { count: 79 } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.evaluate(() => document.fonts.ready);
     const trigger = page.locator('[data-perf-trigger] button').first();
+    if (ui.case === 'keyboard' || ui.case === 'threshold') {
+      const search = page.getByPlaceholder(await ui.t('newChat.modelSelector.search.placeholderAll'));
+      const list = page.getByRole('listbox');
+      const row = (id) => list.locator(`[data-unified-anchor="model::openai::openai-model-${id}"]`);
+      const assertFocused = async (locator) => assert.equal(
+        await locator.evaluate(el => el === document.activeElement), true,
+        `Expected focus on ${locator}`,
+      );
+      await trigger.click();
+      await search.evaluate(el => new Promise(resolve => {
+        if (document.activeElement === el) resolve();
+        else el.addEventListener('focus', resolve, { once: true });
+      }));
+      const config = page.getByTestId('unified-model-config-flyout');
+      if (ui.case === 'threshold') {
+        await row(0).focus();
+        await page.keyboard.press('ArrowLeft');
+        await config.getByRole('button', { name: await ui.t('newChat.modelSelector.unified.addFavorite'), exact: true }).click();
+        await list.locator('[data-unified-anchor^="fav::"]').waitFor();
+        await page.keyboard.press('Escape');
+        await config.waitFor({ state: 'detached' });
+        await assertFocused(row(0));
+        return;
+      }
+      await row(78).waitFor();
+      const alignment = await row(78).evaluate(el => {
+        const list = el.closest('[role="listbox"]').getBoundingClientRect();
+        const row = el.getBoundingClientRect();
+        return ((row.top + row.bottom) / 2 - list.top) / list.height;
+      });
+      assert.ok(Math.abs(alignment - 0.35) < 0.06, `Selected row aligned at ${alignment}`);
+      const openAI = page.getByRole('button', { name: 'OpenAI', exact: true });
+      await openAI.click();
+      const focusedInList = () => list.evaluate(el => el.contains(document.activeElement));
+      for (let i = 0; i < 10 && !(await focusedInList()); i++) {
+        await page.keyboard.press('Tab');
+      }
+      assert.equal(await focusedInList(), true, 'Tab could not enter the model list');
+      await page.keyboard.press('Shift+Tab');
+      assert.equal(await focusedInList(), false, 'Shift+Tab could not leave the model list');
+      await row(78).focus();
+      await page.keyboard.press('Home');
+      await assertFocused(row(0));
+      await page.keyboard.press('End');
+      await assertFocused(row(99));
+      await page.keyboard.press('ArrowUp');
+      await assertFocused(row(98));
+      await page.keyboard.press('Home');
+      await assertFocused(row(0));
+      await page.keyboard.press('ArrowLeft');
+      await config.waitFor();
+      await ui.capture('keyboard-configuration');
+      const flyoutTop = await config.evaluate(el => el.getBoundingClientRect().top);
+      await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await row(99).waitFor();
+      await page.waitForFunction(top => {
+        const flyout = document.querySelector('[data-testid="unified-model-config-flyout"]');
+        return flyout && Math.abs(flyout.getBoundingClientRect().top - top) > 20;
+      }, flyoutTop, { timeout: 2_000 });
+      assert.equal(await config.isVisible(), true, 'Scrolling dismissed the configuration');
+      await page.keyboard.press('Escape');
+      await config.waitFor({ state: 'detached' });
+      await assertFocused(row(0));
+      await search.fill('中文目标');
+      await row(78).waitFor();
+      assert.equal(await list.locator('[data-unified-anchor]').count(), 1);
+      await page.keyboard.press('Home');
+      assert.equal(await search.evaluate(el => el.selectionStart), 0, 'Home left the search field instead of moving its caret');
+      await assertFocused(search);
+      await page.keyboard.press('Escape');
+      await list.waitFor({ state: 'detached' });
+      await assertFocused(trigger);
+      return;
+    }
     if (ui.case.startsWith('groups-')) {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await trigger.click();
@@ -36,13 +113,15 @@ export default {
     await session.send('Performance.enable');
     const metrics = async () => Object.fromEntries((await session.send('Performance.getMetrics')).metrics.map(x => [x.name, x.value]));
     const samples = [];
-    const rounds = process.env.CINDY_MODEL_PERF_OUTPUT ? 14 : 1;
+    const rounds = process.env.CINDY_MODEL_PERF_OUTPUT ? Number(process.env.CINDY_MODEL_PERF_ROUNDS || 14) : 1;
     let shape, allShape;
     const readShape = () => page.evaluate(() => {
       const panel = document.querySelector('[data-morph-side]');
       const sizer = document.querySelector('[data-width-sizer]');
       return { width: panel.getBoundingClientRect().width, height: panel.getBoundingClientRect().height,
-        nodes: panel.querySelectorAll('*').length, sizingNodes: sizer?.querySelectorAll('*').length ?? 0,
+        nodes: panel.querySelectorAll('*').length,
+        mountedRows: panel.querySelectorAll('[role="listbox"] [data-unified-anchor]').length,
+        sizingNodes: sizer?.querySelectorAll('*').length ?? 0,
         sizingRows: sizer?.querySelectorAll('[data-unified-triple]').length ?? 0,
         sizingButtons: sizer?.querySelectorAll('button').length ?? 0 };
     });
@@ -52,17 +131,28 @@ export default {
         const timing = await trigger.evaluate(async el => {
           const start = performance.now();
           el.click();
-          // First rAF with the opening geometry applied, then one frame boundary.
+          // One boundary after the open geometry and the first selectable row mount.
           const visible = await new Promise((resolve, reject) => {
+            let frameMs;
+            let openingFrameQueued = false;
             const tick = () => {
               if (performance.now() - start > 5000) { reject(new Error('Model panel did not open')); return; }
               const panel = document.querySelector('[data-morph-side]');
-              if (panel?.getAttribute('data-state') === 'open') requestAnimationFrame(() => resolve(performance.now() - start));
-              else requestAnimationFrame(tick);
+              if (panel?.getAttribute('data-state') === 'open') {
+                if (!openingFrameQueued) {
+                  openingFrameQueued = true;
+                  requestAnimationFrame(() => { frameMs = performance.now() - start; });
+                }
+                if (panel.querySelector('[role="option"]:not([aria-disabled="true"])')) {
+                  requestAnimationFrame(() => resolve({ frameMs, firstRowFrameMs: performance.now() - start }));
+                  return;
+                }
+              }
+              requestAnimationFrame(tick);
             };
             requestAnimationFrame(tick);
           });
-          return { frameMs: visible };
+          return visible;
         });
         await page.waitForTimeout(280); // Real animation/ResizeObserver settling; opt-in browser benchmark.
         const after = await metrics();
@@ -85,7 +175,12 @@ export default {
           filterLayoutCount: filterAfter.LayoutCount - filterBefore.LayoutCount,
           filterScriptMs: (filterAfter.ScriptDuration - filterBefore.ScriptDuration) * 1000 });
         if (i < rounds - 1) {
-          await trigger.click();
+          samples.at(-1).closeFrameMs = await trigger.evaluate(async el => {
+            const start = performance.now();
+            el.click();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return performance.now() - start;
+          });
           await page.locator('[data-morph-side]').waitFor({ state: 'detached' });
         }
       }
@@ -96,6 +191,8 @@ export default {
       assert.ok(shape.sizingRows <= 1 && shape.sizingNodes < 40,
         `Filtering mounted ${shape.sizingRows} width-probe rows (${shape.sizingNodes} nodes)`);
       assert.equal(shape.sizingButtons, 0, 'Width measurement exposed interactive buttons');
+      assert.ok(allShape.mountedRows <= 24 && shape.mountedRows <= 24,
+        `Mounted ${allShape.mountedRows} All / ${shape.mountedRows} filtered rows for ${ui.data.count} models`);
       await ui.capture('provider-filter');
       const width = shape.width;
       await page.getByRole('button', { name: await ui.t('newChat.modelSelector.unified.railAll'), exact: true }).click();
