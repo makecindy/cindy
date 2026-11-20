@@ -5,7 +5,7 @@
  * 收敛成界面可以放心渲染的结构。
  */
 
-import type { GiftCardAmountLayout } from './giftCardAmount.js';
+import { giftCardAmountLayoutFitsCard, type GiftCardAmountLayout } from './giftCardAmount.js';
 
 export type GiftCardRegion = 'cn' | 'global';
 
@@ -305,7 +305,10 @@ function faceImageUrl(value: unknown): string | null {
   return allowed ? url.href : null;
 }
 
-/** 金额印法必须落在卡面里：起点、基线、字号与可占宽度都在 1200 × 757 之内，颜色是 #RRGGBB。 */
+/**
+ * 金额印法必须落在卡面里：起点、基线、字号与可占宽度都在 1200 × 757 之内，按字号算出的字形上下沿
+ * 也不出卡面（否则金额会被裁掉、界面却以为已经印在卡上），颜色是 #RRGGBB。
+ */
 function faceAmountLayout(value: unknown): GiftCardAmountLayout | null {
   if (!isRecord(value)) return null;
   const { x, baseline, size, maxWidth, color } = value;
@@ -318,7 +321,8 @@ function faceAmountLayout(value: unknown): GiftCardAmountLayout | null {
   ) {
     return null;
   }
-  return { x, baseline, size, maxWidth, color };
+  const layout = { x, baseline, size, maxWidth, color };
+  return giftCardAmountLayoutFitsCard(layout) ? layout : null;
 }
 
 function faceNames(value: unknown): Readonly<Record<string, string>> | null {

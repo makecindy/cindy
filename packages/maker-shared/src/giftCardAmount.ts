@@ -97,6 +97,38 @@ export function bundledGiftCardAmountLayout(faceCode: string): GiftCardAmountLay
 }
 
 export const GIFT_CARD_VIEW_BOX = '0 0 1200 757';
+const CARD_WIDTH = 1200;
+const CARD_HEIGHT = 757;
+
+/**
+ * 金额字形在纵向占的范围（字体单位，基线为 0、向上为负）：取全部轮廓点（含二次曲线控制点）的
+ * 最高与最低 y。轮廓只用绝对坐标的 M / L / Q / Z，坐标成对出现，每对的第二个数是 y。
+ */
+const GLYPH_EXTENT = Object.values(GLYPHS).reduce(
+  (extent, glyph) => {
+    const numbers = glyph.d.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    for (let index = 1; index < numbers.length; index += 2) {
+      extent.top = Math.min(extent.top, numbers[index]);
+      extent.bottom = Math.max(extent.bottom, numbers[index]);
+    }
+    return extent;
+  },
+  { top: 0, bottom: 0 },
+);
+
+/**
+ * 按这个印法印任何金额都不会超出卡面：横向从 x 起最多占 maxWidth（再长整体缩小），纵向按字号算出
+ * 字形的上沿与下沿（缩小只会更矮）。超出时金额会被底图边缘裁掉。
+ */
+export function giftCardAmountLayoutFitsCard(layout: GiftCardAmountLayout): boolean {
+  const scale = layout.size / UNITS_PER_EM;
+  return (
+    layout.x >= 0 &&
+    layout.x + layout.maxWidth <= CARD_WIDTH &&
+    layout.baseline + GLYPH_EXTENT.top * scale >= 0 &&
+    layout.baseline + GLYPH_EXTENT.bottom * scale <= CARD_HEIGHT
+  );
+}
 
 export type GiftCardAmountArt = {
   fill: string;

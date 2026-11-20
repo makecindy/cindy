@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { giftCardAmountArt, giftCardAmountArtForLayout, giftCardAmountLabel } from '../giftCardAmount';
+import {
+  bundledGiftCardAmountLayout,
+  giftCardAmountArt,
+  giftCardAmountArtForLayout,
+  giftCardAmountLabel,
+  giftCardAmountLayoutFitsCard,
+} from '../giftCardAmount';
 
 describe('gift card amount on the face', () => {
   it('writes the amount with the currency symbol and without trailing zeros', () => {
@@ -45,6 +51,19 @@ describe('gift card amount on the face', () => {
     expect(art?.fill).toBe('#112233');
     expect(art?.transform.startsWith('translate(600 300) ')).toBe(true);
     expect(art!.width).toBeLessThanOrEqual(200);
+  });
+
+  // 评审发现（PR #11688）：只分别检查基线与字号时，基线 100、字号 228 也算合法，金额上半截会被裁掉。
+  // 纵向按字形实际上下沿判断；内置四张卡面都在卡面内。
+  it('tells whether a layout keeps every glyph on the card', () => {
+    const layout = { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' };
+    expect(giftCardAmountLayoutFitsCard(layout)).toBe(true);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, baseline: 100 })).toBe(false);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, baseline: 757 })).toBe(false);
+    expect(giftCardAmountLayoutFitsCard({ ...layout, x: 800, maxWidth: 401 })).toBe(false);
+    for (const face of ['cindy', 'cat', 'bell', 'leap']) {
+      expect(giftCardAmountLayoutFitsCard(bundledGiftCardAmountLayout(face)!)).toBe(true);
+    }
   });
 
   it('declines faces and characters it cannot draw', () => {

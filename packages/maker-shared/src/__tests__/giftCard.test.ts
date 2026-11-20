@@ -206,6 +206,9 @@ describe('gift card server responses', () => {
       { ...snow, amount: { ...snow.amount, baseline: 0 } },
       { ...snow, amount: { ...snow.amount, size: Number.NaN } },
       { ...snow, amount: { ...snow.amount, x: 800, maxWidth: 401 } },
+      // 基线与字号各自都在卡面内，但字形上沿超出卡面顶部 / 下沿（$ 的竖线）超出底部：金额会被裁掉。
+      { ...snow, amount: { ...snow.amount, baseline: 100 } },
+      { ...snow, amount: { ...snow.amount, baseline: 757 } },
       { ...snow, amount: null },
     ]) {
       const parsed = read(broken);
