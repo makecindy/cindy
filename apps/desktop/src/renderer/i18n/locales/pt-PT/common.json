@@ -4393,7 +4393,10 @@
       },
       "antigravity": {
         "configure": "Ligar manualmente",
-        "setupHint": "Use o Antigravity CLI 1.5.9 verificado para ligar a sua subscrição do Google AI. A Cindy usa apenas a quota da subscrição.",
+        "install": "Instalar e ligar",
+        "update": "Atualizar o Antigravity CLI",
+        "installing": "A instalar…",
+        "setupHint": "A Cindy descarrega e verifica o Antigravity CLI oficial e usa apenas a quota da subscrição do Google AI.",
         "activeAccount": "Conta Google ativa",
         "existing": "Conta local predefinida",
         "removeAccount": "Remover conta",
@@ -4404,7 +4407,10 @@
         "refreshQuota": "Atualizar quota",
         "legacyQuota": "Adicione uma conta Google para ver a respetiva quota na Cindy.",
         "noQuota": "A quota do Google está temporariamente indisponível.",
-        "failed": "Não foi possível concluir a operação da conta Google."
+        "failed": "Não foi possível concluir a operação da conta Google.",
+        "installConfirmTitle": "Instalar o Antigravity CLI?",
+        "installConfirmDescription": "O Antigravity CLI ainda não está instalado neste computador. Transferir e instalar a versão mais recente e continuar para o início de sessão Google?",
+        "installConfirmButton": "Instalar e iniciar sessão"
       },
       "genericOAuth": {
         "subtitle": "Conta de subscrição",
@@ -11158,16 +11164,16 @@
     "close": "Fechar",
     "list": {
       "folders": {
-        "create": "Nova pasta",
-        "rename": "Mudar o nome da pasta",
-        "dissolve": "Dissolver pasta",
-        "name": "Nome da pasta",
-        "move": "Mover para uma pasta",
-        "unfiled": "Fora das pastas",
+        "create": "Novo departamento",
+        "rename": "Renomear departamento",
+        "dissolve": "Dissolver departamento",
+        "name": "Nome do departamento",
+        "move": "Mover para departamento",
+        "unfiled": "Remover do departamento",
         "up": "Mover para cima",
         "down": "Mover para baixo",
         "actions": "Ações para {{name}}",
-        "saveFailed": "Não foi possível guardar as pastas."
+        "saveFailed": "Não foi possível guardar os departamentos."
       },
       "createMenu": "Criar",
       "createTeammate": "Novo amigo",

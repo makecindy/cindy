@@ -1,50 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
-import { AntigravityAgent, antigravityNativeResumeId, isAntigravitySubscriptionModel } from '@cindy/maker-core/agents/antigravity';
+import { AntigravityAgent, antigravityNativeResumeId, isAntigravitySubscriptionModel, probeAntigravityRuntime } from '@cindy/maker-core/agents/antigravity';
 import { spawnAcp } from '@cindy/maker-core/agents/antigravity-transport';
 import type { AgentDeps } from '@cindy/maker-core';
 import { antigravitySubscriptionArgs, assertAntigravityGenerationAllowed, assertAntigravitySubscriptionSettings } from './antigravity-policy.js';
 import { ANTIGRAVITY_ACCOUNT_BUSY, type AntigravityAccountsView } from '../../shared/antigravityAccounts.js';
+import type { SubscriptionCodexUsageBucket } from '../../shared/subscriptionAccounts.js';
 import { readAntigravityToken, createAntigravityUsageReader } from './antigravity-usage.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 import { antigravityConnected, setAntigravityState } from './antigravity-state.js';
 
-/** Official manifest-verified 1.5.9 darwin-arm64 payload; defaults below are version-bound. */
-export const PINNED_ANTIGRAVITY_SHA256 = 'fad3628ad91fe8613a72f074a1c5fde7cd816517788a5b9be96703f7d256741a';
+import { assertVerifiedAntigravityBinary, supportsAntigravityRuntime } from './antigravity-runtime.js';
 
-type FileStat = fs.BigIntStats;
-const MAX_VERIFIED_BINARY_CACHE = 16;
-const verifiedBinaryCache = new Map<string, string>();
-
-function fileVersion(stat: FileStat): string {
-  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
-}
-
-/** Verify once per unchanged file. Never cache a digest for a replaced or changing file. */
-export function assertVerifiedAntigravityBinary(binaryPath: string): void {
-  const stat = fs.statSync(binaryPath, { bigint: true });
-  if (!stat.isFile()) throw new Error('ANTIGRAVITY_UNVERIFIED_RUNTIME');
-  const version = fileVersion(stat);
-  if (verifiedBinaryCache.get(binaryPath) === version) return;
-  verifiedBinaryCache.delete(binaryPath);
-  const fd = fs.openSync(binaryPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
-  try {
-    const opened = fs.fstatSync(fd, { bigint: true });
-    if (!opened.isFile() || fileVersion(opened) !== version
-      || createHash('sha256').update(fs.readFileSync(fd)).digest('hex') !== PINNED_ANTIGRAVITY_SHA256
-      || fileVersion(fs.fstatSync(fd, { bigint: true })) !== version
-      || fileVersion(fs.statSync(binaryPath, { bigint: true })) !== version) {
-      throw new Error('ANTIGRAVITY_UNVERIFIED_RUNTIME');
-    }
-  } finally { fs.closeSync(fd); }
-  if (verifiedBinaryCache.size >= MAX_VERIFIED_BINARY_CACHE) {
-    const oldest = verifiedBinaryCache.keys().next().value;
-    if (oldest !== undefined) verifiedBinaryCache.delete(oldest);
-  }
-  verifiedBinaryCache.set(binaryPath, version);
-}
+import { downloadAntigravityRelease, fetchAntigravityRelease, managedAntigravityPlatform } from './antigravity-download.js';
 
 const LEGACY_PROFILE = 'default';
 const PROFILE_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -56,12 +27,23 @@ interface AntigravityAccounts {
   assertActiveAccount(id: string): void;
   read(): AntigravityAccountsView;
   configure(binaryPath: string): Promise<AntigravityAccountsView>;
+  install(): Promise<AntigravityAccountsView>;
   add(): Promise<AntigravityAccountsView>;
   select(id: string): Promise<AntigravityAccountsView>;
   remove(id: string): Promise<AntigravityAccountsView>;
   usage(): Promise<AntigravityAccountsView>;
 }
 let currentAccounts: AntigravityAccounts | null = null;
+const quotaChangeListeners = new Set<() => void>();
+export function onAntigravityQuotaChanged(listener: () => void): () => void {
+  quotaChangeListeners.add(listener);
+  return () => { quotaChangeListeners.delete(listener); };
+}
+function notifyAntigravityQuotaChanged(): void {
+  for (const listener of [...quotaChangeListeners]) {
+    try { listener(); } catch { /* ignore listener failure */ }
+  }
+}
 export function getAntigravityAccounts(): AntigravityAccounts | null {
   return currentAccounts;
 }
@@ -82,7 +64,7 @@ function createAntigravityAgent(
 ): AntigravityAgent | null {
   currentAccounts = null;
   setAntigravityState(null);
-  if (process.platform !== 'darwin' || process.arch !== 'arm64') return null;
+  if (!supportsAntigravityRuntime()) return null;
 
   const owner = getActiveAppSession().dataOwnerId;
   const fence = activeOwnerScopeKey();
@@ -186,6 +168,7 @@ function createAntigravityAgent(
 
   let version = 0;
   let changingAccount = false;
+  let lastUsage: { id: string; version: number; buckets: SubscriptionCodexUsageBucket[] } | null = null;
   const assertAccountIdle = () => {
     if (changingAccount) throw new Error(ANTIGRAVITY_ACCOUNT_BUSY);
   };
@@ -309,6 +292,8 @@ function createAntigravityAgent(
       assertOwner();
       const admitted = models.filter(m => isAntigravitySubscriptionModel(m.id));
       setAntigravityState({ isCurrent: isOwner, connected: true, models: admitted, tier: tier && { ...tier } });
+      notifyAntigravityQuotaChanged();
+      void currentAccounts?.usage().catch(() => undefined);
     },
   });
 
@@ -316,27 +301,34 @@ function createAntigravityAgent(
     const config = readConnection();
     const active = activeId(config);
     let configured = false;
-    if (config.enabled === true && active && typeof config.binaryPath === 'string' && path.isAbsolute(config.binaryPath)) {
+    if (config.enabled === true && typeof config.binaryPath === 'string' && path.isAbsolute(config.binaryPath)) {
       try { assertVerifiedAntigravityBinary(config.binaryPath); configured = true; } catch { /* Offer manual configuration. */ }
     }
+    const connected = configured && active !== null && !disconnected(config, active) && antigravityConnected();
+    const cachedUsage = connected && active !== null && lastUsage && lastUsage.id === active && lastUsage.version === version
+      ? lastUsage.buckets
+      : undefined;
     return {
       configured,
-      connected: configured && active !== null && !disconnected(config, active) && antigravityConnected(),
+      connected,
       activeId: active,
       accounts: profileIds(config).map(id => {
         const identity = id === LEGACY_PROFILE ? undefined : getToken(id)?.identity?.trim();
         const expected = profileIdentity(config, id);
         return { id, identity: !expected || identityDigest(identity) === expected ? identity : undefined };
       }),
+      ...(cachedUsage !== undefined ? { usage: cachedUsage } : {}),
     };
   };
   const quotaReads = new Set<AbortController>();
   const changeBinding = (next: Connection) => {
     writeConnection(next);
     for (const request of quotaReads) request.abort();
+    lastUsage = null;
     version += 1;
     agent.resetConnection();
     clearState();
+    notifyAntigravityQuotaChanged();
   };
   const mutate = async (run: () => Promise<void>) => {
     assertOwner();
@@ -355,7 +347,7 @@ function createAntigravityAgent(
   };
   const refreshSelection = async () => {
     const view = read();
-    if (!view.configured) return view;
+    if (!view.configured || !view.activeId) return view;
     const selected = getBinding();
     await agent.getAuthState();
     assertCurrentBinding(selected);
@@ -393,7 +385,40 @@ function createAntigravityAgent(
     fs.renameSync(directory, temporary);
     try { commit(); }
     catch (error) { fs.renameSync(temporary, directory); throw error; }
-    await fs.promises.rm(temporary, { recursive: true });
+    await fs.promises.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  };
+  const configureRuntime = async (binaryPath: string, managedRelease?: string): Promise<void> => {
+    const binary = fs.realpathSync(binaryPath);
+    const fingerprint = assertVerifiedAntigravityBinary(binary);
+    const assertSameBinary = () => {
+      if (assertVerifiedAntigravityBinary(binary) !== fingerprint) throw new Error('ANTIGRAVITY_RUNTIME_CHANGED');
+    };
+    const probeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-agy-probe-'));
+    try {
+      assertOwner();
+      assertSameBinary();
+      await probeAntigravityRuntime(spawnAcp(binary, antigravitySubscriptionArgs(probeDir), probeDir, {
+        isolatedHome: probeDir,
+        profileStorage: true,
+      }), probeDir);
+    } finally {
+      await fs.promises.rm(probeDir, { recursive: true, force: true });
+    }
+    assertSameBinary();
+    const config = readConnection();
+    const previous = activeId(config);
+    await quiesce(previous, true);
+    assertSameBinary();
+    const id = previous ?? randomUUID();
+    const profiles = profileIds(config);
+    changeBinding({
+      ...config, binaryPath: binary, enabled: true, activeProfile: id, managedRelease,
+      managedFingerprint: managedRelease ? fingerprint : undefined,
+      // Legacy configurations retain their explicit generation choice.
+      generationMode: config.generationMode ?? (profiles.length === 0 ? 'subscription-only' : undefined),
+      profiles: profiles.includes(id) ? profiles : [...profiles, id],
+      ...(profiles.length === 0 ? { disconnectedProfiles: [id] } : {}),
+    });
   };
   const readUsage = createAntigravityUsageReader(outboundFetch);
   currentAccounts = {
@@ -402,34 +427,63 @@ function createAntigravityAgent(
       if (getBinding().id !== id) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
     },
     async configure(binaryPath) {
+      await mutate(() => configureRuntime(binaryPath));
+      return refreshSelection();
+    },
+    async install() {
       await mutate(async () => {
-        const binary = fs.realpathSync(binaryPath);
-        assertVerifiedAntigravityBinary(binary);
-        const config = readConnection();
-        const previous = activeId(config);
-        if (previous && config.enabled === true && config.binaryPath === binary) return;
-        await quiesce(previous, true);
-        const id = previous ?? randomUUID();
-        const profiles = profileIds(config);
-        changeBinding({
-          ...config, binaryPath: binary, enabled: true, activeProfile: id,
-          // Legacy configurations retain their explicit generation choice.
-          generationMode: config.generationMode ?? (profiles.length === 0 ? 'subscription-only' : undefined),
-          profiles: profiles.includes(id) ? profiles : [...profiles, id],
-          ...(profiles.length === 0 ? { disconnectedProfiles: [id] } : {}),
-        });
+        const controller = new AbortController();
+        const unsubscribe = onAppSessionInvalidated(() => controller.abort());
+        let stage: string | undefined;
+        let activated = false;
+        try {
+          const platform = managedAntigravityPlatform();
+          const release = await fetchAntigravityRelease(outboundFetch, platform, controller.signal);
+          assertOwner();
+          const config = readConnection();
+          const managedRoot = path.join(root, 'managed-runtimes', 'antigravity');
+          let verifiedExisting: string | undefined;
+          if (config.enabled === true && config.managedRelease === release.sha512 && typeof config.binaryPath === 'string') {
+            try {
+              ownerDirectory(managedRoot);
+              const managedPath = fs.realpathSync(managedRoot);
+              if (path.dirname(path.dirname(config.binaryPath)) === managedPath) {
+                ownerDirectory(path.dirname(config.binaryPath));
+                if (assertVerifiedAntigravityBinary(config.binaryPath) === config.managedFingerprint) verifiedExisting = config.binaryPath;
+              }
+            } catch { /* Repair a missing or changed managed executable. */ }
+          }
+          if (verifiedExisting) {
+            if (!activeId(config)) await configureRuntime(verifiedExisting, release.sha512);
+            return;
+          }
+          ownerDirectory(managedRoot, true);
+          stage = await fs.promises.mkdtemp(path.join(managedRoot, release.version + '-' + platform + '-'));
+          const binary = await downloadAntigravityRelease(outboundFetch, release, platform, stage, controller.signal);
+          assertOwner();
+          ownerDirectory(stage);
+          await configureRuntime(binary, release.sha512);
+          activated = true;
+        } finally {
+          unsubscribe();
+          if (stage && !activated) await fs.promises.rm(stage, { recursive: true, force: true });
+        }
       });
-      return read();
+      return refreshSelection();
     },
     async add() {
       await mutate(async () => {
-        const { config, id: current } = getBinding();
+        const config = readConnection();
+        if (config.enabled !== true || typeof config.binaryPath !== 'string' || !path.isAbsolute(config.binaryPath)) {
+          throw new Error('ANTIGRAVITY_BINARY_UNAVAILABLE');
+        }
+        const current = activeId(config);
         const profiles = profileIds(config);
-        if (emptyProfile(config, current)) return;
+        if (current && emptyProfile(config, current)) return;
         const available = profiles.find(id => emptyProfile(config, id));
         if (!available && profiles.length >= MAX_PROFILES) throw new Error('ANTIGRAVITY_ACCOUNT_LIMIT');
         const id = available ?? randomUUID();
-        await quiesce(current, true);
+        if (current) await quiesce(current, true);
         changeBinding(setDisconnected({ ...config, profiles: available ? profiles : [...profiles, id], activeProfile: id }, id, true));
       });
       return read();
@@ -457,7 +511,7 @@ function createAntigravityAgent(
         const fallback = remaining.find(profile => !disconnected(config, profile) &&
           (profile === LEGACY_PROFILE || !!getToken(profile)?.accessToken)) ?? remaining[0] ?? null;
         const next = setDisconnected({
-          ...config, profiles: remaining, activeProfile: (wasActive ? fallback : current) ?? undefined,
+          ...config, profiles: remaining, activeProfile: (wasActive ? fallback : current) ?? null,
         }, id, id === LEGACY_PROFILE);
         if (next.profileIdentities && typeof next.profileIdentities === 'object' && !Array.isArray(next.profileIdentities)) {
           const identities = { ...next.profileIdentities } as Record<string, unknown>;
@@ -466,7 +520,10 @@ function createAntigravityAgent(
         }
         await removeProfileDirectory(id, config, () => {
           if (wasActive) changeBinding(next);
-          else writeConnection(next);
+          else {
+            writeConnection(next);
+            notifyAntigravityQuotaChanged();
+          }
         });
       });
       return wasActive ? refreshSelection() : read();
@@ -478,7 +535,10 @@ function createAntigravityAgent(
       // The legacy CLI reads its own OS Keychain entry. Quota requests use only
       // the CLI-owned file belonging to the selected owner-local profile.
       const token = privateTokenPath(id);
-      if (!token || id === LEGACY_PROFILE || disconnected(config, id)) return { ...read(), usage: [] };
+      if (!token || id === LEGACY_PROFILE || disconnected(config, id)) {
+        lastUsage = null;
+        return { ...read(), usage: [] };
+      }
       const request = new AbortController();
       quotaReads.add(request);
       const release = onAppSessionInvalidated(() => request.abort());
@@ -489,6 +549,9 @@ function createAntigravityAgent(
           if (disconnected(current, id)) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
           assertProfileIdentity(current, id);
         });
+        const previous = lastUsage && lastUsage.id === id && lastUsage.version === binding.version ? lastUsage.buckets : null;
+        lastUsage = { id, version: binding.version, buckets: usage };
+        if (JSON.stringify(previous) !== JSON.stringify(usage)) notifyAntigravityQuotaChanged();
         return { ...read(), usage };
       } finally {
         release();

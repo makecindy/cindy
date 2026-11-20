@@ -5,7 +5,7 @@ export const ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID = 'google-antigravity-subscrip
 export const ANTIGRAVITY_ACCOUNT_BUSY = 'ANTIGRAVITY_ACCOUNT_BUSY';
 
 export type AntigravityAccountCommand =
-  | { action: 'read' | 'configure' | 'add' | 'usage' }
+  | { action: 'read' | 'install' | 'configure' | 'add' | 'usage' }
   | { action: 'select' | 'remove'; id: string };
 
 export interface AntigravityOwnerScope {

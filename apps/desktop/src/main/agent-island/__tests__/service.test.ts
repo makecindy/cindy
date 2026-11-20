@@ -3811,6 +3811,27 @@ describe('AgentIslandService native publishing', () => {
     expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
   });
 
+  it('accepts Antigravity completion only after the replacement dispatch boundary', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound: () => true },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'antigravity-replacement', agentKind: 'antigravity' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+    const done = { type: 'done', source: 'antigravity', data: { status: 'completed' } } as const;
+
+    service.handleAgentEvent(meta, done);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.phase).toBe('running');
+    service.handleUserPromptDispatching(meta.sessionId);
+    service.handleAgentEvent(meta, done);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.phase).toBe('completed');
+  });
+
   it('accepts replacement-turn interaction requests before its running status arrives', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

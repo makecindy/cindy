@@ -1,4 +1,4 @@
-import { AcpClient, AcpError, record, type AcpRecord, type AcpTransport } from './client.js';
+import { AcpClient, AcpError, record, type AcpRecord, type AcpResponse, type AcpTransport } from './client.js';
 import type { Effort } from '../../types/common.js';
 import { isAntigravitySubscriptionModel } from './model-policy.js';
 export interface AcpSubscriptionOptions {
@@ -31,7 +31,6 @@ export class AcpSubscriptionSession {
   private busy = false;
   private ready = false;
   private cancelEpoch = 0;
-  private promptSent = false;
   private permissions = new Set<AbortController>();
   private legacyModels: AcpRecord[] = [];
   private nativeDefaults = new Map<string, Effort>();
@@ -213,7 +212,11 @@ export class AcpSubscriptionSession {
       }
     } finally { await restore(); }
   }
-  async dispatchPrompt(content: string | AcpRecord[], signal?: AbortSignal): Promise<{ completion: Promise<AcpRecord> }> {
+  async dispatchPrompt(
+    content: string | AcpRecord[],
+    signal?: AbortSignal,
+    lifecycle?: { sent(): void; response(outcome: AcpResponse): void },
+  ): Promise<{ completion: Promise<AcpRecord> }> {
     if (!this.ready || !this.authenticated || !this.sessionId || this.busy) throw new AcpError(-32000);
     const epoch = this.cancelEpoch;
     this.busy = true;
@@ -223,9 +226,18 @@ export class AcpSubscriptionSession {
       signal?.throwIfAborted();
       if (!this.ready || epoch !== this.cancelEpoch) throw new Error('ANTIGRAVITY_CANCELLED_BEFORE_DISPATCH');
       let sent = false;
-      const completion = this.client.request('session/prompt', { sessionId: this.sessionId, prompt: typeof content === 'string' ? [{ type: 'text', text: content }] : content }, 60 * 60_000, () => { sent = true; this.promptSent = true; });
+      const completion = this.client.request(
+        'session/prompt',
+        { sessionId: this.sessionId, prompt: typeof content === 'string' ? [{ type: 'text', text: content }] : content },
+        60 * 60_000,
+        () => { sent = true; lifecycle?.sent(); },
+        outcome => {
+          // The next frame in the same stdout chunk can already be background work.
+          lifecycle?.response(outcome);
+        },
+      );
       if (!sent) await completion; // A transport rejection is not an accepted provider turn.
-      return { completion: completion.finally(() => { this.busy = false; this.promptSent = false; }) };
+      return { completion: completion.finally(() => { this.busy = false; }) };
     } catch (error) { this.busy = false; throw error; }
   }
   async prompt(text: string, signal?: AbortSignal): Promise<AcpRecord> {

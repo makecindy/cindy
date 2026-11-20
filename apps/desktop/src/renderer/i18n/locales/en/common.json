@@ -4337,7 +4337,10 @@
       },
       "antigravity": {
         "configure": "Connect manually",
-        "setupHint": "To connect your Google AI subscription, use a verified Antigravity CLI 1.5.9. Cindy uses subscription quota only.",
+        "install": "Install and connect",
+        "update": "Update Antigravity CLI",
+        "installing": "Installing…",
+        "setupHint": "Cindy downloads and verifies the official Antigravity CLI. Google AI requests use subscription quota only.",
         "activeAccount": "Active Google account",
         "existing": "Local default account",
         "removeAccount": "Remove account",
@@ -4348,7 +4351,10 @@
         "refreshQuota": "Refresh quota",
         "legacyQuota": "Add a Google account to view its quota in Cindy.",
         "noQuota": "Google quota is currently unavailable.",
-        "failed": "Could not complete the Google account operation."
+        "failed": "Could not complete the Google account operation.",
+        "installConfirmTitle": "Install Antigravity CLI?",
+        "installConfirmDescription": "Antigravity CLI is not installed on this computer yet. Download and install the latest version now, then continue to Google sign-in?",
+        "installConfirmButton": "Install & Sign in"
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -11074,16 +11080,16 @@
     "close": "Close",
     "list": {
       "folders": {
-        "create": "New folder",
-        "rename": "Rename folder",
-        "dissolve": "Dissolve folder",
-        "name": "Folder name",
-        "move": "Move to folder",
-        "unfiled": "Outside folders",
+        "create": "New department",
+        "rename": "Rename department",
+        "dissolve": "Dissolve department",
+        "name": "Department name",
+        "move": "Move to department",
+        "unfiled": "Remove from department",
         "up": "Move up",
         "down": "Move down",
         "actions": "Actions for {{name}}",
-        "saveFailed": "Could not save your folders."
+        "saveFailed": "Couldn’t save departments."
       },
       "createMenu": "Create",
       "createTeammate": "New buddy",

@@ -13,13 +13,20 @@ function record(raw: unknown): Record<string, unknown> {
 export function readAntigravityToken(tokenPath: string) {
   try {
     // The CLI owns this file. Never follow a substituted symlink or copy its credentials.
-    const fd = fs.openSync(tokenPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const initial = fs.lstatSync(tokenPath, { bigint: true });
+    if (!initial.isFile()) return null;
+    const fd = fs.openSync(tokenPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
     try {
       const stat = fs.fstatSync(fd, { bigint: true });
-      if (!stat.isFile() || stat.nlink !== 1n || stat.uid !== BigInt(process.getuid!()) || stat.size > MAX_TOKEN_FILE_BYTES) return null;
+      const uid = process.getuid?.();
+      if (!stat.isFile() || stat.nlink !== 1n || (uid !== undefined && stat.uid !== BigInt(uid))
+        || stat.dev !== initial.dev || stat.ino !== initial.ino || stat.size > MAX_TOKEN_FILE_BYTES) return null;
       const bytes = Buffer.alloc(MAX_TOKEN_FILE_BYTES + 1);
       const read = fs.readSync(fd, bytes);
       if (read > MAX_TOKEN_FILE_BYTES) return null;
+      const current = fs.lstatSync(tokenPath, { bigint: true });
+      if (!current.isFile() || current.dev !== stat.dev || current.ino !== stat.ino
+        || current.mtimeNs !== stat.mtimeNs || current.ctimeNs !== stat.ctimeNs || current.size !== stat.size) return null;
       const value = record(JSON.parse(bytes.toString('utf8', 0, read)));
       const token = record(value.token);
       return {

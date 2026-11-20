@@ -4393,7 +4393,10 @@
       },
       "antigravity": {
         "configure": "Connecter manuellement",
-        "setupHint": "Utilisez une version vérifiée d’Antigravity CLI 1.5.9 pour connecter votre abonnement Google AI. Cindy utilise uniquement le quota de l’abonnement.",
+        "install": "Installer et connecter",
+        "update": "Mettre à jour Antigravity CLI",
+        "installing": "Installation…",
+        "setupHint": "Cindy télécharge et vérifie la CLI officielle d’Antigravity et utilise uniquement le quota de l’abonnement Google AI.",
         "activeAccount": "Compte Google actif",
         "existing": "Compte local par défaut",
         "removeAccount": "Supprimer le compte",
@@ -4404,7 +4407,10 @@
         "refreshQuota": "Actualiser le quota",
         "legacyQuota": "Ajoutez un compte Google pour afficher son quota dans Cindy.",
         "noQuota": "Le quota Google est temporairement indisponible.",
-        "failed": "Impossible de terminer l’opération sur le compte Google."
+        "failed": "Impossible de terminer l’opération sur le compte Google.",
+        "installConfirmTitle": "Installer Antigravity CLI ?",
+        "installConfirmDescription": "Antigravity CLI n’est pas encore installé sur cet ordinateur. Télécharger et installer la dernière version puis ouvrir la connexion Google ?",
+        "installConfirmButton": "Installer et se connecter"
       },
       "genericOAuth": {
         "subtitle": "Compte d'abonnement",
@@ -11158,16 +11164,16 @@
     "close": "Fermer",
     "list": {
       "folders": {
-        "create": "Nouveau dossier",
-        "rename": "Renommer le dossier",
-        "dissolve": "Dissoudre le dossier",
-        "name": "Nom du dossier",
-        "move": "Déplacer vers un dossier",
-        "unfiled": "Hors des dossiers",
+        "create": "Nouveau département",
+        "rename": "Renommer le département",
+        "dissolve": "Dissoudre le département",
+        "name": "Nom du département",
+        "move": "Déplacer vers le département",
+        "unfiled": "Retirer du département",
         "up": "Déplacer vers le haut",
         "down": "Déplacer vers le bas",
         "actions": "Actions pour {{name}}",
-        "saveFailed": "Impossible d’enregistrer les dossiers."
+        "saveFailed": "Impossible d’enregistrer les départements."
       },
       "createMenu": "Créer",
       "createTeammate": "Nouvel ami",

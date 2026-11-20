@@ -1,6 +1,6 @@
-/** Defaults are verified against the official Antigravity CLI 1.5.9 settings schema.
+/** Defaults follow the official Antigravity CLI settings schema.
  * The CLI removes keys equal to defaults when saving. Reject overrides and bad types.
- * This policy is used only after the host has verified the pinned executable digest.
+ * The host admits only a signature-verified CLI that speaks personal OAuth ACP.
  */
 export function assertAntigravitySubscriptionSettings(settings: Record<string, unknown>, user: Record<string, unknown> = {}): void {
   const safeDefaults = (value: Record<string, unknown>) =>
@@ -15,7 +15,7 @@ export function assertAntigravitySubscriptionSettings(settings: Record<string, u
 }
 
 /** Generation is opt-in for this connection. Native credits policy is supplied
- * independently through the pinned CLI's session settings on every launch. */
+ * independently through the CLI's session settings on every launch. */
 export function assertAntigravityGenerationAllowed(config: Record<string, unknown>): void {
   if (config.authDisconnected === true) throw new Error('Google 订阅连接已断开，请先在 Cindy 中重新连接。');
   if (config.generationMode !== 'subscription-only') throw new Error('Google 生成已暂停，本次没有发送请求。');

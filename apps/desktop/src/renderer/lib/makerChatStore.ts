@@ -11066,7 +11066,7 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'antigravity') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11153,11 +11153,17 @@ function syncActiveTurnsFromMain(): void {
   const listActive = window.electronAPI?.maker?.listActive;
   if (typeof listActive !== 'function') return;
 
+  const owner = getDataOwnerGeneration();
+  const statusAtRequest = new Map([...sessions].map(([id, session]) => [id, session.agentStatus]));
+  const incarnationsAtRequest = new Map(sessionIncarnations);
   void listActive()
     .then((items) => {
-      if (!Array.isArray(items)) return;
+      if (getDataOwnerGeneration() !== owner || !Array.isArray(items)) return;
       const active = items.filter(isActiveSessionSnapshot);
       for (const item of active) {
+        if (item.agentKind === 'antigravity' &&
+          (sessions.get(item.sessionId)?.agentStatus !== statusAtRequest.get(item.sessionId)
+            || sessionIncarnations.get(item.sessionId) !== incarnationsAtRequest.get(item.sessionId))) continue;
         setState(item.sessionId, (s) => {
           const agentKindPatch = s.agentKind === item.agentKind ? null : item.agentKind;
           if (!item.isTurnRunning) {
@@ -11177,7 +11183,9 @@ function syncActiveTurnsFromMain(): void {
             errorRetryText: null,
             agentStatus: {
               ...s.agentStatus,
-              status: s.agentStatus.status || 'Running',
+              status: item.agentKind === 'antigravity' && !s.agentStatus.isRunning
+                ? 'Thinking...'
+                : s.agentStatus.status || 'Running',
               isRunning: true,
               // Reload recovery of a turn this window never saw start. Stamp a
               // fresh clock; the previous turn's leftover would make this

@@ -466,6 +466,7 @@ describe('provider weekly quota identity and windows', () => {
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
+    expect(providerWeeklyQuotaSource(provider('google-antigravity-subscription'))).toBe('antigravity');
     expect(providerWeeklyQuotaSource(provider('opencode-go', {
       source: 'user',
       auth: { method: 'apiKey' },

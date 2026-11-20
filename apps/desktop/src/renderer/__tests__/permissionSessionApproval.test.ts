@@ -179,6 +179,31 @@ describe('permission interaction IPC', () => {
     expect(snap.agentStatus.isRunning).toBe(true);
   });
 
+  it('rehydrates a running Antigravity turn as Thinking after reload', async () => {
+    listActive.mockResolvedValueOnce([{ sessionId: SESSION_ID, agentKind: 'antigravity', isTurnRunning: true }]);
+    makerChatStore.initGlobalListeners();
+    makerChatStore.syncActiveTurnsFromMain();
+    await Promise.resolve();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      agentKind: 'antigravity',
+      isStreaming: true,
+      agentStatus: { isRunning: true, status: 'Thinking...' },
+    });
+  });
+
+  it('keeps an Antigravity turn terminal when an earlier active snapshot arrives late', async () => {
+    const pending = deferred<unknown[]>();
+    listActive.mockReturnValueOnce(pending.promise);
+    makerChatStore.initGlobalListeners();
+    makerChatStore.syncActiveTurnsFromMain();
+    listeners.event?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'antigravity', data: {} } });
+    pending.resolve([{ sessionId: SESSION_ID, agentKind: 'antigravity', isTurnRunning: true }]);
+    await Promise.resolve();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+  });
+
   it('preserves title, description, and suggestions from main to pendingPermission', () => {
     const suggestions = [
       {

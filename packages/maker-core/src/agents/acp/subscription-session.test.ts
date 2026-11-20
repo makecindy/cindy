@@ -6,21 +6,23 @@
  * Tier: unit (in-memory protocol peer; no process, credentials or network).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { AntigravityAgent } from './antigravity-agent.js';
+import { pathToFileURL } from 'node:url';
+import { AntigravityAgent, probeAntigravityRuntime } from './antigravity-agent.js';
 import { createConsoleLogger } from '../../interfaces/logger.js';
 import { TASK_SYSTEM_PROMPT } from '../base-agent.js';
 import { AcpSubscriptionSession } from './subscription-session.js';
 import { personalSubscriptionEnv } from './transport.js';
 import type { AcpTransport, AcpRecord } from './client.js';
-function setup(authFails = false) {
+function setup(authFails = false, holdPrompt = false, version?: string, protocolVersion = 1) {
   const sent: AcpRecord[] = []; const received = new Set<(line: string) => void>();
   const transport: AcpTransport = {
     onLine: fn => { received.add(fn); return () => { received.delete(fn); }; }, onClose: () => () => {}, close: async () => {},
     write(line) {
       const req = JSON.parse(line); sent.push(req);
       if (req.id === undefined) return;
+      if (holdPrompt && req.method === 'session/prompt') return;
       let result: unknown = {};
-      if (req.method === 'initialize') result = { protocolVersion: 1, agentInfo: { name: 'Antigravity ACP Server' }, agentCapabilities: { loadSession: true, _meta: { antigravity: { systemPrompt: { append: true } } } }, authMethods: [{ id: 'oauth-personal' }] };
+      if (req.method === 'initialize') result = { protocolVersion, agentInfo: { name: 'Antigravity ACP Server', version }, agentCapabilities: { loadSession: true, _meta: { antigravity: { systemPrompt: { append: true } } } }, authMethods: [{ id: 'oauth-personal' }] };
       if (req.method === 'session/new') result = { sessionId: 'native-1', _meta: { antigravity: { tier: { id: 'test-pro', name: 'Google AI Pro' } } }, models: { currentModelId: 'gemini-test', availableModels: [{ modelId: 'gemini-test', name: 'Gemini' }] } };
       if (req.method === 'session/load') result = { models: { currentModelId: 'gemini-test', availableModels: [{ modelId: 'gemini-test', name: 'Gemini' }] } };
       if (req.method === 'authenticate') result = { _meta: { antigravity: { tier: { id: 'test-pro', name: 'Google AI Pro', upgradeUri: 'not-forwarded' } } } };
@@ -37,6 +39,18 @@ function setup(authFails = false) {
   return { session, transport, sent, policy, permission, updates, inbound: (msg: AcpRecord) => { for (const fn of received) fn(JSON.stringify({ jsonrpc: '2.0', ...msg })); } };
 }
 describe('Antigravity subscription ACP', () => {
+  it.each(['1.5.9', '1.5.10', '1.5.13'])('probes compatible CLI %s before using any credentials', async (version) => {
+    const h = setup(false, false, version);
+    await h.session.close();
+    await probeAntigravityRuntime(h.transport, '/workspace');
+    expect(h.sent.map(request => request.method)).toEqual(['initialize']);
+  });
+  it('rejects an incompatible ACP protocol before authenticating', async () => {
+    const h = setup(false, false, '2.0.0', 2);
+    await h.session.close();
+    await expect(probeAntigravityRuntime(h.transport, '/workspace')).rejects.toThrow();
+    expect(h.sent.map(request => request.method)).toEqual(['initialize']);
+  });
   it('authenticates only personal OAuth; failure blocks creation and hides auth error contents', async () => {
     const h = setup(true); await h.session.initialize();
     await expect(h.session.authenticate()).rejects.toThrow('Google 登录已失效');
@@ -181,7 +195,7 @@ describe('AntigravityAgent native Cindy contract', () => {
     const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'auto' });
     await handle.send({ type: 'user', content: [{ type: 'text', text: 'Read this file' }, { type: 'file', path: '/workspace/input.txt', mimeType: 'text/plain' }] });
     expect(h.sent.find(x => x.method === 'session/prompt')?.params).toMatchObject({ prompt: [
-      { type: 'text', text: 'Read this file' }, { type: 'resource_link', uri: 'file:///workspace/input.txt', name: 'input.txt', mimeType: 'text/plain' },
+      { type: 'text', text: 'Read this file' }, { type: 'resource_link', uri: pathToFileURL('/workspace/input.txt').href, name: 'input.txt', mimeType: 'text/plain' },
     ] });
     await handle.close();
   });
@@ -201,9 +215,120 @@ describe('AntigravityAgent native Cindy contract', () => {
     expect(h.sent.find(x => x.method === 'session/new')?.params).toMatchObject({ _meta: { antigravity: { systemPrompt: { append: 'Cindy task instructions' } } } });
     const iterator = handle.events()[Symbol.asyncIterator]();
     await handle.send({ type: 'user', content: 'hello' });
+    expect((await iterator.next()).value).toMatchObject({
+      type: 'status', source: 'antigravity', data: { isRunning: true, status: 'Thinking...' },
+    });
     expect((await iterator.next()).value).toMatchObject({ type: 'done', source: 'antigravity' });
     expect(h.sent.find(x => x.method === 'session/prompt')?.params).toMatchObject({ prompt: [{ type: 'text', text: 'hello' }] });
     await handle.close();
+  });
+  it('delivers and finalizes a wake immediately after the prompt reply without a second send', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const h = setup(false, true);
+    await h.session.close();
+    const { agent } = makeAgent(h);
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
+    try {
+      const events = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'start the background tool' });
+      expect((await events.next()).value).toMatchObject({ type: 'status', data: { isRunning: true } });
+      const update = (data: AcpRecord) => h.inbound({ method: 'session/update', params: { sessionId: 'native-1', update: data } });
+      update({ sessionUpdate: 'tool_call', toolCallId: 'background-tool', title: 'background work' });
+      const prompt = h.sent.find(x => x.method === 'session/prompt')!;
+      h.inbound({ id: prompt.id, result: { stopReason: 'end_turn' } });
+      // Same stdout batch as the reply, before promise continuations run.
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'background-tool', status: 'completed' });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Work finished.' } });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_use' });
+      expect((await events.next()).value).toMatchObject({ type: 'done', data: { status: 'completed' } });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result_full', turnScope: 'background' });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result', turnScope: 'background' });
+      expect((await events.next()).value).toMatchObject({ type: 'text', turnScope: 'background', data: { text: 'Work finished.', isFinal: false } });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await events.next()).value).toMatchObject({ type: 'text', turnScope: 'background', data: { text: 'Work finished.', isFinal: true, isFullText: true } });
+      expect(h.sent.filter(x => x.method === 'session/prompt')).toHaveLength(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.abort();
+      expect(h.sent.at(-1)).toMatchObject({ method: 'session/cancel', params: { sessionId: 'native-1' } });
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+  it('keeps a previous turn tool result background while a new turn is running', async () => {
+    const h = setup(false, true);
+    await h.session.close();
+    const { agent } = makeAgent(h);
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
+    const update = (data: AcpRecord) => h.inbound({ method: 'session/update', params: { sessionId: 'native-1', update: data } });
+    try {
+      const events = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'start a tool' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      update({ sessionUpdate: 'tool_call', toolCallId: 'earlier-tool' });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_use' });
+      h.inbound({ id: h.sent.at(-1)?.id, result: { stopReason: 'end_turn' } });
+      expect((await events.next()).value).toMatchObject({ type: 'done' });
+
+      await handle.send({ type: 'user', content: 'next prompt' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'earlier-tool', status: 'completed' });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result_full', turnScope: 'background' });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result', turnScope: 'background' });
+      expect(handle.isTurnRunning?.()).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+  it.each(['cancelled', 'error'] as const)('settles a dispatched prompt on %s', async (outcome) => {
+    const h = setup(false, true);
+    await h.session.close();
+    const { agent } = makeAgent(h);
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
+    try {
+      const events = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'hello' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      const prompt = h.sent.find(x => x.method === 'session/prompt')!;
+      h.inbound({ method: 'session/update', params: { sessionId: 'native-1', update: { sessionUpdate: 'tool_call', toolCallId: 'unfinished' } } });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_use' });
+      if (outcome === 'cancelled') {
+        await handle.abort();
+        expect(h.sent).toContainEqual(expect.objectContaining({ method: 'session/cancel' }));
+        h.inbound({ id: prompt.id, result: { stopReason: 'cancelled' } });
+      } else {
+        h.inbound({ id: prompt.id, error: { code: -32603 } });
+      }
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result_full', data: { isError: true, toolUseId: 'unfinished' } });
+      expect((await events.next()).value).toMatchObject({ type: 'tool_result', data: { summary: 'failed' } });
+      expect((await events.next()).value).toMatchObject(outcome === 'cancelled'
+        ? { type: 'done', data: { cancelled: true } }
+        : { type: 'error', data: { isTerminal: true } });
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+  it('retires an unresponsive transport when the CLI ignores cancellation', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const h = setup(false, true);
+    await h.session.close();
+    const close = vi.spyOn(h.transport, 'close');
+    const { agent } = makeAgent(h);
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test', permissionMode: 'ask' });
+    try {
+      const events = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'hello' });
+      expect((await events.next()).value).toMatchObject({ type: 'status' });
+      await handle.abort();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(close).toHaveBeenCalledOnce();
+      expect((await events.next()).value).toMatchObject({ type: 'done', data: { cancelled: true } });
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
   });
   it('starts a V2 teammate with its host identity and project context, while rejecting a classic isolated profile', async () => {
     const h = setup(); await h.session.close(); const { agent } = makeAgent(h);

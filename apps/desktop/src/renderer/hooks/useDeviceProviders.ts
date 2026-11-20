@@ -90,7 +90,7 @@ function isProviderModel(value: unknown): boolean {
     typeof value.name === 'string' &&
     typeof value.contextWindow === 'number' &&
     Number.isFinite(value.contextWindow) &&
-    value.contextWindow > 0 &&
+    (value.contextWindow > 0 || (value.contextWindow === 0 && value.contextWindowVerified === false)) &&
     Array.isArray(efforts) &&
     efforts.every((effort) => typeof effort === 'string') &&
     (defaultEffort === undefined || defaultEffort === null ||

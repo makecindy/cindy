@@ -201,7 +201,7 @@ function runForgeMake({ platform, arch, region, version, versionless, noSign, we
     // 版本无关 / 开源打包(versionless):配置文件是 gitignore 的、默认 checkout 里不存在,
     // 允许缺失 ⇒ 注入空目标、功能整体关闭,拉仓即可打包(2026-08-04 review P1)。
     // 注意 allowMissing 只放宽「文件缺失」;文件在但内容损坏两种模式都仍然硬失败。
-    ...desktopLogUploadBuildEnv({ authRegion: region, allowMissing: versionless }),
+    ...desktopLogUploadBuildEnv({ authRegion: region, allowMissing: versionless || noSign }),
     // forge.config.ts 的 NSIS appId / AUMID 优先读这个(与 VITE_ 同源,双保险)。
     CINDY_AUTH_REGION: region,
     // forge.config.ts 注入 packagerConfig.appVersion;版本无关时为占位 0.0.0。

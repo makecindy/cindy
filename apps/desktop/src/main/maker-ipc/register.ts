@@ -17869,14 +17869,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           requestedAgentDeviceId ??= null;
         }
         if (executionDeviceId) {
-          if (agent === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
+          const remoteAgentDeviceId = requestedAgentDeviceId && requestedAgentDeviceId !== executionDeviceId
+            ? requestedAgentDeviceId
+            : null;
+          if (agent === 'antigravity' && remoteAgentDeviceId) throw new Error('ANTIGRAVITY_LOCAL_ONLY');
           if (!orcaRemoteWorkersForHost) throw new Error('[HOST_NOT_READY] Worker service is not ready');
           const result = await orcaRemoteWorkersForHost.readModels(executionDeviceId, {
-            ...(agent ? { agent } : {}), agentDeviceId: requestedAgentDeviceId ?? null,
+            ...(agent ? { agent } : {}), agentDeviceId: remoteAgentDeviceId,
           });
           return { ok: true, ...result };
         }
-        const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
+        const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi', 'antigravity'];
         // SSH Lead 的 Worker 在 SSH 主机上运行 Agent，不能放到别的电脑：不列可选位置。
         const sshLead = callerSessionId ? Boolean(await readSessionRemoteHostIdCached(callerSessionId)) : false;
         // 不指定位置时列 Lead 所在位置(Lead 的 Agent 在另一台电脑运行就列那台；Lead 归在供应商组里就列组那一项
@@ -17905,7 +17908,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             agentDeviceId,
             ...(locations ? { locations } : {}),
             ...Object.fromEntries(agents.map((a) => [
-              a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
+              a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : a === 'antigravity' ? 'antigravity' : 'claude_code',
               deviceAvailableModels(views, a),
             ])),
           };
@@ -17922,14 +17925,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         > = {};
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
-          // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
-          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
-          result[key] = localAvailableModels(
+          // key 必须区分 pi 与 antigravity,否则会被塞进 claude_code 键与 CC 模型混淆。
+          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : a === 'antigravity' ? 'antigravity' : 'claude_code';
+          const models = localAvailableModels(
             caps.availableModels,
             providerRouting.availability[a] ?? [],
             providerRouting.resolveDefaultProviderIdForModel,
             a,
           );
+          if (a !== 'antigravity' || agent === 'antigravity' || models.length > 0) {
+            result[key] = models;
+          }
         }
         // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机运行：不按 agent 过滤时列本机此刻提供的引擎；
         // SSH Lead 的 Worker 在 SSH 主机上运行，不列。

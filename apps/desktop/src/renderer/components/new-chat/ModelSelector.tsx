@@ -1264,6 +1264,7 @@ export function resolveRemoteModelListStatus({
   cc,
   codex,
   pi,
+  antigravity,
   providers,
 }: {
   deviceId?: string;
@@ -1271,11 +1272,12 @@ export function resolveRemoteModelListStatus({
   cc: RemoteCapabilityLoadState;
   codex: RemoteCapabilityLoadState;
   pi: RemoteCapabilityLoadState;
+  antigravity?: RemoteCapabilityLoadState;
   providers: RemoteProviderLoadState;
 }): RemoteModelListStatus {
   if (!deviceId) return 'idle';
   const required = agentKind
-    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'antigravity' ? (antigravity ?? pi) : pi]
     : [cc, codex, pi];
   if (required.some((state) => !!state.error)) return 'error';
   if (providers.error && !providers.unsupported) return 'error';
@@ -1543,6 +1545,7 @@ function ModelSelectorContentView({
     cc,
     codex,
     pi,
+    antigravity,
     providers: remoteProviders,
   });
   // 分享来的供应商：分享者电脑上的 Cindy 太旧，只答得了模型目录、答不了 Agent 能力
@@ -2131,6 +2134,7 @@ function ModelSelectorContentView({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceAntigravityModels: antigravity.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -2141,6 +2145,7 @@ function ModelSelectorContentView({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      antigravity.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -4626,13 +4631,20 @@ export function ModelSelector({
     cc,
     codex,
     pi,
+    antigravity,
     providers: remoteProviders,
   });
   const remoteModelLoading = providersOverrideState?.status === 'loading' ||
     (sshCodexCurrent && sshCodex?.status === 'loading') || (!!deviceId && remoteModelListStatus === 'loading');
   const localModelLoading = !deviceId && !providersOverride && !sshCodexCurrent && !localProviders.loadFailed && (
     localProviders.loading ||
-    (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
+    (agentKind === 'codex'
+      ? codex.loading
+      : agentKind === 'pi'
+        ? pi.loading
+        : agentKind === 'antigravity'
+          ? antigravity.loading
+          : cc.loading)
   );
   const visibleModels = useMemo(
     () =>
@@ -4643,6 +4655,7 @@ export function ModelSelector({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceAntigravityModels: antigravity.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -4653,6 +4666,7 @@ export function ModelSelector({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      antigravity.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -4667,7 +4681,13 @@ export function ModelSelector({
     : visibleModels.find((m) => m.id === modelId);
   // Keep directory refresh errors in the picker when the task model is known
   // and the selected engine still reports its capabilities.
-  const agentCapabilities = agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi;
+  const agentCapabilities = agentKind === 'claude-code'
+    ? cc
+    : agentKind === 'codex'
+      ? codex
+      : agentKind === 'antigravity'
+        ? antigravity
+        : pi;
   const confirmedRemoteModel = actualRoute && agentIdentity?.state === 'current' && !!currentModel &&
     agentCapabilities.capabilities != null && !agentCapabilities.error &&
     !isProviderAccessDeniedError(remoteProviders.error);
@@ -4686,7 +4706,10 @@ export function ModelSelector({
   // 只限新建草稿(!actualRoute):已建会话的模型身份由目标目录决定,目标目录里没有这个
   // 模型时不能用本机同名模型的名字顶替 —— 路由与候选仍指向远端目标,名字却来自本机,
   // 会显示成一个「看着正常但其实不对」的模型。
-  const localFallbackName = !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
+  // 例外:跨设备查看另一台电脑的 Antigravity/Gemini 任务时,对端模型清单动态来自 ACP,
+  // 若对端目录暂缺该模型但已确认是 antigravity 任务,可回退展示本机目录同名显示名或
+  // 已存储模型的可读名,避免落入「模型信息暂不可用」。
+  const localFallbackName = deviceId && remoteModelListStatus === 'ready' && agentKind && (!actualRoute || agentKind === 'antigravity')
     ? localProviders.providers
         .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
         .find((name) => name !== undefined)
@@ -4721,7 +4744,9 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
-      (preserveDraftModel && modelId ? displayNameOfStoredModelId(modelId) : null) ??
+      ((preserveDraftModel || (!!deviceId && agentKind === 'antigravity')) && modelId
+        ? displayNameOfStoredModelId(modelId)
+        : null) ??
       (unconfirmedList ? modelId : null) ??
       (modelId
         ? t(localModelLoading

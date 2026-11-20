@@ -2662,24 +2662,26 @@ function CCAgentSessionContent({
     () => hasTurnResponse(messages, startingInputClientId), [messages, startingInputClientId],
   );
   const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
+  const watchesStarting = Boolean(statusAgentDeviceId)
+    || (displayAgentKind === 'antigravity' && !remoteDeviceId && !isRemoteSession);
   // A retained error belongs to the previous turn until running clears it.
   // Only a newly received terminal event may settle this send's preparation.
   const settledStartingSessions = useMemo(() => new Set(
-    statusAgentDeviceId && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
+    watchesStarting && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
       || queuePaused || credentialSwitchWait
       || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
       ? [sessionId] : [],
-  ), [statusAgentDeviceId, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
+  ), [watchesStarting, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
     queuePaused, credentialSwitchWait,
     pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
   const startingSessions = useStartingSessionIds(settledStartingSessions);
-  const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
+  const waitingForStart = Boolean(watchesStarting && sessionId
     && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
+    : waitingForStart ? (statusAgentDeviceId ? 'Waiting for remote response' : 'Thinking...') : remoteResponsePendingStatus(
         agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
         messages,
       );
@@ -6094,7 +6096,7 @@ function CCAgentSessionContent({
 
   const composerRuntimeVisible =
     !pendingPlanReview &&
-    (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+    (agentStatus.isRunning || waitingForStart || backgroundTasksActive || runningWorkflow !== null);
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6372,13 +6374,13 @@ function CCAgentSessionContent({
                   endedAt={session?.id === sessionId ? session?.lastTurnEndedAt ?? null : null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  preparing={waitingRemoteStart}
-                  tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
-                  outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
-                  generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
-                  generationReliable={!waitingRemoteStart && (agentStatus.generationReliable ?? true)}
-                  tokenSpeed={waitingRemoteStart ? undefined : agentStatus.tokenSpeed}
-                  startedAt={waitingRemoteStart ? null : agentStatus.startedAt}
+                  preparing={waitingForStart}
+                  tokenUsage={waitingForStart ? 0 : agentStatus.tokenUsage}
+                  outputTokens={waitingForStart ? 0 : agentStatus.outputTokens ?? 0}
+                  generationDurationMs={waitingForStart ? 0 : agentStatus.generationDurationMs ?? 0}
+                  generationReliable={!waitingForStart && (agentStatus.generationReliable ?? true)}
+                  tokenSpeed={waitingForStart ? undefined : agentStatus.tokenSpeed}
+                  startedAt={waitingForStart ? null : agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}

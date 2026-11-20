@@ -75,6 +75,7 @@ import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { useAntigravityAccountsCache } from '@/hooks/useAntigravityUsage';
 import { ANTIGRAVITY_ACCOUNT_BUSY, ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID, type AntigravityAccountsView, type AntigravityAccountCommand } from '../../../shared/antigravityAccounts';
 import { quotaWindowLabel } from '../status/usageCardModel';
 import { toast } from '@/lib/toast';
@@ -1541,39 +1542,38 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
-  const [view, setView] = useState<{ owner: ReturnType<typeof getDataOwnerGeneration>; value: AntigravityAccountsView }>();
   const [failure, setFailure] = useState<'failed' | 'accountBusy'>();
-  const [pending, setPending] = useState<'login' | 'change' | null>(null);
+  const [pending, setPending] = useState<'login' | 'install' | 'change' | null>(null);
   const pendingRef = useRef(false);
   const mounted = useRef(false);
   const loginOwner = useRef<string>(undefined);
   const readSequence = useRef(0);
   const api = window.electronAPI.antigravityAccounts;
   const { onStateChanged, cancelLogin, triggerLogin, logout } = window.electronAPI.maker.auth;
-  const accounts = view && isDataOwnerGenerationCurrent(view.owner) ? view.value : undefined;
+  const { accounts, usageLoaded, refresh, updateView } = useAntigravityAccountsCache(Boolean(api), {
+    fetchUsage: provider.connected,
+  });
   const connected = accounts?.connected ?? provider.connected;
   const active = accounts?.accounts.find(account => account.id === accounts.activeId);
   const text = (key: string) => t(`settings.providers.antigravity.${key}`);
   const accountName = (account: AntigravityAccountsView['accounts'][number], index: number) =>
     account.identity || (account.id === 'default' ? text('existing') : t('settings.providers.antigravity.account', { number: index + 1 }));
-  const read = useCallback(async (action: 'read' | 'usage', cancelled: () => boolean = () => false) => {
+  const read = useCallback(async (action: 'read' | 'usage', cancelled: () => boolean = () => false, force = false) => {
     const owner = getDataOwnerGeneration();
     const sequence = ++readSequence.current;
     const current = () => sequence === readSequence.current && !cancelled() && isDataOwnerGenerationCurrent(owner);
     if (!api || owner.dataOwnerId !== dataOwnerId) return;
     try {
-      const value = await api({ action }, { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation });
-      if (current()) { setView({ owner, value }); }
+      await refresh(action, { force });
     } catch { if (current()) setFailure('failed'); }
-  }, [api, dataOwnerId]);
+  }, [api, dataOwnerId, refresh]);
   useEffect(() => {
     let cancelled = false;
-    if (api) void read(provider.connected ? 'usage' : 'read', () => cancelled);
     const unsubscribe = onStateChanged?.(state => {
-      if (state.agentKind === 'antigravity' && api) void read(state.authenticated ? 'usage' : 'read', () => cancelled);
+      if (state.agentKind === 'antigravity' && api) void read(state.authenticated ? 'usage' : 'read', () => cancelled, true);
     });
     return () => { cancelled = true; unsubscribe?.(); };
-  }, [api, onStateChanged, provider.connected, read]);
+  }, [api, onStateChanged, read]);
 
   useEffect(() => {
     mounted.current = true;
@@ -1587,11 +1587,23 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
   const run = async (command: AntigravityAccountCommand | 'login' | 'disconnect') => {
     const owner = getDataOwnerGeneration();
     if (!api || pendingRef.current || owner.dataOwnerId !== dataOwnerId || !accounts) return;
+    if (command === 'login' && !accounts.configured) {
+      const confirmed = await confirm({
+        title: text('installConfirmTitle'),
+        description: text('installConfirmDescription'),
+        confirmText: text('installConfirmButton'),
+        cancelText: t('common.cancel'),
+      });
+      if (!confirmed || !mounted.current || !isDataOwnerGenerationCurrent(owner)) return;
+      command = { action: 'install' };
+    } else if (command === 'login' && accounts.configured && !accounts.activeId) {
+      command = { action: 'add' };
+    }
     pendingRef.current = true;
     readSequence.current += 1;
     const scope = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
     const current = () => mounted.current && isDataOwnerGenerationCurrent(owner);
-    setPending(command === 'login' ? 'login' : 'change');
+    setPending(command === 'login' ? 'login' : typeof command === 'object' && command.action === 'install' ? 'install' : 'change');
     setFailure(undefined);
     try {
       let accountToLogin = command === 'login' ? accounts.activeId : null;
@@ -1609,8 +1621,9 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
         }
         const value = await api(command, scope);
         if (!current()) return;
-        setView({ owner, value });
-        if (command.action === 'add' || (command.action === 'configure' && value.configured)) accountToLogin = value.activeId;
+        updateView(owner, value, { usageLoaded: command.action === 'usage' ? true : undefined });
+        if (command.action === 'add' || ((command.action === 'configure' || command.action === 'install')
+          && value.configured && !value.connected && value.activeId)) accountToLogin = value.activeId;
       }
       if (!current()) return;
       if (accountToLogin) {
@@ -1621,16 +1634,16 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
         if (!state.authenticated && !['login_cancelled', 'auth_mutation_superseded'].includes(state.errorReason ?? '')) {
           throw new Error('AUTHENTICATION_REQUIRED');
         }
-        if (current()) void read(state.authenticated ? 'usage' : 'read');
+        if (current()) void read(state.authenticated ? 'usage' : 'read', () => false, true);
       } else if (typeof command === 'object' && (command.action === 'select' || command.action === 'remove')) {
-        void read('usage');
+        void read('usage', () => false, true);
       } else if (current() && (typeof command !== 'object' || command.action !== 'usage')) {
-        await read('read');
+        await read('read', () => false, true);
       }
     } catch (error) {
       if (current()) {
         setFailure(error instanceof Error && error.message.includes(ANTIGRAVITY_ACCOUNT_BUSY) ? 'accountBusy' : 'failed');
-        void read('read');
+        void read('read', () => false, true);
       }
     } finally {
       loginOwner.current = undefined;
@@ -1645,19 +1658,23 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
     status={{ kind: connected ? 'connected' : 'neutral' }}
     primaryAction={api && (accounts || pending) ? {
       label: pending === 'login' ? t('settings.providers.button.cancel')
-        : !accounts?.configured ? text('configure')
-          : connected ? t('settings.providers.button.disconnect') : t('settings.providers.button.authorize'),
-      disabled: pending === 'change',
+        : pending === 'install' ? text('installing')
+          : connected ? t('settings.providers.button.disconnect') : t('subscriptionAccounts.login'),
+      disabled: pending === 'change' || pending === 'install',
       onClick: () => {
         if (pending === 'login') {
           const id = loginOwner.current;
           if (id) void cancelLogin('antigravity', { ownerId: id, releaseOwner: true }).catch(() => { setFailure('failed'); });
-        } else void run(!accounts?.configured ? { action: 'configure' } : connected ? 'disconnect' : 'login');
+        } else void run(connected ? 'disconnect' : 'login');
       },
     } : undefined}>
     {api && <section className="flex flex-col gap-3 border-t border-[var(--border-default)] px-4 py-3">
+      {accounts && !accounts.configured && <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" size="sm" disabled={pending !== null}
+          onClick={() => void run({ action: 'configure' })}>{text('configure')}</Button>
+      </div>}
       {accounts && active ? <>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           <div className="min-w-0 grow">
             <Select data-settings-search-action="Switch the active Google subscription account" label={text('activeAccount')} width="full" size="compact" truncateOptions value={active.id} disabled={pending !== null || !accounts.configured}
               options={accounts.accounts.map((account, index) => ({ value: account.id, label: accountName(account, index) }))}
@@ -1666,20 +1683,9 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
           <Button data-settings-search-action="Add a Google subscription account" variant="secondary" size="sm" disabled={pending !== null || !accounts.configured} onClick={() => void run({ action: 'add' })}>
             <Plus size={14} />{t('subscriptionAccounts.add')}
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button data-settings-search-action="Remove a Google subscription account" variant="secondary" size="sm" disabled={pending !== null}>
-                <Trash2 size={14} />{text('removeAccount')}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {accounts.accounts.map((account, index) => (
-                <DropdownMenuItem key={account.id} onSelect={() => void run({ action: 'remove', id: account.id })}>
-                  {accountName(account, index)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button data-settings-search-action="Remove a Google subscription account" variant="secondary" size="sm" disabled={pending !== null} onClick={() => void run({ action: 'remove', id: active.id })}>
+            <Trash2 size={14} />{text('removeAccount')}
+          </Button>
           {connected && active.id !== 'default' && <Button data-settings-search-action="Refresh the active Google account quota" variant="secondary" size="sm" disabled={pending !== null}
             onClick={() => void run({ action: 'usage' })}>{text('refreshQuota')}</Button>}
         </div>
@@ -1695,13 +1701,15 @@ function AntigravitySubscriptionHeader({ provider, onChanged, children }: { prov
               }];
             }),
           }} />
-        )) : <p className="text-12 text-[var(--text-secondary)]">
-          {active.id === 'default' ? text('legacyQuota') : text('noQuota')}
-        </p>)}
+        )) : active.id === 'default' ? <p className="text-12 text-[var(--text-secondary)]">
+          {text('legacyQuota')}
+        </p> : usageLoaded ? <p className="text-12 text-[var(--text-secondary)]">
+          {text('noQuota')}
+        </p> : null)}
       </> : accounts && <p className="text-13 text-[var(--text-secondary)]">{text('setupHint')}</p>}
       {failure && <div className="flex items-center gap-2">
         <p role="alert" className="text-13 text-[var(--error-fg)]">{text(failure)}</p>
-        {!accounts && <Button data-settings-search-action="Retry reading Google subscription accounts" variant="secondary" size="sm" onClick={() => { setFailure(undefined); void read('read'); }}>{t('commonUi.retry')}</Button>}
+        {!accounts && <Button data-settings-search-action="Retry reading Google subscription accounts" variant="secondary" size="sm" onClick={() => { setFailure(undefined); void read('read', () => false, true); }}>{t('commonUi.retry')}</Button>}
       </div>}
     </section>}
     {children}

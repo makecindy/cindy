@@ -1,5 +1,5 @@
-import { app, dialog, ipcMain } from 'electron';
-import fs from 'node:fs';
+import { dialog, ipcMain } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 import { ANTIGRAVITY_ACCOUNTS_CHANNEL, ANTIGRAVITY_ACCOUNT_BUSY } from '../../shared/antigravityAccounts.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -23,18 +23,17 @@ export function registerAntigravityAccountsIpc(): void {
       if (command.action === 'read') return accounts.read();
       if (command.action === 'usage') return await accounts.usage();
       const result = await (async () => {
+        if (command.action === 'install') return accounts.install();
         if (command.action === 'configure') {
-          // The existing managed download is preferred. Other machines can select
-          // an already installed copy; configure verifies the exact pinned digest.
-          const managed = path.join(app.getPath('userData'), 'managed-runtimes', 'antigravity', '1.5.9-darwin-arm64', 'antigravity');
-          if (fs.existsSync(managed)) {
-            try { return await accounts.configure(managed); }
-            catch (error) {
-              if (error instanceof Error && error.message === ANTIGRAVITY_ACCOUNT_BUSY) throw error;
-              // A valid existing copy can be selected below.
-            }
-          }
-          const picked = await dialog.showOpenDialog({ properties: ['openFile'] });
+          const windows = process.platform === 'win32';
+          const defaultPath = windows && process.env.LOCALAPPDATA
+            ? path.join(process.env.LOCALAPPDATA, 'agy', 'bin')
+            : path.join(os.homedir(), '.local', 'bin');
+          const picked = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            defaultPath,
+            ...(windows ? { filters: [{ name: 'Antigravity CLI', extensions: ['exe'] }] } : {}),
+          });
           accounts.assertOwner();
           if (picked.canceled || !picked.filePaths[0]) return accounts.read();
           return accounts.configure(picked.filePaths[0]);

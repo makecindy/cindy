@@ -4337,7 +4337,10 @@
       },
       "antigravity": {
         "configure": "Manuell verbinden",
-        "setupHint": "Verbinde dein Google-AI-Abo mit einer geprüften Version von Antigravity CLI 1.5.9. Cindy verwendet nur das Kontingent des Abos.",
+        "install": "Installieren und verbinden",
+        "update": "Antigravity CLI aktualisieren",
+        "installing": "Wird installiert…",
+        "setupHint": "Cindy lädt die offizielle Antigravity CLI herunter und prüft sie. Es gilt ausschließlich das Kontingent des Google-AI-Abos.",
         "activeAccount": "Aktives Google-Konto",
         "existing": "Lokales Standardkonto",
         "removeAccount": "Konto entfernen",
@@ -4348,7 +4351,10 @@
         "refreshQuota": "Kontingent aktualisieren",
         "legacyQuota": "Füge ein Google-Konto hinzu, um sein Kontingent in Cindy zu sehen.",
         "noQuota": "Das Google-Kontingent ist derzeit nicht verfügbar.",
-        "failed": "Der Vorgang für das Google-Konto konnte nicht abgeschlossen werden."
+        "failed": "Der Vorgang für das Google-Konto konnte nicht abgeschlossen werden.",
+        "installConfirmTitle": "Antigravity CLI installieren?",
+        "installConfirmDescription": "Antigravity CLI ist auf diesem Computer noch nicht installiert. Jetzt die neueste Version herunterladen, installieren und mit Google anmelden?",
+        "installConfirmButton": "Installieren & anmelden"
       },
       "genericOAuth": {
         "subtitle": "Abonnementkonto",
@@ -11074,16 +11080,16 @@
     "close": "Schließen",
     "list": {
       "folders": {
-        "create": "Neuer Ordner",
-        "rename": "Ordner umbenennen",
-        "dissolve": "Ordner auflösen",
-        "name": "Ordnername",
-        "move": "In Ordner verschieben",
-        "unfiled": "Außerhalb der Ordner",
+        "create": "Neue Abteilung",
+        "rename": "Abteilung umbenennen",
+        "dissolve": "Abteilung auflösen",
+        "name": "Abteilungsname",
+        "move": "In Abteilung verschieben",
+        "unfiled": "Aus Abteilung entfernen",
         "up": "Nach oben verschieben",
         "down": "Nach unten verschieben",
         "actions": "Aktionen für {{name}}",
-        "saveFailed": "Ordner konnten nicht gespeichert werden."
+        "saveFailed": "Abteilungen konnten nicht gespeichert werden."
       },
       "createMenu": "Erstellen",
       "createTeammate": "Neuer Freund",

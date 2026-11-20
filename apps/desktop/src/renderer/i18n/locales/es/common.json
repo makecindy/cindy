@@ -4393,7 +4393,10 @@
       },
       "antigravity": {
         "configure": "Conectar manualmente",
-        "setupHint": "Usa Antigravity CLI 1.5.9 verificado para conectar tu suscripción a Google AI. Cindy solo usa la cuota de la suscripción.",
+        "install": "Instalar y conectar",
+        "update": "Actualizar Antigravity CLI",
+        "installing": "Instalando…",
+        "setupHint": "Cindy descarga y verifica la CLI oficial de Antigravity y solo usa la cuota de la suscripción a Google AI.",
         "activeAccount": "Cuenta de Google activa",
         "existing": "Cuenta local predeterminada",
         "removeAccount": "Eliminar cuenta",
@@ -4404,7 +4407,10 @@
         "refreshQuota": "Actualizar cuota",
         "legacyQuota": "Añade una cuenta de Google para ver su cuota en Cindy.",
         "noQuota": "La cuota de Google no está disponible en este momento.",
-        "failed": "No se pudo completar la operación de la cuenta de Google."
+        "failed": "No se pudo completar la operación de la cuenta de Google.",
+        "installConfirmTitle": "¿Instalar Antigravity CLI?",
+        "installConfirmDescription": "Antigravity CLI aún no está instalado en este equipo. ¿Descargar e instalar la última versión y continuar con el inicio de sesión de Google?",
+        "installConfirmButton": "Instalar e iniciar sesión"
       },
       "genericOAuth": {
         "subtitle": "Cuenta de suscripción",
@@ -11158,16 +11164,16 @@
     "close": "Cerrar",
     "list": {
       "folders": {
-        "create": "Nueva carpeta",
-        "rename": "Renombrar carpeta",
-        "dissolve": "Disolver carpeta",
-        "name": "Nombre de la carpeta",
-        "move": "Mover a una carpeta",
-        "unfiled": "Fuera de las carpetas",
+        "create": "Nuevo departamento",
+        "rename": "Renombrar departamento",
+        "dissolve": "Disolver departamento",
+        "name": "Nombre del departamento",
+        "move": "Mover al departamento",
+        "unfiled": "Quitar del departamento",
         "up": "Mover arriba",
         "down": "Mover abajo",
         "actions": "Acciones de {{name}}",
-        "saveFailed": "No se pudieron guardar las carpetas."
+        "saveFailed": "No se pudieron guardar los departamentos."
       },
       "createMenu": "Crear",
       "createTeammate": "Nuevo amigo de equipo",

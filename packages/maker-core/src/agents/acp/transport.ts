@@ -11,9 +11,12 @@ export function personalSubscriptionEnv(source: NodeJS.ProcessEnv): NodeJS.Proce
   env.AGY_CLI_DISABLE_AUTO_UPDATE = 'true';
   return env;
 }
-export function spawnAcp(binary: string, args: string[], cwd: string, options: { profileStorage?: boolean } = {}): AcpTransport {
+export function spawnAcp(binary: string, args: string[], cwd: string, options: { profileStorage?: boolean; isolatedHome?: string } = {}): AcpTransport {
   const env = personalSubscriptionEnv(globalThis.process.env);
-  // The pinned CLI uses its app-data token file on this code path instead of
+  if (options.isolatedHome) {
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) env[key] = options.isolatedHome;
+  }
+  // The CLI uses its app-data token file on this code path instead of
   // the shared native credential store. Enable it only for isolated profiles.
   if (options.profileStorage) env.WSL_DISTRO_NAME = 'Cindy';
   const process = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });

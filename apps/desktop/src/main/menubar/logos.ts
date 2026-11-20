@@ -61,10 +61,13 @@ export function providerLogo(providerId: string, name: string, routing?: Provide
   return logoForKind(resolveProviderLogoKind(providerId, routing), name);
 }
 
-/** Subscription logos follow the model maker: Anthropic for Claude, OpenAI for Codex, xAI for Grok. */
+/** Subscription logos follow the model maker: Anthropic for Claude, OpenAI for Codex, xAI for Grok, Google for Gemini. */
 export function familyLogo(family: MenubarFamily): string {
   if (family === 'shared') return MENUBAR_CINDY_LOGO;
   if (family === 'claude') return logoForKind('anthropic', 'Claude');
+  if (family === 'gemini') {
+    return filled('M12 2C12.7 7.6 16.4 11.3 22 12C16.4 12.7 12.7 16.4 12 22C11.3 16.4 7.6 12.7 2 12C7.6 11.3 11.3 7.6 12 2Z');
+  }
   if (family === 'kimi') return providerLogo('kimi-coding', 'Kimi Code');
   if (family === 'codex') return logoForKind('openai', 'Codex');
   if (family === 'opencode-go') return providerLogo('opencode-go', 'OpenCode Go');

@@ -1,5 +1,6 @@
 import { isKimiCodingProviderView } from './kimiCodingUsage';
 import { isOpenCodeGoProviderView } from './opencodeGoUsage';
+import { ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID } from './antigravityAccounts';
 import type { ProviderView } from '@cindy/model-providers';
 
 /**
@@ -8,7 +9,7 @@ import type { ProviderView } from '@cindy/model-providers';
  */
 export function providerWeeklyQuotaSource(
   provider: ProviderView,
-): 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | null {
+): 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | 'antigravity' | null {
   if (provider.connected && !provider.suspended && !provider.removed && isKimiCodingProviderView(provider)) return 'kimi';
   if (provider.connected && !provider.suspended && !provider.removed && isOpenCodeGoProviderView(provider)) return 'opencode-go';
   if (
@@ -19,6 +20,7 @@ export function providerWeeklyQuotaSource(
     (provider.access && provider.access.kind !== 'subscription')
   )
     return null;
+  if (provider.id === ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID) return 'antigravity';
   if (provider.id === 'openai' || provider.auth.native === 'codex') return 'codex';
   if (provider.auth.native === 'claude') return 'claude';
   if (provider.auth.native === 'xai') return 'xai';

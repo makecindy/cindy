@@ -39,7 +39,7 @@ import {
 } from '../../shared/menubarQuota.js';
 
 export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'antigravity';
-export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
+export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'gemini' | 'kimi' | 'opencode-go' | 'shared';
 
 export interface MenubarWindowInput {
   kind: 'session' | 'week' | 'scoped' | 'period';
@@ -225,11 +225,12 @@ const MIN_PACE_ELAPSED = 0.03;
 const ROOMY_CELL_LIMIT = 4;
 /** Settings' soft daily limit for a period quota: period total / 30 × 4.5 (a display hint, not a cap). */
 const DAILY_SOFT_LIMIT_FACTOR = 4.5;
-const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, shared: 5 };
+const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, gemini: 3, kimi: 4, 'opencode-go': 5, shared: 6 };
 const FAMILY_COLORS: Record<MenubarFamily, MenubarColor[]> = {
   claude: ['claude', 'claude2', 'claude3'],
   codex: ['codex'],
   grok: ['fill'],
+  gemini: ['fill'],
   kimi: ['fill'],
   'opencode-go': ['fill'],
   shared: ['fill'],

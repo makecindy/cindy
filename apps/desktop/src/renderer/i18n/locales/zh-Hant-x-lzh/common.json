@@ -4294,7 +4294,10 @@
       },
       "antigravity": {
         "configure": "手動連接",
-        "setupHint": "請使用經過驗證的 Antigravity CLI 1.5.9 連接 Google AI 訂閱。Cindy 僅使用訂閱額度。",
+        "install": "一鍵安裝並連線",
+        "update": "更新 Antigravity CLI",
+        "installing": "安裝中…",
+        "setupHint": "Cindy 會下載並驗證官方 Antigravity CLI，僅使用 Google AI 訂閱額度。",
         "activeAccount": "目前的 Google 帳號",
         "existing": "本機預設帳號",
         "removeAccount": "移除帳號",
@@ -4305,7 +4308,10 @@
         "refreshQuota": "更新額度",
         "legacyQuota": "新增 Google 帳號後，即可在 Cindy 中查看該帳號的額度。",
         "noQuota": "暫時無法讀取 Google 額度。",
-        "failed": "無法完成 Google 帳號操作。"
+        "failed": "無法完成 Google 帳號操作。",
+        "installConfirmTitle": "安裝 Antigravity CLI？",
+        "installConfirmDescription": "此機未裝 Antigravity CLI。確認則自取新版安之，既成即啟 Google 登入。",
+        "installConfirmButton": "安裝並登入"
       },
       "genericOAuth": {
         "subtitle": "訂閱名籍",
@@ -11029,16 +11035,16 @@
     "close": "闔",
     "list": {
       "folders": {
-        "create": "新建資料夾",
-        "rename": "更改資料夾名稱",
-        "dissolve": "解散資料夾",
-        "name": "資料夾名稱",
-        "move": "移入資料夾",
-        "unfiled": "移出資料夾",
+        "create": "新建部屬",
+        "rename": "更名部屬",
+        "dissolve": "解散部屬",
+        "name": "部屬之名",
+        "move": "遷入部屬",
+        "unfiled": "遷出部屬",
         "up": "上移",
         "down": "下移",
         "actions": "{{name}}的操作",
-        "saveFailed": "無法儲存資料夾。"
+        "saveFailed": "未能存部屬。"
       },
       "createMenu": "增",
       "createTeammate": "增同伴",

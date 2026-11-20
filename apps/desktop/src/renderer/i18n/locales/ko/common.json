@@ -4294,7 +4294,10 @@
       },
       "antigravity": {
         "configure": "수동 연결",
-        "setupHint": "검증된 Antigravity CLI 1.5.9로 Google AI 구독을 연결하세요. Cindy는 구독 한도만 사용합니다.",
+        "install": "설치 및 연결",
+        "update": "Antigravity CLI 업데이트",
+        "installing": "설치 중…",
+        "setupHint": "Cindy가 공식 Antigravity CLI를 다운로드하고 검증합니다. Google AI 구독 한도만 사용합니다.",
         "activeAccount": "현재 Google 계정",
         "existing": "이 Mac의 기본 계정",
         "removeAccount": "계정 삭제",
@@ -4305,7 +4308,10 @@
         "refreshQuota": "한도 새로고침",
         "legacyQuota": "Google 계정을 추가하면 Cindy에서 해당 계정의 한도를 확인할 수 있습니다.",
         "noQuota": "현재 Google 사용 한도를 가져올 수 없습니다.",
-        "failed": "Google 계정 작업을 완료하지 못했습니다."
+        "failed": "Google 계정 작업을 완료하지 못했습니다.",
+        "installConfirmTitle": "Antigravity CLI를 설치할까요?",
+        "installConfirmDescription": "이 컴퓨터에 아직 Antigravity CLI가 설치되어 있지 않습니다. 최신 버전을 자동 설치한 뒤 바로 Google 로그인을 진행할까요?",
+        "installConfirmButton": "설치 및 로그인"
       },
       "genericOAuth": {
         "subtitle": "구독 계정",
@@ -11029,16 +11035,16 @@
     "close": "닫기",
     "list": {
       "folders": {
-        "create": "새 폴더",
-        "rename": "폴더 이름 변경",
-        "dissolve": "폴더 해제",
-        "name": "폴더 이름",
-        "move": "폴더로 이동",
-        "unfiled": "폴더 밖으로 이동",
+        "create": "새 부서",
+        "rename": "부서 이름 변경",
+        "dissolve": "부서 해산",
+        "name": "부서 이름",
+        "move": "부서로 이동",
+        "unfiled": "부서에서 제거",
         "up": "위로 이동",
         "down": "아래로 이동",
         "actions": "{{name}} 작업",
-        "saveFailed": "폴더를 저장하지 못했습니다."
+        "saveFailed": "부서를 저장할 수 없습니다."
       },
       "createMenu": "새로 만들기",
       "createTeammate": "새 동료",

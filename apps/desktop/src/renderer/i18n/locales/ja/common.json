@@ -4294,7 +4294,10 @@
       },
       "antigravity": {
         "configure": "手動で接続",
-        "setupHint": "検証済みの Antigravity CLI 1.5.9 を使用して Google AI サブスクリプションを接続してください。Cindy はサブスクリプションの利用枠のみを使用します。",
+        "install": "インストールして接続",
+        "update": "Antigravity CLI を更新",
+        "installing": "インストール中…",
+        "setupHint": "Cindy が公式の Antigravity CLI をダウンロードして検証します。Google AI サブスクリプションの利用枠のみを使用します。",
         "activeAccount": "使用中の Google アカウント",
         "existing": "この Mac の既定のアカウント",
         "removeAccount": "アカウントを削除",
@@ -4305,7 +4308,10 @@
         "refreshQuota": "利用枠を更新",
         "legacyQuota": "Google アカウントを追加すると、Cindy で利用枠を確認できます。",
         "noQuota": "Google の利用枠を現在取得できません。",
-        "failed": "Google アカウントの操作を完了できませんでした。"
+        "failed": "Google アカウントの操作を完了できませんでした。",
+        "installConfirmTitle": "Antigravity CLI をインストールしますか？",
+        "installConfirmDescription": "このコンピューターには Antigravity CLI がまだインストールされていません。最新版を自動インストールして Google ログインに進みますか？",
+        "installConfirmButton": "インストールしてログイン"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -11029,16 +11035,16 @@
     "close": "閉じる",
     "list": {
       "folders": {
-        "create": "フォルダを作成",
-        "rename": "フォルダ名を変更",
-        "dissolve": "フォルダを解散",
-        "name": "フォルダ名",
-        "move": "フォルダへ移動",
-        "unfiled": "フォルダの外へ移動",
+        "create": "新しい部門",
+        "rename": "部門名を変更",
+        "dissolve": "部門を解散",
+        "name": "部門名",
+        "move": "部門に移動",
+        "unfiled": "部門から外す",
         "up": "上に移動",
         "down": "下に移動",
         "actions": "{{name}}の操作",
-        "saveFailed": "フォルダを保存できませんでした。"
+        "saveFailed": "部門を保存できませんでした。"
       },
       "createMenu": "新規作成",
       "createTeammate": "仲間を作成",

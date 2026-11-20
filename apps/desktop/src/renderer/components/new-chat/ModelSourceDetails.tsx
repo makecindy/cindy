@@ -54,7 +54,7 @@ function SourceUsageProvider({
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(
+  const { source, codex, claude, xai, kimi, opencodeGo, antigravity } = useProviderUsageSnapshots(
     provider,
     scope,
     { web: true },
@@ -62,9 +62,9 @@ function SourceUsageProvider({
   const value = useMemo(() => {
     if (!source) return parent;
     const next = new Map(parent);
-    next.set(usageKey, { source, codex, claude, xai, kimi, opencodeGo });
+    next.set(usageKey, { source, codex, claude, xai, kimi, opencodeGo, antigravity });
     return next;
-  }, [parent, usageKey, source, codex, claude, xai, kimi, opencodeGo]);
+  }, [parent, usageKey, source, codex, claude, xai, kimi, opencodeGo, antigravity]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
@@ -160,6 +160,41 @@ interface QuotaWindow {
   windowMinutes?: number | null;
 }
 
+function matchAntigravityBucketForModel(
+  buckets: readonly NonNullable<NonNullable<SourceUsage['antigravity']>['usage']>[number][],
+  modelId: string,
+) {
+  if (buckets.length === 0) return null;
+  if (buckets.length === 1) return buckets[0]!;
+  const id = modelId.toLowerCase();
+  const byName = (pattern: RegExp) => buckets.find((bucket) => bucket.limitName && pattern.test(bucket.limitName));
+  if (id.includes('claude')) {
+    const matched = byName(/claude/i);
+    if (matched) return matched;
+  }
+  if (id.includes('gpt')) {
+    const matched = byName(/gpt/i);
+    if (matched) return matched;
+  }
+  if (id.includes('gemini')) {
+    if (id.includes('flash')) {
+      const matched = byName(/flash/i);
+      if (matched) return matched;
+    }
+    if (id.includes('pro') || id.includes('ultra')) {
+      const matched = byName(/pro|ultra/i);
+      if (matched) return matched;
+    }
+    const matched = byName(/gemini/i);
+    if (matched) return matched;
+  }
+  return buckets.reduce((tightest, bucket) => {
+    const maxOf = (b: typeof bucket) =>
+      Math.max(b.primary?.usedPercent ?? -1, b.secondary?.usedPercent ?? -1);
+    return maxOf(bucket) > maxOf(tightest) ? bucket : tightest;
+  }, buckets[0]!);
+}
+
 function modelSourceQuota(
   usage: SourceUsage | undefined,
   modelId: string,
@@ -169,6 +204,26 @@ function modelSourceQuota(
   windows: QuotaWindow[];
 } {
   if (!usage) return { plan: null, windows: [] };
+  if (usage.source === 'antigravity') {
+    const buckets = usage.antigravity?.usage ?? [];
+    const bucket = matchAntigravityBucketForModel(buckets, modelId);
+    const windows: QuotaWindow[] = [];
+    if (bucket?.primary && typeof bucket.primary.usedPercent === 'number' && Number.isFinite(bucket.primary.usedPercent)) {
+      windows.push({
+        usedPercent: bucket.primary.usedPercent,
+        resetsAt: bucket.primary.resetsAt,
+        windowMinutes: bucket.primary.windowMinutes ?? FIVE_HOUR_WINDOW_MINUTES,
+      });
+    }
+    if (bucket?.secondary && typeof bucket.secondary.usedPercent === 'number' && Number.isFinite(bucket.secondary.usedPercent)) {
+      windows.push({
+        usedPercent: bucket.secondary.usedPercent,
+        resetsAt: bucket.secondary.resetsAt,
+        windowMinutes: bucket.secondary.windowMinutes ?? WEEKLY_WINDOW_MINUTES,
+      });
+    }
+    return { plan: null, windows };
+  }
   if (usage.source === 'kimi')
     return {
       plan: null,
@@ -263,15 +318,10 @@ export function ModelSourceDetails({
   const pickerAccount = useModelPickerAccount(providerId);
   // Created subscription providers (2026-11-13) report their pool kind; built-ins are their own.
   const codex = (pickerAccount?.kind ?? providerId) === 'openai';
-  if (providerId === 'google-antigravity-subscription') {
-    return (
-      <div data-model-source-details title={t('googleSubscription.quotaGuide')} className="flex w-0 min-w-full items-center gap-1 pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]">
-        <span className="min-w-0 truncate">{providerAccountLabel(label, accountIdentity)}</span>
-        <span aria-hidden>·</span>
-        <span className="min-w-0 truncate">{t('googleSubscription.quotaUnavailable')}</span>
-      </div>
-    );
-  }
+  const sourceUsage = usages.get(providerId);
+  const antigravityIdentity = sourceUsage?.source === 'antigravity'
+    ? sourceUsage.antigravity?.accounts.find((account) => account.id === sourceUsage.antigravity?.activeId)?.identity
+    : undefined;
   const poolParts = pickerAccount?.members?.map((account, index) => {
     const view = modelSourceQuota(
       {
@@ -363,7 +413,7 @@ export function ModelSourceDetails({
     ? undefined
     : pickerAccount
       ? pickerAccount.identity
-      : accountIdentity;
+      : (accountIdentity ?? antigravityIdentity);
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
     <div

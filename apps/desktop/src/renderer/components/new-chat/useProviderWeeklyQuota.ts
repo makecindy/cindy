@@ -1,4 +1,6 @@
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import { useAntigravitySubscriptionUsage } from '@/hooks/useAntigravityUsage';
+import type { AntigravityAccountsView } from '../../../shared/antigravityAccounts';
 import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import { useEffect, useMemo, useState } from 'react';
@@ -159,9 +161,10 @@ export function pickerAccountWeeklyQuota(providerId: string, account: ModelPicke
 }
 
 export interface ProviderUsageSnapshots {
-  source: 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | null;
+  source: 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | 'antigravity' | null;
   kimi?: KimiCodingUsageSnapshot | null;
   opencodeGo?: OpenCodeGoUsageSnapshot | null;
+  antigravity?: AntigravityAccountsView | null;
   codex: CodexQuotaView | null;
   claude: ClaudeSubscriptionUsageSnapshot | null;
   xai: XaiSubscriptionUsageSnapshot | null;
@@ -199,6 +202,7 @@ export function useProviderUsageSnapshots(
   );
   const localClaude = useClaudeSubscriptionUsage(local && source === 'claude' && !pickerAccount, provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
+  const localAntigravity = useAntigravitySubscriptionUsage(local && source === 'antigravity');
   const remoteCodex = useRemoteCodexAccountUsage(
     source === 'codex' && !pickerAccount ? remoteDeviceId : null,
     provider.id,
@@ -227,6 +231,7 @@ export function useProviderUsageSnapshots(
       && accountUsage.result.snapshot.kind === 'kimi-coding-quota' ? accountUsage.result.snapshot : null,
     opencodeGo: source === 'opencode-go' && accountUsage.result?.status === 'ready' && !accountUsage.result.stale
       && accountUsage.result.snapshot.kind === 'opencode-go-quota' ? accountUsage.result.snapshot : null,
+    antigravity: source === 'antigravity' && local ? localAntigravity : null,
     codex,
     claude: source === 'claude' ? (pickerAccount ? pickerAccount.usage?.claude ?? null : local ? localClaude : remoteClaude) : null,
     xai: source === 'xai' ? (local ? localXai : remoteXai) : null,
@@ -241,7 +246,7 @@ export function useProviderWeeklyQuota(
 }
 
 /** Reuse one account reader for the rail's bar and short-window warning. */
-export function useWeeklyQuotaFromSnapshots({ source, codex, claude, xai, kimi, opencodeGo }: ProviderUsageSnapshots): ProviderWeeklyQuota | null {
+export function useWeeklyQuotaFromSnapshots({ source, codex, claude, xai, kimi, opencodeGo, antigravity }: ProviderUsageSnapshots): ProviderWeeklyQuota | null {
   const [nowMs, setNowMs] = useState(Date.now);
   // Local display clock only; fetching and cached-first updates remain in the
   // existing hooks. Hide expired windows even when the panel is left open.
@@ -250,6 +255,22 @@ export function useWeeklyQuotaFromSnapshots({ source, codex, claude, xai, kimi, 
     const timer = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [source]);
+  if (source === 'antigravity') {
+    const buckets = antigravity?.usage ?? [];
+    let worstWeekly: ProviderWeeklyQuota | null = null;
+    let worstSession: ProviderWeeklyQuota | null = null;
+    for (const bucket of buckets) {
+      const secondary = weeklyQuota(bucket.secondary?.usedPercent, bucket.secondary?.resetsAt, nowMs);
+      if (secondary && (!worstWeekly || secondary.usedPercent > worstWeekly.usedPercent)) {
+        worstWeekly = secondary;
+      }
+      const primary = weeklyQuota(bucket.primary?.usedPercent, bucket.primary?.resetsAt, nowMs);
+      if (primary && (!worstSession || primary.usedPercent > worstSession.usedPercent)) {
+        worstSession = primary;
+      }
+    }
+    return worstWeekly ?? worstSession;
+  }
   if (source === 'kimi') {
     const window = kimi?.windows.find(w => w.id === 'limit_7d');
     return weeklyQuota(window?.usedPercent, window?.resetsAt ? window.resetsAt / 1000 : null, nowMs);

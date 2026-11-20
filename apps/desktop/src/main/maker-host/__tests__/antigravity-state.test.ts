@@ -9,6 +9,7 @@ import { createMakerLogger } from '../logger-adapter';
 import { createAntigravityUsageReader, parseAntigravityQuota } from '../antigravity-usage';
 import { antigravityProvider, setAntigravityState } from '../antigravity-state';
 import { ANTIGRAVITY_ACCOUNT_BUSY } from '../../../shared/antigravityAccounts';
+import { supportsAntigravityRuntime } from '../antigravity-runtime';
 
 afterEach(() => setAntigravityState(null));
 describe('native Google subscription metadata', () => {
@@ -99,7 +100,7 @@ describe('Google quota projection', () => {
 // Unit regression from the installed arm64 app: an unconfigured connection
 // must still register its agent and publish a disconnected Settings entry.
 // The older snapshot-only test never invoked the real BaseAgent constructor.
-it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('offers Google setup before a runtime has been configured', async () => {
+it.runIf(supportsAntigravityRuntime())('offers Google setup before a runtime has been configured', async () => {
   const owner = vi.spyOn(appSessionState, 'getActiveAppSession')
     .mockReturnValue({ mode: 'local', dataOwnerId: 'test-owner', generation: 1 });
   try {
@@ -113,7 +114,7 @@ it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('offers Goog
 
 // Unit: legacy and independent profiles share a catalog but have different
 // storage ownership. Use real temporary directories, without a native CLI.
-it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('retires idle tasks before active removal and only deletes the selected profile', async () => {
+it.runIf(supportsAntigravityRuntime())('retires idle tasks before active removal and only deletes the selected profile', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cindy-google-profiles-'));
   const owner = vi.spyOn(appSessionState, 'getActiveAppSession')
     .mockReturnValue({ mode: 'local', dataOwnerId: 'test-owner', generation: 1 });
@@ -128,7 +129,7 @@ it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('retires idl
   try {
     mkdirSync(activeDirectory, { recursive: true });
     mkdirSync(legacyDirectory);
-    symlinkSync(legacyDirectory, spareDirectory);
+    symlinkSync(legacyDirectory, spareDirectory, process.platform === 'win32' ? 'junction' : 'dir');
     writeFileSync(configPath, JSON.stringify({
       enabled: true, binaryPath: join(directory, 'fake-official-agy'),
       profiles: ['default', active, spare], activeProfile: active, disconnectedProfiles: [spare],
@@ -159,7 +160,7 @@ it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('retires idl
 });
 
 // Unit: clicking Add again after cancelling uses the selected blank profile.
-it.runIf(process.platform === 'darwin' && process.arch === 'arm64')('reuses a tokenless sign-in draft without replacing an existing credential file', async () => {
+it.runIf(supportsAntigravityRuntime())('reuses a tokenless sign-in draft without replacing an existing credential file', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cindy-google-draft-'));
   const owner = vi.spyOn(appSessionState, 'getActiveAppSession')
     .mockReturnValue({ mode: 'local', dataOwnerId: 'test-owner', generation: 1 });

@@ -224,7 +224,11 @@ describe('Antigravity native controls', () => {
     await handle.send({ type: 'user', content: 'mock only' });
     const events = [];
     for await (const event of handle.events()) { events.push(event); if (event.type === 'done') break; }
-    expect(events.filter(event => event.type === 'status').every(event => event.turnScope === 'background')).toBe(true);
+    expect(events.filter(event => event.type === 'status')).toEqual([
+      expect.objectContaining({ turnScope: 'background', data: { contextTokens: 7, contextWindow: 1048576 } }),
+      expect.objectContaining({ turnScope: 'background', data: { contextTokens: 350, contextWindow: 1048576 } }),
+      expect.objectContaining({ data: { isRunning: true, status: 'Thinking...' } }),
+    ]);
     expect(handle.getUsageSnapshot()).toMatchObject({ contextTokens: 350, contextWindow: 1048576, tokenUsage: 1234 });
     await handle.close();
   });

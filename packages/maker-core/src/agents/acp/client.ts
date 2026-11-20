@@ -6,6 +6,7 @@ export interface AcpTransport {
   close(): Promise<void>;
 }
 export type AcpRecord = Record<string, unknown>;
+export type AcpResponse = { result: AcpRecord } | { error: Error };
 export function record(value: unknown): AcpRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as AcpRecord : {};
 }
@@ -19,7 +20,12 @@ export class AcpError extends Error {
 export class AcpClient {
   private nextId = 0;
   private closed = false;
-  private pending = new Map<number, { resolve: (v: AcpRecord) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pending = new Map<number, {
+    resolve: (v: AcpRecord) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+    onResponse?: (response: AcpResponse) => void;
+  }>();
   private unsub: Array<() => void>;
   onNotification: (method: string, params: AcpRecord) => void = () => {};
   onRequest: (method: string, params: AcpRecord, signal: AbortSignal) => Promise<unknown> = async () => { throw new AcpError(-32601); };
@@ -27,12 +33,12 @@ export class AcpClient {
   constructor(private transport: AcpTransport, private onClose?: () => void) {
     this.unsub = [transport.onLine(line => { void this.receive(line).catch(() => this.ended()); }), transport.onClose(() => this.ended())];
   }
-  request(method: string, params: AcpRecord, timeoutMs = 30_000, onSent?: () => void): Promise<AcpRecord> {
+  request(method: string, params: AcpRecord, timeoutMs = 30_000, onSent?: () => void, onResponse?: (response: AcpResponse) => void): Promise<AcpRecord> {
     if (this.closed) return Promise.reject(new AcpError(-32001));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new AcpError(-32002)); }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, onResponse });
       try { this.send({ jsonrpc: '2.0', id, method, params }); onSent?.(); }
       catch { clearTimeout(timer); this.pending.delete(id); reject(new AcpError(-32001)); }
     });
@@ -67,9 +73,15 @@ export class AcpClient {
     if (msg.error) {
       const error = record(msg.error);
       const quota = typeof error.message === 'string' && /quota|resource.exhausted|rate.limit/i.test(error.message);
-      pending.reject(new AcpError(typeof error.code === 'number' ? error.code : -32603, quota));
+      const failure = new AcpError(typeof error.code === 'number' ? error.code : -32603, quota);
+      pending.reject(failure);
+      pending.onResponse?.({ error: failure });
     }
-    else pending.resolve(record(msg.result));
+    else {
+      const result = record(msg.result);
+      pending.resolve(result);
+      pending.onResponse?.({ result });
+    }
   }
   private ended(notify = true): void {
     if (this.closed) return;

@@ -1227,11 +1227,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
-    const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
+    const agentKind = getSessionDbAgentKind(sessionId);
+    const acpEngine = agentKind === 'acp' || agentKind === 'antigravity';
     const collabToolUseIds = new Set(
       [...knownToolUseIds].filter(
         (toolUseId) =>
-          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+          acpEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
       ),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();

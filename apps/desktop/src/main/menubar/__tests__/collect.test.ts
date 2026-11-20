@@ -7,6 +7,7 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOver
 beforeEach(() => { disabled.providers = {}; });
 
 import {
+  antigravitySource,
   kimiSource,
   claudeSource,
   codexSource,
@@ -704,4 +705,45 @@ it('includes auxiliary tokens in widget totals without inventing a Claude harnes
   expect(scope.models['30']).toEqual([]);
   expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
   expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
+});
+
+it('maps Google Antigravity subscription buckets into a Gemini source for the menu bar and island', () => {
+  const account = provider({
+    id: 'google-antigravity-subscription',
+    name: 'Google AI · Antigravity',
+    auth: { method: 'oauth' },
+    access: { kind: 'subscription', product: 'Google AI Pro' },
+  });
+  const source = antigravitySource(account, {
+    configured: true,
+    connected: true,
+    activeId: 'prof-1',
+    accounts: [{ id: 'prof-1', identity: 'gemini@example.test' }],
+    usage: [
+      {
+        limitId: '0',
+        limitName: 'Gemini Models',
+        updatedAt: NOW,
+        primary: { usedPercent: 25, windowMinutes: 300, resetsAt: nowSec + 3600 },
+        secondary: { usedPercent: 40, windowMinutes: 10_080, resetsAt: nowSec + 86_400 },
+      },
+      {
+        limitId: '1',
+        limitName: 'Claude Models',
+        updatedAt: NOW,
+        primary: { usedPercent: 10, windowMinutes: 300, resetsAt: nowSec + 3600 },
+        secondary: { usedPercent: 60, windowMinutes: 10_080, resetsAt: nowSec + 86_400 },
+      },
+    ],
+  }, NOW);
+  expect(source).toMatchObject({
+    family: 'gemini',
+    brand: 'Gemini',
+    account: 'gemini@example.test',
+    plan: 'Google AI Pro',
+    updatedAtMs: NOW,
+  });
+  expect(source.windows.filter(w => w.kind === 'session')).toMatchObject([{ usedPercent: 25, windowMinutes: 300 }]);
+  expect(source.windows.filter(w => w.kind === 'week')).toMatchObject([{ usedPercent: 60, windowMinutes: 10_080 }]);
+  expect(source.windows.filter(w => w.kind === 'scoped').map(w => w.label)).toEqual(['Gemini Models', 'Claude Models']);
 });

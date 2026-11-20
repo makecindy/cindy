@@ -48,6 +48,7 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { getAntigravityAccounts, onAntigravityQuotaChanged } from '../maker-host/antigravity-host.js';
 import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import {
@@ -326,6 +327,7 @@ export class QuotaOverviewService {
           if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id);
           else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id);
           else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id);
+          else if (kind === 'antigravity') void getAntigravityAccounts()?.usage().catch(() => undefined);
         }
       })
       .catch((error) => log.warn('quota refresh could not list providers', { error: errorMessage(error) }));
@@ -345,6 +347,7 @@ export class QuotaOverviewService {
     this.usageOwnerId = getActiveAppSession().dataOwnerId;
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
+      onAntigravityQuotaChanged(() => this.scheduleRebuild()),
       onSubscriptionAccountsChanged(() => {
         this.accountsRevision += 1;
         this.scheduleRebuild();
@@ -520,6 +523,10 @@ export class QuotaOverviewService {
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
+      readAntigravity: async () => {
+        const accounts = getAntigravityAccounts();
+        return accounts ? await accounts.usage() : null;
+      },
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),

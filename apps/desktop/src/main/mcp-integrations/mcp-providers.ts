@@ -1210,14 +1210,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const result = await remoteSessionHandoff({ deviceId: device, sessionId: id }, {
             message, sender: () => remoteHandoffSender(dispatcherSessionId),
             create: async () => {
-              if (agentKind === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
+              const normalizedAgentDeviceId = agentDeviceId && agentDeviceId !== 'local' && agentDeviceId !== device
+                ? agentDeviceId
+                : null;
+              if (agentKind === 'antigravity' && normalizedAgentDeviceId) {
+                throw Object.assign(
+                  new Error('ANTIGRAVITY_LOCAL_ONLY: Antigravity uses only the destination computer’s own local Google subscription and cannot borrow another computer’s credentials.'),
+                  { code: 'PROVIDER_ROUTE_UNAVAILABLE' },
+                );
+              }
               if (isSessionSharedTaskActive(dispatcherSessionId)) throw new Error('Shared tasks cannot create remote tasks');
               const [source] = await getDbClient().drizzle.select({ permissionMode: sessions.permissionMode })
                 .from(sessions).where(eq(sessions.id, dispatcherSessionId)).limit(1);
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
               return { title: title?.trim() || undefined, projectDir, workingDir,
-                useWorktree, agentKind, model, effort, fast, agentDeviceId,
+                useWorktree, agentKind, model, effort, fast,
+                agentDeviceId: agentKind === 'antigravity' ? null : agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
           });
