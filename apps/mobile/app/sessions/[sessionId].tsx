@@ -23,7 +23,7 @@ import { incomingShareDestination } from '@/session/incomingShare';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
-import { hiddenSessionModelAtSend } from '@/session/modelReselection';
+import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';

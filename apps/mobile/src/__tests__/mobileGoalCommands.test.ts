@@ -6,7 +6,7 @@ import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/desktopSlashCommands';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { evictDeviceProviders, fetchDeviceProviders, retainedProviderModelKey, type RetainedProviderCatalog } from '@/device-link/deviceProvidersCache';
-import { hiddenSessionModelAtSend } from '@/session/modelReselection';
+import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
 import { captureNewSessionOwner } from '@/session/newSessionForm';

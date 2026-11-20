@@ -9,7 +9,7 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
 import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
-import { hiddenSessionModelAtSend } from '@/session/modelReselection';
+import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
 
 const state = vi.hoisted(() => ({
   context: { connectionEpoch: 1, status: 'online', recoveringDeviceIds: new Set<string>() },

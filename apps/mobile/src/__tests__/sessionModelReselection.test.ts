@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { clearAllDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh, retainedProviderModelKey } from '@/device-link/deviceProvidersCache';
 import { clearAllProviderShareCatalogs, refreshProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
-import { hiddenSessionModelAtSend } from '@/session/modelReselection';
+import { hiddenSessionModelAtSend } from '@/session/sessionModelAtSend';
 
 const session = { agentKind: 'codex' as const, model: 'old', providerId: 'source' };
 const target = { targetAgentKind: 'pi' as const, model: 'next', providerId: 'source' };
