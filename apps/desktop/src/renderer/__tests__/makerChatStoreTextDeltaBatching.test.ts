@@ -715,6 +715,32 @@ describe('makerChatStore text delta batching', () => {
     vi.useRealTimers();
   });
 
+  // #11720 / unit: sendMessage and the real projection listener must settle SSH
+  // preparation on a failed queue head. Stream-terminal tests miss these preflight
+  // failures because no turn started. A late failure for another input must be ignored.
+  // This case took 2.59s in an isolated Vitest run, including setup.
+  it('settles SSH preparation only for the queue head that failed before dispatch', async () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, {
+      agentKind: 'codex', remoteHostId: 'ssh-host', autoTitleDisabled: true,
+    });
+    expect(await makerChatStore.sendMessage(
+      SESSION_ID, 'next input', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+    )).toBe(true);
+    const queued = input.enqueue.mock.calls.at(-1)![1];
+    const failQueueHead = (head: AgentInputQueuedMessage) => onInputProjection?.(projection(SESSION_ID, {
+      pendingQueue: [head],
+      error: 'SSH preflight failed',
+      recovery: { kind: 'queue-head', clientId: head.clientId },
+    }));
+
+    failQueueHead({ ...queued, clientId: 'previous-input' });
+    expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+
+    failQueueHead(queued);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('SSH preflight failed');
+    expect(hasStartingTerminal(SESSION_ID)).toBe(true);
+  });
+
   // #11113 / unit: terminal events can arrive without a running render or text.
   // Exercise sendMessage + the actual event subscription. Old coverage only checked
   // arrival order: a prior turn's late terminal after the new send must not settle it.

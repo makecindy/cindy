@@ -5354,6 +5354,12 @@ function applyInputProjection(
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   }, { fromInputProjection: true });
+  // SSH preflight can fail before a turn starts, so only the failed queue head
+  // identifies the send to settle. A late failure must not settle a newer input.
+  if (projection.error && projection.recovery?.kind === 'queue-head'
+    && sessions.get(projection.sessionId)?.remoteHostId) {
+    noteStartingTerminal(projection.sessionId, projection.recovery.clientId);
+  }
   if (deferredPersistFromProjection.payload) {
     persistTurnErrorDeferredTracked(
       projection.sessionId,
