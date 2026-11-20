@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "Choisissez un modèle sur cet ordinateur pour discuter avec ce partenaire.",
+    "title": "Partenaire de conversation",
+    "default": "Assistant par défaut",
+    "changed": "Le partenaire a changé dans une autre fenêtre.",
+    "busy": "Attendez la fin de la réponse et le traitement des messages en attente avant de changer de partenaire.",
+    "failed": "Impossible de sélectionner ce partenaire. Vérifiez qu’il est actif sur cet ordinateur.",
+    "unavailable": "Partenaire indisponible"
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",

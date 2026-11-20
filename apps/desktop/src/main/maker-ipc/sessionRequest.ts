@@ -156,8 +156,10 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'plugin engine tasks run on this computer only');
     }
   }
+  // Only the host may attach a conversation partner after resolving the owning database.
+  const { projectCompanion: _projectCompanion, ...options } = body;
   return {
-    ...body,
+    ...options,
     id,
     agentKind,
     workspaceKind,

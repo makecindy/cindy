@@ -4,6 +4,7 @@ import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
+import { openProjectCompanionSession, type OpenProjectCompanionSessionArgs } from './openProjectCompanionSession.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
 import { writeModelUsage, type ModelUsageWrite } from './modelUsageTx.js';
@@ -138,6 +139,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return compactSessionToolResults(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
+    case 'sessions.openWithCompanion':
+      return openProjectCompanionSession(db, txArgs as OpenProjectCompanionSessionArgs);
     case 'context.rebuild':
       return contextRebuild(db, txArgs);
     case 'mcpApps.viewState.save':
@@ -1583,6 +1586,15 @@ function contextRebuild(db: Database.Database, args: unknown): void {
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const transaction = db.transaction(() => {
+    if (payload.projectCompanion !== undefined) {
+      const choice = asRecord(payload.projectCompanion, 'projectCompanion');
+      const revision = expectNumber(choice.expectedRevision, 'expectedRevision');
+      const botId = choice.botId === null ? null : expectString(choice.botId, 'botId');
+      const result = revision === 0
+        ? db.prepare('INSERT OR IGNORE INTO project_task_companions (session_id, bot_id, revision) VALUES (?, ?, 1)').run(sessionId, botId)
+        : db.prepare('UPDATE project_task_companions SET bot_id = ?, revision = revision + 1 WHERE session_id = ? AND revision = ?').run(botId, sessionId, revision);
+      if (result.changes !== 1) throw Object.assign(new Error('Conversation partner changed'), { code: 'PRECONDITION_FAILED' });
+    }
     const replacement = payload.replacementRoute === undefined
       ? null : asRecord(payload.replacementRoute, 'replacementRoute');
     const sessionResult = replacement
@@ -2920,6 +2932,11 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (payload.expectedCompanionRevision !== undefined) {
+      const partner = db.prepare('SELECT revision FROM project_task_companions WHERE session_id = ?').get(sourceSessionId) as { revision: number } | undefined;
+      if ((partner?.revision ?? 0) !== payload.expectedCompanionRevision)
+        throw invalidArgs('Conversation partner changed while preparing the fork');
+    }
     if (newSession.source === 'side-chat' && !db.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {
@@ -3006,9 +3023,22 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       db.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
         .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
     }
+    const marker = payload.recoveryMarker == null ? null : asRecord(payload.recoveryMarker, 'recoveryMarker');
+    const visible = marker?.projectMessages === undefined ? null : new Map(
+      expectArray(marker.projectMessages, 'projectMessages').map(raw => {
+        const row = asRecord(raw, 'project message');
+        return [expectString(row.clientId, 'clientId'), row] as const;
+      }),
+    );
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
+      if (visible) {
+        const safe = visible.get(message.client_id);
+        if (safe) insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role,
+          expectString(safe.content, 'content'), null, nullableString(safe.agentMeta), message.agent_kind, message.created_at - historyTimeOffset);
+        continue;
+      }
       insertMessage.run(
         ids.id,
         ids.clientId,
@@ -3061,7 +3091,7 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
         markerCreatedAt,
       );
     }
-    return { messageCount: sourceMessages.length };
+    return { messageCount: visible?.size ?? sourceMessages.length };
   });
   return transaction();
 }

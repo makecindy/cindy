@@ -9,7 +9,7 @@
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
-import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
+import { eq, and, lt, gt, asc, desc, isNull, or, sql, getTableColumns } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -25,6 +25,7 @@ import {
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
+import { projectCompanionHandoffHistory } from '../localDb/projectCompanionTranscript.js';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
@@ -162,7 +163,9 @@ function parseJsonContent(content: string): unknown {
 }
 
 /** 用实际复制的前缀建立交接，和子任务、恢复卡一起原子保存。 */
-function buildCodexForkRecoveryMarker(opts: {
+function buildForkRecoveryMarker(opts: {
+  companionHistory?: boolean;
+  agentKind?: DbAgentKind;
   source: { model: string; providerId: string | null; sdkSessionId: string | null };
   rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
   targetContextWindow?: number | null;
@@ -170,15 +173,15 @@ function buildCodexForkRecoveryMarker(opts: {
   sessionId: string;
   now: number;
 }) {
-  const replay = buildHandoff(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
-    role: row.role,
-    content: parseJsonContent(row.content),
-    createdAt: row.createdAt,
-    toolUseId: row.toolUseId,
-    agentMeta: row.agentMeta,
-  })), {
-    fromLabel: 'Codex',
-    toLabel: 'Codex',
+  const history = opts.rows.filter(row => row.role !== 'error').map(row => ({
+    clientId: row.clientId, role: row.role, content: parseJsonContent(row.content),
+    createdAt: row.createdAt, toolUseId: row.toolUseId, agentMeta: row.agentMeta,
+  }));
+  const visible = opts.companionHistory ? projectCompanionHandoffHistory(history, 'local-copy') : undefined;
+  const label = opts.agentKind === 'cc' ? 'Claude Code' : opts.agentKind === 'pi' ? 'Pi' : 'Codex';
+  const replay = buildHandoff(visible ? projectCompanionHandoffHistory(visible) : history, {
+    fromLabel: label,
+    toLabel: label,
     targetContextWindow: opts.targetContextWindow,
     sessionId: opts.sessionId,
     reason: 'native-session-recovery',
@@ -186,6 +189,8 @@ function buildCodexForkRecoveryMarker(opts: {
   return {
     id: createId(),
     clientId: createId(),
+    ...(visible ? { projectMessages: visible.map(row => ({ clientId: row.clientId,
+      content: JSON.stringify(row.content), agentMeta: row.agentMeta && JSON.stringify(row.agentMeta) })) } : {}),
     sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows.map((row) => ({
       client_id: row.clientId, role: row.role, content: row.content,
       tool_use_id: row.toolUseId, agent_meta: row.agentMeta, agent_kind: row.agentKind,
@@ -196,7 +201,7 @@ function buildCodexForkRecoveryMarker(opts: {
     content: JSON.stringify({
       reason: 'native-session-recovery',
       consumed: false,
-      sourceAgentKind: 'codex',
+      sourceAgentKind: opts.agentKind ?? 'codex',
       sourceModel: opts.source.model,
       sourceProviderId: opts.source.providerId,
       sourceSdkSessionId: opts.source.sdkSessionId,
@@ -850,7 +855,7 @@ export async function forkSessionAtMessage(
 
   // 1. 读 source session
   const [source] = await db
-    .select()
+    .select({ ...getTableColumns(sessions), companionRevision: sql<number | null>`(SELECT revision FROM project_task_companions WHERE session_id = "sessions"."id")` })
     .from(sessions)
     .where(eq(sessions.id, sourceSessionId))
     .limit(1);
@@ -891,7 +896,13 @@ export async function forkSessionAtMessage(
     throw forkError('NOT_USER_MESSAGE', 'fork 只能在 user 或 assistant 消息上发起');
   }
 
+  const companionRevision = source.companionRevision ?? 0;
   const forkSource = await resolveForkNativeSource(sourceSessionId, source, target);
+  if (companionRevision) {
+    forkSource.sdkSessionId = null;
+    forkSource.reuseVendorSession = false;
+    forkSource.rebuildReason = 'native-session-recovery';
+  }
 
   // 2.5 复制边界(exclusive)：user 不含自身；assistant 带完整 turn，到下一条 user
   // 为止。若目标片段先离场，则在 agent_switch 之前截断，不能把未来切换带进子分支。
@@ -1012,7 +1023,7 @@ export async function forkSessionAtMessage(
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
   let usedNativeForkAnchor = false;
-  let needsHistoryRecovery = isCodex
+  let needsHistoryRecovery = !!companionRevision || isCodex
     && !forkSource.reuseVendorSession
     && forkSource.rebuildReason === 'native-session-recovery';
   if (
@@ -1096,7 +1107,8 @@ export async function forkSessionAtMessage(
   const now = Date.now();
 
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
-  const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
+  const recoveryMarker = needsHistoryRecovery ? buildForkRecoveryMarker({
+    companionHistory: !!companionRevision, agentKind: forkSource.agentKind,
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
     targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {
       ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
@@ -1125,6 +1137,7 @@ export async function forkSessionAtMessage(
   try {
     await dbClient.tx('fork.session', {
       sourceSessionId,
+      expectedCompanionRevision: companionRevision,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: copyBoundary.createdAt,
       targetRowid: copyBoundary.rowid,
@@ -1207,14 +1220,15 @@ export async function forkSessionAtMessage(
       reason: forkSource.rebuildReason,
     });
   }
-  return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
+  const copiedCount = recoveryMarker?.projectMessages?.length ?? sourceMessages.length;
+  return sessionToCamel({ ...row, messageCount: copiedCount + (recoveryMarker ? 1 : 0) });
 }
 
 export async function forkSessionStripEncrypted(sourceSessionId: string): Promise<Session> {
   const db = getDbClient().drizzle;
 
   const [source] = await db
-    .select()
+    .select({ ...getTableColumns(sessions), companionRevision: sql<number | null>`(SELECT revision FROM project_task_companions WHERE session_id = "sessions"."id")` })
     .from(sessions)
     .where(eq(sessions.id, sourceSessionId))
     .limit(1);
@@ -1305,7 +1319,8 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const newTitle = source.title.startsWith(STRIP_FORK_TITLE_PREFIX)
     ? source.title
     : `${STRIP_FORK_TITLE_PREFIX} ${source.title}`;
-  const { newSdkSessionId, uuidMap } = await getMaker()
+  const companionRevision = source.companionRevision ?? 0;
+  const { newSdkSessionId, uuidMap } = companionRevision ? { newSdkSessionId: null, uuidMap: new Map<string, string>() } : await getMaker()
     .forkSdkSession('codex', {
       sourceSdkSessionId: source.sdkSessionId,
       model: source.model,
@@ -1329,7 +1344,8 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const now = Date.now();
   const newSessionId = createBusinessSessionId();
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
-  const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
+  const recoveryMarker = newSdkSessionId === null ? buildForkRecoveryMarker({
+    companionHistory: !!companionRevision,
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
     targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, { ...source, agentKind: 'codex' }),
   }) : undefined;
@@ -1339,6 +1355,7 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   try {
     await getDbClient().tx('fork.session', {
       sourceSessionId,
+      expectedCompanionRevision: companionRevision,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: copyBeforeCreatedAt,
       targetRowid: null,
@@ -1382,5 +1399,6 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
   }
-  return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
+  const copiedCount = recoveryMarker?.projectMessages?.length ?? sourceMessages.length;
+  return sessionToCamel({ ...row, messageCount: copiedCount + (recoveryMarker ? 1 : 0) });
 }

@@ -15,9 +15,33 @@ import {
   formatIdleGapForHandoff,
 } from '../agentHandoff';
 
+import { projectCompanionHandoffHistory } from '../../localDb/projectCompanionTranscript';
+
 function msg(role: string, content: unknown, createdAt = 0): HandoffSourceMessage {
   return { role, content, createdAt };
 }
+
+// Unit: a project identity change must carry the visible agreement but neither old notes nor
+// private source metadata. The normal IM handoff intentionally restores those source details.
+it('hands a new project companion only the visible project conversation', () => {
+  const source = [
+    { ...msg('user', 'Remember the issue number P17'), agentMeta: { imSource: { im: 'slack', contextSnapshot: { groupContext: 'PRIVATE_GROUP' } } } },
+    msg('tool_result', 'PRIVATE_NOTE'), { ...msg('assistant', 'PRIVATE_REPLY'), agentMeta: { botPrivateReply: true } },
+    { ...msg('assistant', [{ type: 'thinking', text: 'PRIVATE_THOUGHT' }, { type: 'text', text: 'Agreed.' }]),
+      agentMeta: { projectCompanion: { displayName: 'Alice' } } },
+  ];
+  const visible = projectCompanionHandoffHistory(source);
+  const recovered = buildHandoffText(source.map(row => ({ ...row, projectCompanionHistory: true })), {
+    fromLabel: 'Alice', toLabel: 'Alice', reason: 'context-overflow',
+  });
+  expect(recovered).toContain('P17');
+  expect(recovered).not.toContain('PRIVATE_');
+  const prompt = buildHandoffText(visible, { fromLabel: 'Alice', toLabel: 'Bob', sessionId: 'project' });
+  expect(prompt).toContain('P17');
+  expect(prompt).toContain('[Assistant · Alice]');
+  expect(prompt).toContain('Agreed.');
+  expect(prompt).not.toContain('PRIVATE_');
+});
 
 describe('IM context handoff', () => {
   it.each(['imSource', 'hookSource'])('restores filtered quoted background for empty %s turns', (key) => {

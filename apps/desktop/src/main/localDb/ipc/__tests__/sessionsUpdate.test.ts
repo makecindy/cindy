@@ -120,6 +120,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
 }));
 vi.mock('../../../appSessionState', () => ({
   activeOwnerScopeKey: () => 'owner-a',
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner-a', ownerGeneration: 1 }),
   isAppSessionBoundaryPending: () => false,
   getActiveAppSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.userDataDir!, ...parts),
@@ -129,6 +130,7 @@ vi.mock('../../../logger', () => ({
 }));
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: () => h,
+  tryGetDbClient: () => h.client,
   getDbClient: () => h.client,
   getCurrentDbClientUserId: () => 'test-user',
 }));
@@ -2210,6 +2212,32 @@ describe('local-db:sessions:set-pinned-card-summaries', () => {
     await expect(invokeSetPinnedCardSummaries({}, true)).rejects.toThrow('UNTRUSTED_RENDERER');
     expect(h.setPinnedSectionCardMode).not.toHaveBeenCalled();
   });
+});
+
+// DB integration: the ordinary creation service must persist the selected partner before the
+// first turn, including a typed-but-unsent draft. A Host without the local validator cannot bind it.
+it('creates the empty local project and the chosen companion before any message is sent', async () => {
+  const { createUserSession } = await import('../createUserSession.js');
+  h.sqlite!.exec(`
+    INSERT INTO bot_profiles (id, status) VALUES ('companion','active');
+    CREATE TABLE project_task_companions (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+      bot_id TEXT, revision INTEGER NOT NULL);
+  `);
+  Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+  const ports = { senderId: 7, userDataDir: h.userDataDir!, notifyPluginSessionCreated: vi.fn() };
+  const projectDir = path.join(h.userDataDir!, 'sample-project');
+  await mkdir(projectDir);
+  h.sqlite!.prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, 1)').run(projectDir);
+  const request = { id: 'partner-first', projectCompanionId: 'companion', workspaceKind: 'project',
+    projectDir, provisional: true, model: 'test-model' };
+  await expect(createUserSession(request, ports)).rejects.toThrow(/PRECONDITION_FAILED/);
+  const validateProjectCompanion = vi.fn(async () => {});
+  const session = await createUserSession(request, { ...ports, validateProjectCompanion });
+  expect(validateProjectCompanion).toHaveBeenCalledWith('companion');
+  expect(session._count?.messages).toBe(0);
+  expect(h.sqlite!.prepare('SELECT bot_id, revision FROM project_task_companions WHERE session_id=?').get(session.id))
+    .toEqual({ bot_id: 'companion', revision: 1 });
+  expect(ports.notifyPluginSessionCreated).not.toHaveBeenCalled();
 });
 
 it('opens a normal renderer task through shared model admission', async () => {

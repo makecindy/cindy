@@ -52,6 +52,8 @@ function wrapDrizzleObject<T>(target: T, transport: DbTransport | (() => DbTrans
 
       return (...args: unknown[]) => {
         const result = value.apply(currentTarget, args);
+        // Compiled SQL is data that callers can send to a database worker.
+        if (prop === 'toSQL') return result;
         if (result === currentTarget) return receiver;
         return shouldWrap(result) ? wrapDrizzleObject(result, transport) : result;
       };

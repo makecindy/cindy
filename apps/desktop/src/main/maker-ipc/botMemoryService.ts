@@ -216,6 +216,29 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
   }
 
   return {
+    async rememberPreference(botId: string, input: { name: string; title: string; body: string }, assertAccess: () => Promise<void>) {
+      const { name, title, body } = input;
+      if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(name) || !title.trim() || title.length > BOT_MEMORY_TITLE_MAX
+        || !body.trim() || Buffer.byteLength(body, 'utf8') > BOT_MEMORY_BODY_MAX_BYTES)
+        throwIpcError('INVALID_PARAMS', 'Invalid preference');
+      const { store, owner } = await storeOf(botId);
+      const filename = `user_${name}.md`;
+      await serialized(`${botId}/${filename}`, async () => {
+        await assertAccess();
+        owner.assertCurrent?.();
+        const existing = await store.read(filename).catch(error => {
+          if (error instanceof MemoryError && error.code === 'not-found') return null;
+          throw error;
+        });
+        if (existing?.body === body && existing.frontmatter.title === title) return;
+        await assertAccess();
+        owner.assertCurrent?.();
+        await store.write({ type: 'user', name, title, description: botMemoryDescriptionFromBody(body),
+          body, mode: 'create' }).catch(translateStoreError);
+      });
+      scheduleRefresh(owner);
+      return { filename };
+    },
     /** Deterministic source-document import; uses the same index, FTS and owner fence as settings. */
     async importDocument(botId: string, id: string, title: string, text: string, type: 'user' | 'reference' = 'reference'): Promise<void> {
       if (!/^[a-z0-9_-]{1,40}$/.test(id) || !text.trim()) throwIpcError('INVALID_PARAMS', 'Invalid imported memory');

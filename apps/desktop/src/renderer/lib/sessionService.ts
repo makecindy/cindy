@@ -102,6 +102,7 @@ export async function create(body?: {
   title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
+  projectCompanionId?: string;
   model?: string;
   effort?: string;
   permissionMode?: string;

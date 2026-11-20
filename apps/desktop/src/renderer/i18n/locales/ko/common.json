@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "이 파트너와 대화하려면 이 컴퓨터의 모델을 선택하세요.",
+    "title": "대화 파트너",
+    "default": "기본 어시스턴트",
+    "changed": "다른 창에서 대화 파트너를 변경했습니다.",
+    "busy": "현재 응답과 대기 중인 메시지 처리가 끝나면 파트너를 변경하세요.",
+    "failed": "이 파트너를 선택할 수 없습니다. 이 컴퓨터에서 활성화되어 있는지 확인하세요.",
+    "unavailable": "파트너를 사용할 수 없음"
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",

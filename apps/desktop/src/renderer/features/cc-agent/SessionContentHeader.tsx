@@ -66,6 +66,7 @@ import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentit
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { useProjectTaskCompanion } from './hooks/useProjectTaskCompanion';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -152,6 +153,7 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
+  const projectCompanion = useProjectTaskCompanion(session);
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
@@ -659,6 +661,12 @@ export function SessionContentHeader({
       {!isEditing && <OrcaRemoteLeadBadge session={session} />}
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
+      {!isEditing && projectCompanion?.botId && (
+        <Button variant="secondary" tone="quiet" size="sm" style={WINDOW_NO_DRAG_STYLE} disabled={readOnly}
+          title={t('projectCompanion.title')} onClick={() => setMenuOpen(true)}>
+          <span className="max-w-32 truncate">{projectCompanion.displayName ?? t('projectCompanion.unavailable')}</span>
+        </Button>
+      )}
 
       {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少

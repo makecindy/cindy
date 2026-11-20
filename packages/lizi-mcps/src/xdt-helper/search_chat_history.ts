@@ -138,10 +138,12 @@ export function registerSearchChatHistoryTool(
         limit,
         cursor,
       } = args;
+      const defaultId = session_ids === undefined && !workdir && !args.teammate_id && !args.source
+        ? deps.history.defaultConversationId?.(deps.getSessionContext?.()) : undefined;
       const scope = await resolveHistoryScope(
         deps.history,
         deps.getSessionContext,
-        session_ids ?? null,
+        session_ids ?? (defaultId ? [defaultId] : null),
       );
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       if (

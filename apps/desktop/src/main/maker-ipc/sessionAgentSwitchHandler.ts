@@ -221,6 +221,7 @@ export interface AgentSwitchSessionRow {
 const AGENT_DEVICE_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  assertCompanionSwitchTargetAllowed?(sessionId: string): Promise<void>;
   /**
    * 任务要换到供应商组那一项(组所在电脑上那个建了组的供应商)时，由组按它的状态选一台能用的电脑
    * (docs/product-rules/provider-groups.md §6)：返回选中那台的位置；不是组那一项或组读不到返回 null(照用户选的位置)；
@@ -989,6 +990,7 @@ export async function performSessionAgentSwitch(
       commitProviderGroupBinding = chosen.commitBinding;
     }
   }
+  if (targetAgentDeviceId || targetAgentKind === 'acp') await deps.assertCompanionSwitchTargetAllowed?.(sessionId);
   const agentDeviceChanges = targetAgentDeviceId !== currentAgentDeviceId;
   // 组内同一台电脑可有多个独立连接。换连接必须关闭旧原生会话并全量交接，不能落入同引擎 no-op，
   // 也不能把旧账号的停泊会话或原生历史交给新账号。只认组内立即执行／组选结果，不改变普通换模型语义。

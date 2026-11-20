@@ -29,10 +29,12 @@ const state = vi.hoisted(() => ({
   publishGhosts: null as null | ((value: { ghosts: InstalledGhost[] }) => void),
   runtimePlugins: vi.fn(),
   candidates: vi.fn(),
+  projectTaskCompanion: vi.fn(),
 }));
+vi.mock('../../hooks/useTaskBotMentions', () => ({ useTaskBotMentions: () => [{ id: 'xiaoman', name: '小满' }] }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'projectCompanion.title' ? 'Conversation partner' : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -109,12 +111,27 @@ beforeEach(() => {
   state.setMuted.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+    electronAPI: { maker: { projectTaskCompanion: state.projectTaskCompanion },
+      localDb: { sessionsPush: { onPatched: () => () => {} } }, sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
       ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
         runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
 });
 afterEach(cleanup);
+
+// Unit: picking a partner in the ordinary task menu must address the project task with
+// its last observed revision; opening a canonical chat would discard the current conversation.
+it('chooses the partner for this project task through its title menu', async () => {
+  state.projectTaskCompanion.mockResolvedValueOnce({ botId: null, revision: 2, displayName: null })
+    .mockResolvedValue({ botId: 'xiaoman', revision: 3, displayName: '小满' });
+  render(<Harness target={{ ...session, workspaceKind: 'project', source: 'desktop', workingDir: '/repo' }} />);
+  openMenu();
+  await waitFor(() => expect(state.projectTaskCompanion).toHaveBeenCalledWith('task'));
+  const partnerMenu = await screen.findByRole('menuitem', { name: 'Conversation partner' });
+  fireEvent.keyDown(partnerMenu, { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: '小满' }));
+  expect(state.projectTaskCompanion).toHaveBeenCalledWith('task', { botId: 'xiaoman', expectedRevision: 2 });
+});
 
 // Unit, production menu/dialog: #9803 added an entry to every local task even
 // without a relevant plugin. A saved selection must remain clearable after uninstall.

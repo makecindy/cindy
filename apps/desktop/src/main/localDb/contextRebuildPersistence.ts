@@ -25,6 +25,7 @@ export async function commitContextRebuildWithPorts(
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
     expectedSdkSessionId?: string;
+    projectCompanion?: ContextRebuildArgs['projectCompanion'];
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
@@ -49,6 +50,7 @@ export async function commitContextRebuildWithPorts(
     markerCreatedAt: now,
     updatedAt: now,
     expectedClearedAt: meta.expectedClearedAt ?? null,
+    ...(meta.projectCompanion ? { projectCompanion: meta.projectCompanion } : {}),
     ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
     ...(meta.expectedSdkSessionId !== undefined ? { expectedSdkSessionId: meta.expectedSdkSessionId } : {}),
   });

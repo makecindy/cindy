@@ -487,6 +487,7 @@ export interface ChatMessage {
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: HistoryCacheReceipt;
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
+  projectCompanionName?: string;
   botPrivateReply?: boolean;
   /** The user input (clientId) this assistant reply answers, from the turn's accepted input. */
   replyToClientId?: string;
@@ -6123,6 +6124,7 @@ export function handleStreamEvent(
     ? 'commentary'
     : typeof phaseData?.phase === 'string' ? phaseData.phase : incomingMeta?.assistantPhase;
   const assistantMetaFields: {
+    projectCompanionName?: string;
     botPrivateReply?: boolean;
     replyToClientId?: string;
     assistantPhase?: string;
@@ -6138,6 +6140,7 @@ export function handleStreamEvent(
       ? { parentToolUseId: incomingMeta.parentUuid }
       : {}),
     ...(incomingMeta?.turnCompleted === true ? { turnCompleted: true } : {}),
+    ...(typeof incomingMeta?.projectCompanion?.displayName === 'string' ? { projectCompanionName: incomingMeta.projectCompanion.displayName } : {}),
     ...(typeof incomingMeta?.botPrivateReply === 'boolean' ? { botPrivateReply: incomingMeta.botPrivateReply } : {}),
     ...(typeof incomingMeta?.replyToClientId === 'string' && incomingMeta.replyToClientId
       ? { replyToClientId: incomingMeta.replyToClientId } : {}),
@@ -6290,6 +6293,7 @@ export function handleStreamEvent(
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true ||
+          assistantMetaFields.projectCompanionName !== undefined ||
           assistantMetaFields.botPrivateReply !== undefined ||
           assistantMetaFields.replyToClientId !== undefined;
         const shouldCalibrateText = Boolean(
@@ -20626,6 +20630,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(botStarterOptions.length ? { botStarterOptions } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
+      ...(m.role === 'assistant' && typeof m.agentMeta?.projectCompanion?.displayName === 'string' ? { projectCompanionName: m.agentMeta.projectCompanion.displayName } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       ...(m.role === 'assistant' && typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
         ? { replyToClientId: m.agentMeta.replyToClientId } : {}),

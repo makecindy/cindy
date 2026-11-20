@@ -138,6 +138,8 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 
 async function submit(options: {
   entry?: 'send' | 'goal';
+  projectCompanionId?: string;
+  beforeProjectSelection?: boolean;
   createFailure?: boolean;
   sourceBranch?: string;
   defaultSourceBranch?: string;
@@ -336,7 +338,9 @@ async function submit(options: {
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
-    effectiveWorkingDir: hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
+    setFolderPickerOpen: vi.fn(),
+    effectiveWorkingDir: options.beforeProjectSelection ? null : hasWorktree || options.worktree || options.projectCompanionId ? baseRepo : options.remoteHostId ? '/remote/project' : null,
+    projectCompanionId: options.projectCompanionId,
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
@@ -457,6 +461,37 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // Unit: exercise the real submission and IPC adapter for a project first send.
+  // Losing this field on either creation path starts the default assistant even though a partner is visibly selected.
+  it.each([false, true])('creates the original project task with its chosen partner before sending (worktree %s)', async enabled => {
+    const result = await submit({
+      projectCompanionId: 'partner-a',
+      worktree: { enabled, sourceBranch: 'main' },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate).toHaveBeenCalledWith(expect.objectContaining({ projectCompanionId: 'partner-a', workspaceKind: 'project' }));
+    expect(result.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the project picker before creating a task when the partner was selected first', async () => {
+    const result = await submit({ projectCompanionId: 'partner-a', beforeProjectSelection: true });
+    expect(result.environment.setFolderPickerOpen).toHaveBeenCalledWith(true);
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it('keeps a selected local companion draft when a plugin routes the first send to another device', async () => {
+    const result = await submit({
+      projectCompanionId: 'partner-a',
+      pluginRoute: async () => ({ outcome: 'routed', pluginName: 'Router', modelName: modelId,
+        reason: 'fixture', route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'remote' } }),
+    });
+    expect(result.toastError).toHaveBeenCalledWith('projectCompanion.localModel');
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+  });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
   it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {

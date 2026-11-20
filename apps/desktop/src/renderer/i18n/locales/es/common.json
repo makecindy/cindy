@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "Elige un modelo en este equipo para hablar con este compañero.",
+    "title": "Compañero de conversación",
+    "default": "Asistente predeterminado",
+    "changed": "El compañero cambió en otra ventana.",
+    "busy": "Espera a que terminen la respuesta y los mensajes en cola para cambiar de compañero.",
+    "failed": "No se pudo seleccionar este compañero. Comprueba que esté activo en este ordenador.",
+    "unavailable": "Compañero no disponible"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",

@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "Wähle ein Modell auf diesem Computer, um mit diesem Begleiter zu chatten.",
+    "title": "Gesprächspartner",
+    "default": "Standardassistent",
+    "changed": "Der Gesprächspartner wurde in einem anderen Fenster geändert.",
+    "busy": "Warte, bis die Antwort und alle ausstehenden Nachrichten verarbeitet sind.",
+    "failed": "Dieser Partner ist nicht verfügbar. Prüfe, ob er auf diesem Computer aktiv ist.",
+    "unavailable": "Partner nicht verfügbar"
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",

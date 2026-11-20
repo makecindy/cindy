@@ -111,6 +111,17 @@ describe('provisional draft task', () => {
     expect(provisionalDraftTaskId()).toBeNull();
   });
 
+  // Unit: switching the picker after typing must not hand the earlier prewarmed identity to the first send.
+  it('replaces the provisional partner and commits only the newly selected one', async () => {
+    await ensureProvisionalDraftTask(args({ projectCompanionId: 'first' }));
+    const next = args({ projectCompanionId: 'second' });
+    await ensureProvisionalDraftTask(next);
+    expect(mocks.discard).toHaveBeenCalledWith(next.id);
+    expect(mocks.create).toHaveBeenLastCalledWith(expect.objectContaining({ projectCompanionId: 'second' }));
+    expect((await takeProvisionalDraftTask(next))?.id).toBe(next.id);
+    expect(mocks.commit).toHaveBeenCalledTimes(1);
+  });
+
   // Unit regression for the 2026-10-23 sidebar jump: the old tests only checked
   // the final handoff, not grouping during commit or when draft identity clears.
   it('keeps the task in its project throughout the asynchronous send handoff', async () => {

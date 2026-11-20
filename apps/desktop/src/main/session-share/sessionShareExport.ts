@@ -34,6 +34,7 @@ import { findClaudeSessionJsonl } from '@cindy/maker-core';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { projectCompanionHandoffHistory } from '../localDb/projectCompanionTranscript.js';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createLogger } from '../logger.js';
 import { collectClaudeSdkSessionIds } from '../maker-host/claude-transcript-relocation.js';
@@ -151,6 +152,8 @@ export interface MediaMapEntry {
 
 interface SessionRow {
   id: string;
+  companionRevision: number | null;
+  companionBotId: string | null;
   title: string;
   workingDir: string | null;
   workspaceKind: string;
@@ -341,6 +344,19 @@ async function collectSessionPhaseA(
   const candidates: TranscriptCandidate[] = [];
   const refs: XdtshareTranscriptRef[] = [];
   let codexState: CodexThreadStateDump | null = null;
+
+  // 原生转录可能含伙伴的私有笔记；解除绑定后仍按同一可见范围导出。
+  if (session.companionRevision) {
+    const parsed = messages.filter(message => message.rewindAt == null).map(message => {
+      try { return { ...message, content: JSON.parse(message.content) as unknown }; }
+      catch { return message; }
+    });
+    const visible = projectCompanionHandoffHistory(parsed).map(row => ({
+      ...row, toolUseId: null, content: JSON.stringify(row.content),
+      agentMeta: row.agentMeta ? JSON.stringify(row.agentMeta) : null,
+    }));
+    return { session, messages: visible, zipPrefix, sdkSessionIds, activeSdkSessionId, candidates, refs, codexState };
+  }
 
   // 任务与消息属于本机，但原生转录属于运行 Agent 的电脑。本机可能残留切换
   // 供应商之前的同名转录，不能将它当作当前历史；按既有 db-only 格式导出。
@@ -612,6 +628,8 @@ export async function exportSessionShare(
     throw codedError('PRECONDITION_FAILED', 'remote sessions cannot be exported');
   }
   // 完整迁移仍要求原生历史；普通分享可按 db-only 导出远程供应商任务。
+  if (session.companionBotId && opts.migration)
+    throw codedError('PRECONDITION_FAILED', 'Switch this task to Cindy before migrating it');
   if (session.agentDeviceId && opts.migration) {
     throw codedError('PRECONDITION_FAILED', 'tasks whose agent runs on another computer cannot be exported');
   }
@@ -800,7 +818,7 @@ export async function exportSessionShare(
   const foundCount = allRefs.filter((t) => t.path !== null).length;
   let fidelity: XdtshareFidelity;
   if (allRefs.length === 0 || foundCount === 0) fidelity = 'db-only';
-  else if (foundCount === allRefs.length && !allA.some((a) => a.session.agentDeviceId)) fidelity = 'full';
+  else if (foundCount === allRefs.length && !allA.some((a) => a.session.agentDeviceId || a.session.companionRevision)) fidelity = 'full';
   else fidelity = 'partial';
 
   // ── 打 zip ──
@@ -922,6 +940,11 @@ export async function exportSessionShare(
   // tmp 名带随机段 + 'wx' 独占创建:固定 `${target}.tmp` 可被共享目录里预先
   // 种下的同名 symlink 劫持(writeFile 跟随链接覆盖任意目标,review bot 指出),
   // 随机名不可预测,wx 在路径已存在(含 symlink)时直接 EEXIST 拒写。
+  for (const { session: source } of allA) {
+    const current = await readSessionRow(source.id);
+    if (!current || (current.companionRevision ?? 0) !== (source.companionRevision ?? 0))
+      throw codedError('SHARE_EXPORT_FAILED', 'Conversation partner changed during export');
+  }
   if (activeOwnerScopeKey() !== ownerScope) {
     throw codedError('SHARE_EXPORT_FAILED', 'account changed during export');
   }
@@ -982,7 +1005,7 @@ function buildSessionSnapshot(
     permissionMode: session.permissionMode,
     // Pi 只写便携 id；远程供应商没有随包原生历史，不回退到不可恢复的 DB id。
     sdkSessionId:
-      session.agentKind === 'pi' || session.agentDeviceId
+      session.agentKind === 'pi' || session.agentDeviceId || session.companionRevision
         ? activeSdkSessionId
         : (activeSdkSessionId ?? session.sdkSessionId),
     totalTokenUsage: session.totalTokenUsage,
@@ -1074,6 +1097,8 @@ async function readSessionRow(sessionId: string): Promise<SessionRow | null> {
     (await getDbClient().queryOne<SessionRow>(
       `SELECT
         id, title,
+        (SELECT revision FROM project_task_companions WHERE session_id = sessions.id) AS companionRevision,
+        (SELECT bot_id FROM project_task_companions WHERE session_id = sessions.id) AS companionBotId,
         working_dir AS workingDir,
         workspace_kind AS workspaceKind,
         model, effort,
