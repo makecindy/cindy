@@ -300,7 +300,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -490,4 +490,19 @@ it.each(['live', 'tail'] as const)('explains rejected shared history on mobile %
   expect(host.querySelector('[data-testid="queue.inline.retryButton"]')).toBeNull();
   expect([...host.querySelectorAll('button')].some(button => button.textContent === i18n.t('session.tail.retry'))).toBe(false);
   expect(retry).not.toHaveBeenCalled();
+});
+
+// #8706 unit: mobile live and persisted history must both choose the quota translation.
+it.each(['live', 'tail'] as const)('renders quota guidance in the mobile %s surface', async surface => {
+  await i18n.changeLanguage('zh-CN');
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_PROVIDER_BODY';
+  const state = resolveSessionTailBanner({ messages: [row(message)], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message } as InputProjection} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
+  expect(host.textContent).not.toMatch(/PRIVATE_PROVIDER_BODY|完全访问/);
+  expect(normalizeRemoteMessages([row(message)])[0].body).toBe(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
 });

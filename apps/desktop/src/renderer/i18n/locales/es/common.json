@@ -1380,6 +1380,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
     "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+    "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Inténtalo de nuevo en breve.",
     "INVALID_PARAMS": "Entrada no válida. Revísala e inténtalo de nuevo.",
@@ -13202,6 +13203,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
           "autoReviewNoAvailableModel": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
           "autoReviewUnavailable": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
           "autoReviewUnavailableWechat": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
@@ -15243,7 +15245,7 @@
       "switchClaudeSubscriptionTitle": "Cambiar esta sesión a la suscripción de Claude.ai y reintentar",
       "switchingClaudeSubscription": "Cambiando a Claude.ai…",
       "claudeSubscriptionSwitchFailed": "No se pudo cambiar a Claude.ai o reintentar esta sesión: {{msg}}",
-      "codexAppServerRetired": "El servicio de Codex se reinició o fue reemplazado. La solicitud actual se interrumpió; ejecútala de nuevo.",
+      "codexAppServerRetired": "Se perdió la conexión con Codex y se interrumpió la solicitud en curso. Puedes continuar en esta sesión.",
       "codexAuthMissing": "Aún no se ha iniciado sesión en el Codex remoto (401 Unauthorized). Haz clic en «Sincronizar autenticación» para enviar tus credenciales locales de Codex al directorio de inicio de Cindy Codex remoto y luego reintenta.",
       "codexAuthMissingLocal": "No se pudo autenticar la conexión «{{provider}}» en este ordenador. Revisa su estado de inicio de sesión en la configuración y vuelve a esta sesión cuando se haya restablecido la conexión.",
       "codexSessionExpired": "La conexión con OpenAI necesita una actualización. Vuelve a conectar ChatGPT para continuar; {{appName}} no cerrará tu sesión en el Codex CLI del sistema ni te pedirá que vuelvas a conectar otras fuentes de modelos.",
@@ -15336,6 +15338,7 @@
       "continueFailed_many": "No se pudieron reanudar {{count}} sesiones. Ábrelas para volver a intentarlo."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
@@ -16011,10 +16014,12 @@
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar de Harness. Elige un modelo en su Harness actual o crea una nueva tarea SSH con el Harness que necesitas.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
+      "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a los archivos o imágenes adjuntos locales en sesiones remotas. En su lugar, pega el contenido directamente.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
       "AUTO_REVIEW_UNAVAILABLE": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
@@ -16248,7 +16253,6 @@
       "opened": "Se abrió una página de vista previa"
     },
     "sideChat": {
-      "openPage": "Abrir página completa de la tarea",
       "returnMain": "Volver a la tarea principal",
       "new": "Nuevo chat secundario",
       "mainWindowDescription": "Los chats secundarios se ejecutan actualmente en la ventana principal. Tu conversación está guardada.",
@@ -16256,6 +16260,14 @@
       "commandDescription": "Abre un chat secundario con el contexto de esta tarea. El texto opcional se convierte en un borrador de pregunta.",
       "title": "Chat secundario",
       "context": "Usa el contexto completado hasta el momento en que lo abriste. La tarea principal sigue ejecutándose. El historial se conserva hasta que cierres esta pestaña.",
+      "viewCollaboration": "Ver colaboración",
+      "openConversation": "Abrir conversación",
+      "openFromTaskList": "También en la lista de tareas de la izquierda.",
+      "returnToSideChat": "Volver a la consulta lateral",
+      "reopenSideChat": "Volver a abrir la consulta lateral",
+      "origin": "Esta conversación comenzó en una consulta lateral.",
+      "originNamed": "Esta conversación comenzó en una consulta lateral de «{{title}}».",
+      "originUnavailable": "Esta conversación comenzó en una consulta lateral. La tarea original no está disponible.",
       "opening": "Abriendo…",
       "notReady": "Espera a que la tarea principal complete su primera respuesta.",
       "unsupported": "El Agent de esta tarea se ejecuta en otro entorno. El chat secundario aún no está disponible aquí.",
@@ -16264,9 +16276,10 @@
       "mainTaskOnly": "Abre un chat secundario desde la tarea principal.",
       "sharedTaskUnavailable": "Los chats secundarios no están disponibles en tareas compartidas.",
       "archivedTask": "Desarchiva esta tarea para abrir un chat secundario.",
-      "closeTitle": "¿Cerrar el chat secundario?",
-      "closeDescription": "Este seguimiento se detendrá y su historial se eliminará. La tarea principal seguirá ejecutándose.",
-      "closeConfirm": "Cerrar y eliminar",
+      "closeTitle": "¿Cerrar y archivar este seguimiento?",
+      "closeDescription": "La tarea correspondiente de la barra lateral izquierda también se archivará.",
+      "closeDescriptionRunning": "La tarea correspondiente de la barra lateral izquierda también se archivará y sus Workers se detendrán.",
+      "closeConfirm": "Cerrar y archivar",
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
@@ -17207,7 +17220,41 @@
             "token": "Usando token de respaldo",
             "recheck": "Comprobar conexión",
             "summary": "Administra repositorios, incidencias, pull requests y Actions de GitHub.",
-            "otherMethods": "Otros métodos de conexión"
+            "otherMethods": "Otros métodos de conexión",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "Acceso de GitHub App",
+            "all": "Todos los repositorios",
+            "selected": "Repositorios seleccionados",
+            "visible": "Repositorios visibles: {{count}}",
+            "unknownCount": "Cantidad no disponible",
+            "permissions": "Permisos",
+            "read": "Solo lectura",
+            "write": "Lectura y escritura",
+            "admin": "Administración",
+            "loading": "Cargando acceso…",
+            "missing": "Conecta GitHub App en este equipo para ver el acceso.",
+            "unavailable": "Permisos no disponibles.",
+            "empty": "Esta cuenta no tiene instalaciones visibles.",
+            "suspended": "Instalación suspendida",
+            "events": "Repositorios con eventos suscritos en este equipo: {{count}}",
+            "manage": "Gestionar acceso a repositorios",
+            "names": {
+              "actions": "Actions",
+              "administration": "Administración del repositorio",
+              "checks": "Comprobaciones",
+              "contents": "Contenido del repositorio",
+              "deployments": "Despliegues",
+              "issues": "Issues",
+              "members": "Miembros de la organización",
+              "metadata": "Metadatos",
+              "organization_events": "Eventos de la organización",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Webhooks del repositorio",
+              "statuses": "Estados de commits",
+              "workflows": "Archivos de flujo de trabajo"
+            }
           },
           "app": {
             "title": "Eventos del repositorio",
@@ -17220,6 +17267,21 @@
             "repositories": "Elegir repositorios",
             "disconnect": "Desconectar eventos",
             "connect": "Conectar GitHub App"
+          },
+          "connection": {
+            "operations": "Operaciones del repositorio",
+            "operationsMissing": "Acceso al repositorio aún no autorizado",
+            "checking": "Comprobando conexión con GitHub…",
+            "mismatch": "Las operaciones y las notificaciones usan cuentas diferentes. Revísalas y vuelve a conectar.",
+            "ready": "Cuenta de GitHub conectada.",
+            "close": "Cerrar",
+            "incomplete": "Cuenta vinculada. Autoriza las operaciones en este equipo para terminar.",
+            "eventsOnly": "Esta cuenta recibe eventos del repositorio. Su nombre no confirma la autorización en este equipo.",
+            "connect": "Conectar GitHub",
+            "alternative": "Usar el inicio de sesión local de GitHub",
+            "cliDescription": "Puedes seguir usando tu sesión local. Las notificaciones personales y otras funciones no compatibles con GitHub Apps aún la necesitan.",
+            "disconnect": "Desconectar GitHub App",
+            "repositories": "Repositorios seguidos: {{count}}"
           }
         },
         "unresolved": "Hilos de revisión sin resolver: {{count}}",

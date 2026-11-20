@@ -252,6 +252,8 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
               ...(assessment
                 ? {
                     autoReviewUnavailable: assessment.unavailable === true,
+                    ...(assessment.unavailable === true && assessment.unavailableReason === 'quota_exhausted'
+                      ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
                     autoReviewReason: assessment.reason,
                   }
                 : {}),

@@ -140,11 +140,9 @@ import {
   DEFAULT_HOME_TASK_INFO_FIELDS,
   type HomeContentFilters,
   DEFAULT_HOME_FILTERS,
-  type HomeFilterSelection,
-  type HomeListViewMode,
+  type HomeModeDisplayPreferences,
   type HomeProjectFilter,
   type HomeTeammateFilter,
-  type HomeTaskInfoField,
 } from '@/session/homeDisplaySettings';
 import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
 import {
@@ -518,7 +516,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const residentList = useResidentHomeList(embedded);
   // Captured here: Android draws the list above the route, outside its roster and navigation context.
   const teammatesSectionContext = useHomeTeammatesSectionContext();
-  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode();
   // Bumped by a manual home refresh so the teammate section also re-reads its cloud companions.
   const [teammatesRefreshKey, setTeammatesRefreshKey] = useState(0);
   const activeHomeSession = useContext(ActiveHomeSession);
@@ -802,12 +799,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
   const [taskListMode, setTaskListMode] = useRetainedHomeState<'tasks' | 'inbox'>(viewSession, 'taskListMode', 'tasks');
-  const [taskFilters, setTaskFilters] = useRetainedHomeState<Partial<HomeFilterSelection>>(viewSession, 'taskFilters', {});
-  const [inboxFilters, setInboxFilters] = useRetainedHomeState<Partial<HomeFilterSelection>>(viewSession, 'inboxFilters', {});
-  const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations = false } =
+  const [taskFilters, setTaskFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'taskFilters', {});
+  const [inboxFilters, setInboxFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'inboxFilters', {});
+  const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations = false,
+    viewMode = 'list', taskInfoFields = DEFAULT_HOME_TASK_INFO_FIELDS } =
     { ...DEFAULT_HOME_FILTERS, ...(taskListMode === 'inbox' ? inboxFilters : taskFilters) };
-  const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
-  const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
+  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode(taskListMode);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
   const reloadHostProjectOrderRef = useRef<(() => Promise<void>) | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
@@ -1628,9 +1625,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const applyPreferences = (preferences: HomeViewPreferences | null) => {
       if (!preferences || restoredView) return;
       if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
-      // A late read still restores the other mode and any filter the user hasn't changed.
+      // A late read still restores the other mode and any display preference the user hasn't changed.
       const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations } = preferences;
-      setTaskFilters(current => ({ projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, ...current }));
+      setTaskFilters(current => ({ projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations,
+        viewMode: preferences.viewMode, taskInfoFields: preferences.taskInfoFields, ...current }));
       setInboxFilters(current => ({ ...preferences.inboxFilters, ...current }));
       if (viewPrefsTouchedRef.current) return;
       setGroupByProject(preferences.groupByProject);
@@ -1641,8 +1639,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       setProjectOrder(preferences.projectOrder);
       setManualProjectOrder(preferences.manualProjectOrder);
       setTaskListMode(preferences.taskListMode ?? 'tasks');
-      setViewMode(preferences.viewMode);
-      setTaskInfoFields(preferences.taskInfoFields);
       if (preferences.selectedDevice) {
         setSelectedDeviceId(preferences.selectedDevice.deviceId);
         setRestoredDeviceName(preferences.selectedDevice.name);
@@ -2841,22 +2837,22 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
-    const filterPatch: Partial<HomeFilterSelection> = {};
-    if (nextPatch.projectFilter !== undefined) filterPatch.projectFilter = nextPatch.projectFilter;
-    if (nextPatch.teammateFilter !== undefined) filterPatch.teammateFilter = nextPatch.teammateFilter;
-    if (nextPatch.vendorFilter !== undefined) filterPatch.vendorFilter = nextPatch.vendorFilter;
-    if (nextPatch.lastActivityFilter !== undefined) filterPatch.lastActivityFilter = nextPatch.lastActivityFilter;
-    if (nextPatch.hideAutomations !== undefined) filterPatch.hideAutomations = nextPatch.hideAutomations;
-    if (Object.keys(filterPatch).length > 0) {
-      const setFilters = taskListMode === 'inbox' ? setInboxFilters : setTaskFilters;
-      setFilters(current => ({ ...current, ...filterPatch }));
+    const modePatch: Partial<HomeModeDisplayPreferences> = {};
+    if (nextPatch.projectFilter !== undefined) modePatch.projectFilter = nextPatch.projectFilter;
+    if (nextPatch.teammateFilter !== undefined) modePatch.teammateFilter = nextPatch.teammateFilter;
+    if (nextPatch.vendorFilter !== undefined) modePatch.vendorFilter = nextPatch.vendorFilter;
+    if (nextPatch.lastActivityFilter !== undefined) modePatch.lastActivityFilter = nextPatch.lastActivityFilter;
+    if (nextPatch.hideAutomations !== undefined) modePatch.hideAutomations = nextPatch.hideAutomations;
+    if (nextPatch.viewMode !== undefined) modePatch.viewMode = nextPatch.viewMode;
+    if (nextPatch.taskInfoFields !== undefined) modePatch.taskInfoFields = nextPatch.taskInfoFields;
+    if (Object.keys(modePatch).length > 0) {
+      const setPreferences = taskListMode === 'inbox' ? setInboxFilters : setTaskFilters;
+      setPreferences(current => ({ ...current, ...modePatch }));
     }
     if (nextPatch.taskListMode !== undefined) {
       setTaskListMode(nextPatch.taskListMode);
       homeListRef.current?.getScrollResponder()?.scrollTo({ y: 0, animated: false });
     }
-    if (nextPatch.viewMode !== undefined) setViewMode(nextPatch.viewMode);
-    if (nextPatch.taskInfoFields !== undefined) setTaskInfoFields(nextPatch.taskInfoFields);
     if (selectedDeviceId && nextPatch.projectOrder) {
       if (!isHostProjectOrderReachable(hostProjectOrders.get(selectedDeviceId))) {
         if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
@@ -3373,7 +3369,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }}
         sections={sections}
         ListHeaderComponent={<>
-        <HomeTeammatesSection context={teammatesSectionContext} active={active} refreshKey={teammatesRefreshKey}
+        <HomeTeammatesSection showCollapsedAvatars={showCollapsedTeammateAvatars} context={teammatesSectionContext} active={active} refreshKey={teammatesRefreshKey}
           push={guardedPush}
           // Independent of the computer-connection guide: server group chats and cloud companions need no computer.
           visible={indexedSearch.activeFilterCount === 0 && displayedStatus !== 'archived'}

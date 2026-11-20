@@ -1,6 +1,7 @@
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
+import { patchSessionWithDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { playHaptic } from '@/platform/haptics';
@@ -194,7 +195,7 @@ import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cin
 import { SideChatsSheet } from '@/session/SideChatsSheet';
 import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
-import { buildMobileSessionRenderWindow } from '@/session/mobileHistoryRender';
+import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
@@ -1254,7 +1255,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
   const sideChatParent = useRemoteSessionDetail(deviceId, currentSession?.source === 'side-chat' ? (currentSession.parentSessionId ?? '')
       : '');
-  const sideChatBoundary = currentSession?.source === 'side-chat' ? Date.parse(currentSession.createdAt) : undefined;
+  const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
@@ -10054,6 +10055,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const { rpcDeviceId, shardId } = resolveSessionWriteDevices(sessionId, session, deviceId)
       ?? { rpcDeviceId: deviceId, shardId: deviceId };
     const leavesDetailScreen = patch.status === 'deleted';
+    const deleteTarget = leavesDetailScreen
+      ? session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined
+      : undefined;
     if (leavesDetailScreen) {
       goBackToHome();
     }
@@ -10073,12 +10077,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           write.isLatest,
           // preSend:重连等待(最长 1.5s)之后、真正出网之前再查一次让位——本页同
           // 字段连续两次操作时,前笔在等待中被取代不得再发出(review P2)。
-          (assertStillLatest) => invoke<RemoteSession>(
+          (assertStillLatest) => patchSessionWithDeleteTarget(patch, deleteTarget, body => invoke<RemoteSession>(
             rpcDeviceId,
             'local-db:sessions:patch-meta',
-            [sessionId, patch],
+            [sessionId, body],
             { preSend: assertStillLatest },
-          ),
+          )),
+          deleteTarget ? 1 : undefined,
         )), write.isLatest);
         if (updated && write.isLatest()) {
           // 字段级对账 + updatedAt 单调下限(同首页):整对象覆盖会冲掉其它字段

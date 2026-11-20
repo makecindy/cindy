@@ -477,6 +477,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     if (live) this.options.onDirectory?.([...next.values()]);
     this.dialRoster();
@@ -557,6 +558,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // Admission changed: the transport forgets handshakes it refused under the old rule (admissionVersion), so a member
     // let back in connects now instead of after the remembered refusal expires.
     this.directoryRevision++;
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     this.dialRoster();
   }

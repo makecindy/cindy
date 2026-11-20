@@ -1,6 +1,6 @@
 import { CredentialModeSwitchBusyError, CodexCredentialModeSwitchBusyError, isCredentialModeSwitchBusyError } from './credentialSwitchError.js';
 export { CredentialModeSwitchBusyError, CodexCredentialModeSwitchBusyError, isCredentialModeSwitchBusyError } from './credentialSwitchError.js';
-import { providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
+import { isOpenAiSubscriptionProvider, providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
@@ -31,9 +31,12 @@ import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 import { getActiveCatalog } from './active-catalog.js';
 
 function resolveAgentCredentialMode(input: Parameters<typeof resolveBaseCredentialMode>[0]): AgentCredentialMode | undefined {
-  if (input.agentKind === 'codex' && getActiveCatalog().providers.some(
-    (provider) => provider.id === input.providerId && provider.auth.native === 'codex',
-  )) return 'oauth-bearer';
+  if (input.agentKind === 'codex' && getActiveCatalog().providers.some((provider) => {
+    if (provider.id !== input.providerId) return false;
+    // 拆出来的 OpenAI 订阅来源只有 subscriptionPool，没有 auth.native。
+    // 它和内置 openai 共用 cindy_openai 线程家族，不能按普通供应商期待 cindy_gateway。
+    return provider.auth.native === 'codex' || isOpenAiSubscriptionProvider(provider);
+  })) return 'oauth-bearer';
   return resolveBaseCredentialMode(input);
 }
 

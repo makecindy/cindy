@@ -12,7 +12,7 @@ import { sessions } from '../localDb/schema';
 
 export async function listSideChats(sourceSessionId: string): Promise<Array<{ id: string }>> {
   return getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(and(
-    eq(sessions.parentSessionId, sourceSessionId), eq(sessions.source, 'side-chat'),
+    eq(sessions.parentSessionId, sourceSessionId), eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, false),
     or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
   )).orderBy(asc(sessions.createdAt));
 }
