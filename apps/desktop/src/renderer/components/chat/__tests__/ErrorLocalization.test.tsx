@@ -38,6 +38,22 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = 'app-server force-retired: transport error: codex app-server transport closed: child exited (exit code=0)';
+  const reason = 'app-server-force-retired';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason={reason} agentKind="codex" retryText="continue" onRetry={retry} />
+    : <ErrorMessageCard message={message} reason={reason} />}</I18nextProvider>);
+  expect(screen.getByText('The connection to Codex was lost. The current request was interrupted. You can continue in this session.')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledOnce();
+  }
+});
+
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
 it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {

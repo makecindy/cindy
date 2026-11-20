@@ -15244,7 +15244,7 @@
       "switchClaudeSubscriptionTitle": "Mudar esta sessão para a subscrição Claude.ai e tentar novamente",
       "switchingClaudeSubscription": "A mudar para Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Não foi possível mudar para Claude.ai ou repetir esta sessão: {{msg}}",
-      "codexAppServerRetired": "O serviço Codex foi reiniciado ou substituído. O pedido atual foi interrompido; execute-o novamente.",
+      "codexAppServerRetired": "A ligação ao Codex perdeu-se e o pedido em curso foi interrompido. Podes continuar nesta sessão.",
       "codexAuthMissing": "Ainda não foi iniciada sessão no Codex remoto (401 Unauthorized). Clique em \"Sincronizar autenticação\" para enviar as credenciais locais do Codex para o diretório base do Cindy Codex remoto e tente novamente.",
       "codexAuthMissingLocal": "Não foi possível autenticar a ligação «{{provider}}» neste computador. Verifique o estado de início de sessão nas definições e volte a esta sessão depois de restabelecer a ligação.",
       "codexSessionExpired": "A ligação à OpenAI precisa de ser atualizada. Volte a ligar o ChatGPT para continuar; o {{appName}} não irá terminar a sessão do Codex CLI do sistema nem pedir que volte a ligar outras origens de modelos.",
