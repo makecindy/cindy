@@ -158,6 +158,24 @@ it('keeps a pinned task on its original computer after its companion moves', asy
 
 // #10112, unit tier: the former-home route must show the local failure rather
 // than spin forever; automatic recovery follows the completed home projection.
+// #8585, unit: a same-home install shadow without a validation failure must be
+// reachable from both its cloud row and a former-home link, even with stale rows.
+it.each([true, false])('opens read-only local installation recovery with a stale listed row: %s', async listed => {
+  h.listed = listed;
+  h.cached = listed;
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const view = render(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
+  expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ botId: 'writer', deviceId: 'home' }));
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.navigate).not.toHaveBeenCalled();
+  h.cloud = { ...h.cloud, demotedBotIds: [] };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });
+});
+
 it.each([true, false])('keeps rejected local source editing open until recovery (demoted: %s)', async demoted => {
   h.listed = false;
   const failure = { field: 'identitySource' as const, maxLength: 12000 };

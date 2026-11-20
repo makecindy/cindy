@@ -13,7 +13,7 @@ import { BotAvatar } from './BotAvatar';
 import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
 import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
-import { cloudCompanionAt, homeControlOff } from './companionCloudPresentation';
+import { cloudCompanionAt, homeControlOff, localCompanionNeedsRecovery } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDelayedFlag } from '@/features/cc-agent/workdir-browse/hooks/useDelayedFlag';
 // Loaded only when a main computer is offline; keeps the live remote path light.
@@ -51,10 +51,10 @@ function RemoteBotSessionGate() {
   const deviceList = useDeviceLinkDeviceList();
   const cloudActor = cloudCompanionAt(cloud, deviceId, botId);
   const homeActor = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId) : undefined;
-  const rejectedHere = homeActor?.homeDeviceId === cloud.selfDeviceId && !!homeActor?.profileFailure;
+  const recoveryHere = localCompanionNeedsRecovery(cloud, botId);
   const deviceListState = useDeviceLinkDeviceListRequestState();
   const recoveringHere = useRef(false);
-  if (rejectedHere) recoveringHere.current = true;
+  if (recoveryHere) recoveringHere.current = true;
   const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(() => {
     if (!bot?.sessionId || !deviceId || (requestedSessionId && requestedSessionId !== bot.sessionId)
       || remoteProjectsStore.getSessionDeviceId(bot.sessionId) !== deviceId) return null;
@@ -71,7 +71,7 @@ function RemoteBotSessionGate() {
     const owner = getDataOwnerGeneration();
     setFailed(false);
     setOriginalTask(false);
-    if (!deviceId || !bot?.online) return;
+    if (!deviceId || !bot?.online || (!requestedSessionId && recoveringHere.current && homeActor?.homeDeviceId === cloud.selfDeviceId)) return;
     setValidatedSessionId(null);
     const request: RemoteResourceGetRequest = {
       client: { protocolVersion: 1, primitives: ['status', 'session-link'] },
@@ -132,7 +132,7 @@ function RemoteBotSessionGate() {
     return () => {
       disposed = true;
     };
-  }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry, requestedSessionId]);
+  }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry, requestedSessionId, recoveryHere, homeActor?.homeDeviceId, cloud.selfDeviceId]);
 
   useEffect(() => {
     if (!failed || !bot?.online || !ready) return;
@@ -173,13 +173,13 @@ function RemoteBotSessionGate() {
     return <Navigate to={`${standardSessionRoute(requestedSessionId)}?${query}`} state={location.state} replace />;
   }
   if (!requestedSessionId && recoveringHere.current && homeActor?.homeDeviceId === cloud.selfDeviceId
-    && !rejectedHere && !cloud.demotedBotIds.includes(botId!)) {
+    && !recoveryHere && !cloud.demotedBotIds.includes(botId!)) {
     return <Navigate to={`/bots/${encodeURIComponent(botId!)}`} replace />;
   }
-  const offlineActor = !requestedSessionId && rejectedHere ? homeActor : cloudActor;
+  const offlineActor = !requestedSessionId && recoveryHere ? homeActor : cloudActor;
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.
-  if (offlineActor && deviceId && botId && (rejectedHere || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
+  if (offlineActor && deviceId && botId && (recoveryHere || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
     return (
       <Suspense fallback={<main className="flex h-full items-center justify-center bg-[var(--surface)]"><Spinner size={18} /></main>}>
       <CloudCompanionOfflineView
