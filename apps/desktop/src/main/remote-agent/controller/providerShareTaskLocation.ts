@@ -30,7 +30,7 @@ export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: s
   const ownerEpoch = getRemoteLinkCloseEpoch(ownerRoute);
   const shareId = parseProviderShareAgentDeviceId(ownerRoute);
   const findShare = grant.standby ? findReceivedShareForExecution : findReceivedShare;
-  const share = shareId ? findShare(shareId) : null;
+  const share = shareId ? findShare(shareId, { existingLease: true }) : null;
   if (!share || share.status !== 'active') return;
   const accessEpoch = providerShareAccessEpoch(shareId!);
   const ownerTarget = share.hostDeviceId ? providerShareHostPeer(shareId!, share.hostDeviceId) : ownerRoute;
@@ -42,7 +42,7 @@ export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: s
       if (retainedTasks.get(key) === entry) retainedTasks.delete(key);
       return false;
     }
-    const now = shareId ? findShare(shareId) : null;
+    const now = shareId ? findShare(shareId, { existingLease: true }) : null;
     return retainedTasks.get(key) === entry && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner
       && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint
       && getRemoteLinkCloseEpoch(grant.target) === closeEpoch && getRemoteLinkCloseEpoch(ownerRoute) === ownerEpoch

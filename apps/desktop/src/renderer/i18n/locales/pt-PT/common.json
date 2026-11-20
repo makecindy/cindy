@@ -16315,9 +16315,15 @@
       "toggle": "Mostrar ou ocultar a resposta de «{{title}}»",
       "openTask": "Abrir tarefa"
     },
+    "geminiRateLimit": {
+      "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+      "title": "O limite de entrada por minuto do Gemini foi atingido.",
+      "exhausted": "O Gemini continua limitado após uma nova tentativa. Pode voltar a tentar manualmente.",
+      "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos. A conta não muda automaticamente.",
-      "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+      "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos.",
+      "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos.",
       "loginRequired": "A conta de subscrição desta tarefa requer um novo início de sessão. Inicia sessão no computador que executa a tarefa e tenta novamente.",
       "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
       "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",

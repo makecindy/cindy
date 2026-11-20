@@ -641,9 +641,11 @@ export async function relocateForFreshStart(
     /** 原来那个位置(调用方可能已把任务记录改到了目标位置)；不给 = 按任务记录。 */
     from?: { agentDeviceId: string | null; providerId: string | null };
     sharedRelocation?: boolean;
+    /** Publish the shared handoff only after the replacement runtime is ready. */
+    deferSharedCommit?: true;
     assertCurrent?: () => void;
   },
-): Promise<{ nativeId: string | null; fallback?: () => Promise<void> }> {
+): Promise<{ nativeId: string | null; fallback?: () => Promise<void>; commit?: () => Promise<void> }> {
   const ownerGeneration = deps.readOwnerGeneration?.();
   const { sessionId, agentDeviceId, providerId } = params;
   const row = await deps.getSessionRow(sessionId);
@@ -685,14 +687,6 @@ export async function relocateForFreshStart(
   assertCurrent();
   const handoff = nativeId ? nativeRelocationHandoff(await deps.peekPendingHandoff?.(sessionId)) : full.handoff;
   assertCurrent();
-  await deps.applyAgentSwitchToDb(sessionId, {
-    agentKind: dbKind,
-    model,
-    providerId,
-    sdkSessionId: nativeId,
-    agentDeviceId,
-  });
-  deps.setSessionProvider(sessionId, providerId);
   const boundaryContent: AgentSwitchBoundaryContent = {
     fromAgentKind: dbKind,
     toAgentKind: dbKind,
@@ -711,33 +705,52 @@ export async function relocateForFreshStart(
     fromAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(fromAgentDeviceId) ?? null,
     toAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(agentDeviceId) ?? null,
   };
-  let boundaryId: string | null = null;
-  try {
-    boundaryId = await deps.insertBoundaryMessage(sessionId, boundaryContent);
-  } catch (err) {
-    if (nativeId) {
-      // A native copy cannot be published without the boundary needed for an
-      // atomic fallback. Abort before opening it and retain the source identity.
-      assertCurrent();
-      await deps.applyAgentSwitchToDb(sessionId, {
-        agentKind: dbKind, model, providerId: fromProviderId,
-        sdkSessionId: row.sdkSessionId, agentDeviceId: fromAgentDeviceId,
-      });
-      assertCurrent();
-      deps.setSessionProvider(sessionId, fromProviderId);
-      throw err;
-    }
-    deps.log.warn('agent-switch: boundary message insert failed on fresh-start relocation (degraded)', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+  const deferred = params.sharedRelocation === true && params.deferSharedCommit === true;
+  const publish = async () => {
+    assertCurrent();
+    if (!deferred) await deps.applyAgentSwitchToDb(sessionId, {
+      agentKind: dbKind,
+      model,
+      providerId,
+      sdkSessionId: nativeId,
+      agentDeviceId,
     });
+    if (!deferred) deps.setSessionProvider(sessionId, providerId);
+    let boundaryId: string | null = null;
+    try {
+      boundaryId = await deps.insertBoundaryMessage(sessionId, boundaryContent);
+    } catch (err) {
+      if (deferred) throw err;
+      if (nativeId) {
+        // A native copy cannot be published without the boundary needed for an
+        // atomic fallback. Abort before opening it and retain the source identity.
+        assertCurrent();
+        await deps.applyAgentSwitchToDb(sessionId, {
+          agentKind: dbKind, model, providerId: fromProviderId,
+          sdkSessionId: row.sdkSessionId, agentDeviceId: fromAgentDeviceId,
+        });
+        assertCurrent();
+        deps.setSessionProvider(sessionId, fromProviderId);
+        throw err;
+      }
+      deps.log.warn('agent-switch: boundary message insert failed on fresh-start relocation (degraded)', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (deferred) assertCurrent();
+    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    deps.log.info('agent-switch: relocated for a fresh start', {
+      sessionId,
+      handoffChars: handoff.length,
+      agentDeviceChange: params.sharedRelocation ? 'reassigned-by-provider-group' : agentDeviceId ? 'other-device' : 'task-device',
+    });
+    return boundaryId;
+  };
+  if (deferred) {
+    return { nativeId, commit: async () => { await publish(); } };
   }
-  deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-  deps.log.info('agent-switch: relocated for a fresh start', {
-    sessionId,
-    handoffChars: handoff.length,
-    agentDeviceChange: params.sharedRelocation ? 'reassigned-by-provider-group' : agentDeviceId ? 'other-device' : 'task-device',
-  });
+  const boundaryId = await publish();
   return { nativeId, ...(nativeId ? { fallback: async () => {
     assertCurrent();
     if (!boundaryId) throw new Error('Cannot replace native relocation without its boundary record');
