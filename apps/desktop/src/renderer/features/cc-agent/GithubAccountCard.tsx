@@ -6,7 +6,7 @@ import { GithubAppCard } from './GithubAppCard';
 import type { GithubConnectionState } from '../../../shared/githubSetup';
 
 /** Account verification belongs to the trusted host, not the plugin webview. */
-export function GithubAccountCard({ onConnected, includeEvents = false }: { onConnected(): void; includeEvents?: boolean }) {
+export function GithubAccountCard({ onConnected, includeEvents = false, pluginSettings = false }: { pluginSettings?: boolean; onConnected(): void; includeEvents?: boolean }) {
   const { t } = useTranslation();
   const [state, setState] = useState<GithubConnectionState>();
   const [busy, setBusy] = useState(false);
@@ -67,7 +67,7 @@ export function GithubAccountCard({ onConnected, includeEvents = false }: { onCo
       </div>
     </div>
   );
-  return includeEvents ? <GithubAppCard account={state} accountBusy={busy} alternative={
+  return includeEvents ? <GithubAppCard pluginSettings={pluginSettings} account={state} accountBusy={busy} alternative={
     <GithubConnectButton visible onConnected={() => { void refresh(); onConnected(); }} />
   }>{controls}</GithubAppCard> : controls;
 }

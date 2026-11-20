@@ -1,4 +1,5 @@
 import { readGithubAppToken, onGithubAppAuthorizationChanged } from './githubAppAuthorization.desktop.js';
+import { githubInstallationAccess } from './githubInstallationAccess.js';
 import path from 'node:path';
 import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
@@ -114,7 +115,8 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       if (!win.isDestroyed()) win.webContents.send('git-context:github-connected');
     }
   };
-  const stopAppChanges = onGithubAppAuthorizationChanged(changed);
+  let accessGeneration = 0;
+  const stopAppChanges = onGithubAppAuthorizationChanged(() => { accessGeneration++; changed(); });
   const setup = createGithubSetup(root, changed);
   const star = createGithubStar({
     owner: () => getActiveAppSession().dataOwnerId ? activeOwnerScopeKey() : null,
@@ -157,6 +159,12 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       'git-context:github-setup:connection',
       readGithubConnection,
     ],
+    ['git-context:github-app:access', () => {
+      const owner = activeOwnerScopeKey();
+      const generation = accessGeneration;
+      return githubInstallationAccess(readGithubAppToken, outboundFetch,
+        () => owner === activeOwnerScopeKey() && generation === accessGeneration);
+    }],
     ['git-context:github-app:status', () => githubApp('status')],
     ['git-context:github-app:connect', () => githubApp('connect')],
     ['git-context:github-app:install', () => githubApp('install')],
