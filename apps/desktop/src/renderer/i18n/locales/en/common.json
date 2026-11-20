@@ -16887,6 +16887,11 @@
         "inbox": "Inbox",
         "enterInbox": "Switch to Inbox mode",
         "leaveInbox": "Switch to task list mode"
+      },
+      "mainTabs": {
+        "label": "Sidebar sections",
+        "options": "Sidebar options",
+        "computers": "Computers"
       }
     },
     "rename": {

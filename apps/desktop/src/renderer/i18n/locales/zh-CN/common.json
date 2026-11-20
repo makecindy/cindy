@@ -16813,6 +16813,11 @@
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
         "leaveInbox": "切换到任务列表模式"
+      },
+      "mainTabs": {
+        "label": "侧栏分类",
+        "options": "侧栏选项",
+        "computers": "电脑"
       }
     },
     "rename": {
