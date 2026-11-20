@@ -22,20 +22,7 @@ export interface TraceChartPoint {
   /** Position on the generation-time axis, in ms. */
   at: number;
   rate: number;
-}
-
-/** Speed at `at`, between the two readings around it. */
-function rateAt(points: readonly TraceChartPoint[], at: number): number {
-  if (at <= points[0].at) return points[0].rate;
-  for (let i = 1; i < points.length; i += 1) {
-    const previous = points[i - 1];
-    const next = points[i];
-    if (at <= next.at) {
-      const between = next.at - previous.at;
-      return between > 0 ? previous.rate + ((at - previous.at) / between) * (next.rate - previous.rate) : next.rate;
-    }
-  }
-  return points[points.length - 1].rate;
+  settled?: boolean;
 }
 
 function formatClock(ms: number): string {
@@ -111,7 +98,7 @@ export function GenerationTraceChart({
   const showThinking = columns.some((column) => column.thinkingTokens !== null);
   // A finished turn too short for a curve keeps only its strokes, not an empty band above them.
   // The live chart holds its height: its curve is still to come.
-  const speedHeight = liveDot || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
+  const speedHeight = liveDot || points.some(point => point.settled) || points.length > 1 || !showThinking ? fullSpeedHeight : STROKE_GAP;
   const height = speedHeight + (showThinking ? STROKE_GAP + strokeHeight + 1 : 4);
   const ceiling = Math.max(1, ...points.map((point) => point.rate));
   const yOf = (rate: number) => speedHeight - (rate / ceiling) * (speedHeight - SPEED_TOP);
@@ -131,8 +118,14 @@ export function GenerationTraceChart({
   // There is a moment to pick once the curve exists.
   const pickable = xy.length > 1 && span > 0;
   const picked = pickable && pick ? pick.column : null;
-  const pickedAt = picked === null ? 0 : fromMs + ((picked + 0.5) / THINKING_COLUMNS) * span;
-  const pickedRate = picked === null ? 0 : rateAt(points, pickedAt);
+  const cursorTime = picked === null ? 0 : fromMs + ((picked + 0.5) / THINKING_COLUMNS) * span;
+  // Pick a reading that was actually measured. A line between two settled requests
+  // is only a visual guide; intermediate times have no measured speed.
+  const sample = picked === null ? undefined : points.reduce((nearest, point) =>
+    Math.abs(point.at - cursorTime) < Math.abs(nearest.at - cursorTime) ? point : nearest);
+  const pickedAt = sample?.at ?? 0;
+  const pickedRate = sample?.rate ?? 0;
+  const pickedX = span > 0 ? PAD_LEFT + ((pickedAt - fromMs) / span) * plotWidth : PAD_LEFT + plotWidth;
   const pickedThinking = picked === null
     ? null : columns.find((column) => column.column === picked)?.thinkingTokens ?? null;
   const onPick = (event: PointerEvent<HTMLDivElement>) => {
@@ -191,6 +184,11 @@ export function GenerationTraceChart({
             <path d={line} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
           </>
         )}
+        {xy.map((point, index) => points[index].settled && (
+          <circle key={index} cx={point.x} cy={point.y} r="2" fill="currentColor">
+            <title>{t('chat.runningStatus.lastRequestRate')}</title>
+          </circle>
+        ))}
         {liveDot && last && (
           <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" opacity={picked === null ? 1 : 0.35} />
         )}
@@ -213,13 +211,13 @@ export function GenerationTraceChart({
             {/* Only between the two values it ties together: from the speed at that moment down to
                 the end of that slice's stroke, or to the baseline when the slice has none. */}
             <path
-              d={`M${columnX(picked)} ${yOf(pickedRate)}V${pickedThinking === null ? speedHeight : strokeEnd(pickedThinking)}`}
+              d={`M${pickedX} ${yOf(pickedRate)}L${columnX(picked)} ${pickedThinking === null ? speedHeight : strokeEnd(pickedThinking)}`}
               stroke="currentColor"
               strokeWidth="0.75"
               opacity="0.55"
             />
             <circle
-              cx={columnX(picked)}
+              cx={pickedX}
               cy={yOf(pickedRate)}
               r="3.2"
               fill="var(--surface-elevated)"
@@ -240,7 +238,9 @@ export function GenerationTraceChart({
           style={floatingStyles}
         >
           <div className="flex justify-between gap-3">
-            <span>{t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate) })}</span>
+            <span>{sample?.settled
+              ? `${t('chat.runningStatus.lastRequestRate')} · ${t('chat.runningStatus.tokenRate', { rate: Math.round(pickedRate * 10) / 10 })}`
+              : t('usageDetails.performanceRateLine', { rate: Math.round(pickedRate * 10) / 10 })}</span>
             <span className="opacity-60">{formatClock(pickedAt - fromMs)}</span>
           </div>
           {/* Only a real amount is worth a line: nothing finished in the slice, nothing reported,

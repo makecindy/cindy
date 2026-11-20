@@ -300,6 +300,8 @@
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "Latest speed",
+    "lastRequestRate": "Last request average",
+    "recentTokenRate": "Recent {{rate}} tok/s",
     "averageRate": "Turn average",
     "rateHistory": "Generation speed history",
     "outputTotal": "Output",

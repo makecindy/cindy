@@ -300,6 +300,8 @@
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "近速",
+    "lastRequestRate": "前請均速",
+    "recentTokenRate": "近速 {{rate}} tok/s",
     "averageRate": "本輪均速",
     "rateHistory": "生成速度之史",
     "outputTotal": "累出",

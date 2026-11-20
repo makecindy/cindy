@@ -109,6 +109,7 @@ export interface CodexRuntimeState {
   generationStartedAt: number | null;
   /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
   generationPendingToolIds: Set<string>;
+  generationStreamItemIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
   /** Model time sampled with the latest accepted output usage. */
@@ -169,6 +170,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationSegmentComplete: true,
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
+    generationStreamItemIds: new Set(),
     generationDurationMs: 0,
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
@@ -255,6 +257,7 @@ export function settleCodexSpeedUsage(
   last: { outputTokens: number; reasoningOutputTokens?: number },
   now = Date.now(),
 ): SpeedCalibrationReport | undefined {
+  rt.generationStreamItemIds.clear();
   rt.generationOutputTokens += last.outputTokens;
   const pairedDurationMs = sampleGenerationDuration(rt.generationDurationMs, rt.generationStartedAt, now);
   const responseWallMs = pairedDurationMs - rt.generationOutputDurationMs;
@@ -284,6 +287,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationSegmentComplete = true;
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
+  rt.generationStreamItemIds.clear();
   rt.generationDurationMs = 0;
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
@@ -417,8 +421,10 @@ function noteCodexGenerationBoundary(
   }
   // The speed clock runs from the response's first streamed item, not from the request.
   if (phase === 'started' && rt.generationPendingToolIds.size === 0) {
-    if (item.type === 'reasoning') rt.tokenSpeed.start(receivedAt, 'thinking');
-    if (item.type === 'agentMessage') rt.tokenSpeed.start(receivedAt, 'visible');
+    if (item.type === 'reasoning' || item.type === 'agentMessage') {
+      if (typeof item.id === 'string') rt.generationStreamItemIds.add(item.id);
+      rt.tokenSpeed.start(receivedAt, item.type === 'reasoning' ? 'thinking' : 'visible');
+    }
   }
   if (
     typeof item.type !== 'string' ||
@@ -597,11 +603,15 @@ export function translateItemNotification(
   ctx.onItemBoundary?.();
   switch (itemType) {
     case 'agentMessage':
-      handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+    case 'reasoning': {
+      if (itemType === 'agentMessage') handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+      else handleReasoning(phase, item as ReasoningItem, queue, ctx);
+      // A usage report or tool start may arrive well after the last model byte.
+      // Count any final text in this item before closing the last open stream.
+      if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
+          ctx.rt.generationStreamItemIds.size === 0) ctx.rt.tokenSpeed.pause();
       return;
-    case 'reasoning':
-      handleReasoning(phase, item as unknown as ReasoningItem, queue, ctx);
-      return;
+    }
     case 'commandExecution':
       handleCommandExecution(phase, item as unknown as CommandExecutionItem, queue, ctx);
       return;

@@ -13871,7 +13871,7 @@ function ComposerActivityStatus({
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
   const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
-  const showLiveRate = !showElapsedOnly && (!tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
+  const showLiveRate = !showElapsedOnly && (tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0));
   const rateValue = formatComposerActivityRateValue(showLiveRate ? rateHistory.latestRate : null);
   const canShowRateDetails = !showElapsedOnly
     && generationReliable
@@ -13880,7 +13880,7 @@ function ComposerActivityStatus({
     && Number.isFinite(generationDurationMs)
     && generationDurationMs > 0;
   const rateText = rateValue
-    ? t('session.screen.tokenRate', { rate: rateValue })
+    ? t(tokenSpeed?.measurement ? 'session.screen.recentTokenRate' : 'session.screen.tokenRate', { rate: rateValue })
     : null;
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
   const usageMeta = (
@@ -13948,6 +13948,7 @@ function ComposerActivityStatus({
         history={rateHistory}
         outputTokens={outputTokens}
         totalOutputTokens={tokenSpeed?.totalOutputTokens}
+        measuredAverage={tokenSpeed?.measurement?.average}
         generationDurationMs={generationDurationMs}
         generationReliable={generationReliable && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}

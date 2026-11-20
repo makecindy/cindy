@@ -557,3 +557,23 @@ it('restores missed requests and the whole-turn reasoning share from a host trac
   expect(repeated.marks).toEqual(restored.marks);
   expect(readTokenSpeedSnapshot(speed)?.trace).toEqual(trace);
 });
+
+// Unit: a late or reconnecting viewer receives only a paused wire snapshot.
+// Its chart and original expiry must match a viewer that saw the request finish.
+it('restores measured rates from a paused host without renewing their freshness', () => {
+  const speed = readTokenSpeedSnapshot({
+    rate: 9, average: 9, tokens: 500, elapsedMs: 10_000, streaming: false,
+    measurement: { latest: { kind: 'request', rate: 42, atMs: 9_000, measuredAt: 12_000 }, average: 40 },
+    trace: { durationMs: 9_000, requests: 1, speed: [[4_000, 38], [9_000, 42]],
+      requestRateTimes: [9_000], marks: [[9_000, 80, 1]], reportedOutputTokens: 500 },
+  })!;
+  const opened = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed, now: 55_000 });
+  expect(opened).toMatchObject({ latestRate: 42, latestSampleAt: 12_000, peak: 42, samples: [
+    { rate: 38, kind: 'stream' }, { rate: 42, kind: 'request' },
+  ] });
+  const repeated = recordTokenSpeed(opened, { startedAt: 1, speed, now: 78_000 });
+  expect(repeated.latestSampleAt).toBe(opened.latestSampleAt);
+  expect(repeated.samples).toEqual(opened.samples);
+  const summary = { ...speed, streaming: true, measurement: { latest: null, average: null } };
+  expect(recordTokenSpeed(repeated, { startedAt: 2, speed: summary }).latestRate).toBeNull();
+});
