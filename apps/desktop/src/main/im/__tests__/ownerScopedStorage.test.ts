@@ -152,11 +152,37 @@ describe('IM owner-scoped storage', () => {
     expect(discordFinalTextStorage('personal', true).read()).toBe('{"version":1,"entries":[]}');
     expect(revision).not.toContain('invalid-test-token');
     ownerScopedImSecrets.write('discord-bot-token', 'another-invalid-test-token');
+    const replacementRevision = ownerScopedImSecretRevision('discord-bot-token');
+    expect(replacementRevision).not.toBe(revision);
     expect(storage.authorizationStamp('g/1/20')).not.toBe(authorization);
     mocks.ownerScopeKey = 'owner-2'; setSession('cloud', 'cloud-b');
     expect(() => storage.read()).toThrow('DISCORD_ACCOUNT_CHANGED');
     expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
     expect(discordFinalTextStorage('personal', true).read()).toBeNull();
+  });
+  it('recovers an atomic credential backup and removes stale backups on revoke', () => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-test-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token');
+    expect(target).not.toBeNull();
+    fs.renameSync(target!, `${target}.bak`);
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-test-token');
+    expect(fs.existsSync(target!)).toBe(true);
+
+    fs.copyFileSync(target!, `${target}.bak`);
+    ownerScopedImSecrets.remove('discord-bot-token');
+    expect(fs.existsSync(target!)).toBe(false);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
+  });
+  it('does not reinterpret a legacy credential that starts with the revision prefix', () => {
+    setSession('local', 'local-v1');
+    const target = __testing.scopedSecretPath('discord-bot-token');
+    expect(target).not.toBeNull();
+    fs.mkdirSync(path.dirname(target!), { recursive: true });
+    const legacy = 'cindy-im-secret-v2:not-a-uuid:legacy-value';
+    fs.writeFileSync(target!, Buffer.from(`encrypted:${legacy}`).toString('base64'), 'utf-8');
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe(legacy);
   });
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
