@@ -1692,7 +1692,7 @@ describe('OrcaTeamService', () => {
 
   it('cancels an accepted queue item when its linked Lead is archived before the team ends', async () => {
     let delayed: (() => void | Promise<void>) | undefined;
-    const row = { status: 'active', source: 'side-chat', sideChatPromoted: true,
+    const row = { status: 'active', sideChatClosePending: false,
       clearedAt: null, permissionMode: 'auto', planModeEnabled: false };
     const baselines = captureOrcaDeliveryBaselines({ row, live: null });
     const h = createDeps({
@@ -1726,6 +1726,7 @@ describe('OrcaTeamService', () => {
       message: 'queued before the team ended',
     });
     row.status = 'archived';
+    row.sideChatClosePending = true;
 
     await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
     expect(h.getWorker().status).toBe('idle');
@@ -4485,9 +4486,8 @@ describe('Orca delivery scope', () => {
   });
 
   it('revokes queued delivery at the durable linked follow-up archive', () => {
-    const linked = { source: 'side-chat', sideChatPromoted: true };
-    expect(evaluate({ row: row({ ...linked, status: 'active' }) })).toBe('ok');
-    expect(evaluate({ row: row({ ...linked, status: 'archived' }) })).toBe('task-gone');
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: false }) })).toBe('ok');
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: true }) })).toBe('task-gone');
   });
 
   it('rejects a task that was cleared, deleted or removed', () => {

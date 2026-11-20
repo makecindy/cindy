@@ -281,6 +281,7 @@ function createDb(): void {
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
@@ -454,9 +455,8 @@ it('scopes linked archive to the raw source and parent, and retries cleanup on t
       side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
   `);
   const cleanup = vi.fn(async () => {
-    const row = h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'codex-local'").get();
-    expect(row).toEqual({ status: 'archived' });
-    h.sqlite!.exec("UPDATE sessions SET orca_role = NULL WHERE id = 'codex-local'");
+    const row = h.sqlite!.prepare("SELECT status, side_chat_close_pending FROM sessions WHERE id = 'codex-local'").get();
+    expect(row).toEqual({ status: 'archived', side_chat_close_pending: 1 });
   }).mockRejectedValueOnce(new Error('shutdown interrupted'));
   setSideChatArchiveCleanup(cleanup);
   const patch = (archiveSideChatParentId: string) => invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId });
@@ -469,9 +469,51 @@ it('scopes linked archive to the raw source and parent, and retries cleanup on t
   await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', parentSessionId: 'cc-local' });
   expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched',
     expect.objectContaining({ sessionId: 'codex-local', patch: expect.objectContaining({ status: 'archived', orcaRole: null }) }));
+  await expect(patch('cc-local')).resolves.toMatchObject({ status: 'archived', orcaRole: null });
   expect(cleanup).toHaveBeenCalledTimes(2);
+  expect(h.sqlite!.prepare("SELECT side_chat_close_pending FROM sessions WHERE id = 'codex-local'").pluck().get()).toBe(0);
   await expect(invokePatchMeta('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active' });
   expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'cc-local'").get()).toEqual({ status: 'active' });
+});
+
+// DB IPC tier: generic patch-meta archives a linked team without recording a close.
+it('restores an ordinary linked-task archive and leaves its Orca Lead role intact', async () => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'codex-local';
+  `);
+  const cleanup = vi.fn(async () => {});
+  setSideChatArchiveCleanup(cleanup);
+  await expect(invokePatchMeta('codex-local', { status: 'archived' })).resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  await expect(invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' }))
+    .resolves.toMatchObject({ status: 'archived', orcaRole: 'lead' });
+  await expect(invokePatchMeta('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', orcaRole: 'lead' });
+  expect(cleanup).not.toHaveBeenCalled();
+});
+
+// DB IPC tier: a close admitted while cleanup is pending must not reach a
+// replacement collaboration if restore wins the route lock first.
+it('rejects a queued close retry after the follow-up is restored to a new team', async () => {
+  h.sqlite!.exec(`
+    UPDATE sessions SET source = 'side-chat', parent_session_id = 'cc-local',
+      status = 'archived', side_chat_promoted = 1, side_chat_close_pending = 1, orca_role = 'lead'
+      WHERE id = 'codex-local';
+    INSERT INTO orca_teams VALUES ('old-team', 'codex-local', 'active');
+  `);
+  const cleanup = vi.fn(async () => {});
+  setSideChatArchiveCleanup(cleanup);
+  setSessionRouteLockImplementation(async (_id, task) => {
+    h.sqlite!.exec(`
+      UPDATE orca_teams SET status = 'completed' WHERE id = 'old-team';
+      UPDATE sessions SET status = 'active', side_chat_close_pending = 0 WHERE id = 'codex-local';
+      INSERT INTO orca_teams VALUES ('new-team', 'codex-local', 'active');
+    `);
+    return task();
+  });
+  await expect(invokePatchMeta('codex-local', { status: 'archived', archiveSideChatParentId: 'cc-local' }))
+    .rejects.toThrow('changed while closing');
+  expect(cleanup).not.toHaveBeenCalled();
+  expect(h.sqlite!.prepare("SELECT status FROM orca_teams WHERE id = 'new-team'").pluck().get()).toBe('active');
 });
 
 // DB IPC regression: a committed worker promotes only its owning follow-up.

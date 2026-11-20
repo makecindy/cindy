@@ -14,7 +14,7 @@ const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'regis
 describe('disableOrcaInternal stranded-lead recovery', () => {
   it('extracts a shared clearLeadOrcaRoleState helper', () => {
     expect(registerSource).toContain(
-      'async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>)',
+      'async function clearLeadOrcaRoleState(',
     );
   });
 
@@ -86,7 +86,7 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   });
 
   it('reuses clearLeadOrcaRoleState on BOTH the normal-close and stranded-recovery paths', () => {
-    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId, assertCurrent\)/g) ?? [];
+    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId, assertCurrent, !requireWorkerClosed\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });

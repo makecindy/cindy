@@ -121,6 +121,7 @@ function createDb(): Database.Database {
       cleared_at INTEGER,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,

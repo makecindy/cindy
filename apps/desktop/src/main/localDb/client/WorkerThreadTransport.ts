@@ -12,7 +12,7 @@ import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-revie
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
-import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -51,6 +51,7 @@ const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
 const assertSessionDeleteTarget = ${assertSessionDeleteTarget.toString()};
+const SIDE_CHAT_CLOSE_TARGET_SQL = ${JSON.stringify(SIDE_CHAT_CLOSE_TARGET_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
@@ -1217,7 +1218,7 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source, side_chat_promoted AS sideChatPromoted, orca_role AS orcaRole FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
     'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
@@ -1237,9 +1238,8 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
-      if (status === 'active' && existing.status === 'archived' && existing.source === 'side-chat'
-        && existing.sideChatPromoted && existing.orcaRole === 'lead') {
-        throw Object.assign(new Error('Finish closing the follow-up before restoring it'), { code: 'PRECONDITION_FAILED' });
+      if (existing.sideChatClosePending) {
+        throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
       }
       // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
       if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
@@ -1293,9 +1293,16 @@ function sessionsSetTerminalStatus(readyDb, args) {
       || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
       throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const closeParentId = payload.sideChatCloseParentId;
+    if (status === 'archived' && existing.sideChatClosePending && closeParentId === undefined) {
+      throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (closeParentId !== undefined && (status !== 'archived' || !readyDb.prepare(SIDE_CHAT_CLOSE_TARGET_SQL).get(sessionId, closeParentId))) {
+      throw Object.assign(new Error('The linked follow-up no longer matches this tab'), { code: 'PRECONDITION_FAILED' });
+    }
     if (status === 'deleted') {
       const hasCommittedWorker = existing.source === 'side-chat' && !existing.sideChatPromoted
         && Boolean(readyDb.prepare('SELECT id FROM sessions WHERE id = ? AND ' + COMMITTED_SIDE_CHAT_WORKER_SQL).get(sessionId));
@@ -1309,8 +1316,8 @@ function sessionsSetTerminalStatus(readyDb, args) {
     }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, payload.idleArchiveCutoff ?? null, now, sessionId);
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +

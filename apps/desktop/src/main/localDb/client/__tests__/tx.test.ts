@@ -102,6 +102,7 @@ CREATE TABLE sessions (
   orca_role TEXT,
   source TEXT NOT NULL DEFAULT 'desktop',
   side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+  side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
   extra_dirs TEXT NOT NULL DEFAULT '[]',
   writable_dirs TEXT NOT NULL DEFAULT '[]',
   im_bot_context_id TEXT,
@@ -2011,10 +2012,18 @@ describe('db worker tx handlers', () => {
       });
       await createWorker('worker-wins');
       await expect(closeSideChat('worker-wins')).rejects.toThrow('collaboration is being linked');
-      await client.exec("UPDATE sessions SET status = 'archived', side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'worker-wins'");
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'worker-wins'");
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'worker-wins', status: 'archived' });
+      await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
+      await client.tx('sessions.setTerminalStatus', {
+        sessionId: 'worker-wins', status: 'archived', sideChatCloseParentId: 'parent',
+      });
       await expect(client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' }))
         .rejects.toThrow('Finish closing the follow-up');
       await client.exec("UPDATE sessions SET orca_role = NULL WHERE id = 'worker-wins'");
+      await expect(client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' }))
+        .rejects.toThrow('Finish closing the follow-up');
+      await client.exec("UPDATE sessions SET side_chat_close_pending = 0 WHERE id = 'worker-wins'");
       await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
       await client.exec("UPDATE sessions SET side_chat_promoted = 0 WHERE id = 'worker-wins'");
       await closeSideChat('delete-wins');

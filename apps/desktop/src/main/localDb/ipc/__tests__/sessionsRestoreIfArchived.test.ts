@@ -132,6 +132,7 @@ function createDb(): void {
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,

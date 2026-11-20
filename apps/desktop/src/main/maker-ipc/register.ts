@@ -15647,9 +15647,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 清 knownNonOrca cache、在线时清空 vendorOptions。抽出来给 disableOrcaInternal 的「正常关闭」
    * 和「悬空 lead 兜底」两条路径共用,避免两份漂移。
    */
-  async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<void> {
+  async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>, persistRole = true): Promise<void> {
     await assertCurrent?.();
-    await setSessionOrcaRole(leadSessionId, null);
+    if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
@@ -15721,7 +15721,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             count: orphanedWorkerSessionIds.length,
           });
         }
-        await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
+        await clearLeadOrcaRoleState(leadSessionId, assertCurrent, !requireWorkerClosed);
       } else {
         log.info('disableOrca: no active team, no-op', { leadSessionId });
       }
@@ -15795,7 +15795,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }),
     );
 
-    await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
+    // The confirmed archive clears its marker and role together before publishing.
+    await clearLeadOrcaRoleState(leadSessionId, assertCurrent, !requireWorkerClosed);
 
     log.info('disableOrca done', {
       leadSessionId,
@@ -16321,8 +16322,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .select({
           status: sessions.status,
           clearedAt: sessions.clearedAt,
-          source: sessions.source,
-          sideChatPromoted: sessions.sideChatPromoted,
+          sideChatClosePending: sessions.sideChatClosePending,
           permissionMode: sessions.permissionMode,
           planModeEnabled: sessions.planModeEnabled,
         })

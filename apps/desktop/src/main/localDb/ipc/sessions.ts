@@ -63,7 +63,7 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import type { SessionsSetTerminalStatusResult } from '../client/tx/types';
-import { sessions, messages } from '../schema';
+import { sessions, messages, orcaTeams } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
   selectOrdinarySessionListRows,
@@ -299,6 +299,7 @@ async function withStatusWriteLock<T>(
   discardWorktreeChanges?: true,
   preserveFiles = false,
   deleteTarget?: SessionDeleteTarget,
+  resumingLinkedClose = false,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
@@ -307,12 +308,11 @@ async function withStatusWriteLock<T>(
     const mutate = async () => {
       beforeWrite?.();
       if (status === 'deleted') await assertDeleteTargetInDb(db, sessionId, deleteTarget);
-      if (status === 'active') {
+      if (status === 'active' || (status === 'archived' && !resumingLinkedClose)) {
         const [pending] = await db.select({ id: sessions.id }).from(sessions).where(and(
-          eq(sessions.id, sessionId), eq(sessions.status, 'archived'), eq(sessions.source, 'side-chat'),
-          eq(sessions.sideChatPromoted, true), eq(sessions.orcaRole, 'lead'),
+          eq(sessions.id, sessionId), eq(sessions.sideChatClosePending, true),
         )).limit(1);
-        if (pending) throwIpcError('PRECONDITION_FAILED', 'Finish closing the follow-up before restoring it');
+        if (pending) throwIpcError('PRECONDITION_FAILED', 'Finish closing the follow-up before changing its status');
       }
       let discardOnTransition = false;
       if (discardWorktreeChanges) {
@@ -433,11 +433,12 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
-  { idleArchiveCutoff, unusedOnly, projectGuard, deleteTarget }: {
+  { idleArchiveCutoff, unusedOnly, projectGuard, deleteTarget, sideChatCloseParentId }: {
     idleArchiveCutoff?: number;
     unusedOnly?: boolean;
     projectGuard?: ProjectArchiveGuard;
     deleteTarget?: SessionDeleteTarget;
+    sideChatCloseParentId?: string;
   } = {},
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
@@ -445,6 +446,7 @@ async function setTerminalSessionStatus(
       ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
       ...(projectGuard && { projectGuard }),
       ...(deleteTarget !== undefined && { deleteTarget }),
+      ...(sideChatCloseParentId !== undefined && { sideChatCloseParentId }),
       ...(unusedOnly ? { unusedOnly: true } : {}) });
     return result.deletedSideChats;
   } catch (error) {
@@ -1743,18 +1745,19 @@ async function cancelValidatedCreation(
   assertCurrent();
   if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
   // Follow-ups are already persisted. A pending close must not cancel their runtime before commit.
-  if (status === 'deleted' && target.source === 'side-chat') return;
+  if (target.source === 'side-chat' && (status === 'deleted' || target.sideChatClosePending)) return;
   cancel();
 }
 
 const sessionDeletionGuardColumns = {
   source: sessions.source,
   sideChatPromoted: sessions.sideChatPromoted,
+  sideChatClosePending: sessions.sideChatClosePending,
   hasCommittedWorker: sql<number>`CASE WHEN ${sessions.source} = 'side-chat' AND NOT ${sessions.sideChatPromoted}
     THEN ${sql.raw(COMMITTED_SIDE_CHAT_WORKER_SQL)} ELSE 0 END`,
 };
 
-function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean; hasCommittedWorker?: number }, target?: SessionDeleteTarget): void {
+function assertDeleteTarget(row: { source: string; sideChatPromoted: boolean; sideChatClosePending: boolean; hasCommittedWorker?: number }, target?: SessionDeleteTarget): void {
   try {
     assertSessionDeleteTarget(row, target);
   } catch (err) {
@@ -2107,6 +2110,14 @@ async function archiveLinkedSideChatInDb(
       throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
     options.beforeWrite?.();
   };
+  assertCurrent();
+  // Fence requests already admitted to the host that wait behind another close
+  // and a restore. Such a request must never begin closing the restored task.
+  const readActiveTeam = () => client.drizzle.select({
+    status: sessions.status, updatedAt: sessions.updatedAt, teamId: orcaTeams.id,
+  }).from(sessions).leftJoin(orcaTeams, and(eq(orcaTeams.leadSessionId, sessions.id), eq(orcaTeams.status, 'active')))
+    .where(eq(sessions.id, sessionId)).limit(1);
+  const [requested] = await readActiveTeam();
   return withSessionRouteLock(sessionId, async () => {
     assertCurrent();
     const row = await selectSessionWithCount(client.drizzle, sessionId);
@@ -2115,15 +2126,30 @@ async function archiveLinkedSideChatInDb(
       || (row.status !== 'active' && row.status !== 'archived')) {
       throwIpcError('PRECONDITION_FAILED', 'The linked follow-up no longer matches this tab');
     }
+    if (row.status === 'archived' && !row.sideChatClosePending) return sessionToCamel(row);
+    if (row.status === 'active') {
+      const [current] = await readActiveTeam();
+      assertCurrent();
+      if (!current || requested?.status !== 'active' || requested.updatedAt !== row.updatedAt || requested.teamId !== current.teamId) {
+        throwIpcError('PRECONDITION_FAILED', 'The follow-up changed while closing. Review and try again.');
+      }
+    }
     return patchSessionMetaInDb(sessionId, { status: 'archived', pinnedAt: null }, {
       routeLockHeld: true,
       beforeWrite: assertCurrent,
       // Roll forward after an interrupted request. Until cleanup succeeds,
       // keep the durable archive as a fence without announcing tab dismissal.
-      finishLinkedArchive: async () => {
-        assertCurrent();
-        await cleanup(sessionId, async () => assertCurrent());
-        assertCurrent();
+      linkedArchive: {
+        parentId,
+        finish: async () => {
+          assertCurrent();
+          await cleanup(sessionId, async () => assertCurrent());
+          assertCurrent();
+          const cleared = await client.drizzle.update(sessions).set({ sideChatClosePending: false, orcaRole: null }).where(and(
+            eq(sessions.id, sessionId), eq(sessions.status, 'archived'), eq(sessions.sideChatClosePending, true),
+          )).run();
+          if (cleared.changes !== 1) throwIpcError('PRECONDITION_FAILED', 'The follow-up archive changed during cleanup');
+        },
       },
     });
   });
@@ -2140,7 +2166,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; finishLinkedArchive?: () => Promise<void> } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; linkedArchive?: { parentId: string; finish: () => Promise<void> } } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, archiveSideChatParentId, ...patch } = rawPatch;
@@ -2205,12 +2231,14 @@ export async function patchSessionMetaInDb(
           unusedOnly: options.unusedOnly,
           projectGuard: options.projectGuard,
           deleteTarget,
+          sideChatCloseParentId: options.linkedArchive?.parentId,
         });
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
           beforeWrite();
-          await writeSessionPatch(db, sessionId, setObj, patch.status);
+          await writeSessionPatch(db, sessionId, options.linkedArchive
+            ? { ...setObj, sideChatClosePending: true } : setObj, patch.status);
         } catch (error) {
           await rollbackSharedTaskClosure(dbClient, prepared);
           throw error;
@@ -2252,8 +2280,8 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget);
-  await options.finishLinkedArchive?.();
+  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget, Boolean(options.linkedArchive));
+  await options.linkedArchive?.finish();
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2283,7 +2311,7 @@ export async function patchSessionMetaInDb(
   const broadcastPatch =
     patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.finishLinkedArchive && { orcaRole: null }) }, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2292,7 +2320,7 @@ export async function patchSessionMetaInDb(
   }
   compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
   if (patch.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sessionId, dbClient, ownerScope, deletedSideChats);
-  return options.finishLinkedArchive ? { ...updated, orcaRole: null } : updated;
+  return options.linkedArchive ? { ...updated, orcaRole: null } : updated;
 }
 
 /**

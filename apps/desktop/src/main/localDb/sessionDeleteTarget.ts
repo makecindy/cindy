@@ -4,9 +4,14 @@ export const COMMITTED_SIDE_CHAT_WORKER_SQL = `EXISTS (
   WHERE team.lead_session_id = sessions.id AND team.status IN ('active', 'completed', 'cancelled')
 )`;
 
+export const SIDE_CHAT_CLOSE_TARGET_SQL = `
+  SELECT 1 FROM sessions WHERE id = ? AND parent_session_id = ? AND source = 'side-chat'
+    AND side_chat_promoted = 1 AND (status = 'active' OR (status = 'archived' AND side_chat_close_pending = 1))
+`;
+
 /** Used inside both SQLite transaction implementations and before cleanup side effects. */
 export function assertSessionDeleteTarget(
-  row: { source: string; sideChatPromoted: number | boolean; hasCommittedWorker?: number | boolean },
+  row: { source: string; sideChatPromoted: number | boolean; sideChatClosePending?: number | boolean; hasCommittedWorker?: number | boolean },
   target: unknown,
 ): void {
   if (target !== undefined && target !== 'side-chat' && target !== 'task') {
@@ -16,6 +21,9 @@ export function assertSessionDeleteTarget(
     throw Object.assign(new Error('This follow-up is now an independent task. Reopen it from the task list to delete it.'), {
       code: 'PRECONDITION_FAILED',
     });
+  }
+  if (row.sideChatClosePending) {
+    throw Object.assign(new Error('Finish closing the follow-up before deleting it.'), { code: 'PRECONDITION_FAILED' });
   }
   if (row.source === 'side-chat' && !row.sideChatPromoted && row.hasCommittedWorker) {
     throw Object.assign(new Error('Follow-up collaboration is being linked. Try again after it appears.'), {

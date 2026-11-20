@@ -337,6 +337,7 @@ function createDb(filename = ':memory:'): void {
       orca_remote_lead TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       feishu_open_id TEXT,

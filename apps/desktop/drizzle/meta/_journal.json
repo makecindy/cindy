@@ -1107,6 +1107,13 @@
       "when": 1795171167620,
       "tag": "0157_promote_orca_side_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "6",
+      "when": 1795172272030,
+      "tag": "0158_close_linked_side_chat",
+      "breakpoints": true
     }
   ]
 }

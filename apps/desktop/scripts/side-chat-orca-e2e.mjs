@@ -297,7 +297,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
     await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
     await clickControl('toggle collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
   };
-  const startCollaboration = async () => {
+  const startCollaboration = async (initialTask = workerRequest) => {
     await toggleCollaboration();
     await until('dialog uses the loopback model and automatic approval', async () => {
       const snapshot = await ui.snapshot();
@@ -306,7 +306,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
     });
     const taskField = await until('worker initial task input', async () =>
       /textbox "(?:初始任务|Initial task)"[^\n]*\bref=(e\d+)\]/i.exec(await ui.snapshot())?.[1]);
-    await cli('fill', `@${taskField}`, workerRequest);
+    await cli('fill', `@${taskField}`, initialTask);
     await clickControl('start collaboration', /button "(开启协同|Start Collaboration|Start collab)"/i);
   };
   await startCollaboration();
@@ -333,7 +333,7 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
     return row?.querySelector('p')?.title.includes(title) && Boolean(row.querySelector('button'))
       && !row.closest('header') && (!header || !header.textContent.includes('回到侧边追问'));
   }, parentTitle));
-  const readCollaboration = () => evaluate(async (leadId, reply) => {
+  const readCollaboration = (reply = workerReply) => evaluate(async (leadId, expectedReply) => {
     const api = window.electronAPI;
     if (location.hash.split('?')[0] !== '#/cc-agent/' + leadId) return null;
     const [worker] = await api.localDb.orcaWorkflows.listWorkersByLead(leadId);
@@ -341,10 +341,10 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
     const active = tabs.tabs.find(tab => tab.id === tabs.activeTabId && tab.kind === 'orca-workers');
     if (!worker || !active) return null;
     const chat = document.querySelector(`[data-tab-pill="${active.id}"]`)?.closest('aside:not([data-pane-collapsed])');
-    if (!chat?.innerText.includes(reply) || !chat.innerText.includes(worker.label)) return null;
+    if (!chat?.innerText.includes(worker.label) || (expectedReply && !chat.innerText.includes(expectedReply))) return null;
     const task = await api.localDb.sessions.get(worker.sessionId);
     return { id: worker.sessionId, label: worker.label, provider: task.providerId };
-  }, side.id, workerReply);
+  }, side.id, reply);
   const worker = await until('real worker, collaboration tab, and displayed fixture reply', readCollaboration, 40_000);
   assert.equal(worker.provider, providerId);
   assert.deepEqual(await evaluate(id => window.electronAPI.localDb.orcaWorkflows.listWorkersByLead(id), parentId), []);
@@ -416,10 +416,12 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
     location.hash.split('?')[0] === '#/cc-agent/' + id && !history.state?.usr?.orcaWorkersReveal, side.id));
   await returnToSideChat();
   await until('return from the ordinary conversation preserves the side chat', async () => await readActiveSideChat() === side.tabId);
-  await startCollaboration();
+  // Use the real initial assignment to keep the second Worker streaming.
+  // Sending after a completed turn competes with normal idle reclamation.
+  await startCollaboration(preview ? workerRequest : runningWorkerRequest);
   await openCollaboration();
   const restartedWorker = await until('re-enabled collaboration reveals a new worker for the same task', async () => {
-    const current = await readCollaboration();
+    const current = await readCollaboration(preview ? workerReply : null);
     return current && current.id !== worker.id ? current : null;
   }, 40_000);
   assert.equal(restartedWorker.provider, providerId);
@@ -451,9 +453,6 @@ async function exercise(ui, baseUrl, workdir, evidenceDir, { preview, heldWorker
         && messages.some(message => String(message.content).includes(reply));
     }, parentId, side.id, sideReply));
   };
-  await evaluate(async (id, prompt, workdir, model) => {
-    await window.electronAPI.maker.send(id, prompt, { agentKind: 'codex', workingDir: workdir, model, permissionMode: 'ask' }, { throwOnStartFailure: true });
-  }, restartedWorker.id, runningWorkerRequest, workdir, model);
   await until('a real Worker turn is streaming when closed', () => heldWorker.started && !heldWorker.stopped);
   await archiveAndReadHistory({ workerExpected: true });
   await until('model stream disconnected by actual Worker shutdown', () => heldWorker.stopped);

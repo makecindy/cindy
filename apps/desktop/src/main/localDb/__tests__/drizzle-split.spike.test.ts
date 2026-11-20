@@ -123,6 +123,10 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0158_close_linked_side_chat.sql') {
+    ensureColumnSync(db, 'sessions', 'side_chat_close_pending', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0157_promote_orca_side_chat.sql') {
     ensureColumnSync(db, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
     return;
@@ -244,6 +248,10 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0158_close_linked_side_chat.sql') {
+    await ensureColumn(target, 'sessions', 'side_chat_close_pending', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0157_promote_orca_side_chat.sql') {
     await ensureColumn(target, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
     return;

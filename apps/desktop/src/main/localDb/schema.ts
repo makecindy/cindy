@@ -258,6 +258,7 @@ export const sessions = sqliteTable(
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
     /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
     sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
+    sideChatClosePending: integer('side_chat_close_pending', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。

@@ -46,7 +46,7 @@ export function reconcileStrandedOrcaLeads(db: Database.Database): void {
       const archivedTeams = db.prepare(`
         UPDATE orca_teams SET status = 'completed', completed_at = ?, updated_at = ?
         WHERE status = 'active' AND lead_session_id IN (
-          SELECT id FROM sessions WHERE source = 'side-chat' AND side_chat_promoted = 1 AND status = 'archived'
+          SELECT id FROM sessions WHERE source = 'side-chat' AND side_chat_close_pending = 1 AND status = 'archived'
         )
       `).run(Date.now(), Date.now()).changes;
       // 1) 归档「属于非 active team」且仍 active 的孤儿 worker session(对齐 archiveWorkersByTeam)。
@@ -94,6 +94,10 @@ export function reconcileStrandedOrcaLeads(db: Database.Database): void {
               AND EXISTS (SELECT 1 FROM orca_workers worker WHERE worker.team_id = team.id)
           )
       `).run().changes;
+      db.prepare(`
+        UPDATE sessions SET side_chat_close_pending = 0
+        WHERE source = 'side-chat' AND side_chat_close_pending = 1 AND status = 'archived'
+      `).run();
       return { archivedTeams, archivedWorkerSessions, doneWorkers, clearedLeads, promotedLeads };
     });
 
