@@ -32,9 +32,12 @@ interface RouteApplyOptions {
 function configuredKey(state: BotRouteState, chain = state.chain): string {
   // Restore defaults is a configuration change even when its routes are equal.
   // Without model groups the key stays exactly as before, so upgrading does not re-apply.
+  // A group entry is decided by its group; its saved model is only the fallback. Filling that in
+  // (the settings preview saves it right after the group) is the same choice, not one to pick again.
   return JSON.stringify(state.modelGroupsSignature === undefined
     ? [chain, state.followsCindyDefault === true]
-    : [chain, state.followsCindyDefault === true, state.modelGroupsSignature]);
+    : [chain.map((route) => (route.modelGroup ? { modelGroup: route.modelGroup } : route)),
+      state.followsCindyDefault === true, state.modelGroupsSignature]);
 }
 
 function configuredRoute(

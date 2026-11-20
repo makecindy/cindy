@@ -66,6 +66,22 @@ describe('permanent Bot model selection', () => {
     expect(h.apply).toHaveBeenLastCalledWith('lane', expect.objectContaining({ model: 'haiku' }), state.current);
     expect(h.apply).toHaveBeenCalledTimes(2);
   });
+  // PR #11683 评审：设置页选组先存组、预览回来再存组挑出的模型；第二次保存若算新配置，轮流组会被推进两次。
+  // 最小失败输入：同一组项只换存下的具体模型。tier：unit。
+  it('does not pick again when only the saved model of a group entry is filled in', async () => {
+    const h = harness();
+    const state = { ...h.state, chain: [{ harness: 'codex', model: 'luna', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' }] as BotModelRoute[],
+      modelGroupsSignature: '[{"strategy":"rotate"}]' };
+    const commit = vi.fn();
+    const pickModelGroup = vi.fn(async () => ({ route: { agentKind: 'claude-code' as const, model: 'sonnet', providerId: 'sub', effort: null, fastMode: false }, commit }));
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply, pickModelGroup });
+    await reconcile('lane');
+    state.current = { agentKind: 'claude-code', model: 'sonnet', providerId: 'sub', effort: null, fastMode: false };
+    state.chain = [{ harness: 'claude', model: 'sonnet', providerId: 'sub', effort: 'high', fastMode: false, modelGroup: 'night' }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+  });
   // Unit regression: ordinary sends/reopen must keep a verified group member
   // after failover; the old fallback tests only covered runtime overrides.
   it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {

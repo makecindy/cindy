@@ -4917,7 +4917,7 @@ describe('Teammate settings with the real model picker', () => {
       vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
       await act(async () => { await refreshModelGroups(); });
     });
-    const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' },
+    const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
       modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] };
     const saved: Route[][] = [];
     let setChain!: (next: Route[]) => void;
@@ -4942,7 +4942,8 @@ describe('Teammate settings with the real model picker', () => {
     // Recorded before the preview returns: submitting now keeps the group, with the previous model as its fallback.
     expect(saved.at(-1)).toEqual([{ ...route, modelGroup: 'grp' }]);
     await act(async () => previews.shift()!(routed));
-    expect(saved.at(-1)).toEqual([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', modelGroup: 'grp' })]);
+    // The group's effort comes with its source; the previous model's 'high' is not kept (review r4640307228).
+    expect(saved.at(-1)).toEqual([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]);
 
     await act(async () => setChain([route]));
     await chooseGroup();
@@ -4951,6 +4952,41 @@ describe('Teammate settings with the real model picker', () => {
     await act(async () => setChain([route]));
     await act(async () => previews.shift()!(routed));
     expect(saved.length).toBe(count);
+  });
+
+  // PR #11683 review r4640307222, unit, real editor + picker: the "choose a model first" page starts with no entry
+  // and drops changes without a model, so recording the group alone is lost; the preview must create the entry.
+  // Minimal input: an empty chain and a routed preview.
+  it('creates the first entry from the group preview when the chain is empty', async () => {
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'First group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'routed', groupName: 'First group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
+        modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<Array<{ model: string }>>([]);
+      return <BotModelChainEditor value={chain as never} onChange={(next) => {
+        if (!next[0]?.model) return; // like BotsHomeView's model-selection page
+        saved.push(next); setState(next);
+      }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('First group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([expect.objectContaining({
+      harness: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]));
   });
 
   // model-groups.md §6.2, user 2026-11-20「漏了补全客户端」, unit, real editor + picker: editing a companion on

@@ -133,7 +133,9 @@ export function BotModelChainEditor({
     if (!localGroups) return;
     const result = await previewModelGroup(selection);
     const entry = latest.current.entryAt(index);
-    if (seq !== pickSeq.current || entry?.modelGroup !== selection.id || entry.model !== chosenFrom) return;
+    // 还没有任何一项时(「请先选择模型」页)只记组的那次修改没有模型、不会被收下，就由预览直接建出第一项。
+    const stillChosen = entry ? entry.modelGroup === selection.id && entry.model === chosenFrom : !chosenFrom;
+    if (seq !== pickSeq.current || !stillChosen) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
     if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
@@ -145,6 +147,8 @@ export function BotModelChainEditor({
       harness: harnessFor(route.agentKind),
       model: route.model,
       providerId: route.providerId,
+      // 组设了推理强度就用它，否则按该模型的默认档；不沿用原来那个模型的档位。
+      effort: route.effort ?? '',
       fastMode: false,
       agentDeviceId: route.agentDeviceId ?? null,
       modelGroup: selection.id,
