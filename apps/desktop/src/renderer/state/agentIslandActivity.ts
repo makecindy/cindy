@@ -129,6 +129,28 @@ function getActivityMap(): ReadonlyMap<string, AgentIslandSessionActivity> {
   return activityMap;
 }
 
+let waitingKeySource: ReadonlyMap<string, AgentIslandSessionActivity> | null = null;
+let waitingKey = '';
+function getWaitingKey(): string {
+  if (waitingKeySource !== activityMap) {
+    waitingKeySource = activityMap;
+    waitingKey = [...activityMap]
+      .filter(([, activity]) => activity.phase === 'needs-interaction' || activity.phase === 'error')
+      .map(([sessionId]) => sessionId)
+      .sort()
+      .join('\n');
+  }
+  return waitingKey;
+}
+
+/**
+ * 正在等你回复 / 出错的会话 id(按 id 排序、换行连接的字符串)。只在这组会话变化时
+ * 才变，供侧栏顶部标签判断「别的标签里有没有在等你」,不随运行进度重渲染整栏。
+ */
+export function useAgentIslandWaitingSessionKey(): string {
+  return useSyncExternalStore(subscribe, getWaitingKey, getWaitingKey);
+}
+
 /** 测试缝:清掉进程内快照,避免用例之间互相看到对方的活动。 */
 export function __resetAgentIslandActivityForTests(): void {
   activityMap = new Map();
