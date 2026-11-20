@@ -1004,7 +1004,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       };
       let authorizedUntil = openingDirectRoute?.authorizedUntil ?? Date.now();
       let authorizedAccessEpoch = initialAccessEpoch ?? providerShareAccessEpoch(shareId);
-      const permissionCurrent = () => (openingDirectRoute?.standby ? findReceivedShareForExecution(shareId) : findReceivedShare(shareId))?.status === 'active'
+      const permissionCurrent = () => (openingDirectRoute?.standby
+        ? findReceivedShareForExecution(shareId, { existingLease: true })
+        : findReceivedShare(shareId, { existingLease: true }))?.status === 'active'
         && providerShareAccessEpoch(shareId) === authorizedAccessEpoch && activeOwnerScopeKey() === ownerScope && !isAppSessionBoundaryPending();
       let offPermissionChange = () => {};
       // The same monotonic budget has been active throughout local preparation and M startup.
