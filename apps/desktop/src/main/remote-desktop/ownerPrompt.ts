@@ -50,8 +50,16 @@ export async function watchOwnerPrompt(
     done = true;
     clearTimeout(timer);
     // Answers only mean something once the prompt is up: anything earlier is a helper
-    // this build cannot use, and the cover has to stay guarded.
-    if (!started) return settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
+    // this build cannot use, and the cover has to stay guarded. Such a helper is often an
+    // older build that ignored the unknown switch and keeps reading stdin in a mode of its
+    // own, so take it down through the same bounded stop-then-kill path instead of leaving
+    // one child (and its pipes) behind for every cover.
+    if (!started) {
+      requestStop();
+      settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
+      settle = undefined;
+      return;
+    }
     settle?.();
     settle = undefined;
     onAnswer(answer);

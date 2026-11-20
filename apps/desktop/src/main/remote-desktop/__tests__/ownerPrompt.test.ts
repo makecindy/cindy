@@ -158,4 +158,6 @@ it('refuses a bare ready from a helper that predates this mode', async () => {
   await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
   // The cover stays in charge: no answer is reported and no prompt is considered armed.
   expect(f.answers).toEqual([]);
+  // That helper keeps reading stdin in its own mode, so it is taken down, not just ignored.
+  expect(f.child.stdin.write).toHaveBeenCalledWith('stop\n');
 });
