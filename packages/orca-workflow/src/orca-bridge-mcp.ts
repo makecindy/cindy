@@ -11,6 +11,7 @@ import {
 import type {
   AgentEvent,
   AgentKind,
+  EngineKind,
   Logger,
   Maker,
   McpProvider,
@@ -31,7 +32,7 @@ export type OrcaWorkerStatus = 'idle' | 'running' | 'done' | 'error';
 
 export interface OrcaPersistedSession {
   sessionId: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
   providerId?: string | null;
@@ -741,7 +742,7 @@ async function ensureSessionFromMeta(
   // 远端 MCP 注入):bridge 直调 core createSession 不经 maker-ipc, 跳过这步
   // 会让 app 重启后的首次 worker 回报 host-not-ready 或远端无协同 MCP。
   let remoteMakerMemoryEnabled = false;
-  if (meta.remoteHostId) {
+  if (meta.remoteHostId && meta.agentKind !== 'acp') {
     const preflight = await deps.ensureRemoteSessionStart?.({
       sessionId: meta.sessionId,
       agentKind: meta.agentKind,
@@ -922,6 +923,22 @@ async function ensureCapturedSession(
     existing.captureDispose?.();
     existing.captureDispose = undefined;
     existing.session = null;
+  }
+  // Dormant ACP plugin-engine Leads require full host bootstrap (briefing, route admission,
+  // harness lookup) and must never be woken through raw maker.createSession (e.g. from read_lead).
+  if (!deps.getMaker().getSession(meta.sessionId) && meta.agentKind === 'acp') {
+    if (existing) return existing;
+    const dormant: CapturedSessionEntry = {
+      sessionId: meta.sessionId,
+      session: null,
+      status: 'idle',
+      finalText: '',
+      lastEventAt: Date.now(),
+      eventSeq: 0,
+      terminalEventSeq: 0,
+    };
+    registry.add(dormant);
+    return dormant;
   }
   const session = await ensureSessionFromMeta(deps, meta, vendorOptions);
   return captureLiveSession(registry, session);

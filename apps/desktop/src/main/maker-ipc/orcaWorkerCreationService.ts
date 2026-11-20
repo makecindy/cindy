@@ -26,7 +26,7 @@ export interface OrcaTeamSnapshot {
 /** 解析 worker 默认 model/effort/fastMode 所需的 lead session 字段。 */
 export interface OrcaLeadSessionSnapshot {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workspaceKind: 'project' | 'dialogue';
   workingDir: string | null;
   model: string;

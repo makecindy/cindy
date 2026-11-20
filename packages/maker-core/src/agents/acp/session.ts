@@ -132,8 +132,10 @@ export interface OpenAcpSessionOptions {
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
-   * loaded session already has it in its own history, so it is not repeated. A function receives
-   * the names of the MCP servers the agent accepted, so the text only names tools it really has.
+   * loaded session already has it in its own history, so it is not repeated unless
+   * `forceBriefingOnResume` is explicitly set (one-shot mid-session role promotion). A function
+   * receives the names of the MCP servers the agent accepted, so the text only names tools it
+   * really has.
    */
   briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
   /** Current companion settings for the first prompt after restoring the native conversation. */
@@ -145,6 +147,10 @@ export interface OpenAcpSessionOptions {
    * text. Called only for such messages, so ordinary messages are sent without waiting on it.
    */
   expandSlashInvocation?: (text: string) => Promise<string | null>;
+  /** Deliver `briefing` once even on a resumed/loaded session (mid-session Orca Lead promotion). */
+  forceBriefingOnResume?: boolean;
+  /** Called when the host mutates per-session vendor options (e.g. Orca Lead role activation/teardown). */
+  onSetVendorOptions?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -190,7 +196,12 @@ export class AcpAccountError extends Error {
 /** The agent cannot connect to an MCP server this task depends on. */
 export class AcpRequiredMcpUnavailableError extends Error {
   constructor(readonly servers: readonly string[]) {
-    super('[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.');
+    const isLeadCollabOnly = servers.includes('cindy_orca') && !servers.includes('cindy_exec');
+    super(
+      isLeadCollabOnly
+        ? '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] This plugin engine cannot connect to Cindy collaboration tools (cindy_orca), so it cannot act as a collaboration Lead.'
+        : '[PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED] This plugin engine cannot use the tools of the computer the task is on, so it cannot run this task from another computer.',
+    );
     this.name = 'AcpRequiredMcpUnavailableError';
   }
 }
@@ -337,10 +348,14 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       sessionId,
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
+      acceptedMcpServers: accepted.map((server) => server.name),
       droppedMcpServers: dropped,
-      briefing: outcome === 'new'
+      // A new session, or a resume that explicitly forces it (one-shot Orca Lead promotion), gets the
+      // full briefing (it already carries the companion part). Any other resume only refreshes the
+      // companion settings.
+      briefing: outcome === 'new' || opts.forceBriefingOnResume === true
         ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
-        : '',
+        : opts.resumedCompanionBriefing ?? '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
@@ -364,8 +379,12 @@ interface AcpSessionInit {
   sessionId: string;
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
+  acceptedMcpServers: string[];
   droppedMcpServers: string[];
-  /** Briefing for a new session, resolved against the accepted MCP servers. */
+  /**
+   * Text sent ahead of the first prompt: the briefing resolved against the accepted MCP servers for a
+   * new session (or a resume that forces it), the companion settings alone for any other resume.
+   */
   briefing: string;
   options: OpenAcpSessionOptions;
 }
@@ -404,6 +423,9 @@ export class AcpSession {
   /** MCP servers the agent could not accept (transport not advertised). */
   readonly droppedMcpServers: readonly string[];
   readonly initializeResult: AcpInitializeResult;
+  readonly pluginEngineHttpMcpSupported: boolean;
+  readonly pluginEngineHasOrcaMcp: boolean;
+  readonly pluginEngineResumeSupported: boolean;
 
   private readonly connection: AcpConnection;
   private readonly logger: Logger | undefined;
@@ -411,6 +433,7 @@ export class AcpSession {
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
   private readonly onEnded: (() => void) | undefined;
+  private readonly onSetVendorOptions: ((patch: Record<string, unknown>) => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: AcpContentBlock[][] = [];
@@ -448,6 +471,10 @@ export class AcpSession {
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
     this.initializeResult = init.init;
+    this.pluginEngineHttpMcpSupported = init.init.agentCapabilities.mcpCapabilities.http === true;
+    this.pluginEngineHasOrcaMcp = init.acceptedMcpServers.includes('cindy_orca');
+    this.pluginEngineResumeSupported =
+      init.init.agentCapabilities.sessionCapabilities.resume === true || init.init.agentCapabilities.loadSession === true;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
@@ -461,10 +488,11 @@ export class AcpSession {
     this.expandSlashInvocation = init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
+    this.onSetVendorOptions = init.options.onSetVendorOptions;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
-    this.pendingBriefing = briefing?.trim() ? briefing : null;
+    const briefing = init.briefing;
+    this.pendingBriefing = briefing.trim() ? briefing : null;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
@@ -559,6 +587,19 @@ export class AcpSession {
   validateSendOptions(opts: SendOptions): void {
     if (opts.turnPermissionPolicy) {
       throw new TurnPermissionPolicyUnsupportedError('acp', this.permissionMode);
+    }
+  }
+
+  queuePluginEngineBriefing(briefing: string): void {
+    if (this.ended || this.closing) return;
+    if (briefing.trim()) this.pendingBriefing = briefing;
+  }
+
+  async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+    if (this.ended || this.closing) throw new Error('ACP session is closed');
+    this.onSetVendorOptions?.(patch);
+    if (patch.orcaRole === null) {
+      this.pendingBriefing = null;
     }
   }
 

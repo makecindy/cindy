@@ -9,7 +9,9 @@ import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { cn } from '@/lib/utils';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -74,16 +76,23 @@ export function OrcaSplitView({
     [sessions, workerSessionId],
   );
 
+  const leadIsPluginEngine = isPluginEngineKind(leadSession?.agentKind);
+  const leadPluginEngine = usePluginEngineIdentity(
+    leadIsPluginEngine ? leadSession?.providerId : undefined,
+  );
   const leadAgentKind = normalizeOrcaDisplayAgentKind(leadSession?.agentKind);
-  const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadVendor = leadIsPluginEngine ? 'acp' : orcaVendorForAgentKind(leadAgentKind);
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: leadIsPluginEngine ? leadPluginEngine.name : orcaAgentLabel(leadAgentKind),
   });
   const leadPaneIcon = (
     <VendorIcon
       vendor={leadVendor}
       size={leadVendor === 'cc' ? 14 : 13}
       className="text-current"
+      {...(leadIsPluginEngine && leadPluginEngine.iconDataUrl
+        ? { iconDataUrl: leadPluginEngine.iconDataUrl }
+        : {})}
     />
   );
   const workerAgentKind = normalizeOrcaDisplayAgentKind(

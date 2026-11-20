@@ -148,14 +148,13 @@ export function renderOrcaRoleInstructions(o: MakerSessionCreateOpts): string | 
   return prompt;
 }
 
-/** Inject the role-specific Orca instructions into the stable session startup prompt. */
-export async function applyOrcaInstructions(
+/** Resolve role-specific Orca instructions, populating active initialWorker route for Leads. */
+export async function resolveOrcaRoleInstructions(
   o: MakerSessionCreateOpts,
   deps: OrcaSessionStartOptionsDeps = defaultDeps,
-): Promise<boolean> {
+): Promise<string | null> {
   let prompt = renderOrcaRoleInstructions(o);
-  if (!prompt) return false;
-  if (o.userPrompt && `\n\n${o.userPrompt}\n\n`.includes(`\n\n${prompt}\n\n`)) return true;
+  if (!prompt) return null;
   const vendor = o.vendorOptions;
   if (vendor?.orcaRole === 'lead' && o.id && vendor.orcaLeadSessionId === o.id && deps.listWorkersByLead) {
     let route = null;
@@ -175,6 +174,20 @@ export async function applyOrcaInstructions(
     o.vendorOptions = { ...vendor, initialWorker: route };
     prompt = renderOrcaRoleInstructions(o) ?? prompt;
   }
+  return prompt;
+}
+
+/** Inject the role-specific Orca instructions into the stable session startup prompt. */
+export async function applyOrcaInstructions(
+  o: MakerSessionCreateOpts,
+  deps: OrcaSessionStartOptionsDeps = defaultDeps,
+): Promise<boolean> {
+  const initialPrompt = renderOrcaRoleInstructions(o);
+  if (!initialPrompt) return false;
+  if (o.userPrompt && `\n\n${o.userPrompt}\n\n`.includes(`\n\n${initialPrompt}\n\n`)) return true;
+  const prompt = await resolveOrcaRoleInstructions(o, deps);
+  if (!prompt) return false;
+  if (o.userPrompt && `\n\n${o.userPrompt}\n\n`.includes(`\n\n${prompt}\n\n`)) return true;
   o.userPrompt = o.userPrompt ? `${o.userPrompt}\n\n${prompt}` : prompt;
   return true;
 }

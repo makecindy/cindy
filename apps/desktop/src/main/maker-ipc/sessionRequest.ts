@@ -169,6 +169,11 @@ export function readCreateSessionOpts(
   // 模型组凭据只由 main 内部的入口交给 bootstrapSession，界面与其他设备传来的一律不认。
   const callerOpts: Record<string, unknown> = { ...body };
   delete callerOpts.modelGroupStart;
+  // Strip host-only plugin engine privilege/briefing fields at the IPC boundary so callers
+  // (renderer or device-link) cannot inject system briefings or elevate MCP caller trust.
+  delete callerOpts.pluginEngineBriefing;
+  delete callerOpts.pluginEngineForceBriefingOnResume;
+  delete callerOpts.pluginEngineTrustedCaller;
   return {
     ...callerOpts,
     id,

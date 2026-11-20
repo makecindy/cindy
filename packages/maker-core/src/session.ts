@@ -500,6 +500,18 @@ export class Session {
   getPluginEngineCommandNames(): readonly string[] {
     return this.handle.getPluginEngineCommandNames?.() ?? [];
   }
+  get pluginEngineHttpMcpSupported(): boolean | undefined {
+    return this.handle.pluginEngineHttpMcpSupported;
+  }
+  get pluginEngineHasOrcaMcp(): boolean | undefined {
+    return this.handle.pluginEngineHasOrcaMcp;
+  }
+  get pluginEngineResumeSupported(): boolean | undefined {
+    return this.handle.pluginEngineResumeSupported;
+  }
+  queuePluginEngineBriefing(briefing: string): void {
+    this.handle.queuePluginEngineBriefing?.(briefing);
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */

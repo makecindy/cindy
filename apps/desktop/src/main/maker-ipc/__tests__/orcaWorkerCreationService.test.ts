@@ -748,6 +748,30 @@ describe('plugin engine Worker', () => {
     expect(result).toEqual({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: '插件已停用或卸载' });
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
+
+  // 本机插件引擎当 Orca Lead：Lead 的 agentKind='acp' 不能压成 'claude-code'，
+  // 否则创建内置 claude-code Worker 时会误继承 Lead 的插件模型与 acp-plugin: providerId。
+  it('does not inherit an ACP Lead model or provider when creating a built-in Claude Code Worker', async () => {
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'gemini-4-neon',
+        providerId: 'acp-plugin:agy-acp:antigravity',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'claude-code',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+    }));
+    const bootstrapped = vi.mocked(deps.bootstrapSession).mock.calls[0]![0];
+    expect(bootstrapped.model).not.toBe('gemini-4-neon');
+    expect(String(bootstrapped.providerId ?? '')).not.toContain('acp-plugin:');
+  });
 });
 
 describe('Orca worker working directory', () => {

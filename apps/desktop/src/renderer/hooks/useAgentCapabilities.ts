@@ -153,6 +153,8 @@ export interface AgentCapabilities {
    * 老被控端无此字段 → undefined：控制端对这类 Worker 不列其他电脑与分享(老端会拒绝)。
    */
   supportsOrcaRemoteWorkerAgentRelocation?: boolean;
+  /** 被控端支持本机插件引擎任务作为 Orca 协同 Lead；老被控端缺省 undefined。 */
+  supportsPluginEngineLead?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -327,6 +329,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsOrcaWorkerModelGroup) ||
     !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
     !isOptionalBoolean(value.supportsOrcaRemoteWorkerAgentRelocation) ||
+    !isOptionalBoolean(value.supportsPluginEngineLead) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {

@@ -74,11 +74,12 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
 工具发起，远程控制与手机不列插件引擎；旧版被控端从不会收到。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置
 或 SSH Lead 时拒绝（INVALID_PARAMS）；2026-11-25 起接受 `worktree`（旧版拒绝）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
 `session.providerId`；`list_workers` / `get_workspace_info` 的 agent 字段同样可为 `acp`。共享解析器 `parseOrcaTeamWorkers` 给手机追加可选
-`pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响。插件引擎任务当 Lead
-的所有入口统一拒绝（`[PLUGIN_ENGINE_CANNOT_LEAD]`），`set_worker_runtime` 对插件引擎 Worker 返回 UNSUPPORTED_CAPABILITY。远端 Worker
+`pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响。本机插件引擎任务
+支持作为协同 Lead（要求引擎支持 HTTP MCP，缺失时报 `[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED]`；跨电脑或 SSH 插件引擎任务仍报
+`[PLUGIN_ENGINE_CANNOT_LEAD]`），`set_worker_runtime` 对插件引擎 Worker 返回 UNSUPPORTED_CAPABILITY。远端 Worker
 回报通道（`orcaRemoteWorkerBridge`）拒绝插件引擎 Worker。maker-core 内部新增 `StartSessionOptions.pluginEngineBriefing` /
-`pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
-`acp-session.test.ts`（briefing / trusted caller）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
+`pluginEngineForceBriefingOnResume` / `pluginEngineTrustedCaller` 与 `AcpSession.setVendorOptions`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
+`acp-session.test.ts`（briefing / trusted caller / setVendorOptions / forceBriefingOnResume）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
 
 ## 免装远程调用与跨账号分享插件引擎（2026-11-21）
 
