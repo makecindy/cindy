@@ -280,7 +280,7 @@ function confirmationFor(
 ): LocalConfirmation {
   switch (action.kind) {
     case 'exec':
-      return { ...base, toolName: 'Bash', input: { command: action.command } };
+      return { ...base, toolName: 'Bash', input: { command: action.command, cwd: action.cwd } };
     case 'write':
       return { ...base, toolName: 'Write', input: { file_path: action.path } };
     case 'fetch':
@@ -460,8 +460,8 @@ async function prepareAndStartRemoteAgentSession(
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
     // 权限上限拦下的操作都在本机补问(凭证类用分享凭证卡)，不在没有卡的情况下拒绝。
-    confirm: async (action: ExecutorAction, signal: AbortSignal) =>
-      controller?.confirm(credentialConsent && gate.needsCredentialConsent(action)
+    confirm: async (action, signal, credential) =>
+      controller?.confirm(credentialConsent && credential
         ? credentialConfirmation(action, credentialConsent.description)
         : approvalConfirmation(action), signal) ?? false,
     ...(credentialConsent

@@ -52,12 +52,20 @@ export interface ExecutorGateDecision {
 export const EXECUTOR_APPROVAL_TTL_MS = 2 * 60_000;
 const MAX_APPROVALS = 256;
 
+type PathAccess = 'read' | 'tree' | 'write';
+
+function pathAccess(action: ExecutorAction): PathAccess | undefined {
+  if (action.kind === 'read') return action.scope === 'tree' ? 'tree' : 'read';
+  if (action.kind === 'write') return 'write';
+  return undefined;
+}
+
 interface Approval {
   kind: 'path' | 'exec' | 'fetch';
   key: string;
   expiresAt: number;
   credential: boolean;
-  exactFileRead?: true;
+  pathAccess?: PathAccess;
 }
 
 export function executorGateModeFor(
@@ -150,12 +158,21 @@ export class ExecutorGate {
 
   /** 本机用户在确认卡上允许了一个操作后调用。 */
   recordApproval(action: ExecutorAction): void {
+    this.addApproval(action, this.isCredentialAction(action), action.kind === 'read' && action.exactFileApproval ? 'read' : undefined);
+  }
+
+  /** 补弹卡只批准展示过的访问方式和凭证范围。 */
+  recordLocalConfirmation(action: ExecutorAction, credential: boolean): void {
+    this.addApproval(action, credential, pathAccess(action));
+  }
+
+  private addApproval(action: ExecutorAction, credential: boolean, access?: PathAccess): void {
     this.prune();
     this.approvals.push({
       ...approvalOf(action),
       expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS,
-      credential: this.isCredentialAction(action),
-      ...(action.kind === 'read' && action.exactFileApproval ? { exactFileRead: true } : {}),
+      credential,
+      pathAccess: access,
     });
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
@@ -216,9 +233,14 @@ export class ExecutorGate {
     return this.evaluate(action, false).ok;
   }
 
+  /** 本机核实过的 Git 命令只需普通批准，且仍须在执行时复核豁免。 */
+  requiresCredentialApproval(action: ExecutorAction, take = false): boolean {
+    return this.needsCredentialConsent(action)
+      && !(this.consumeCredentialExemption(action, take) && this.credentialGitReads(action) !== null);
+  }
+
   private evaluate(action: ExecutorAction, take: boolean): ExecutorGateDecision {
-    let credential = this.needsCredentialConsent(action);
-    if (credential && this.consumeCredentialExemption(action, take) && this.credentialGitReads(action) !== null) credential = false;
+    const credential = this.requiresCredentialApproval(action, take);
     if (this.mode === 'full' && !credential) return { ok: true, elevated: true };
     // 抓取网页：本机用户批准过这个地址就放开内网。公网样式的域名也可能解析到内网(公司内网域名)，
     // 只看地址文本判定为不必问，但抓取时会按 DNS 结果被拦下。
@@ -265,7 +287,7 @@ export class ExecutorGate {
     this.prune();
     const { kind, key } = approvalOf(action);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key
-      && (!approval.exactFileRead || (action.kind === 'read' && action.scope !== 'tree'))
+      && (!approval.pathAccess || approval.pathAccess === pathAccess(action))
       && (!credential || approval.credential));
     if (index < 0) return false;
     if (take && kind !== 'path') this.approvals.splice(index, 1);

@@ -419,6 +419,26 @@ describe.runIf(posix)('Claude Code style Bash', () => {
     }
   });
 
+  // PR #11758 / unit: Bash can change directories while a relative command awaits approval.
+  // The existing cwd test only runs commands sequentially. The approved command must run in its shown directory.
+  it('executes an approved relative Bash command in the directory shown before another call changed it', async () => {
+    const sub = path.join(project, 'sub');
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(project, 'a.txt'), 'needle');
+    const { executor } = makeExecutor('normal', {
+      confirm: async (action) => {
+        expect(action).toMatchObject({ kind: 'exec', cwd: project });
+        expect(text(await executor.callTool('Bash', { command: 'cd sub && pwd' }))).toBe(sub);
+        return true;
+      },
+    });
+    try {
+      expect(text(await executor.callTool('Bash', { command: 'grep -rn needle .' }))).toContain('a.txt:1:needle');
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('keeps the working directory between calls, but resets it when it leaves the project', async () => {
     const { executor } = makeExecutor();
     fs.mkdirSync(path.join(project, 'sub'));
@@ -874,7 +894,7 @@ describe('shared provider credentials', () => {
     try {
       expect(gate.authorize(action).ok).toBe(false);
       expect(await executor.confirm(action)).toBe(false);
-      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), true);
       expect(gate.authorize(action).ok).toBe(false);
     } finally {
       await executor.close();
@@ -899,7 +919,7 @@ describe('shared provider credentials', () => {
       const denied = await executor.callTool('Bash', { command: action.command });
       expect(denied.isError).toBe(true);
       expect(text(denied)).not.toContain('PRIVATE_FIXTURE=changed-target');
-      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), true);
     } finally {
       await executor.close();
     }
@@ -925,7 +945,7 @@ describe('shared provider credentials', () => {
     gate.recordCredentialExemption(compound);
     try {
       expect(await executor.confirm(compound)).toBe(false);
-      expect(asked).toHaveBeenCalledExactlyOnceWith(compound, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledExactlyOnceWith(compound, expect.any(AbortSignal), true);
       expect(gate.authorize(compound).ok).toBe(false);
       expect(gate.authorize(ordinary).ok).toBe(false);
     } finally {
@@ -1002,14 +1022,19 @@ describe('shared provider credentials', () => {
     expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
     expect(asked).toEqual([{ kind: 'read', path: env }]);
 
+    // PR #11758 / unit: a local Read confirmation must never authorize Write.
     answer = false;
+    expect((await executor.callTool('Write', { file_path: env, content: 'TOKEN=changed' })).isError).toBe(true);
+    expect(asked.at(-1)).toEqual({ kind: 'write', path: env });
+    expect(fs.readFileSync(env, 'utf8')).toBe('TOKEN=1');
+
     const production = path.join(project, '.env.production');
     fs.writeFileSync(production, 'TOKEN=2');
     const denied = await executor.callTool('Read', { file_path: production });
     expect(denied.isError).toBe(true);
     expect(text(denied)).toContain('did not allow');
     await expect(executor.handle('fs.read', { path: production })).rejects.toMatchObject({ code: 'EACCES' });
-    expect(asked).toHaveLength(3);
+    expect(asked).toHaveLength(4);
   });
 
   it('remembers an explicit credential grant across different operations only in this task', async () => {
@@ -1073,7 +1098,7 @@ describe('shared provider credentials', () => {
       else resolve(answer);
       expect(await Promise.all(pending)).toEqual([answer === true, false]);
       expect(confirm).toHaveBeenCalledTimes(2);
-      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal), true);
       expect(executor.check(first).ok).toBe(answer === true);
       expect(executor.check(first).ok).toBe(false);
       expect(executor.check(second).ok).toBe(false);
@@ -1129,7 +1154,7 @@ describe('shared provider credentials', () => {
       answers[0](true);
       expect(await pending[0]).toBe(true);
       await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-      expect(confirm).toHaveBeenNthCalledWith(2, third, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, third, expect.any(AbortSignal), true);
       answers[1](true);
       expect(await pending[2]).toBe(true);
     } finally {
@@ -1151,7 +1176,7 @@ describe('shared provider credentials', () => {
       expect(confirm).toHaveBeenCalledTimes(1);
       abort.abort();
       await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal));
+      expect(confirm).toHaveBeenNthCalledWith(2, second, expect.any(AbortSignal), true);
       // 已取消请求的卡片之后再回答，不建立任务授权。
       answers[0]('session');
       expect(await pending[0]).toBe(false);
@@ -1225,8 +1250,9 @@ describe('shared provider credentials', () => {
     const unrelated: ExecutorAction = { kind: 'write', path: path.join(outside, 'plain.txt') };
     try {
       expect(text(await executor.callTool('Read', { file_path: env }))).toBe('1\tTOKEN=1');
-      expect(executor.check(write).ok).toBe(true);
       // Session consent is already active when these approvals are recorded.
+      gate.recordApproval(write);
+      expect(executor.check(write).ok).toBe(true);
       gate.recordApproval(command);
       gate.recordApproval(unrelated);
       executor.setGateMode(mode === 'normal' ? 'plan' : 'normal');
@@ -1341,10 +1367,12 @@ describe('shared provider credentials', () => {
       expect(gate.authorize(action).ok).toBe(false);
       // 核实只免掉凭证确认：计划模式仍要本机批准，于是弹普通确认卡，用户不允许就不放行。
       expect(await executor.confirm(action)).toBe(false);
-      expect(asked).toHaveBeenCalledOnce();
+      expect(asked).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal), false);
       expect(gate.authorize(action).ok).toBe(false);
-      gate.recordApproval(action);
+      asked.mockResolvedValueOnce('session');
+      expect(await executor.confirm(action)).toBe(true);
       expect(gate.authorize(action).ok).toBe(true);
+      expect(gate.authorize({ kind: 'read', path: path.join(project, '.env') }).ok).toBe(false);
     } finally {
       await executor.close();
     }
@@ -1363,7 +1391,7 @@ describe('shared provider credentials', () => {
       // 旧卡还没回答：切换权限档后的新请求不必等它。
       fresh = executor.confirm(production);
       await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
-      expect(asked).toHaveBeenNthCalledWith(2, production, expect.any(AbortSignal));
+      expect(asked).toHaveBeenNthCalledWith(2, production, expect.any(AbortSignal), true);
       // 旧卡之后再回答，不建立授权。
       answers[0]('session');
       expect(await stale).toBe(false);
@@ -1418,7 +1446,7 @@ describe('shared provider credentials', () => {
     try {
       expect(await executor.confirm(git)).toBe(true);
       expect(asked).toHaveBeenCalledTimes(1);
-      expect(asked).toHaveBeenCalledWith(env, expect.any(AbortSignal));
+      expect(asked).toHaveBeenCalledWith(env, expect.any(AbortSignal), true);
       answer(true);
       expect(await pending).toBe(true);
     } finally {

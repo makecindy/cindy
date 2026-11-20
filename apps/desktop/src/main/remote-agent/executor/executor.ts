@@ -68,7 +68,7 @@ export interface RemoteExecutorOptions {
    * 操作)用它补问，允许后默认只放行这一个操作；凭证卡上用户明确选择会话级允许后免除后续的分享凭证确认。
    * 缺省时直接拒绝。
    */
-  confirm?(action: ExecutorAction, signal: AbortSignal): Promise<ExecutorConfirmation>;
+  confirm?(action: ExecutorAction, signal: AbortSignal, credential: boolean): Promise<ExecutorConfirmation>;
   /** 与 confirm 一起提供：git 查看内容、打出 git 配置的命令先在本机核实，读不到凭证时不弹卡。 */
   gitCredentials?: GitCredentialHistory;
   /**
@@ -233,20 +233,20 @@ export class RemoteExecutor {
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
       // 排队期间前一张卡已建立任务授权：不再弹卡，调用方重新检查即可放行。
       if (this.gate.wouldAllow(action)) return true;
+      const credentialConfirmation = this.gate.requiresCredentialApproval(action);
       const allowed = await Promise.race([
-        this.opts.confirm(action, signal).catch(() => false),
+        this.opts.confirm(action, signal, credentialConfirmation).catch(() => false),
         aborted.then(() => false as const),
       ]);
       // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
       if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
         || permissionGeneration !== this.permissionGeneration) return false;
-      if (allowed === 'session' && this.gate.needsCredentialConsent(action)) {
+      if (allowed === 'session' && credentialConfirmation && this.gate.needsCredentialConsent(action)) {
         this.gate.allowCredentialsForSession();
         this.opts.credentialGrant?.remember();
         if (this.gate.wouldAllow(action)) return true;
       }
-      // 同一张卡同时满足凭证确认与普通上限(批准记录按操作是否凭证类登记)。
-      this.gate.recordApproval(action);
+      this.gate.recordLocalConfirmation(action, credentialConfirmation);
       return true;
     } finally {
       if (onAbort) signal?.removeEventListener('abort', onAbort);
@@ -525,12 +525,13 @@ export class RemoteExecutor {
     const rawCommand = args.command;
     if (typeof rawCommand !== 'string' || !rawCommand.trim()) return textResult('command is required.', true);
     const command = this.workspace.mapCommand(rawCommand, resolveExecutorShell().dialect);
-    await this.authorizeTool({ kind: 'exec', command, cwd: this.shell.getCwd() }, signal);
+    const cwd = await this.shell.resolveCwd();
+    await this.authorizeTool({ kind: 'exec', command, cwd }, signal);
     const timeout = optionalNumber(args, 'timeout');
     try {
       const result = args.run_in_background === true
-        ? await this.shell.startBackground(command)
-        : await this.shell.run(command, timeout, signal);
+        ? await this.shell.startBackground(command, cwd)
+        : await this.shell.run(command, cwd, timeout, signal);
       return textResult(this.workspace.mapTextForAgent(result.text), result.isError);
     } finally {
       this.opts.capture?.noteOpaqueWrite();
