@@ -16327,6 +16327,10 @@
       "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Foi atingido o limite de utilização da subscrição para este modelo. Pode mudar de modelo.",
+      "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+      "poolOtherSignedOut": "Outra conta de subscrição tem a sessão terminada. Inicie sessão no computador que executa a tarefa e tente novamente.",
+      "poolUnavailable": "Não há nenhuma conta de subscrição disponível para este modelo. Mude de modelo ou verifique as contas no computador que executa a tarefa.",
       "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos.",
       "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos.",
       "loginRequired": "A conta de subscrição desta tarefa requer um novo início de sessão. Inicia sessão no computador que executa a tarefa e tenta novamente.",

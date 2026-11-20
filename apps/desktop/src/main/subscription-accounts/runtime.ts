@@ -439,15 +439,19 @@ function persistCooling(state: OwnerRuntime): void {
   }
   void writeSubscriptionAccountCooling(cooling);
 }
-function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
+function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string) {
   const scope = coolingScope(provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model);
-  return accountProfilePeers(state, provider, id).some(accountId => {
+  let until = 0;
+  let modelLimited = false;
+  for (const accountId of accountProfilePeers(state, provider, id)) {
     const key = keyOf(provider, accountId);
     const scopes = currentCooling(state.quotaCooling.get(key), Date.now());
     if (Object.keys(scopes).length) state.quotaCooling.set(key, scopes);
     else state.quotaCooling.delete(key);
-    return Boolean(scopes[''] || scopes[scope]);
-  });
+    until = Math.max(until, scopes[''] ?? 0, scopes[scope] ?? 0);
+    if (scope && scopes[scope]) modelLimited = true;
+  }
+  return until ? { until, modelLimited } : undefined;
 }
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
@@ -2445,8 +2449,11 @@ export async function acquireSubscriptionAccount(
       const loggingIn = [...state.logins].some(
         ([key, login]) => key.startsWith(provider + ':') && login.accountId === a.id,
       );
+      const cooling = !control && info?.auth.authenticated && (!binding || rebind) && distinctAccounts >= 2
+        ? accountCooling(state, provider, a.id, model) : undefined;
       return {
         ...a,
+        cooling,
         paused: control ? false : a.paused,
         key: a.id,
         accountKey: known?.auth.authenticated && !known.unavailable ? known.accountKey : undefined,
@@ -2457,7 +2464,7 @@ export async function acquireSubscriptionAccount(
         // Like goal continuation, ChatGPT admission belongs to upstream: cached windows and
         // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
         usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
-          && ((Boolean(binding) && !rebind) || distinctAccounts < 2 || !accountCooling(state, provider, a.id, model))))
+          && !cooling))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, model, {
             remote: options.remote === true, ownComputer: options.ownComputer === true,
@@ -2524,7 +2531,25 @@ export async function acquireSubscriptionAccount(
     if (!selected && !pinned && providerGroupMembersFull(grouped.candidates, grouped))
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
     if (!selected || !member || !member.usable || (!control && member.paused)) {
-      if (!pinned) throw new Error('No subscription account is available');
+      if (!pinned) {
+        // Only describe reasons proven for this request. Shared/remote callers retain
+        // their opaque failure and must not learn about the owner's other accounts.
+        if (provider === 'anthropic' && !control && !options.remote) {
+          const active = grouped.candidates.filter(a => !a.paused && !grouped.exclude.has(a.id));
+          const signedOut = active.filter(a => !a.loggingIn && !a.unavailable && a.auth?.authenticated === false && !a.auth.errorReason);
+          const limited = active.filter(a => !a.loggingIn && !a.unavailable && a.auth?.authenticated
+            && (a.usage.limited || a.cooling?.modelLimited));
+          if (limited.length && limited.length + signedOut.length === active.length) {
+            const retries = limited.map(a => a.usage.limited && !a.usage.resetAtMs ? Infinity
+              : Math.max(a.cooling?.until ?? 0, a.usage.resetAtMs ?? 0));
+            const retryAt = Math.min(...retries);
+            throw new Error('[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model'
+              + (Number.isFinite(retryAt) ? `\nresetAtMs=${retryAt}` : '')
+              + (signedOut.length ? '\notherAccountSignedOut=true' : ''));
+          }
+        }
+        throw new Error('No subscription account is available');
+      }
       // Keep account affinity and admission unchanged; report the actual reason.
       // Do not include identity or configDir: errors also reach shared viewers.
       if (!member || member.unavailable || !member.auth || member.auth.errorReason === 'codex_provider_managed_auth')

@@ -467,6 +467,21 @@ it.each(['paused', 'removed', 'signed-out', 'unknown', 'exhausted', 'cooling', '
   },
 );
 
+// Unit regression: admission must explain a model cooldown alongside a signed-out
+// sibling, without exposing identities or applying the cooldown to other models.
+it('explains an unbound task blocked by a model limit and a signed-out account', async () => {
+  const until = Date.now() + 60_000;
+  h.cooling = { anthropic: { default: { 'claude:fable': until } } };
+  h.read.mockImplementation(async (_kind: string, dir: string) => ({
+    authenticated: dir.endsWith('default'), identity: dir,
+  }));
+  await expect(acquireSubscriptionAccount('anthropic', 'claude-fable-5-2', []))
+    .rejects.toThrow(new Error(`[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model\nresetAtMs=${until}\notherAccountSignedOut=true`));
+  const lease = await acquireSubscriptionAccount('anthropic', 'claude-opus-5-5', []);
+  expect(lease?.accountId).toBe('default');
+  lease?.release();
+});
+
 it('reads round capacity without advancing the account cursor or reserving a slot', async () => {
   h.pools.anthropic!.strategy = 'round';
   for (let i = 0; i < 2; i++) expect(await readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5'))
@@ -4725,7 +4740,7 @@ describe('native account assignment on the executing computer', () => {
       expect(next?.account.configDir).toBe('anthropic/second');
       next?.release();
     } else if (backup === 'exhausted') {
-      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('No subscription account');
+      await expect(acquireSubscriptionAccount('anthropic', model, ['task:new'])).rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
     }
     expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-opus-5-5')).toBe(true);
   });
@@ -5057,7 +5072,7 @@ describe('native account assignment on the executing computer', () => {
         }
         if (provider === 'anthropic') {
           await expect(acquireSubscriptionAccount(provider, 'claude-sonnet', []))
-            .rejects.toThrow('No subscription account is available');
+            .rejects.toThrow('[SUBSCRIPTION_POOL_MODEL_LIMITED]');
         } else {
           const next = await acquireSubscriptionAccount(provider, 'gpt-6', []);
           expect(next?.account.configDir).toBe('openai/default');

@@ -16102,6 +16102,10 @@
       "retryIn": "{{seconds}} 秒后自动重试"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
+      "poolRetryUntil": "可在 {{resetAt}} 后重试。",
+      "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
+      "poolUnavailable": "当前模型没有可用的订阅账号。请切换模型，或在执行任务的电脑上检查账号状态。",
       "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。",
       "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。",
       "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",

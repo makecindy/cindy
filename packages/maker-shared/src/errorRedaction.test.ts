@@ -525,6 +525,11 @@ describe('subscription account startup guidance', () => {
     });
   it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: No subscription account is available', t)).toBe('chat.subscriptionAccountError.poolUnavailable');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=1900000000000\notherAccountSignedOut=true', t, 'zh-CN'))
+      .toBe(['chat.subscriptionAccountError.poolModelLimited', 'chat.subscriptionAccountError.poolRetryUntil',
+        new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)),
+        'chat.subscriptionAccountError.poolOtherSignedOut'].join(' '));
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });
