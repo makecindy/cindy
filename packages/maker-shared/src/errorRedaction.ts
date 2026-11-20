@@ -116,7 +116,7 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
 const ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS = [
   // Claude: "You've hit your session limit · resets 1:20am (TZ)"; ChatGPT: "You've hit
   // your usage limit"; Pi: "You have hit your ChatGPT usage limit (plus plan)".
-  /\byou(?:(?:'|’)ve|\s+have)\s+hit\s+your\s+(?:[a-z0-9-]+\s+){0,2}limit\b/i,
+  /\byou(?:(?:'|’)ve|\s+have)\s+hit\s+your\s+(?:(?:(?:claude\s+)?session|(?:chatgpt\s+)?usage|daily|weekly|monthly|\d+-hour)\s+)?limit\b/i,
   // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`.
   /\busage[\s_-]?limit[\s_-]?(?:reached|exceeded)\b/i,
 ];

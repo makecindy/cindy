@@ -159,6 +159,9 @@ describe('matchesDeterministicUsageExhaustionText', () => {
 describe('isAccountUsageLimitReachedText', () => {
   it.each([
     "You've hit your session limit · resets 1:20am (Asia/Shanghai)",
+    "You've hit your Claude session limit",
+    "You've hit your weekly limit",
+    "You've hit your 5-hour limit",
     "You've hit your limit · resets 11pm (UTC)",
     'You’ve hit your usage limit. Try again at 11:30 PM.',
     'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.',
@@ -173,6 +176,8 @@ describe('isAccountUsageLimitReachedText', () => {
     '',
     'HTTP 429 Too Many Requests',
     'Rate limit reached for gpt-5.5',
+    // PR #11526: the "hit your" form used the same branch as periodic limits.
+    "You've hit your rate limit",
     "You've hit your session limit: budget_exceeded",
     'insufficient_quota: usage limit reached',
     'You hit your spend cap set by the owner of your workspace.',
