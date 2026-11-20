@@ -2363,7 +2363,6 @@ export function MessageRenderer({
     isFinalDragSample = false,
   ) => {
     richContent?.onScroll();
-    messageListVisibility.viewportChanged();
     if (!historyPositioningRef.current) return;
     // Cancellation releases ownership immediately. Only endDrag may still consume its final
     // sample; an ordinary layout/MVCP scroll cannot use the retained origin as user intent.
@@ -2493,7 +2492,6 @@ export function MessageRenderer({
       if (anchor && !reopeningAnchorRef.current) readingPosition?.write({ anchor, atEnd: nearBottomRef.current });
     }
   }, [
-    messageListVisibility,
     isUserControllingScroll,
     runStickToLatestVerify,
     captureCurrentHistoryAnchor,
@@ -2678,7 +2676,6 @@ export function MessageRenderer({
   }, [attemptAutoLoadEarlier, loadEarlierEvaluationVersion]);
 
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
-    messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
@@ -2702,7 +2699,7 @@ export function MessageRenderer({
     ) {
       restoreHistoryAnchorOnce(transaction.generation);
     }
-  }, [messageListVisibility, reconcileReopeningAnchor, restoreHistoryAnchorOnce, scheduleHistoryAnchorRestore]);
+  }, [reconcileReopeningAnchor, restoreHistoryAnchorOnce, scheduleHistoryAnchorRestore]);
 
   // 记录 contentHeight 供近底判定 fallback + DEV harness 就绪判定;并承担**唯一的贴底跟随**:
   // 内容长高(流式增长、大块一帧撑高、冷开测量结算)时,用户本就贴底(nearBottomRef,与

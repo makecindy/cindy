@@ -37,6 +37,7 @@ function matches(ticket: SlotTicket, release: Release): boolean {
 export class McpAppViewSlots {
   private readonly tickets = new Map<string, SlotTicket>();
   private nextWaiter = 0;
+  private readonly pendingReleases: Array<{ owner: unknown; release: Release }> = [];
 
   cancelCaller(caller: string): void {
     for (const [id, ticket] of this.tickets) {
@@ -57,10 +58,17 @@ export class McpAppViewSlots {
   }
 
   released(owner: unknown, caller: string, peer?: string, window?: Release['window']): void {
-    this.grantNext(owner, { caller, peer, window, through: this.nextWaiter });
+    const release = { caller, peer, window, through: this.nextWaiter };
+    if (!this.grantNext(owner, release)) {
+      // Preserve an edge that arrives between the refusal and the wait registration.
+      // It is consumed by the first matching ticket that subsequently registers.
+      const hasRefused = [...this.tickets.values()].some(ticket =>
+        ticket.owner === owner && ticket.refused && matches(ticket, release));
+      if (hasRefused) this.pendingReleases.push({ owner, release });
+    }
   }
 
-  private grantNext(owner: unknown, release: Release): void {
+  private grantNext(owner: unknown, release: Release): boolean {
     for (const ticket of this.tickets.values()) {
       // A close funds one retry of a card already refused when it occurred. If the recipient
       // leaves before sending open, only another original waiter can use that same slot.
@@ -68,8 +76,9 @@ export class McpAppViewSlots {
           ticket.waitingSince > release.through || !matches(ticket, release)) continue;
       ticket.granted = release;
       ticket.grant(true);
-      return;
+      return true;
     }
+    return false;
   }
 
   async control(owner: unknown, caller: string, peer: string, input: Record<string, unknown>,
@@ -90,6 +99,13 @@ export class McpAppViewSlots {
         previous.waitingSince = ++this.nextWaiter;
         this.tickets.delete(id);
         this.tickets.set(id, previous);
+        const pending = this.pendingReleases.findIndex(item =>
+          item.owner === owner && matches(previous, item.release));
+        if (pending >= 0) {
+          const [{ release }] = this.pendingReleases.splice(pending, 1);
+          previous.granted = release;
+          previous.grant(true);
+        }
       }
       const unwatch = watchClose?.(() => {
         if (!previous.granted) this.cancel(id, previous);

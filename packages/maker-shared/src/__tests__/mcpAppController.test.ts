@@ -68,6 +68,30 @@ describe('MCP App transport lifecycle', () => {
     await Promise.all([first.close(), next.close()]);
   });
 
+  // Regression: a slot can close after refusal but before the controller registers its wait.
+  it('rechecks a slot released during the refusal-to-wait gap', async () => {
+    const slots = new McpAppViewSlots();
+    let openAttempts = 0;
+    const controller = new McpAppController((_session, input) => slots.control(
+      'owner', 'window', 'peer', input, async () => {
+        if (input.op === 'open') {
+          openAttempts++;
+          if (openAttempts === 1) throw new Error('MCP_APP_VIEW_LIMIT');
+          return { viewId: 'view', transport: 'sandbox' };
+        }
+        return {};
+      }), 'task', 'card', vi.fn(), vi.fn(), vi.fn());
+    const opened = controller.open({}, async waiting => {
+      if (waiting) {
+        slots.released('owner', 'window', 'peer');
+        return true;
+      }
+      return true;
+    });
+    await expect(opened).resolves.toMatchObject({ viewId: 'view' });
+    expect(openAttempts).toBe(2);
+  });
+
   // Unit: a wait can outlive an explicit device close. A subsequent slot release must not reconnect it.
   it.each([false, true])('ends the wait on explicit device close without reconnecting (already granted: %s)', async granted => {
     const slots = new McpAppViewSlots();
