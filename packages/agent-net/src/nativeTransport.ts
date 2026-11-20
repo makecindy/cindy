@@ -44,6 +44,8 @@ const WRITE_CHUNK = 65_536;
 const FAST_POLL_MS = 8;
 const IDLE_POLL_MS = 50;
 const ACTIVE_WINDOW_MS = 1_000;
+/** The admitted peers are worked out again at least this often, also when the socket reports no change (see `poll`). */
+const ADMISSION_RECHECK_MS = 1_000;
 const now = () => performance.now();
 
 /**
@@ -66,6 +68,15 @@ export class NativeTransport implements Transport {
   private timerDelay = 0;
   /** Poll fast until then (a new transport starts out connecting). */
   private activeUntil = now() + ACTIVE_WINDOW_MS;
+  /** A poll is running; `again`: something happened meanwhile, so one more follows it. */
+  private polling = false;
+  private again = false;
+  private polledAt = 0;
+  /** When a wake last polled at once (see `wake`). */
+  private wokeAt = Number.NEGATIVE_INFINITY;
+  /** The socket's admission revision the engine last got, and when the admitted peers were last worked out. */
+  private mirroredVersion: number | undefined;
+  private admissionAt = Number.NEGATIVE_INFINITY;
   private channels = new Map<number, NativeChannel>();
   private waiting = new Map<number, Waiting>();
   private links = new Map<string, number>();
@@ -177,6 +188,7 @@ export class NativeTransport implements Transport {
     return link;
   }
   private async synchronizeAdmission(): Promise<void> {
+    const version = this.options.admissionVersion?.();
     const entries = this.options.admittedPeers!().map(peer => {
       if (!/^[a-f0-9]{64}$/.test(peer.id) || !this.options.admit(peer.id)) throw new Error('INVALID_NATIVE_PEER');
       const key = Uint8Array.from(peer.id.match(/../g)!, part => parseInt(part, 16));
@@ -184,9 +196,12 @@ export class NativeTransport implements Transport {
       return { key: toBase64Url(key), link: this.linkFor(peer.relayId), ...(this.enhanced ? { relayId: peer.relayId } : {}) };
     }).sort((a, b) => a.link - b.link);
     const serialized = JSON.stringify(entries);
-    if (serialized === this.lastAdmission) return;
-    await this.call({ op: 'admit', peers: entries });
-    this.lastAdmission = serialized;
+    if (serialized !== this.lastAdmission) {
+      await this.call({ op: 'admit', peers: entries });
+      this.lastAdmission = serialized;
+    }
+    this.admissionAt = now();
+    this.mirroredVersion = version;
   }
   async connect(entry: RosterEntry): Promise<PeerChannel> {
     if (!this.options.admit(entry.id)) throw new Error('UNAUTHORIZED_PEER');
@@ -226,25 +241,53 @@ export class NativeTransport implements Transport {
   }
   release(bytes: number): void { this.pendingBytes = Math.max(0, this.pendingBytes - bytes); }
   private schedule(delay = now() < this.activeUntil ? FAST_POLL_MS : IDLE_POLL_MS): void {
-    if (this.closed || this.timer) return;
+    if (this.closed || this.timer || this.polling) return;
     this.timerDelay = delay;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.poll().then(() => this.schedule(), () => this.close());
-    }, delay);
+    this.timer = setTimeout(() => { this.timer = null; this.drive(); }, delay);
   }
   /**
-   * Something to move: poll fast for a while, and at once if the next poll was an idle one. A poll under way is left alone;
-   * the next follows FAST_POLL_MS after it, as it always did.
+   * Something to move: poll now. React Native runs timers on the display's frames, so a zero timer was up to a frame late
+   * (7–20 ms measured, 2026-11-21) and a request sat in JS that long before the engine saw it. A wake within FAST_POLL_MS
+   * of the previous one keeps that rhythm instead, so a run of writes does not poll per write.
    */
   wake(): void {
     this.activeUntil = now() + ACTIVE_WINDOW_MS;
-    if (this.closed || !this.timer || this.timerDelay <= FAST_POLL_MS) return;
-    clearTimeout(this.timer); this.timer = null;
-    this.schedule(0);
+    if (this.closed) return;
+    if (!this.polling && now() - this.wokeAt < FAST_POLL_MS) {
+      if (this.timer && this.timerDelay > FAST_POLL_MS) { clearTimeout(this.timer); this.timer = null; }
+      this.schedule(FAST_POLL_MS);
+      return;
+    }
+    this.wokeAt = now();
+    this.drive();
+  }
+  /** The roster or the peer rule changed: mirror it into the engine now rather than at the next poll. */
+  admissionChanged(): void { this.wake(); }
+  /** Poll now. During a poll a wake is noted and one more poll follows it; then the next poll is scheduled. */
+  private drive(): void {
+    if (this.closed) return;
+    if (this.polling) { this.again = true; return; }
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    this.polling = true;
+    void (async () => {
+      try {
+        await this.poll();
+        if (this.again && !this.closed) { this.again = false; await this.poll(); }
+      } catch { this.polling = false; await this.close(); return; }
+      this.polling = false;
+      this.again = false;
+      this.schedule();
+    })();
   }
   private async poll(): Promise<void> {
-    await this.synchronizeAdmission();
+    this.polledAt = now();
+    // The admitted peers are worked out again when the socket says its roster or rule changed, and once per
+    // ADMISSION_RECHECK_MS for what lapses with time (a certificate, a grant). Working them out on every poll took about
+    // 8 ms of the phone's JS thread with 28 devices in the account (2026-11-21), more than the poll itself.
+    const version = this.options.admissionVersion?.();
+    if (version === undefined || version !== this.mirroredVersion || this.polledAt - this.admissionAt >= ADMISSION_RECHECK_MS) {
+      await this.synchronizeAdmission();
+    }
     await this.synchronizeRelayUdp();
     // Native commands can complete while this poll is awaiting bridge I/O or
     // initializing/flushing another channel. Its snapshot cannot establish that
