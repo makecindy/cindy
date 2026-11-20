@@ -2036,6 +2036,55 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // DB: both production Worker-link transactions must keep a normally
+  // archived team's existing work going, while fencing an explicit close and
+  // the first member of an unfinished team whose Lead was archived first.
+  it.each([false, true])('admits Workers only to the established team of a normally archived follow-up (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'parent');
+      await seedSession(client, 'lead', { source: 'side-chat', parentSessionId: 'parent', orcaRole: 'lead' });
+      const startTeam = (teamId: string) => client.exec(
+        "INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, 'lead', 'active', 1, 1)",
+        [teamId],
+      );
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'lead', status: 'archived' });
+      const addRemote = (id: string, teamId = 'original') => client.tx('orca.upsertWorker', {
+        id, teamId, sessionId: id, label: id, now: 2,
+        remoteExecution: {
+          deviceId: 'device', remoteSessionId: id,
+          proxySession: { title: 'Worker', model: 'model', agentKind: 'codex', effort: null, permissionMode: 'auto', fastMode: false },
+        },
+      });
+      await startTeam('original');
+      await addRemote('first');
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'lead'");
+      await archive();
+      await addRemote('added');
+
+      await client.tx('sessions.setTerminalStatus', {
+        sessionId: 'lead', status: 'archived', sideChatCloseParentId: 'parent',
+      });
+      await expect(addRemote('pending')).rejects.toThrow('no longer active');
+      await client.exec("UPDATE orca_teams SET status = 'completed' WHERE id = 'original'");
+      await client.exec("UPDATE sessions SET side_chat_close_pending = 0 WHERE id = 'lead'");
+      await client.tx('sessions.setStatus', { sessionIds: ['lead'], status: 'active' });
+      await startTeam('next');
+      await expect(addRemote('stale')).rejects.toThrow('no longer active');
+      await archive();
+      await expect(addRemote('first-in-next', 'next')).rejects.toThrow('no longer active');
+      await client.tx('sessions.setStatus', { sessionIds: ['lead'], status: 'active' });
+      await addRemote('current', 'next');
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'lead', status: 'deleted', deleteTarget: 'task' });
+      await expect(addRemote('deleted', 'next')).rejects.toThrow('no longer active');
+      await expect(client.query('SELECT id, team_id FROM orca_workers ORDER BY id'))
+        .resolves.toEqual([
+          { id: 'added', team_id: 'original' }, { id: 'current', team_id: 'next' }, { id: 'first', team_id: 'original' },
+        ]);
+      await expect(client.query('SELECT id FROM sessions ORDER BY id'))
+        .resolves.toEqual([{ id: 'added' }, { id: 'current' }, { id: 'first' }, { id: 'lead' }, { id: 'parent' }]);
+    }, { useInlineWorker });
+  });
+
   it('rewind.commit follows transcript parent links and preserves the prior assistant when timestamps are inverted', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

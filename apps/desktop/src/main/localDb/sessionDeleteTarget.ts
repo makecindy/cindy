@@ -4,6 +4,21 @@ export const COMMITTED_SIDE_CHAT_WORKER_SQL = `EXISTS (
   WHERE team.lead_session_id = sessions.id AND team.status IN ('active', 'completed', 'cancelled')
 )`;
 
+/** A normal archive preserves an established team. The Worker must belong to this generation. */
+export const ORCA_WORKER_LINK_TEAM_SQL = `
+  SELECT 1 FROM orca_teams AS team WHERE team.id = ? AND team.status = 'active'
+    AND NOT EXISTS (
+      SELECT 1 FROM sessions AS lead WHERE lead.id = team.lead_session_id AND lead.source = 'side-chat'
+        AND (
+          lead.side_chat_close_pending = 1 OR lead.status = 'deleted'
+          OR (lead.status = 'archived' AND NOT EXISTS (
+            SELECT 1 FROM orca_workers AS worker WHERE worker.team_id = team.id
+          ))
+        )
+    )
+  LIMIT 1
+`;
+
 export const SIDE_CHAT_CLOSE_TARGET_SQL = `
   SELECT 1 FROM sessions WHERE id = ? AND parent_session_id = ? AND source = 'side-chat'
     AND side_chat_promoted = 1 AND (

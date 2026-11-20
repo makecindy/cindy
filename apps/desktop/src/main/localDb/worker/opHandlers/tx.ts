@@ -11,7 +11,7 @@ import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
-import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../../sessionDeleteTarget.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
@@ -3520,9 +3520,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   db.transaction(() => {
-    const activeTeam = db.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = orca_teams.lead_session_id AND source = 'side-chat' AND status <> 'active') LIMIT 1",
-    ).get(teamId);
+    const activeTeam = db.prepare(ORCA_WORKER_LINK_TEAM_SQL).get(teamId);
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);
     }

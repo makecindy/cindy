@@ -195,7 +195,7 @@ import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cin
 import { SideChatsSheet } from '@/session/SideChatsSheet';
 import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
-import { buildMobileSessionRenderWindow } from '@/session/mobileHistoryRender';
+import { buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
@@ -1254,7 +1254,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
   const sideChatParent = useRemoteSessionDetail(deviceId, currentSession?.source === 'side-chat' ? (currentSession.parentSessionId ?? '')
       : '');
-  const sideChatBoundary = currentSession?.source === 'side-chat' ? Date.parse(currentSession.createdAt) : undefined;
+  const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,

@@ -12,7 +12,7 @@ import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-revie
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
-import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -50,6 +50,7 @@ const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_F
 const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
+const ORCA_WORKER_LINK_TEAM_SQL = ${JSON.stringify(ORCA_WORKER_LINK_TEAM_SQL)};
 const assertSessionDeleteTarget = ${assertSessionDeleteTarget.toString()};
 const SIDE_CHAT_CLOSE_TARGET_SQL = ${JSON.stringify(SIDE_CHAT_CLOSE_TARGET_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
@@ -1613,9 +1614,7 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
-    const activeTeam = readyDb.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = orca_teams.lead_session_id AND source = 'side-chat' AND status <> 'active') LIMIT 1",
-    ).get(teamId);
+    const activeTeam = readyDb.prepare(ORCA_WORKER_LINK_TEAM_SQL).get(teamId);
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');
     }
