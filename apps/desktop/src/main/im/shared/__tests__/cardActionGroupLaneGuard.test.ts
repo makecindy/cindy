@@ -271,6 +271,16 @@ describe('飞书群卡片 lane 丢失时的 /ctr fail-closed', () => {
     );
   });
 
+  it('无 controlUserId 的旧群卡不会误清另一场私聊 /ctr', async () => {
+    const im = makeIm();
+    enterControl('cli_abc', 'ou_owner');
+
+    await press(im, { ...SESSION_PICK, senderId: 'ou_owner' });
+
+    expect(mocks.bindingAttach).not.toHaveBeenCalled();
+    expect(isInControl('cli_abc', 'ou_owner')).toBe(true);
+  });
+
   it('失效群卡被拒后释放 /ctr 锁, 用户可以再发消息', async () => {
     const im = makeIm();
     enterControl('cli_abc', 'g/oc_chat1/omt_t1');
