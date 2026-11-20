@@ -16153,6 +16153,12 @@
       "toggle": "Show or hide the reply from “{{title}}”",
       "openTask": "Open task"
     },
+    "geminiRateLimit": {
+      "retried": "Retried automatically after the Gemini rate limit",
+      "title": "Gemini’s per-minute input token limit was reached.",
+      "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+      "retryIn": "Retrying automatically in {{seconds}} s"
+    },
     "subscriptionAccountError": {
       "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
       "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",

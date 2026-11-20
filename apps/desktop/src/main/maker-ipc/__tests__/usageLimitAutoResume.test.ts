@@ -483,3 +483,31 @@ describe('UsageLimitAutoResume', () => {
     }
   });
 });
+
+describe('Gemini paid input tokens per minute (#11719)', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}, limit: 2000000. Generate content input tokens per minute limit exceeded on Tier 1. Please retry in 56.598211013s.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  const message = JSON.stringify({ error: { message: JSON.stringify({ error }) } });
+
+  it('uses the later Google hint, bypasses subscription checks and retries once', async () => {
+    const h = harness();
+    expect(await h.guard.onTurnError('api', { message })).toBe(true);
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.timers[0]?.delayMs).toBe(56_599);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledWith('api', 1, expect.objectContaining({ attempt: 1, maxAttempts: 1 }));
+    expect(await h.guard.onTurnError('api', { message })).toBe(false);
+    expect(h.timers).toHaveLength(1);
+  });
+
+  it('invalidates a due callback when the user takes over', async () => {
+    const h = harness();
+    await h.guard.onTurnError('api', { message });
+    h.guard.noteUserAction('api');
+    h.timers[0]!.fn();
+    await h.flush();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+});

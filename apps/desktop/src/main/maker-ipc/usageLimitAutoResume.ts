@@ -14,6 +14,7 @@
  *  - 同一任务连续自动继续而没有任何实质产出达到上限后停下，防止重置时刻算早时反复撞限额。
  */
 
+import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import type { AutoResumeInfo } from '../../shared/agentInputQueue.js';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../shared/agentInputQueue.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
@@ -72,7 +73,7 @@ export function isAccountUsageLimitError(signals: InterruptedTurnErrorSignals): 
 }
 
 export class UsageLimitAutoResume {
-  private readonly timers = new Map<string, { token: number; handle: unknown; groupQuota: boolean }>();
+  private readonly timers = new Map<string, { token: number; handle: unknown; groupQuota: boolean; minuteLimit: boolean }>();
   private readonly consecutive = new Map<string, number>();
   /** 每次新错误 / 用户接手 / 任务关闭都递增；迟到的异步解析结果据此丢弃。 */
   private readonly generations = new Map<string, number>();
@@ -88,14 +89,21 @@ export class UsageLimitAutoResume {
   ): Promise<boolean> {
     if (this.disposed || !isAccountUsageLimitError(signals)) return false;
     const used = this.consecutive.get(sessionId) ?? 0;
-    if (used >= USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES) {
+    const limit = signals.providerGroupUsageLimit ? null : parseGeminiInputRateLimit(signals.message);
+    if (limit && limit.retryDelayMs === null) {
+      this.deps.cancel(sessionId, candidateToken);
+      return false;
+    }
+    const delay = limit?.retryDelayMs ?? null;
+    const retryAt = delay === null ? null : this.deps.now() + delay;
+    if (used >= (retryAt === null ? USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES : 1)) {
       this.deps.log('usage-limit auto-resume exhausted', { sessionId, used });
       this.deps.cancel(sessionId, candidateToken);
       return false;
     }
     const generation = this.bumpGeneration(sessionId);
     try {
-      const armed = await this.schedule(sessionId, signals, candidateToken, generation, options);
+      const armed = await this.schedule(sessionId, signals, candidateToken, generation, options, retryAt);
       if (!armed) this.deps.cancel(sessionId, candidateToken);
       return armed;
     } catch (err) {
@@ -120,13 +128,14 @@ export class UsageLimitAutoResume {
     token: number,
     generation: number,
     options: UsageLimitRecoveryOptions,
+    retryAt: number | null,
   ): Promise<boolean> {
     if (!(await this.deps.isEligible(sessionId))) return false;
     // A group-verified limit already covers every member; only an ordinary account task switches here.
-    const switchAccount = signals.providerGroupUsageLimit === undefined
+    const switchAccount = retryAt === null && signals.providerGroupUsageLimit === undefined
       && !options.accountSwitchChecked
       && (await this.deps.canSwitchAccount?.(sessionId).catch(() => false) ?? false);
-    const resetAt = switchAccount ? null : await this.deps.resolveResetAt(sessionId, signals);
+    const resetAt = retryAt ?? (switchAccount ? null : await this.deps.resolveResetAt(sessionId, signals));
     if (this.disposed || this.generations.get(sessionId) !== generation) return false;
     const now = this.deps.now();
     if (!switchAccount && (resetAt === null || resetAt - now > USAGE_LIMIT_MAX_WAIT_MS)) {
@@ -137,19 +146,19 @@ export class UsageLimitAutoResume {
       return false;
     }
     // 已过点（错误到达时额度刚好重置）也按最短缓冲继续。
-    const resumeAt = switchAccount || resetAt === null
+    const resumeAt = retryAt ?? (switchAccount || resetAt === null
       ? now + USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS
       : Math.max(resetAt, now) +
         USAGE_LIMIT_RESUME_BUFFER_MS +
-        Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS);
+        Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS));
     if (!this.deps.arm(sessionId, token, resumeAt)) return false;
     if (this.deps.saveWait && !await this.deps.saveWait(sessionId, token, resumeAt, this.consecutive.get(sessionId) ?? 0, signals.providerGroupUsageLimit !== undefined)) return false;
     if (this.disposed || this.generations.get(sessionId) !== generation || !this.deps.isCurrent(sessionId, token)) return false;
     this.clear(sessionId);
     const handle = this.deps.setTimer(() => {
       void this.fire(sessionId, token);
-    }, resumeAt - now);
-    this.timers.set(sessionId, { token, handle, groupQuota: signals.providerGroupUsageLimit !== undefined });
+    }, Math.max(0, resumeAt - this.deps.now()));
+    this.timers.set(sessionId, { token, handle, groupQuota: signals.providerGroupUsageLimit !== undefined, minuteLimit: retryAt !== null });
     this.deps.log('usage-limit auto-resume scheduled', { sessionId, resumeAt });
     return true;
   }
@@ -174,7 +183,8 @@ export class UsageLimitAutoResume {
       outcome = await this.deps.continueSession(sessionId, token, {
         reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
         attempt,
-        maxAttempts: USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
+        ...(pending.minuteLimit ? { geminiInputRetry: true as const } : {}),
+        maxAttempts: pending.minuteLimit ? 1 : USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
         // sessionTotal 兼作中断自愈的 attempt 令牌(见 register 的 autoResumeAttemptTokenFromAgentMeta);
         // 0 永远不是有效令牌,避免与进行中的重连记账串号。本行也不展示累计次数。
         sessionTotal: 0,
@@ -208,7 +218,7 @@ export class UsageLimitAutoResume {
       }
       if (this.disposed || !this.deps.isCurrent(sessionId, token)) return;
       const handle = this.deps.setTimer(() => { void this.fire(sessionId, token); }, USAGE_LIMIT_RESUME_BUFFER_MS);
-      this.timers.set(sessionId, { token, handle, groupQuota: pending?.groupQuota ?? false });
+      this.timers.set(sessionId, { ...pending, handle });
       return;
     }
     // 没真正续上(如判断不了有无产出):撤掉已过点的提示,保留原错误与手动重试,不再自动等待。
@@ -217,15 +227,15 @@ export class UsageLimitAutoResume {
   }
 
   /** Keep the original deadline across restart; overdue waits get a short startup buffer. */
-  restore(sessionId: string, token: number, resumeAt: number, attempts: number, groupQuota = false): boolean {
-    if (this.disposed || attempts >= USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES) return false;
-    const due = Math.max(resumeAt, this.deps.now() + USAGE_LIMIT_RESUME_BUFFER_MS);
+  restore(sessionId: string, token: number, resumeAt: number, attempts: number, groupQuota = false, minuteLimit = false): boolean {
+    if (this.disposed || attempts >= (minuteLimit ? 1 : USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES)) return false;
+    const due = minuteLimit ? Math.max(resumeAt, this.deps.now()) : Math.max(resumeAt, this.deps.now() + USAGE_LIMIT_RESUME_BUFFER_MS);
     if (!this.deps.arm(sessionId, token, due)) return false;
     this.bumpGeneration(sessionId);
     this.clear(sessionId);
     this.consecutive.set(sessionId, attempts);
     const handle = this.deps.setTimer(() => { void this.fire(sessionId, token); }, due - this.deps.now());
-    this.timers.set(sessionId, { token, handle, groupQuota });
+    this.timers.set(sessionId, { token, handle, groupQuota, minuteLimit });
     return true;
   }
 
@@ -242,7 +252,7 @@ export class UsageLimitAutoResume {
     for (const [sessionId, pending] of [...this.timers]) {
       // A pending group switch still has the previous route saved. A local reset event
       // says nothing about the group's quota; only its own reset timer may resume it.
-      if (pending.groupQuota) continue;
+      if (pending.groupQuota || pending.minuteLimit) continue;
       if (!await matches(sessionId) || this.timers.get(sessionId) !== pending) continue;
       this.deps.clearTimer(pending.handle);
       await this.fire(sessionId, pending.token);

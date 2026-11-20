@@ -42,6 +42,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
 import { AUTO_BRIDGE_BATCH_HEADER_RESERVE, AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS, AUTO_BRIDGE_BATCH_SEPARATOR, autoBridgeReportCount, buildOrcaAutoBridgeBatch, isOrcaAutoBridgeQueueItem, sameAutoBridgeDispatchOptions } from './orcaAutoBridgeBatch.js';
@@ -7711,6 +7712,11 @@ export class AgentInputCoordinator {
     // The synchronous switch hint only controls error presentation. Recovery
     // eligibility belongs to the service, including reconnect-only groups.
     if (!state || !this.willNotifyUsageLimitedTurnError(state, item, beforeDispatch)) return;
+    if (item.autoResumeInfo?.geminiInputRetry && parseGeminiInputRateLimit(message) !== null) {
+      state.errorReason = 'gemini-input-retry-exhausted';
+      if (!this.releaseProviderGroupSwitchHold(sessionId)) this.emit(sessionId);
+      return;
+    }
     const token = ++this.usageLimitWaitSeq;
     state.usageLimitWait = {
       resumeAt: null, token, recovery: state.recovery!,

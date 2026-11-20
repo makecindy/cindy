@@ -16079,6 +16079,12 @@
       "toggle": "展開或收起「{{title}}」的回信",
       "openTask": "開啟任務"
     },
+    "geminiRateLimit": {
+      "retried": "已按 Gemini 建議的時間自動重試",
+      "title": "Gemini 每分鐘輸入量已達上限",
+      "exhausted": "已自動重試一次，Gemini 仍受限。稍後可手動重試。",
+      "retryIn": "{{seconds}} 秒後自動重試"
+    },
     "subscriptionAccountError": {
       "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
       "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",

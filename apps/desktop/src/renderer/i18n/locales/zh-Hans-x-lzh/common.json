@@ -16079,6 +16079,12 @@
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
     },
+    "geminiRateLimit": {
+      "retried": "依 Gemini 所请，已自试",
+      "title": "Gemini 每分钟所入已达其限",
+      "exhausted": "已自试一次，仍受限。可稍后再试。",
+      "retryIn": "{{seconds}} 秒后自试"
+    },
     "subscriptionAccountError": {
       "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
       "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",

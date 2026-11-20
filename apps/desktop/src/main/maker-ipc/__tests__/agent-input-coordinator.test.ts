@@ -17854,6 +17854,22 @@ describe('usage-limit wait (ordinary tasks)', () => {
     return { h, candidate };
   }
 
+  it.each([true, false])('only exhausts Gemini retries sent for this limit (Gemini retry: %s)', async gemini => {
+    const sid = 'minute-limit-retry';
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, Date.now())).toBe(true);
+    const info = { ...INFO, maxAttempts: 1, ...(gemini ? { geminiInputRetry: true as const } : {}) };
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, info)).toBe('resumed');
+    await flush();
+    h.setRunning(false);
+    const message = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+    h.coordinator.onTurnEvent(sid, 'error', message, { errorStatus: 429, usageLimit: true });
+    await flush();
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(gemini ? 1 : 2);
+    expect(h.coordinator.getProjection(sid).errorReason).toBe(gemini ? 'gemini-input-retry-exhausted' : null);
+  });
+
   // Unit: cancellation uses the actual recovery entry, not an activity-field
   // whitelist. The prior phase matrix only used service-generated metadata.
   it.each(['provider-group', 'quota-reset'] as const)('cancels only the recorded recovery owner: %s', async owner => {
