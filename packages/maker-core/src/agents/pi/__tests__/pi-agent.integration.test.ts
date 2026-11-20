@@ -2286,7 +2286,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'].flatMap(plan => [{ plan, thinking: false }, { plan, thinking: true }]))('8933 does not confirm a bodyless response: %j', { timeout: 60_000 }, async ({ plan, thinking }) => {
+  it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'].flatMap(plan => [{ plan, thinking: false }, { plan, thinking: true }]).concat([{ plan: '1.5.2 is the pinned runtime', thinking: true }]))('8933 does not confirm a bodyless response: %j', { timeout: 60_000 }, async ({ plan, thinking }) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-empty-plan-'));
     let handle: AgentSessionHandle | undefined;
     try {
@@ -2367,6 +2367,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['thinking-final-lists', 'Options:\n1. A\n2. B\n\nFinal steps:\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-final-headerless', 'Options:\n1. A\n2. B\n\n1. 验证\n\nDetails...\n2. 交付', ['验证', '交付']],
     ['thinking-analysis-final', 'Analysis:\n1. A\n2. B\n\n1. 验证\n2. 交付', ['验证', '交付']],
+    ['thinking-options-phase', 'Options:\n1. A\n2. B\n\nImplementation:\n1. 验证\n2. 交付', ['验证', '交付']],
   ])('8933 preserves and confirms the native %s plan', { timeout: 60_000 }, async (_name, plan, titles) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-short-plan-'));
     let handle: AgentSessionHandle | undefined;

@@ -67,16 +67,20 @@ function selectPlanText(content) {
   // heading. Keep the complete top-level list, including blank lines and
   // step details, while still dropping unrelated preamble.
   const lines = planLines(native);
-  const numbered = lines.filter(line => /^\s*\d+[.)、．）]\s*\S/.test(line.text));
+  const numbered = lines.filter(line => /^\s*\d+[.)、．）](?!\d)\s*\S/.test(line.text));
   if (numbered.length) {
     const indent = line => line.text.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
     const minimum = numbered.reduce((minimum, line) => Math.min(minimum, indent(line)), Infinity);
     const roots = numbered.filter(line => indent(line) === minimum);
     // Section headings make a restart a phase boundary, not a new plan.
     // Keep the complete sectioned plan for ambiguous-id whole-plan tracking.
+    const reasoningHeader = line => /^(?:#{1,6}\s+)?(?:options|alternatives|considerations|analysis|reasoning|brainstorm(?:ing)?|选项|备选|思考|分析|推理)\s*[:：]?$/i.test(line.text.trim());
     const sections = lines.filter(line => /^(?:#{1,6}\s+\S.*|[^\s\d].*[:：])\s*$/.test(line.text.trim())
-      && !/^(?:#{1,6}\s+)?(?:options|alternatives|considerations|analysis|reasoning|brainstorm(?:ing)?|选项|备选|思考|分析|推理)\s*[:：]?$/i.test(line.text.trim()));
-    if (sections.length) return native.slice(Math.min(sections[0].start, roots[0].start));
+      && !reasoningHeader(line));
+    if (sections.length) {
+      const precedingReasoning = lines.some(line => line.start < sections[0].start && reasoningHeader(line));
+      return native.slice(precedingReasoning ? sections[0].start : Math.min(sections[0].start, roots[0].start));
+    }
     let start = 0;
     for (let i = 1; i < roots.length; i++) {
       const previous = roots[i - 1];
@@ -103,7 +107,7 @@ function extractTodoItems(plan) {
   }
   const candidates = [];
   for (const line of visible.slice(header + 1)) {
-    const match = line.match(/^([ \t]*)(\d+)[.)、．）]\s*(\S.*)$/);
+    const match = line.match(/^([ \t]*)(\d+)[.)、．）](?!\d)\s*(\S.*)$/);
     if (!match) continue;
     const text = match[3].trim().replace(/^\[[ xX]\]\s*/, '')
       .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1').replace(/__([^_]+)__/g, '$1')

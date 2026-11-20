@@ -12,6 +12,16 @@ const selectPlan = runInNewContext(PI_PLAN_TODOS_SOURCE + '; selectPlanText') as
   (content: Array<{ type: string; text?: string; thinking?: string }>) => string;
 
 describe('Pi plan title extraction', () => {
+  it('excludes decimal and version continuations but retains no-space Chinese titles', () => {
+    expect(extract('1.5.2 is the pinned runtime\n2.75 is a version')).toEqual([]);
+    expect(selectPlan([{ type: 'thinking', thinking: '1.5.2 is the pinned runtime' }])).toBe('');
+    expect(extract('1.验证\n2.交付').map(todo => todo.text)).toEqual(['验证', '交付']);
+  });
+
+  it('starts after options when the final plan has structural phases', () => {
+    const plan = 'Implementation:\n1. 验证\n2. 交付';
+    expect(selectPlan([{ type: 'thinking', thinking: 'Options:\n1. A\n2. B\n\n' + plan }])).toBe(plan);
+  });
   it.each(['Plan:', 'Here is the plan.', 'Plan:\n```\n1. Example action with long title\n```'])('does not select a bodyless visible response: %s', text => {
     expect(selectPlan([{ type: 'text', text }])).toBe('');
     expect(selectPlan([{ type: 'thinking', thinking: text }])).toBe('');
